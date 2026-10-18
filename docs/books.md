@@ -32,15 +32,17 @@ balance sheet and trial balance from FleetSuite's own books, each next to
 NetSuite's, part 17, its customer refunds, posted with its bank
 deposits, part 18, 1084 Cool Springs' books, posted in the same run as
 BMG's, part 19, a check each morning that tells the super admins when
-a month stops matching NetSuite, and part 20, the documents behind each
-account line on the reports.
+a month stops matching NetSuite, part 20, the documents behind each
+account line on the reports, and part 21, each item's stock at each
+location, counted from a copy of every NetSuite document that moves it and
+checked against NetSuite's own count.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
-`/admin/books/differences`, the reports at `/admin/books/reports` and an
-account line's detail at `/admin/books/reports/detail`, which only super
-admins can
-open. Only they see the Books entry on the More page (Admin), which opens
+`/admin/books/differences`, the reports at `/admin/books/reports`, an
+account line's detail at `/admin/books/reports/detail`, stock by item at
+`/admin/books/stock` and an item's moves at `/admin/books/stock/item`,
+which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there.
 
 | Piece | Where |
@@ -94,10 +96,13 @@ the accounts page; the others are linked from there.
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
-| Daily check, and its notification | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs` in `src/lib/notification-registry.ts` |
+| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs` and `books_stock_differs` in `src/lib/notification-registry.ts` |
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
+| NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
+| Stock by item and an item's moves, and their APIs | `src/app/(main)/admin/books/stock/page.tsx`, `src/app/(main)/admin/books/stock/item/page.tsx`, `src/app/api/admin/books/stock/route.ts`, `src/app/api/admin/books/stock/item/route.ts` |
+| Stock by item tests | `src/lib/books/netsuite-stock.test.ts`, `src/lib/books/stock-items.test.ts`, `src/lib/books/stock-items-sql.test.ts`; the daily check's are in its test files |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -1623,6 +1628,25 @@ NetSuite says when the check last looked and what it couldn't do. When the
 notifications can't go, nothing is recorded, so the next morning tells
 again. Nothing is written to NetSuite or to the books.
 
+Stock by item is looked at the same way (owner decision 2026-10-18): an
+item whose count at a location stops matching NetSuite's own count is
+noted at the first look and told about at the second if it still differs,
+and so is one whose counts have drawn further apart, by whole units, than
+when the super admins last heard of it. Each look comes fifteen minutes
+after a copy of NetSuite's stock moves, which reads NetSuite's counts as it
+ends, so both counts are of the same moment; when the last copy didn't get
+that far (the first copies of the whole history, or one that ran out of
+time), stock waits for the next look. Values aren't told about, since
+NetSuite works costs out again after the fact and may not give its values
+at all; the page shows them. Each item gets its own notification
+(`books_stock_differs`, in the app and by push) with both counts, linking
+to its moves; more than three at once get one, linking to Stock by item
+open on the items that differ. The record holds the items whose counts
+differ, by item and location, with how many units apart, never an amount.
+When NetSuite's counts are read another way (each item company-wide
+instead of at each location, or back), the items are keyed another way, so
+the next look starts afresh and tells nobody.
+
 ## Reports
 
 `/admin/books/reports` shows one company's profit and loss, balance sheet
@@ -1742,6 +1766,112 @@ FleetSuite's documents always add up to its side of the line. NetSuite's
 come from the copy of its ledger, while the report's NetSuite side is
 NetSuite's own totals; when the copy doesn't hold all of a range yet, the
 page says how much it holds.
+
+## Stock by item
+
+`/admin/books/stock` shows each item's count and value at each location,
+FleetSuite's next to NetSuite's own, so FleetSuite knows its stock without
+NetSuite before the changeover (owner decision 2026-10-18, "Stock by item",
+counted from "Every move"). Until then it only had each item's company-wide
+count, copied from NetSuite onto the parts catalog, with no location, cost
+or history. What stock costs already posts to the books from the copy of
+NetSuite's general ledger ("Stock and cost"); this is what lies behind the
+inventory accounts, item by item. Nothing is written to NetSuite or to the
+books.
+
+### Copying stock moves
+
+`/api/cron/books-netsuite-stock`, at :43 past each odd hour UTC, or Copy
+now on the page, copies every NetSuite document dated from January 1, 2025
+with a line that moves stock (`transactionline.isinventoryaffecting`):
+fulfillments, item receipts, inventory adjustments and transfers, assembly
+builds and unbuilds, and the invoices, credit memos and bills that move
+stock themselves, for BMG and 1084. Each comes with every line of it that
+names an item: the item, location, quantity (positive into stock, negative
+out of it) and whether NetSuite counts the line in the item's stock. A
+line that names the item without moving it, such as a cost of goods line,
+is kept for its cost.
+
+The copy is shaped like the deposits copy: the documents changed since the
+last run that finished, newest first a page at a time with a saved cursor,
+so the first copy of the whole history can span runs (each stops for time
+after four minutes and the next carries on) and a run cut short loses
+nothing. Once every changed document is in, the run lists every such
+document NetSuite has and marks the ones it no longer has as gone; a list
+that looks cut short, under half of the ones FleetSuite holds, marks
+nothing and says so. Then it reads where each item's count starts, its
+count and value at each location on December 31, 2024, from NetSuite's own
+lines before 2025, and last NetSuite's own count of each item now, so that
+count is as close as it can be to the copy it is checked against. Each of
+those steps waits for the next run when there isn't time for it.
+
+NetSuite's own counts are read the first way NetSuite allows:
+
+1. each item's count and value at each location (`aggregateitemlocation`,
+   with `onhandvaluemli` for the value);
+2. its count at each location alone, with no value, so only counts are
+   compared;
+3. each item's company-wide count (`item.totalquantityonhand`, as the parts
+   catalog reads it), against which FleetSuite's counts at all of the
+   item's locations are put together.
+
+The page says which. Migration 401 holds the copy
+(`gl_netsuite_stock_documents` and `gl_netsuite_stock_lines`, never
+deleted, `gone_at` marking what NetSuite stopped listing, and
+`gl_netsuite_stock_opening` and `gl_netsuite_stock_counts`, replaced on
+each run), and `src/lib/books/netsuite-stock.ts` runs it. The run is
+recorded in `sync_state` as `books_netsuite_stock`, with no amount in it.
+
+### Counting
+
+FleetSuite's count of an item at a location is its starting count plus the
+quantity of every copied line of it there that moves stock. Its value is
+its starting value plus what NetSuite posted to an inventory account on its
+lines, read from the copy of NetSuite's general ledger by NetSuite's line
+id, so a cost NetSuite works out again later shows here once the GL copy
+has it. The inventory accounts are the asset accounts NetSuite's items name
+in the copy of its lists. Migration 401's `gl_stock_items` gives every item
+at every location for each company, NetSuite's counts and what the GL copy
+holds on the inventory accounts, and `compareStock` in
+`src/lib/books/stock-items.ts` puts them side by side. A count differs when
+the two are a millionth or more apart (NetSuite keeps quantities with
+decimals); a value differs when the two aren't the same to the cent, and
+only when NetSuite gives values.
+
+### The page
+
+The page opens with how the last copy went and the value of all stock both
+ways, then each company's inventory accounts in the copy of NetSuite's
+ledger next to what its items come to; what's left between them was posted
+there without an item, as by a journal entry, and shows in amber rather
+than as a difference. Each item at each location follows, the ones whose
+count differs first, by item number after that: FleetSuite's count,
+NetSuite's and the difference, or the same for values, with how many
+documents moved it since 2025 and the last one's date. Buttons show only
+the ones that differ, and a search finds an item or location. An item and
+location that both sides have none of now is left out. `?only=differs`
+(`deepLinks.booksStock`) opens the page on the ones that differ.
+
+An item opens `/admin/books/stock/item` (`deepLinks.booksStockItem`,
+`?item=&location=`, the location highlighted): the item at each location,
+its count and value on December 31, 2024, now, and NetSuite's now, then
+every document that moved it, from migration 401's `gl_stock_item_moves`,
+oldest first, each with what it moved and the count it left at its
+location. The page lists the newest 1,000 and says how many older ones are
+counted in but not listed. A document's number opens its line by line
+check on Invoices vs NetSuite under the month NetSuite posted it to: the
+Stock and cost switch for a stock document or an invoice's or credit
+memo's stock, the Bills switch for a bill or bill credit.
+
+Not yet seen in NetSuite's data, so the page is what will show it:
+
+- whether SuiteQL in BMG's account reads `isinventoryaffecting`; if it
+  can't, the copy stops and says so;
+- whether NetSuite gives the quantity of a line that takes stock out
+  negative, as the copy expects; if not, every count of an item sold since
+  2025 would differ from NetSuite's at once;
+- items bought or sold in a different unit than they're stocked in, whose
+  lines' quantities may be in that unit.
 
 ## Posting
 

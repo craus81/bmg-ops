@@ -164,6 +164,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   // The daily books check (src/lib/books/daily-check.ts, owner decision
   // 2026-10-18): in-app and push, no email by default.
   { type: 'books_month_differs', label: 'Books stopped matching NetSuite', description: "FleetSuite's daily check found a month of its own books that no longer matches NetSuite's, or one where more documents differ than before. Opens that month on Differences vs NetSuite.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
+  { type: 'books_stock_differs', label: "Stock stopped matching NetSuite's count", description: "FleetSuite's daily check found an item whose count at a location no longer matches NetSuite's own count, or whose counts are further apart than before. Opens that item's moves on Stock by item, or the items that differ when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
 
   // ── Contract installers (CNI) ─────────────────────────────────────────
   { type: 'cni_job_invite', label: 'Job invitation', description: 'An installer company was invited to bid on a job.', area: 'cni', defaultChannels: ['in_app', 'push'] },

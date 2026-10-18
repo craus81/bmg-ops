@@ -1,0 +1,127 @@
+import { describe, it, expect } from 'vitest';
+import { compareStock, itemMoves, quantityText, type StockItemMovesData, type StockItemsData } from './stock-items';
+
+/** Made-up items and locations: every name and amount here is invented. */
+const ITEMS = [
+  { netsuite_id: '9001', name: 'LDR-24', display_name: 'Ladder rack 24 in', active: true },
+  { netsuite_id: '9002', name: 'LDR-9', display_name: 'LDR-9', active: true },
+  { netsuite_id: '9003', name: 'LDR-10', display_name: null, active: false },
+];
+const LOCATIONS = [{ netsuite_id: '11', name: 'Wentzville' }, { netsuite_id: '12', name: 'Kansas City' }];
+
+const row = (item_id: string, location_id: string | null, quantity: string, value: string, company = 'BMG') => ({
+  company, item_id, location_id, opening_quantity: '0', opening_value: '0', quantity, value, documents: 1, last_date: '2026-10-01',
+});
+const data = (over: Partial<StockItemsData>): StockItemsData => ({
+  rows: [], netsuite: [], netsuite_read_at: '2026-10-18T13:45:00Z', items: ITEMS, locations: LOCATIONS, ledger: [], accounts: ['190'], ...over,
+});
+
+describe('compareStock', () => {
+  it('lists the counts that differ first, then items as people read their names, then locations', () => {
+    const compared = compareStock(data({
+      rows: [row('9003', '11', '1', '10.00'), row('9002', '11', '2', '20.00'), row('9001', '12', '3', '30.00'), row('9001', '11', '4', '40.00')],
+      netsuite: [
+        { item_id: '9003', location_id: '11', quantity: '1', value: '10.00' }, { item_id: '9002', location_id: '11', quantity: '2', value: '20.00' },
+        { item_id: '9001', location_id: '12', quantity: '3', value: '30.00' }, { item_id: '9001', location_id: '11', quantity: '5', value: '40.00' },
+      ],
+    }));
+    expect(compared.by).toBe('location');
+    expect(compared.lines.map((l) => `${l.item} at ${l.location}`)).toEqual([
+      'LDR-24 at Wentzville', 'LDR-9 at Wentzville', 'LDR-10 at Wentzville', 'LDR-24 at Kansas City',
+    ].sort((a, b) => Number(b === 'LDR-24 at Wentzville') - Number(a === 'LDR-24 at Wentzville')
+      || a.localeCompare(b, 'en-US', { numeric: true })));
+    expect(compared.lines[0]).toMatchObject({ key: '9001|11', countDiffers: true, valueDiffers: false });
+  });
+
+  it('names an item by its number, adds its description only when it says more, and names what the lists lack by id', () => {
+    const compared = compareStock(data({
+      rows: [row('9001', '11', '1', '1.00'), row('9002', '11', '1', '1.00'), row('9999', '77', '1', '1.00')],
+      netsuite: [],
+    }));
+    const byKey = new Map(compared.lines.map((l) => [l.key, l]));
+    expect(byKey.get('9001|11')).toMatchObject({ item: 'LDR-24', description: 'Ladder rack 24 in', location: 'Wentzville' });
+    expect(byKey.get('9002|11')).toMatchObject({ item: 'LDR-9', description: null });
+    expect(byKey.get('9999|77')).toMatchObject({ item: 'Item 9999', description: null, location: 'Location 77' });
+  });
+
+  it('counts a hair apart as the same, and compares values only when NetSuite gives them', () => {
+    const compared = compareStock(data({
+      rows: [row('9001', '11', '2.0000001', '50.00')],
+      netsuite: [{ item_id: '9001', location_id: '11', quantity: '2', value: null }],
+    }));
+    expect(compared.lines[0]).toMatchObject({ countDiffers: false, valueDiffers: false, netsuite: { quantity: 2, value: null } });
+    expect(compared.value).toEqual({ fleetsuite: 5000, netsuite: null });
+  });
+
+  it('leaves out what both sides have none of, and counts it', () => {
+    const compared = compareStock(data({
+      rows: [row('9001', '11', '0', '0'), row('9002', '11', '0', '0')],
+      netsuite: [{ item_id: '9002', location_id: '11', quantity: '1', value: '5.00' }],
+    }));
+    expect(compared.lines.map((l) => l.key)).toEqual(['9002|11']);
+    expect(compared.cleared).toBe(1);
+  });
+
+  it("adds each company's items up next to what the copy of NetSuite's ledger holds on the inventory accounts", () => {
+    const compared = compareStock(data({
+      rows: [row('9001', '11', '1', '100.00'), row('9002', '12', '1', '50.00'), row('9001', '13', '1', '20.00', '1084')],
+      ledger: [{ company: 'BMG', balance: '175.00' }, { company: '1084', balance: '20.00' }, { company: 'ACME', balance: '0' }],
+    }));
+    expect(compared.ledger).toEqual([{ company: 'BMG', balance: 17500, items: 15000 }, { company: '1084', balance: 2000, items: 2000 }]);
+  });
+});
+
+/** One move as gl_stock_item_moves gives it. */
+const move = (document_id: string, type: string, posting_month: string | null) => ({
+  document_id, type, number: null, date: '2026-09-02', company: 'BMG', location_id: '11',
+  quantity: '1', value: '10.00', quantity_since: '1', value_since: '10.00', posting_month,
+});
+const moves = (over: Partial<StockItemMovesData>): StockItemMovesData => ({
+  item: ITEMS[0], opening: [], netsuite: [], netsuite_read_at: '2026-10-18T13:45:00Z', moves: [], count: 0, totals: [], locations: LOCATIONS, ...over,
+});
+
+describe('itemMoves', () => {
+  it('links each move to the switch of Invoices vs NetSuite that checks it, and the rest to nothing', () => {
+    const page = itemMoves(moves({
+      moves: [
+        move('1', 'ItemShip', '2026-09-01'), move('2', 'CustInvc', '2026-09-01'), move('3', 'VendBill', '2026-09-01'),
+        move('4', 'VendCred', '2026-10-01'), move('5', 'CashSale', '2026-09-01'), move('6', 'ItemRcpt', null),
+      ],
+      count: 6,
+    }));
+    expect(page.moves.map((m) => m.check)).toEqual([
+      { kind: 'stock', month: '2026-09-01' }, { kind: 'stock', month: '2026-09-01' }, { kind: 'bill', month: '2026-09-01' },
+      { kind: 'bill', month: '2026-10-01' }, null, null,
+    ]);
+    expect(page.moves[0]).toMatchObject({ typeName: 'Item Fulfillment', number: 'NetSuite 1', location: 'Wentzville' });
+  });
+
+  it("puts NetSuite's company-wide count beside the item, not beside a location, when that's all NetSuite gives", () => {
+    const page = itemMoves(moves({
+      opening: [{ company: 'BMG', location_id: '11', quantity: '3', value: '30.00' }],
+      totals: [{ company: 'BMG', location_id: '11', quantity: '2', value: '20.00' }],
+      netsuite: [{ location_id: null, quantity: '6', value: null }],
+    }));
+    expect(page.by).toBe('item');
+    expect(page.places).toEqual([
+      { locationId: '11', location: 'Wentzville', start: { quantity: 3, value: 3000 }, fleetsuite: { quantity: 5, value: 5000 }, netsuite: null },
+    ]);
+    expect(page.netsuite).toEqual({ quantity: 6, value: null });
+  });
+
+  it("compares nothing before NetSuite's counts are read", () => {
+    const page = itemMoves(moves({ netsuite_read_at: null }));
+    expect(page.by).toBeNull();
+    expect(page.netsuite).toBeNull();
+  });
+});
+
+describe('quantityText', () => {
+  it('writes a quantity as people do: no trailing zeros, thousands grouped, no float noise', () => {
+    expect(quantityText(1250.5)).toBe('1,250.5');
+    expect(quantityText(0.1 + 0.2)).toBe('0.3');
+    expect(quantityText(-0)).toBe('0');
+    expect(quantityText(-3)).toBe('-3');
+    expect(quantityText(1 / 3)).toBe('0.33333');
+  });
+});
