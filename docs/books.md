@@ -96,8 +96,8 @@ the accounts page; the others are linked from there.
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
 | Daily check, and its notification | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs` in `src/lib/notification-registry.ts` |
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
-| An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
-| Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
+| An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
+| Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -1704,8 +1704,12 @@ Each account line on Reports opens `/admin/books/reports/detail`
 the months the line covers, FleetSuite's journal next to the copy of
 NetSuite's general ledger, so the owner or the CPA can trace any number on a
 report back to its documents (owner decision 2026-10-18). A line that
-differs opens on the documents that differ, with the rest a tap away; From
-and To pick other months.
+differs opens on the documents that differ, with the rest a tap away, from
+the first month it differs in when that's earlier than the months it
+covers (owner decision 2026-10-18, `detailMonths` in
+`src/lib/books/report-links.ts`): a balance carries a difference forward
+from the month it started in, so the line's own month alone would list
+none. From and To pick other months.
 
 What a line covers: on the profit and loss, the months picked; on the
 balance sheet, the To month, between the account's balance at the end of the
