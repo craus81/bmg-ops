@@ -100,7 +100,7 @@ the accounts page; the others are linked from there.
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
-| NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
+| NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
 | Stock by item and an item's moves, and their APIs | `src/app/(main)/admin/books/stock/page.tsx`, `src/app/(main)/admin/books/stock/item/page.tsx`, `src/app/api/admin/books/stock/route.ts`, `src/app/api/admin/books/stock/item/route.ts` |
 | Stock by item tests | `src/lib/books/netsuite-stock.test.ts`, `src/lib/books/stock-items.test.ts`, `src/lib/books/stock-items-sql.test.ts`; the daily check's are in its test files |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
@@ -1829,8 +1829,16 @@ quantity of every copied line of it there that moves stock. Its value is
 its starting value plus what NetSuite posted to an inventory account on its
 lines, read from the copy of NetSuite's general ledger by NetSuite's line
 id, so a cost NetSuite works out again later shows here once the GL copy
-has it. The inventory accounts are the asset accounts NetSuite's items name
-in the copy of its lists. Migration 401's `gl_stock_items` gives every item
+has it. The inventory accounts are the asset accounts of the items NetSuite
+keeps in stock (inventory items and assemblies) in the copy of its lists,
+when the chart of accounts has them as asset accounts, and only those items
+have a value. Migration 402 made it so (field bug 2026-10-18): migration
+401 took every account an item named as its asset account, and some of
+NetSuite's items name the cost of goods sold account and fixed asset
+accounts there, so on the first look at the real books every count matched
+NetSuite's while each item's value kept what it cost when it was sold. The
+copy reads the starting values again with the new accounts on its next run.
+Migration 401's `gl_stock_items` gives every item
 at every location for each company, NetSuite's counts and what the GL copy
 holds on the inventory accounts, and `compareStock` in
 `src/lib/books/stock-items.ts` puts them side by side. A count differs when
@@ -1842,9 +1850,9 @@ only when NetSuite gives values.
 
 The page opens with how the last copy went and the value of all stock both
 ways, then each company's inventory accounts in the copy of NetSuite's
-ledger next to what its items come to; what's left between them was posted
-there without an item, as by a journal entry, and shows in amber rather
-than as a difference. Each item at each location follows, the ones whose
+ledger next to what its stocked items come to; what's left between them was
+posted there by journal entries or on items NetSuite doesn't stock, and
+shows in amber rather than as a difference. Each item at each location follows, the ones whose
 count differs first, by item number after that: FleetSuite's count,
 NetSuite's and the difference, or the same for values, with how many
 documents moved it since 2025 and the last one's date. Buttons show only
