@@ -341,8 +341,8 @@ export default function BooksStockPage() {
                       <div>
                         <div>{l.company}&apos;s inventory accounts in NetSuite&apos;s ledger</div>
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                          {accountNames || 'No inventory account yet'}. Its items come to {fmt(l.items)}
-                          {l.balance !== l.items ? `; ${fmt(l.balance - l.items)} was posted there without an item, as by a journal entry` : ''}.
+                          {accountNames || 'No inventory account yet'}. Its stocked items come to {fmt(l.items)}
+                          {l.balance !== l.items ? `; the other ${fmt(l.balance - l.items)} was posted there by journal entries or on items NetSuite doesn't stock` : ''}.
                         </div>
                       </div>
                     )}

@@ -1,5 +1,6 @@
-// Migration 401 keeps FleetSuite's own count of each item at each location.
-// This runs migrations 359–363 with 401 in an in-memory Postgres (PGlite) as
+// Migration 401 keeps FleetSuite's own count of each item at each location,
+// and 402 values only what NetSuite keeps in stock. This runs migrations
+// 359–363 with 401 and 402 in an in-memory Postgres (PGlite) as
 // the app's server login, copies a made-up handful of NetSuite stock
 // documents the way netsuite-stock.ts hands them over, with their GL lines in
 // the copy of NetSuite's general ledger, and holds what gl_stock_items and
@@ -15,9 +16,13 @@ const KANSAS_CITY = '12';
 const LADDER = '9001';
 const BINS = '9002';
 const VINYL = '9003';
+/** Items NetSuite doesn't keep in stock, or whose asset account isn't an asset in the chart. */
+const KIT = '9200';
+const TOOLS = '9300';
 /** The items' inventory account, and the accounts the other sides of their documents post to. */
 const INVENTORY = '190';
 const COGS = '580';
+const EQUIPMENT = '195';
 const RECEIVED = '210';
 const ADJUSTMENT = '520';
 
@@ -35,6 +40,7 @@ async function freshDb(): Promise<PGlite> {
   for (const file of [
     '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '401-books-stock-by-item.sql',
+    '402-books-stock-values.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -47,8 +53,17 @@ async function freshDb(): Promise<PGlite> {
       ('item', '${BINS}', 'BIN-10', true, '{"item_type": "InvtPart", "asset_account": "${INVENTORY}"}'),
       ('item', '${VINYL}', 'VINYL-3M', true, '{"item_type": "InvtPart", "asset_account": "${INVENTORY}"}'),
       ('item', '9100', 'LABOR', true, '{"item_type": "Service"}'),
+      -- As some items in NetSuite do: a non-inventory part that names an
+      -- equipment account as its asset account, and an inventory part that
+      -- names the cost of goods account there.
+      ('item', '${KIT}', 'HW-KIT', true, '{"item_type": "NonInvtPart", "asset_account": "${EQUIPMENT}"}'),
+      ('item', '${TOOLS}', 'TOOL-KIT', true, '{"item_type": "InvtPart", "asset_account": "${COGS}"}'),
       ('location', '${WENTZVILLE}', 'Wentzville', true, '{"subsidiary_id": "2"}'),
       ('location', '${KANSAS_CITY}', 'Kansas City', true, '{"subsidiary_id": "2"}');
+    INSERT INTO gl_accounts (number, name, account_type, netsuite_account_id) VALUES
+      ('1200', 'Inventory', 'other_current_asset', '${INVENTORY}'),
+      ('1500', 'Equipment', 'fixed_asset', '${EQUIPMENT}'),
+      ('5000', 'Cost of goods sold', 'cost_of_goods_sold', '${COGS}');
   `);
   await pg.exec('SET ROLE service_role');
   return pg;
@@ -141,6 +156,9 @@ describe("migration 401's stock by item", () => {
 
   it('counts each item at each location from where it started and every move since, valued at what NetSuite posted', async () => {
     const data = await items(db);
+    // Not the equipment account a non-inventory part names, nor the cost of
+    // goods account an inventory part names: the fulfillment's and invoice's
+    // cost lines below post there on the racks' lines and aren't stock.
     expect(data.accounts).toEqual([INVENTORY]);
     expect(data.netsuite_read_at).toBeNull();
     const row = (item: string, location: string) => data.rows.find((r) => r.item_id === item && r.location_id === location);
@@ -296,6 +314,33 @@ describe("migration 401's stock by item", () => {
     await expect(one(db, 'SELECT gl_stock_item_moves($1, 10) AS r', ['abc'])).rejects.toThrow(/NetSuite id/);
     // Nothing of the refused pages landed.
     expect((await moves(db, LADDER)).count).toBe(5);
+  });
+
+  it("values only what NetSuite keeps in stock, though the ledger still holds the rest", async () => {
+    // Ten more bins at $2.50, with three hardware kits on the receipt that
+    // NetSuite posted to the inventory account on their own line.
+    await call(db, 'gl_netsuite_stock_apply', {
+      documents: [doc('5011', 'ItemRcpt', 'IR5011', '2026-03-01', [['1', BINS, WENTZVILLE, '10', true], ['2', KIT, WENTZVILLE, '3', false]])],
+    });
+    await gl(db, '5011', 'ItemRcpt', '2026-03-01', [['0', RECEIVED, -2800], ['1', INVENTORY, 2500], ['2', INVENTORY, 300]]);
+    // Before 2025 the kits put $40 on the inventory account too.
+    await call(db, 'gl_netsuite_stock_store_opening', {
+      rows: [
+        { company: 'BMG', item_id: LADDER, location_id: WENTZVILLE, quantity: '10', value: '1500.00' },
+        { company: 'BMG', item_id: LADDER, location_id: KANSAS_CITY, quantity: '2', value: '300.00' },
+        { company: 'BMG', item_id: KIT, location_id: WENTZVILLE, quantity: '0', value: '40.00' },
+      ],
+    });
+    const data = await items(db);
+    expect(data.rows.find((r) => r.item_id === BINS)).toMatchObject({ quantity: '45', value: '115.00', documents: 3, last_date: '2026-03-01' });
+    expect(data.rows.some((r) => r.item_id === KIT)).toBe(false);
+    expect(data.ledger).toEqual([{ company: '1084', balance: '0' }, { company: 'BMG', balance: '2584.00' }]);
+    // What's left between the ledger and the items: the journal entry's $25 and the kits' $3.
+    expect(compareStock(data).ledger).toEqual([{ company: 'BMG', balance: 258400, items: 255600 }]);
+
+    const kit = await moves(db, KIT);
+    expect(kit.count).toBe(0);
+    expect(kit.opening).toEqual([{ company: 'BMG', location_id: WENTZVILLE, quantity: '0', value: '0' }]);
   });
 
   it('is open to the service role only', async () => {
