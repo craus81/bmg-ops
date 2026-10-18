@@ -887,7 +887,7 @@ export default function OpsDashboard() {
         <h2 style={headTitle}>Graphics — work in motion</h2>
         <button onClick={() => router.push('/graphics')} style={headLink}>{d.lanes.gfxActive} active jobs →</button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', padding: '2px 8px 12px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', padding: '2px 8px 12px' }}>
         {stageDefs.map((s, i) => (
           <button key={s.l} onClick={() => go(s.path)} style={{ padding: '8px 10px', borderRadius: '8px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>
             {i > 0 && <span style={{ position: 'absolute', left: '-4px', top: '38%', color: 'var(--text-muted)', opacity: 0.6, fontSize: '14px' }}>›</span>}
@@ -935,7 +935,7 @@ export default function OpsDashboard() {
         <h2 style={headTitle}>Upfit — at a glance</h2>
         {canOpen('/tracking') ? <button onClick={() => go('/tracking')} style={headLink}>{d.lanes.shopActive} in shop →</button> : <span style={{ ...headLink, cursor: 'default' }}>{d.lanes.shopActive} in shop</span>}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', padding: '2px 8px 12px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', padding: '2px 8px 12px' }}>
         {upfitStages.map((s, i) => (
           <button key={s.l} onClick={() => go('/tracking')} style={{ padding: '8px 10px', borderRadius: '8px', background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', position: 'relative' }}>
             {i > 0 && <span style={{ position: 'absolute', left: '-4px', top: '38%', color: 'var(--text-muted)', opacity: 0.6, fontSize: '14px' }}>›</span>}
@@ -1234,13 +1234,13 @@ export default function OpsDashboard() {
       {kpis}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '12px', alignItems: 'start' }} className="dash-cols">
-        <div style={{ display: 'grid', gap: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '12px' }}>
           {leftColumn.map((el, i) => <div key={i}>{el}</div>)}
         </div>
         {rightRail}
       </div>
 
-      <style>{`@media (max-width: 860px) { .dash-cols { grid-template-columns: 1fr !important; } }`}</style>
+      <style>{`@media (max-width: 860px) { .dash-cols { grid-template-columns: minmax(0, 1fr) !important; } }`}</style>
     </div>
   );
 }

@@ -36,8 +36,9 @@ export default function BottomNav() {
   const pathname = usePathname();
   const router = useRouter();
   // Which tabs, in which order: the user's saved choice or the role default
-  // (src/lib/nav-tabs.ts, More → Customize Bottom Bar).
-  const { tabs: chosen, customerOnly } = useNavTabs();
+  // (src/lib/nav-tabs.ts, More → Customize Bottom Bar). On the open iPhone
+  // Duo screen it's the longer open-screen list instead.
+  const { shown: chosen, customerOnly } = useNavTabs();
   const tabs = [...chosen];
 
   // The AI tab has no page; it highlights while the chat panel is open.

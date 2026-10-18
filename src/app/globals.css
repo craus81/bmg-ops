@@ -636,8 +636,9 @@ html[data-sidenav] .ai-chat-panel {
 html[data-sidenav] .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 html[data-duo-wide] .dash-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
 /* One column: beside the rail there isn't room for the dashboard's side
-   column, and its stage strips spilled under it. */
-html[data-sidenav] .dash-cols { grid-template-columns: 1fr !important; }
+   column, and its stage strips spilled under it. minmax(0, …) so a long
+   one-line row ellipsizes instead of widening the column past the rail. */
+html[data-sidenav] .dash-cols { grid-template-columns: minmax(0, 1fr) !important; }
 
 /* In-Shop: the tapped vehicle docks on the right, beside the list, instead of
    a pop-up over it. Tapping another vehicle swaps it; ✕ closes. */

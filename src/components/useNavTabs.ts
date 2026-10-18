@@ -1,8 +1,9 @@
 'use client';
 
 import { useAuth } from '@/components/AuthProvider';
+import { useDuoWide } from '@/components/useDuoWide';
 import { ROLE_DEFAULT_FEATURES } from '@/lib/features';
-import { allTabs, resolveNavTabs, AI_TAB_ID, type Tab } from '@/lib/nav-tabs';
+import { allTabs, resolveNavTabs, resolveOpenNavTabs, AI_TAB_ID, type Tab } from '@/lib/nav-tabs';
 
 // Every role that isn't 'customer'. Used to tell a customer-ONLY account
 // (locked to the portal nav) from a staff account that merely also carries
@@ -20,11 +21,14 @@ export function useAiChatAccess(): boolean {
  *
  * `available` is every tab they may put in the bar; `tabs` is what the bar
  * shows (their saved choice, or the role default), without More.
+ * `openTabs` is the side bar on the open iPhone Duo screen (also without More);
+ * `shown` is whichever of the two is on screen right now.
  * `customerOnly` accounts get the fixed portal nav and cannot customize.
  */
-export function useNavTabs(): { available: Tab[]; tabs: Tab[]; customerOnly: boolean; aiInBar: boolean } {
+export function useNavTabs(): { available: Tab[]; tabs: Tab[]; openTabs: Tab[]; shown: Tab[]; customerOnly: boolean; aiInBar: boolean } {
   const { hasFeature, isCustomer, hasRole, profile } = useAuth();
   const aiAccess = useAiChatAccess();
+  const duoWide = useDuoWide();
 
   // The portal nav (My Jobs + Settings) is for customer-ONLY accounts. An
   // admin/staff profile that also has the customer role (e.g. linked to a
@@ -33,7 +37,7 @@ export function useNavTabs(): { available: Tab[]; tabs: Tab[]; customerOnly: boo
   const customerOnly = isCustomer && !STAFF_ROLES.some(r => hasRole(r));
   if (customerOnly) {
     const tabs = [{ id: 'customer-dashboard', path: '/customer/dashboard', label: 'My Jobs', feature: 'home' as const, priority: 0 }];
-    return { available: tabs, tabs, customerOnly, aiInBar: false };
+    return { available: tabs, tabs, openTabs: tabs, shown: tabs, customerOnly, aiInBar: false };
   }
 
   const available = allTabs.filter(tab => {
@@ -45,5 +49,7 @@ export function useNavTabs(): { available: Tab[]; tabs: Tab[]; customerOnly: boo
     return hasFeature(tab.feature);
   });
   const tabs = resolveNavTabs(available, profile?.nav_tabs);
-  return { available, tabs, customerOnly, aiInBar: tabs.some(t => t.id === AI_TAB_ID) };
+  const openTabs = resolveOpenNavTabs(available, profile?.nav_tabs_open, tabs);
+  const shown = duoWide ? openTabs : tabs;
+  return { available, tabs, openTabs, shown, customerOnly, aiInBar: shown.some(t => t.id === AI_TAB_ID) };
 }
