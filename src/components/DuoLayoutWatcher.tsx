@@ -13,9 +13,10 @@ export default function DuoLayoutWatcher() {
       let override: string | null = null;
       try { override = localStorage.getItem(SIDENAV_STORAGE_KEY); } catch { /* private mode */ }
       // innerWidth/innerHeight are real px, the units the rule is written in.
-      const { sideNav, wide } = computeDuoLayout(window.innerWidth, window.innerHeight, navigator.userAgent, override);
+      const { sideNav, wide, statusOnSide } = computeDuoLayout(window.innerWidth, window.innerHeight, navigator.userAgent, override);
       root.toggleAttribute('data-sidenav', sideNav);
       root.toggleAttribute('data-duo-wide', wide);
+      root.toggleAttribute('data-duo-status-side', statusOnSide);
     };
     apply();
     window.addEventListener('resize', apply);

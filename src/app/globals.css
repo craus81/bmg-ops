@@ -609,6 +609,17 @@ html[data-sidenav] .app-nav {
   overflow-y: auto;
 }
 html[data-sidenav] .app-nav-tab { flex: 0 0 auto !important; padding: 8px 2px !important; }
+/* Start below Apple's clock/camera bubble, which floats over the top of the
+   right edge (see data-duo-status-side in src/lib/duo-layout.ts). */
+html[data-duo-status-side] .app-nav { padding-top: calc(150px + env(safe-area-inset-top, 0px)) !important; }
+/* Short screens (the closed phone on its side): icons only so all tabs fit;
+   each tab keeps its name as its label for screen readers and long-press. */
+@media (max-height: 640px) {
+  html[data-sidenav] .app-nav-tab { padding: 6px 2px !important; }
+  html[data-sidenav] .app-nav-tab > span { display: none; }
+}
+/* The small screen has no room for the FleetSuite name next to the buttons. */
+html[data-sidenav]:not([data-duo-wide]) .app-header-title { display: none; }
 html[data-sidenav] .app-shell {
   padding-right: var(--rail-w) !important;
   padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;
@@ -624,8 +635,9 @@ html[data-sidenav] .ai-chat-panel {
 /* Home: money tiles two across on the small screen, one row of four on the big one. */
 html[data-sidenav] .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 html[data-duo-wide] .dash-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
-/* Keep the dashboard's main column + right rail (it drops to one column under 860px). */
-html[data-duo-wide] .dash-cols { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) !important; }
+/* One column: beside the rail there isn't room for the dashboard's side
+   column, and its stage strips spilled under it. */
+html[data-sidenav] .dash-cols { grid-template-columns: 1fr !important; }
 
 /* In-Shop: the tapped vehicle docks on the right, beside the list, instead of
    a pop-up over it. Tapping another vehicle swaps it; ✕ closes. */
