@@ -135,7 +135,7 @@ export default function MorePage() {
       items: [
         { title: 'Sent Emails', sub: 'Every email you’ve sent from FleetSuite — with delivery status', path: '/sent-emails', show: true },
         { title: 'Settings', sub: 'Password, email signature, alerts & notifications', path: '/settings', show: true },
-        { title: 'Customize Bottom Bar', sub: 'Pick which tabs sit in your bottom bar, and their order', path: '/more/bottom-bar', show: !customerOnly },
+        { title: 'Customize Bottom Bar', sub: 'Pick which tabs sit in your bottom bar, and their order (and the open iPhone Duo screen’s side bar)', path: '/more/bottom-bar', show: !customerOnly },
       ],
     },
   ];

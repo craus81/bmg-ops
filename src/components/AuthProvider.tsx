@@ -38,7 +38,8 @@ interface AuthContextType {
   profileError: boolean;
   retryProfile: () => Promise<void>;
   /** Save this user's bottom-bar tabs (null = back to the role default). */
-  saveNavTabs: (ids: string[] | null) => Promise<void>;
+  /** `which` picks the bottom bar (default) or the open iPhone Duo screen's side bar. */
+  saveNavTabs: (ids: string[] | null, which?: 'bar' | 'open') => Promise<void>;
 }
 
 function sameJson(a: unknown, b: unknown) {
@@ -126,12 +127,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Own-row write through profiles_update_own; nav_tabs is not a guarded
   // privilege column (migration 233), so no server route is needed.
-  const saveNavTabs = async (ids: string[] | null) => {
+  const saveNavTabs = async (ids: string[] | null, which: 'bar' | 'open' = 'bar') => {
     if (!user) return;
     const value = ids && ids.length > 0 ? ids : null;
-    const { error } = await supabase.from('profiles').update({ nav_tabs: value }).eq('id', user.id);
+    const column = which === 'open' ? 'nav_tabs_open' : 'nav_tabs';
+    const { error } = await supabase.from('profiles').update({ [column]: value }).eq('id', user.id);
     if (error) throw new Error(error.message);
-    setProfile(p => (p ? { ...p, nav_tabs: value } : p));
+    setProfile(p => (p ? { ...p, [column]: value } : p));
   };
 
   // Self-healing. A shop tablet whose wifi drops usually gets it back in

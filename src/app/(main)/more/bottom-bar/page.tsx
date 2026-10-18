@@ -5,37 +5,60 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useNavTabs } from '@/components/useNavTabs';
 import { TAB_ICONS } from '@/components/BottomNav';
-import { defaultNavTabs, MAX_TABS, type Tab } from '@/lib/nav-tabs';
+import { defaultNavTabs, defaultOpenNavTabs, MAX_TABS, MAX_OPEN_TABS, type Tab } from '@/lib/nav-tabs';
 
 /**
  * More → Customize Bottom Bar. Each user picks and orders up to MAX_TABS
  * tabs from the ones their role allows; More always stays at the end.
  * Saved on their profile, so the same bar shows on every device.
+ *
+ * On an iPhone Duo (or once an open-screen list is saved) a switch adds a
+ * second, longer list for the side bar on the OPEN screen (MAX_OPEN_TABS).
  */
 export default function BottomBarSettingsPage() {
   const router = useRouter();
   const { saveNavTabs, profile, loading } = useAuth();
-  const { available, tabs, customerOnly } = useNavTabs();
+  const { available, tabs, openTabs, customerOnly } = useNavTabs();
+
+  // Which list is being edited. The Open screen choice only shows on an
+  // iPhone Duo (html[data-sidenav]) or when an open list is already saved.
+  const [onDuo, setOnDuo] = useState(false);
+  const [which, setWhich] = useState<'bar' | 'open'>('bar');
+  useEffect(() => {
+    const root = document.documentElement;
+    setOnDuo(root.hasAttribute('data-sidenav'));
+    if (root.hasAttribute('data-duo-wide')) setWhich('open');
+  }, []);
+  const showSwitch = onDuo || !!profile?.nav_tabs_open?.length;
+  const isOpen = which === 'open';
+  const max = isOpen ? MAX_OPEN_TABS : MAX_TABS;
 
   const [picked, setPicked] = useState<string[]>([]);
   const [ready, setReady] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // Start from what the bar shows now, once the profile has loaded.
+  // Start from what the chosen list shows now, once the profile has loaded
+  // (and again when switching lists).
   useEffect(() => {
     if (loading || ready) return;
-    setPicked(tabs.map(t => t.id));
+    setPicked((isOpen ? openTabs : tabs).map(t => t.id));
     setReady(true);
-  }, [loading, ready, tabs]);
+  }, [loading, ready, tabs, openTabs, isOpen]);
+  const switchTo = (w: 'bar' | 'open') => {
+    if (w === which) return;
+    setWhich(w);
+    setReady(false);
+    setMessage(null);
+  };
 
   const byId = new Map(available.map(t => [t.id, t]));
   const inBar = picked.map(id => byId.get(id)).filter((t): t is Tab => !!t);
   const notInBar = available
     .filter(t => !picked.includes(t.id))
     .sort((a, b) => a.priority - b.priority);
-  const full = inBar.length >= MAX_TABS;
-  const isCustom = !!profile?.nav_tabs?.length;
+  const full = inBar.length >= max;
+  const isCustom = !!(isOpen ? profile?.nav_tabs_open : profile?.nav_tabs)?.length;
 
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
@@ -52,9 +75,11 @@ export default function BottomBarSettingsPage() {
     setSaving(true);
     setMessage(null);
     try {
-      await saveNavTabs(ids);
-      if (ids === null) setPicked(defaultNavTabs(available).map(t => t.id));
-      setMessage({ ok: true, text: ids === null ? 'Back to the default bar.' : 'Saved. Your bar is updated on every device.' });
+      await saveNavTabs(ids, which);
+      if (ids === null) setPicked((isOpen ? defaultOpenNavTabs(available, tabs) : defaultNavTabs(available)).map(t => t.id));
+      setMessage({ ok: true, text: ids === null
+        ? (isOpen ? 'Back to the default: your bottom bar, then your other pages.' : 'Back to the default bar.')
+        : (isOpen ? 'Saved. The open screen’s side bar is updated.' : 'Saved. Your bar is updated on every device.') });
     } catch (err) {
       setMessage({ ok: false, text: `Couldn't save: ${err instanceof Error ? err.message : 'unknown error'}` });
     } finally {
@@ -88,11 +113,26 @@ export default function BottomBarSettingsPage() {
     <div style={{ maxWidth: '520px', margin: '0 auto' }}>
       <button onClick={() => router.push('/more')} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600, cursor: 'pointer', padding: 0 }}>← More</button>
       <h1 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', margin: '10px 0 4px' }}>Customize Bottom Bar</h1>
+      {showSwitch && (
+        <div role="tablist" style={{ display: 'flex', gap: '4px', padding: '4px', margin: '8px 0 10px', borderRadius: '12px', border: '1px solid var(--border)', background: 'var(--card)' }}>
+          {([['bar', 'Phone bar'], ['open', 'Open screen']] as const).map(([w, text]) => (
+            <button
+              key={w}
+              role="tab"
+              aria-selected={which === w}
+              onClick={() => switchTo(w)}
+              style={{ flex: 1, padding: '8px', borderRadius: '9px', border: 'none', background: which === w ? 'var(--navy, #1e3a8a)' : 'transparent', color: which === w ? '#fff' : 'var(--text-body)', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
+            >{text}</button>
+          ))}
+        </div>
+      )}
       <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-        Pick up to {MAX_TABS} tabs and put them in the order you want. More always stays at the end, and everything you leave out is still in More. The top of the list is the left end of the bar.
+        {isOpen
+          ? <>The side bar when your iPhone Duo is open. Pick up to {MAX_OPEN_TABS} tabs and put them in the order you want; More always stays at the end. The top of the list is the top of the side bar. The closed phone keeps your Phone bar.</>
+          : <>Pick up to {MAX_TABS} tabs and put them in the order you want. More always stays at the end, and everything you leave out is still in More. The top of the list is the left end of the bar.</>}
       </div>
 
-      <div style={sectionLabel}>In your bar ({inBar.length}/{MAX_TABS})</div>
+      <div style={sectionLabel}>{isOpen ? 'On the open screen' : 'In your bar'} ({inBar.length}/{max})</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {inBar.map((t, i) => (
           <div key={t.id} style={row}>
@@ -109,7 +149,7 @@ export default function BottomBarSettingsPage() {
 
       {notInBar.length > 0 && (
         <>
-          <div style={sectionLabel}>Not in your bar</div>
+          <div style={sectionLabel}>{isOpen ? 'Not on the open screen' : 'Not in your bar'}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {notInBar.map(t => (
               <div key={t.id} style={row}>
@@ -118,7 +158,7 @@ export default function BottomBarSettingsPage() {
               </div>
             ))}
           </div>
-          {full && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>Your bar is full. Remove a tab to add another.</div>}
+          {full && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>{isOpen ? 'The open screen is full.' : 'Your bar is full.'} Remove a tab to add another.</div>}
         </>
       )}
 

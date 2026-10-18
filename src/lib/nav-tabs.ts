@@ -32,6 +32,9 @@ export const AI_TAB_ID = 'ai';
 
 export const MAX_TABS = 7; // + More = 8 total
 
+/** The open iPhone Duo screen's side bar has room for more (+ More). */
+export const MAX_OPEN_TABS = 12;
+
 // Every tab a staff user can put in the bar, in default priority order.
 export const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', feature: 'home', priority: 0 },
@@ -82,4 +85,39 @@ export function defaultNavTabs(available: Tab[]): Tab[] {
     .filter(t => t.id !== AI_TAB_ID)
     .sort((a, b) => a.priority - b.priority);
   return ai ? [...rest.slice(0, MAX_TABS - 1), ai] : rest.slice(0, MAX_TABS);
+}
+
+/**
+ * The side bar on the open iPhone Duo screen, in display order (More is added
+ * by the caller). A saved list wins; otherwise it's the bottom bar followed by
+ * the user's other pages by priority, so the extra room is never empty.
+ *
+ * @param available  tabs this user may see right now (already access-filtered)
+ * @param savedOpen  the user's saved open-screen ids, or null/empty for the default
+ * @param barTabs    what the bottom bar shows (resolveNavTabs)
+ */
+export function resolveOpenNavTabs(available: Tab[], savedOpen: string[] | null | undefined, barTabs: Tab[]): Tab[] {
+  const byId = new Map(available.map(t => [t.id, t]));
+  if (savedOpen && savedOpen.length > 0) {
+    const seen = new Set<string>();
+    const picked: Tab[] = [];
+    for (const id of savedOpen) {
+      const tab = byId.get(id);
+      if (!tab || seen.has(id)) continue;
+      seen.add(id);
+      picked.push(tab);
+      if (picked.length === MAX_OPEN_TABS) break;
+    }
+    if (picked.length > 0) return picked;
+  }
+  return defaultOpenNavTabs(available, barTabs);
+}
+
+/** The open-screen default: the bottom bar, then every other tab by priority. */
+export function defaultOpenNavTabs(available: Tab[], barTabs: Tab[]): Tab[] {
+  const inBar = new Set(barTabs.map(t => t.id));
+  const rest = available
+    .filter(t => !inBar.has(t.id))
+    .sort((a, b) => a.priority - b.priority);
+  return [...barTabs, ...rest].slice(0, MAX_OPEN_TABS);
 }

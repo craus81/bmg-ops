@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { allTabs, resolveNavTabs, defaultNavTabs, AI_TAB_ID, MAX_TABS } from './nav-tabs';
+import { allTabs, resolveNavTabs, defaultNavTabs, resolveOpenNavTabs, defaultOpenNavTabs, AI_TAB_ID, MAX_TABS, MAX_OPEN_TABS } from './nav-tabs';
 
 const ids = (tabs: { id: string }[]) => tabs.map(t => t.id);
 
@@ -36,5 +36,28 @@ describe('resolveNavTabs', () => {
     expect(resolveNavTabs(allTabs, ['bogus'])).toEqual(defaultNavTabs(allTabs));
     expect(resolveNavTabs(allTabs, null)).toEqual(defaultNavTabs(allTabs));
     expect(resolveNavTabs(allTabs, [])).toEqual(defaultNavTabs(allTabs));
+  });
+});
+
+describe('resolveOpenNavTabs', () => {
+  const bar = resolveNavTabs(allTabs, ['scan', 'home', 'ai']);
+
+  it('defaults to the bottom bar, then the other tabs by priority', () => {
+    const tabs = defaultOpenNavTabs(allTabs, bar);
+    expect(ids(tabs).slice(0, 4)).toEqual(['scan', 'home', 'ai', 'upfit']);
+    expect(new Set(ids(tabs)).size).toBe(tabs.length);
+    expect(tabs.length).toBeLessThanOrEqual(MAX_OPEN_TABS);
+    expect(resolveOpenNavTabs(allTabs, null, bar)).toEqual(tabs);
+  });
+
+  it('uses the saved open list, filtered by access and capped', () => {
+    const available = allTabs.filter(t => t.id !== 'pos');
+    expect(ids(resolveOpenNavTabs(available, ['pos', 'estimates', 'estimates', 'home'], bar))).toEqual(['estimates', 'home']);
+    const many = Array.from({ length: 20 }, (_, i) => ({ id: `t${i}`, path: `/t${i}`, label: `T${i}`, priority: i }));
+    expect(resolveOpenNavTabs(many, many.map(t => t.id), [])).toHaveLength(MAX_OPEN_TABS);
+  });
+
+  it('falls back to the default when nothing saved is usable', () => {
+    expect(resolveOpenNavTabs(allTabs, ['bogus'], bar)).toEqual(defaultOpenNavTabs(allTabs, bar));
   });
 });

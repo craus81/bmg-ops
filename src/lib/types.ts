@@ -37,6 +37,8 @@ export interface Profile {
   /** This user's own bottom-bar tab ids, in order (migration 325). NULL =
    *  the role default. See src/lib/nav-tabs.ts. */
   nav_tabs?: string[] | null;
+  /** Side-bar tabs for the open iPhone Duo screen (migration 398). */
+  nav_tabs_open?: string[] | null;
 }
 
 export interface CatalogItem {
