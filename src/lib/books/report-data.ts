@@ -1,0 +1,85 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllRows } from '@/lib/fetch-all';
+import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate } from './netsuite-gl';
+import { BOOKS_INVOICE_POSTING, type InvoicePostingResult } from './invoice-posting';
+import { lastReportMonth, type ReportAccount, type ReportAmount, type ReportData } from './reports';
+import type { TbData } from './trial-balance';
+
+/**
+ * What Reports and an account line's detail read for one company
+ * (src/app/api/admin/books/reports, and its detail): the chart, NetSuite's
+ * own totals (migration 361) and FleetSuite's journal summed per account and
+ * month (migration 396), and how the last posting run and the last copy of
+ * NetSuite's ledger went.
+ */
+export interface LoadedReports {
+  companies: Array<{ code: string; name: string; netsuite_subsidiary_id: string | null }>;
+  company: string;
+  data: ReportData;
+  /** The latest month either side has, but never before this month. */
+  through: string;
+  /** A report's default end: last month, the newest one NetSuite may already have closed, but never before January 2025. */
+  lastMonth: string;
+  lastPosting: { at: string; error: string | null; partial: boolean } | null;
+  lastCopy: { at: string; error: string | null } | null;
+}
+
+/** One company's books for the reports: the one asked for, else BMG, else the first. */
+export async function loadReports(service: SupabaseClient, asked: string | null): Promise<LoadedReports | { error: string }> {
+  const [companies, accounts, posting, copy] = await Promise.all([
+    service.from('gl_companies').select('id, code, name, netsuite_subsidiary_id').order('code'),
+    fetchAllRows<Omit<ReportAccount, 'company'> & { company_id: string | null }>((from, to) => service
+      .from('gl_accounts')
+      .select('id, netsuite_account_id, number, name, account_type, statement, parent_id, company_id')
+      .order('id', { ascending: true })
+      .range(from, to)),
+    service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_INVOICE_POSTING).maybeSingle(),
+    service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_GL_SYNC).maybeSingle(),
+  ]);
+  const error = companies.error || accounts.error || posting.error || copy.error;
+  if (error) return { error: error.message };
+
+  const codeOf = new Map((companies.data || []).map((c) => [c.id as string, c.code as string]));
+  const codes = [...codeOf.values()];
+  const company = asked && codes.includes(asked) ? asked : codes.includes('BMG') ? 'BMG' : codes[0];
+  if (!company) return { error: 'No companies set up' };
+
+  const [netsuite, fleetsuite] = await Promise.all([
+    service.rpc('gl_netsuite_totals', { p_company: company }),
+    service.rpc('gl_books_totals', { p_company: company }),
+  ]);
+  const rpcError = netsuite.error || fleetsuite.error;
+  if (rpcError) return { error: rpcError.message };
+  const totals = (netsuite.data ?? {}) as Partial<TbData>;
+  const data: ReportData = {
+    company,
+    accounts: accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null })),
+    opening: totals.opening ?? [],
+    netsuite: totals.netsuite ?? [],
+    fleetsuite: (fleetsuite.data ?? []) as ReportAmount[],
+  };
+
+  const currentMonth = monthOfDate(new Date().toISOString().slice(0, 10))!;
+  const lastCalendar = new Date();
+  lastCalendar.setUTCDate(1);
+  lastCalendar.setUTCMonth(lastCalendar.getUTCMonth() - 1);
+  const previous = monthOfDate(lastCalendar.toISOString().slice(0, 10))!;
+
+  const run = (posting.data?.last_result ?? null) as InvoicePostingResult | null;
+  const copied = (copy.data?.last_result ?? null) as { error?: string } | null;
+  return {
+    companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name, netsuite_subsidiary_id: c.netsuite_subsidiary_id })),
+    company,
+    data,
+    through: lastReportMonth(data, currentMonth),
+    lastMonth: previous >= COPY_FROM ? previous : COPY_FROM,
+    lastPosting: posting.data ? { at: posting.data.updated_at, error: run?.error ?? null, partial: !!run?.partial } : null,
+    lastCopy: copy.data ? { at: copy.data.updated_at, error: copied?.error ?? null } : null,
+  };
+}
+
+/** A month param ('YYYY-MM') a report can cover, from January 2025 through `through`, as 'YYYY-MM-01'; else null. */
+export function monthParam(value: string | null, through: string): string | null {
+  const m = value && /^\d{4}-\d{2}$/.test(value) ? `${value}-01` : null;
+  return m && m >= COPY_FROM && m <= through ? m : null;
+}

@@ -31,13 +31,15 @@ credit memos, posted the same way too, part 16, the profit and loss,
 balance sheet and trial balance from FleetSuite's own books, each next to
 NetSuite's, part 17, its customer refunds, posted with its bank
 deposits, part 18, 1084 Cool Springs' books, posted in the same run as
-BMG's, and part 19, a check each morning that tells the super admins when
-a month stops matching NetSuite.
+BMG's, part 19, a check each morning that tells the super admins when
+a month stops matching NetSuite, and part 20, the documents behind each
+account line on the reports.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
-`/admin/books/differences` and the reports at `/admin/books/reports`,
-which only super admins can
+`/admin/books/differences`, the reports at `/admin/books/reports` and an
+account line's detail at `/admin/books/reports/detail`, which only super
+admins can
 open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there.
 
@@ -94,6 +96,8 @@ the accounts page; the others are linked from there.
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
 | Daily check, and its notification | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs` in `src/lib/notification-registry.ts` |
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
+| An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
+| Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -1688,6 +1692,52 @@ link there).
 On a phone the trial balance shows each side in one column, its balance
 marked Dr or Cr, so it fits the screen as the other two reports do, and the
 reports' text isn't enlarged by iOS.
+
+The page keeps the company, report and months in its address
+(`deepLinks.booksReport`), so coming back from a line's detail opens the
+same report.
+
+## Report detail
+
+Each account line on Reports opens `/admin/books/reports/detail`
+(`deepLinks.booksAccountDetail`): every document that moved the account in
+the months the line covers, FleetSuite's journal next to the copy of
+NetSuite's general ledger, so the owner or the CPA can trace any number on a
+report back to its documents (owner decision 2026-10-18). A line that
+differs opens on the documents that differ, with the rest a tap away; From
+and To pick other months.
+
+What a line covers: on the profit and loss, the months picked; on the
+balance sheet, the To month, between the account's balance at the end of the
+month before and at the end of To; on the trial balance, the same for a
+balance sheet account and the year to date for income and expenses (those
+lines carry `yearToDate`). `lineSpan` in `src/lib/books/reports.ts` works
+out both ends as the report itself does, so the last one is the line, and
+the amounts read as that report shows them: income, liabilities and equity
+positive on the profit and loss and balance sheet, debit positive (Dr and
+Cr) on the trial balance. Retained earnings takes in earlier years' net
+income at each year's start, as the balance sheet puts it there, so a range
+across a year's start shows that on a row of its own. A NetSuite account the
+chart doesn't have yet counts as the report lists it.
+
+The documents come from migration 400's `gl_books_account_documents`,
+counted as Reports and Differences count them: NetSuite's in the month it
+posted to, FleetSuite's by each entry's date, and a reversal with the
+document it reverses, so a replaced entry shows once, at what stands. A
+document is the same on both sides when FleetSuite's source_id is NetSuite's
+internal id; a typed entry or an opening balance is a document of its own.
+One whose lines on the account come to nothing on both sides is left out.
+Each shows its date, type, number, name (from NetSuite's vendor list, else
+the ledger mirror's customer, as journal entries name theirs) and first
+memo, whether only one side has it, and, for a kind FleetSuite posts, a
+link from its number to its line by line check on Invoices vs NetSuite
+(`deepLinks.booksDocument`, as Differences links). The page lists 1,000 at
+most, by date.
+
+FleetSuite's documents always add up to its side of the line. NetSuite's
+come from the copy of its ledger, while the report's NetSuite side is
+NetSuite's own totals; when the copy doesn't hold all of a range yet, the
+page says how much it holds.
 
 ## Posting
 

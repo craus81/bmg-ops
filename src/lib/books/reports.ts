@@ -79,6 +79,8 @@ export interface ReportLine {
   derived?: true;
   /** A total over sections: gross profit, net income, total assets and the like. */
   grand?: true;
+  /** On the trial balance, an income or expense account's line, which covers its year to date. */
+  yearToDate?: true;
   /** Null on a section or heading. */
   fleetsuite: number | null;
   netsuite: number | null;
@@ -376,7 +378,7 @@ function trialBalanceOf(b: Books, month: string): Report {
         order: isIncomeStatement(b, key) ? 2 : 0,
         line: {
           kind: 'account', depth: 0, label: account?.name ?? `NetSuite account ${key}`, number: account?.number ?? null,
-          account: key, inChart: !!account, ...amount,
+          account: key, inChart: !!account, ...(isIncomeStatement(b, key) ? { yearToDate: true } : {}), ...amount,
         },
       };
     });
@@ -463,6 +465,66 @@ export function reportMonths(data: ReportData, kind: ReportKind, through: string
     const differing = reportOf(b, kind, { to: month }).differing;
     return { month, matches: differing === 0, differing };
   });
+}
+
+/** The account types a profit and loss or balance sheet shows credits of as positive: income, liabilities and equity. */
+const CREDIT_TYPES: ReadonlySet<string> = new Set([
+  'income', 'other_income', 'accounts_payable', 'credit_card', 'other_current_liability', 'deferred_revenue', 'long_term_liability', 'equity',
+]);
+
+/**
+ * What one account's line on a report is made of over the months from
+ * `from` through `to`, as the report shows the line (the detail page,
+ * src/lib/books/report-detail.ts): what the account's own documents moved,
+ * and for a balance sheet account, its balance before `from` and, on
+ * retained earnings, earlier years' net income that came into it between
+ * the two. `ending` is the line itself: on the profit and loss, the months
+ * picked; on the balance sheet and trial balance, the line at `to`'s end
+ * (income and expenses on the trial balance cover its year from `from`, a
+ * January). A NetSuite account the chart doesn't have yet counts as the
+ * report lists it, debit positive: what moved on the profit and loss, a
+ * balance on the others.
+ */
+export interface LineSpan {
+  /** -1 where the report shows the account's credits as positive. */
+  sign: 1 | -1;
+  /** The line's amount at the end of the month before `from`; null for income and expenses. */
+  starting: Pair | null;
+  moved: Pair;
+  /** On retained earnings, earlier years' net income the line takes in between `from` and `to`; null elsewhere. */
+  closed: Pair | null;
+  ending: Pair;
+}
+
+const monthBefore = (month: string) => {
+  const d = new Date(`${month.slice(0, 7)}-01T00:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
+export function lineSpan(data: ReportData, kind: ReportKind, key: string, range: { from: string; to: string }): LineSpan {
+  const b = books(data);
+  const account = b.chart.get(key);
+  const sign = kind !== 'trial_balance' && account && CREDIT_TYPES.has(account.account_type) ? -1 : 1;
+  const own = times(sign, pairOf((side) => moved(b, side, key, range.from, range.to)));
+  const balanceSheet = account ? account.statement !== 'income_statement' : kind !== 'profit_and_loss';
+  if (!balanceSheet) return { sign, starting: null, moved: own, closed: null, ending: own };
+
+  // Retained earnings takes in earlier years' net income at each year's start, as the balance sheet shows it.
+  const reAccount = retainedEarningsAccount(b.data.accounts, b.data.company);
+  const incomeKeys = reAccount && keyOf(reAccount) === key ? b.keys.filter((k) => isIncomeStatement(b, k)) : [];
+  const earlier = (month: string) =>
+    incomeKeys.reduce((sum, k) => plus(sum, pairOf((side) => before(b, side, k, yearStart(month)))), ZERO);
+  const previous = monthBefore(range.from);
+  const starting = times(sign, plus(pairOf((side) => before(b, side, key, range.from)), earlier(previous)));
+  const ending = times(sign, plus(balanceAt(b, key, range.to), earlier(range.to)));
+  return {
+    sign,
+    starting,
+    moved: own,
+    closed: incomeKeys.length ? times(sign, minus(earlier(range.to), earlier(previous))) : null,
+    ending,
+  };
 }
 
 /** The latest month either side has, but never before `floor`. */

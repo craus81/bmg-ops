@@ -33,6 +33,8 @@ interface Line {
   inChart?: boolean;
   derived?: true;
   grand?: true;
+  /** On the trial balance, an income or expense account's line: its year to date. */
+  yearToDate?: true;
   fleetsuite: number | null;
   netsuite: number | null;
   /** On an account line that differs: the months whose entries make up the difference, oldest first. */
@@ -144,12 +146,12 @@ const labelCell = (line: Line): React.CSSProperties => ({
   ...cell, textAlign: 'left', whiteSpace: 'normal', paddingLeft: `${10 + line.depth * 14}px`, fontStyle: line.derived ? 'italic' : 'normal',
 });
 
-/** An account's number and name, and whether the chart has it. */
-function AccountLabel({ line }: { line: Line }) {
+/** An account's number and name, opening the documents behind its line, and whether the chart has it. */
+function AccountLabel({ line, detail }: { line: Line; detail: string | null }) {
   return (
     <>
       {line.number && <span style={{ color: 'var(--text-muted)', marginRight: '6px', fontWeight: 400 }}>{line.number}</span>}
-      {line.label}
+      {detail ? <Link href={detail} className="rep-link">{line.label}</Link> : line.label}
       {line.inChart === false && <span style={{ ...chip(AMBER), marginLeft: '6px' }}>Not in the chart yet</span>}
     </>
   );
@@ -201,15 +203,17 @@ function GapMonths({ line, company }: { line: Line; company: string }) {
  * takes a row of its own above them (.rep-label-row in globals.css), so the
  * amounts fit across the screen: three columns on every report.
  */
-function ReportRow({ line, company, style, children }: { line: Line; company: string; style: React.CSSProperties; children: React.ReactNode }) {
+function ReportRow({ line, company, detail = null, style, children }: {
+  line: Line; company: string; detail?: string | null; style: React.CSSProperties; children: React.ReactNode;
+}) {
   const amounts = line.fleetsuite !== null && line.netsuite !== null;
   return (
     <>
       <tr className="rep-label-row" style={style}>
-        <td colSpan={3} style={labelCell(line)}><AccountLabel line={line} /><GapMonths line={line} company={company} /></td>
+        <td colSpan={3} style={labelCell(line)}><AccountLabel line={line} detail={detail} /><GapMonths line={line} company={company} /></td>
       </tr>
       <tr className={amounts ? 'rep-amounts' : 'rep-amounts rep-amounts-empty'} style={style}>
-        <td className="rep-label" style={labelCell(line)}><AccountLabel line={line} /><GapMonths line={line} company={company} /></td>
+        <td className="rep-label" style={labelCell(line)}><AccountLabel line={line} detail={detail} /><GapMonths line={line} company={company} /></td>
         {children}
       </tr>
     </>
@@ -217,7 +221,7 @@ function ReportRow({ line, company, style, children }: { line: Line; company: st
 }
 
 /** One line of the profit and loss or balance sheet. */
-function StatementRow({ line, company }: { line: Line; company: string }) {
+function StatementRow({ line, company, detail }: { line: Line; company: string; detail: string | null }) {
   const amounts = line.fleetsuite !== null && line.netsuite !== null;
   const diff = amounts ? line.fleetsuite! - line.netsuite! : 0;
   const total = line.kind === 'total';
@@ -226,7 +230,7 @@ function StatementRow({ line, company }: { line: Line; company: string }) {
     fontWeight: line.grand ? 800 : total || line.kind === 'section' ? 700 : line.kind === 'heading' ? 600 : 400,
   };
   return (
-    <ReportRow line={line} company={company} style={style}>
+    <ReportRow line={line} company={company} detail={detail} style={style}>
       <td style={cell}>{amounts ? fmt(line.fleetsuite!) : ''}</td>
       <td style={cell}>{amounts ? fmt(line.netsuite!) : ''}</td>
       <td style={{ ...cell, color: diff ? RED : 'var(--text-muted)', fontWeight: diff ? 700 : 400 }}>
@@ -237,10 +241,10 @@ function StatementRow({ line, company }: { line: Line; company: string }) {
 }
 
 /** One account of the trial balance, debits and credits apart; on a phone, each side's in one column with Dr or Cr. */
-function TrialBalanceRow({ line, company }: { line: Line; company: string }) {
+function TrialBalanceRow({ line, company, detail }: { line: Line; company: string; detail: string | null }) {
   const diff = (line.fleetsuite ?? 0) - (line.netsuite ?? 0);
   return (
-    <ReportRow line={line} company={company} style={{ borderTop: '1px solid var(--border)' }}>
+    <ReportRow line={line} company={company} detail={detail} style={{ borderTop: '1px solid var(--border)' }}>
       <td className="rep-wide" style={cell}>{debitOf(line.fleetsuite ?? 0)}</td>
       <td className="rep-wide" style={cell}>{creditOf(line.fleetsuite ?? 0)}</td>
       <td className="rep-wide" style={cell}>{debitOf(line.netsuite ?? 0)}</td>
@@ -272,6 +276,8 @@ export default function BooksReportsPage() {
       if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
       setData(json);
       setError('');
+      // Keep the address on the report shown, so coming back from a line's detail opens it again.
+      window.history.replaceState(null, '', deepLinks.booksReport(json.company, json.report, json.from, json.to));
     } catch (e: any) {
       setError(e?.message || 'Could not load the report');
     }
@@ -281,7 +287,10 @@ export default function BooksReportsPage() {
   useEffect(() => {
     if (authLoading) return;
     if (!hasRole('super_admin')) { router.push('/home'); return; }
-    load({});
+    // A link may name the company, report and months (deepLinks.booksReport), as a line's detail does.
+    const q = new URLSearchParams(window.location.search);
+    const asked = KINDS.find(([k]) => k === q.get('report'))?.[0];
+    load({ company: q.get('company') ?? undefined, report: asked, from: q.get('from') ?? undefined, to: q.get('to') ?? undefined });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
   }, [authLoading, router, load]);
 
@@ -306,6 +315,11 @@ export default function BooksReportsPage() {
   const shown = (data?.lines ?? []).filter((l) => !onlyDifferences
     || ((l.kind === 'account' || l.kind === 'total') && l.fleetsuite !== l.netsuite));
   const isTrialBalance = data?.report === 'trial_balance';
+  const detailOf = (l: Line): string | null => {
+    if (!data || l.kind !== 'account' || !l.account || l.derived) return null;
+    const from = isProfitAndLoss ? data.from : l.yearToDate ? `${data.to.slice(0, 4)}-01-01` : data.to;
+    return deepLinks.booksAccountDetail(data.company, l.account, data.report, from, data.to, data.checked && l.fleetsuite !== l.netsuite);
+  };
 
   return (
     <div>
@@ -507,7 +521,7 @@ export default function BooksReportsPage() {
                     {onlyDifferences ? 'Every line matches NetSuite.' : `Nothing on either side for ${data.from === data.to || !isProfitAndLoss ? 'this month' : 'these months'}.`}
                   </td></tr>
                 )}
-                {isTrialBalance && shown.map((l) => <TrialBalanceRow key={l.account ?? l.label} line={l} company={data.company} />)}
+                {isTrialBalance && shown.map((l) => <TrialBalanceRow key={l.account ?? l.label} line={l} company={data.company} detail={detailOf(l)} />)}
                 {isTrialBalance && data.totals && (
                   <ReportRow
                     line={{ kind: 'total', depth: 0, label: 'Total', fleetsuite: 0, netsuite: 0 }}
@@ -528,7 +542,7 @@ export default function BooksReportsPage() {
                   </ReportRow>
                 )}
                 {!isTrialBalance && shown.map((l, i) => (
-                  <StatementRow key={`${i}-${l.kind}-${l.account ?? l.label}`} line={l} company={data.company} />
+                  <StatementRow key={`${i}-${l.kind}-${l.account ?? l.label}`} line={l} company={data.company} detail={detailOf(l)} />
                 ))}
               </tbody>
             </table>

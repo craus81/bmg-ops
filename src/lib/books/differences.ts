@@ -569,6 +569,16 @@ function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[]): { reason: 
 /** A differing document's number: NetSuite's, else the copy of its documents', else its NetSuite id. */
 export const documentNumber = (doc: DiffDocumentData) => doc.netsuite?.number || doc.copy?.number || `NetSuite ${doc.netsuite_id}`;
 
+/**
+ * The month Invoices vs NetSuite lists a document of a FleetSuite kind
+ * under: NetSuite's month for the kinds that post in it, else the month of
+ * its date; null before the books start, or with neither.
+ */
+export function listMonthOf(kind: string, netsuiteMonth: string | null, date: string | null): string | null {
+  const listed = IN_NETSUITE_MONTH.has(kind) && netsuiteMonth ? netsuiteMonth : date ? monthOf(date) : null;
+  return listed && listed >= COPY_FROM ? listed : null;
+}
+
 /** One differing document, its lines named and the reason it differs spelled out. */
 export function explainDocument(doc: DiffDocumentData, ctx: { name: ReturnType<typeof accountNamer> }): DiffDocument {
   const lines = doc.lines
@@ -581,7 +591,6 @@ export function explainDocument(doc: DiffDocumentData, ctx: { name: ReturnType<t
       || collator.compare(a.name, b.name));
   const standing = doc.fleetsuite?.standing ?? null;
   const date = doc.netsuite?.date ?? standing?.date ?? null;
-  const listed = IN_NETSUITE_MONTH.has(doc.kind) && doc.netsuite?.month ? doc.netsuite.month : date ? monthOf(date) : null;
   return {
     kind: doc.kind,
     netsuiteId: doc.netsuite_id,
@@ -589,7 +598,7 @@ export function explainDocument(doc: DiffDocumentData, ctx: { name: ReturnType<t
     customer: doc.copy?.customer ?? null,
     date,
     netsuiteMonth: doc.netsuite?.month ?? null,
-    listMonth: listed && listed >= COPY_FROM ? listed : null,
+    listMonth: listMonthOf(doc.kind, doc.netsuite?.month ?? null, date),
     listKind: listKindOf(doc.kind),
     fleetsuiteDate: standing?.date ?? null,
     entryNo: standing?.entry_no ?? null,
