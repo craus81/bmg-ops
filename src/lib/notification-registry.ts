@@ -161,6 +161,9 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'email_bounced', label: 'Customer email bounced', description: 'A message to a customer could not be delivered.', area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true },
   { type: 'invoice_email_bounced', label: 'Invoice email bounced', description: 'An invoice never reached the customer — they are not going to pay it.', area: 'money', defaultChannels: ['in_app', 'push', 'email'], emailNow: true },
   { type: 'estimate_email_bounced', label: 'Estimate email bounced', description: 'An estimate never reached the customer.', area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true },
+  // The daily books check (src/lib/books/daily-check.ts, owner decision
+  // 2026-10-18): in-app and push, no email by default.
+  { type: 'books_month_differs', label: 'Books stopped matching NetSuite', description: "FleetSuite's daily check found a month of its own books that no longer matches NetSuite's, or one where more documents differ than before. Opens that month on Differences vs NetSuite.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
 
   // ── Contract installers (CNI) ─────────────────────────────────────────
   { type: 'cni_job_invite', label: 'Job invitation', description: 'An installer company was invited to bid on a job.', area: 'cni', defaultChannels: ['in_app', 'push'] },

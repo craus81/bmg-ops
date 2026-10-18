@@ -39,6 +39,8 @@ interface Payload {
   copyHolds: boolean | null;
   lastPosting: { at: string; error: string | null; partial: boolean } | null;
   lastCopy: { at: string; error: string | null } | null;
+  /** The daily check's last look (src/lib/books/daily-check.ts); null until it has looked. */
+  lastCheck: { at: string; error: string | null } | null;
 }
 
 const GREEN = '#22c55e';
@@ -207,6 +209,7 @@ export default function BooksDifferencesPage() {
           )}
           {data.lastCopy?.error && <div style={banner(RED)}>The last copy of NetSuite&apos;s ledger failed {ago(data.lastCopy.at)}: {data.lastCopy.error}</div>}
           {data.lastPosting?.error && <div style={banner(RED)}>The last posting run failed {ago(data.lastPosting.at)}: {data.lastPosting.error}</div>}
+          {data.lastCheck?.error && <div style={banner(RED)}>The daily check couldn&apos;t look at everything {ago(data.lastCheck.at)}: {data.lastCheck.error}</div>}
           {data.copyHolds === false && (
             <div style={banner(AMBER)}>
               The copy of NetSuite&apos;s ledger doesn&apos;t hold all of {monthName(data.month)} yet, so NetSuite&apos;s side may be
@@ -219,6 +222,7 @@ export default function BooksDifferencesPage() {
               NetSuite&apos;s ledger copied {ago(data.lastCopy.at)}.
               {data.lastPosting ? ` FleetSuite's books posted ${ago(data.lastPosting.at)}${data.lastPosting.partial ? ', still working through the months' : ''}.` : ''}
               {data.posts && ` ${matching} of ${data.months.length} months match on what FleetSuite posts; ${differingMonths} differ.`}
+              {data.lastCheck && ` The daily check looked ${ago(data.lastCheck.at)}; super admins hear each morning when a month stops matching.`}
             </div>
           )}
 

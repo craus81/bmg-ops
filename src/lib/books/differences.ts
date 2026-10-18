@@ -566,6 +566,9 @@ function reasonFor(doc: DiffDocumentData, lines: DiffDocumentLine[]): { reason: 
   };
 }
 
+/** A differing document's number: NetSuite's, else the copy of its documents', else its NetSuite id. */
+export const documentNumber = (doc: DiffDocumentData) => doc.netsuite?.number || doc.copy?.number || `NetSuite ${doc.netsuite_id}`;
+
 /** One differing document, its lines named and the reason it differs spelled out. */
 export function explainDocument(doc: DiffDocumentData, ctx: { name: ReturnType<typeof accountNamer> }): DiffDocument {
   const lines = doc.lines
@@ -582,7 +585,7 @@ export function explainDocument(doc: DiffDocumentData, ctx: { name: ReturnType<t
   return {
     kind: doc.kind,
     netsuiteId: doc.netsuite_id,
-    number: doc.netsuite?.number || doc.copy?.number || `NetSuite ${doc.netsuite_id}`,
+    number: documentNumber(doc),
     customer: doc.copy?.customer ?? null,
     date,
     netsuiteMonth: doc.netsuite?.month ?? null,

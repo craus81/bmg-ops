@@ -1164,7 +1164,8 @@ const documents = (kinds: Array<keyof typeof DOCUMENT_WORDS>) => joined(
   'and',
 );
 
-async function runLimited(tasks: Array<() => Promise<void>>, limit: number): Promise<void> {
+/** Runs the tasks in turn, `limit` of them at once. */
+export async function runLimited(tasks: Array<() => Promise<void>>, limit: number): Promise<void> {
   let next = 0;
   const worker = async () => {
     while (next < tasks.length) await tasks[next++]();
