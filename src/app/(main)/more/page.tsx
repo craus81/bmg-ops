@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useTheme } from '@/components/ThemeProvider';
 import TextSizeToggle from '@/components/TextSizeToggle';
+import DuoScreenNote from '@/components/DuoScreenNote';
 import { apiFetch } from '@/lib/api-client';
 import { useNavTabs } from '@/components/useNavTabs';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
@@ -210,6 +211,7 @@ export default function MorePage() {
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px', textAlign: 'center' }}>
           Makes everything on this device larger and easier to read
         </div>
+        <DuoScreenNote />
       </div>
 
       {/* Profile */}

@@ -433,7 +433,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
             <img src="/bmg-logo-white.png" alt="BMG" style={{ height: '26px', width: 'auto' }}
               onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).parentElement!.innerHTML = '<span style="font-weight:800;font-size:11px;color:white;letter-spacing:1px">BMG</span>'; }} />
           </div>
-          <div>
+          <div className="app-header-title">
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ fontSize: '12px', fontWeight: 800, color: '#fff', letterSpacing: '0.3px' }}>
                 {isAdmin ? 'FleetSuite' : 'Fleet GO'}
