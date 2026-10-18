@@ -4,6 +4,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate } from '@/lib/books/netsuite-gl';
 import { BOOKS_INVOICE_POSTING, POSTING_COMPANIES, type InvoicePostingResult } from '@/lib/books/invoice-posting';
+import { BOOKS_DAILY_CHECK, type DailyCheckResult } from '@/lib/books/daily-check';
 import {
   accountNamer, accountRows, compareMonth, copyHolds, explainDocument, indexMonths, kindRows, lastMonth, monthStatuses,
   NETSUITE_TYPE, postedKinds, type DiffChartAccount, type DiffData, type DiffDocumentData, type GlTotals,
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
 
   const params = new URL(req.url).searchParams;
   const service = createServiceClient();
-  const [companies, chart, posting, copy] = await Promise.all([
+  const [companies, chart, posting, copy, check] = await Promise.all([
     service.from('gl_companies').select('code, name, netsuite_subsidiary_id').order('code'),
     fetchAllRows<DiffChartAccount>((from, to) => service
       .from('gl_accounts')
@@ -39,8 +40,9 @@ export async function GET(req: NextRequest) {
       .range(from, to)),
     service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_INVOICE_POSTING).maybeSingle(),
     service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_GL_SYNC).maybeSingle(),
+    service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_DAILY_CHECK).maybeSingle(),
   ]);
-  const error = companies.error || chart.error || posting.error || copy.error;
+  const error = companies.error || chart.error || posting.error || copy.error || check.error;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const codes = (companies.data || []).map((c) => c.code as string);
@@ -92,6 +94,7 @@ export async function GET(req: NextRequest) {
   const cmp = compareMonth(index.get(month), month, posted);
   const run = (posting.data?.last_result ?? null) as InvoicePostingResult | null;
   const copied = (copy.data?.last_result ?? null) as { error?: string } | null;
+  const checked = (check.data?.last_result ?? null) as DailyCheckResult | null;
 
   return NextResponse.json({
     companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name, netsuite_subsidiary_id: c.netsuite_subsidiary_id })),
@@ -110,5 +113,6 @@ export async function GET(req: NextRequest) {
     copyHolds: copyHolds(totals.data as GlTotals | null, month),
     lastPosting: posting.data ? { at: posting.data.updated_at, error: run?.error ?? null, partial: !!run?.partial } : null,
     lastCopy: copy.data ? { at: copy.data.updated_at, error: copied?.error ?? null } : null,
+    lastCheck: check.data ? { at: check.data.updated_at, error: checked?.error ?? null } : null,
   });
 }

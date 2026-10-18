@@ -333,6 +333,13 @@ export const deepLinks = {
    *  list while a row id is in scope). */
   ledgerCustomerReview: (ledgerCustomerId?: string | null) =>
     `/admin/ledger?tab=review${ledgerCustomerId ? `&customer=${ledgerCustomerId}` : ''}`,
+  /** Books → Differences vs NetSuite on one company's month ('YYYY-MM' or
+   *  'YYYY-MM-01'), which the page opens from ?company= and ?month=: the
+   *  landing for the daily books check's notification
+   *  (src/lib/books/daily-check.ts) and Reports' links to a month. Super
+   *  admins only, as the books are. */
+  booksDifferences: (company: string, month: string) =>
+    `/admin/books/differences?${new URLSearchParams({ company, month: month.slice(0, 7) })}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it

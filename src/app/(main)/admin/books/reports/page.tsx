@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
+import { deepLinks } from '@/lib/deep-links';
 
 /**
  * Books → Reports (src/lib/books/reports.ts, migration 396, docs/books.md).
@@ -180,7 +181,7 @@ function GapMonths({ line, company }: { line: Line; company: string }) {
             {/* Differences starts in January 2025; FleetSuite entries dated earlier have no month there. */}
             {g.month < '2025-01-01' ? shortName(g.month) : (
               <Link
-                href={`/admin/books/differences?${new URLSearchParams({ company, month: g.month.slice(0, 7) })}`}
+                href={deepLinks.booksDifferences(company, g.month)}
                 style={{ color: 'var(--text-secondary)' }}
               >
                 {shortName(g.month)}
@@ -467,7 +468,7 @@ export default function BooksReportsPage() {
               <>
                 {' '}
                 <Link
-                  href={`/admin/books/differences?${new URLSearchParams({ company: data.company, month: firstDiffering.month.slice(0, 7) })}`}
+                  href={deepLinks.booksDifferences(data.company, firstDiffering.month)}
                   style={{ color: 'var(--text-secondary)' }}
                 >
                   Differences vs NetSuite

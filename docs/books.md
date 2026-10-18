@@ -30,8 +30,9 @@ its stock and book their cost, with the cost lines of its invoices and
 credit memos, posted the same way too, part 16, the profit and loss,
 balance sheet and trial balance from FleetSuite's own books, each next to
 NetSuite's, part 17, its customer refunds, posted with its bank
-deposits, and part 18, 1084 Cool Springs' books, posted in the same run as
-BMG's.
+deposits, part 18, 1084 Cool Springs' books, posted in the same run as
+BMG's, and part 19, a check each morning that tells the super admins when
+a month stops matching NetSuite.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -91,6 +92,8 @@ the accounts page; the others are linked from there.
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
+| Daily check, and its notification | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs` in `src/lib/notification-registry.ts` |
+| Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -1579,6 +1582,42 @@ document has no copy but the GL's, which gives its number. When
 the copy of NetSuite's ledger doesn't yet hold everything NetSuite's own
 totals say a month moved, the page says so, since NetSuite's side is then
 short.
+
+## Daily check
+
+Each morning FleetSuite puts every month of BMG's and 1084's books next to
+NetSuite's, as Differences vs NetSuite does, and tells the super admins in
+FleetSuite when a month stops matching, with a link to that month there
+(owner decision 2026-10-18). A month stops matching when it matched and now
+differs on what FleetSuite posts, or when it already differed and more of
+its documents differ now than when the super admins last heard of it, so a
+month that differs for a known reason (December 2025's sales tax on one
+invoice, while a question for the CPA stands) says nothing more until
+another of its documents differs. A month that matches again drops out,
+and is told about again if it stops matching later. The check's first look
+learns where things stand and tells nobody.
+
+`/api/cron/books-daily-check` runs twice, each time just after a posting
+run and before the next copy of NetSuite's ledger. A document someone was
+changing in NetSuite while the copies ran can differ until the next posting
+run catches it up, so the 09:58 UTC run (4:58 AM Central, 3:58 in winter),
+when nobody works in NetSuite, only notes what newly differs, and the 13:58
+UTC run (8:58, 7:58 in winter), two posting runs later, tells about what of
+that still differs. What first differs at the 13:58 run waits for the next
+morning. A run before noon UTC is the first look, after it the second.
+
+Each month gets its own notification (`books_month_differs`: in the app and
+by push, never by email unless someone picks email in Settings) naming the
+two documents that differ most, or how many accounts differ when no
+document of a kind FleetSuite posts is behind it; more than three months of
+a company at once get one notification, linking to the first. It says so
+when the last posting run or copy of NetSuite's ledger failed, which can be
+why. The record in `sync_state`, `books_daily_check`, holds each company's
+months that differ with how many of their documents, never an amount; a
+company the check couldn't look at keeps what it had, and Differences vs
+NetSuite says when the check last looked and what it couldn't do. When the
+notifications can't go, nothing is recorded, so the next morning tells
+again. Nothing is written to NetSuite or to the books.
 
 ## Reports
 
