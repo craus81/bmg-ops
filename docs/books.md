@@ -33,16 +33,19 @@ NetSuite's, part 17, its customer refunds, posted with its bank
 deposits, part 18, 1084 Cool Springs' books, posted in the same run as
 BMG's, part 19, a check each morning that tells the super admins when
 a month stops matching NetSuite, part 20, the documents behind each
-account line on the reports, and part 21, each item's stock at each
+account line on the reports, part 21, each item's stock at each
 location, counted from a copy of every NetSuite document that moves it and
-checked against NetSuite's own count.
+checked against NetSuite's own count, and part 22, what each customer owes
+and each vendor is owed, next to NetSuite's and checked each morning.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
 account line's detail at `/admin/books/reports/detail`, stock by item at
-`/admin/books/stock` and an item's moves at `/admin/books/stock/item`,
-which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
+`/admin/books/stock`, an item's moves at `/admin/books/stock/item`,
+customer and vendor balances at `/admin/books/balances` and the documents
+behind one at `/admin/books/balances/party`, which only super admins can
+open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there.
 
 | Piece | Where |
@@ -96,13 +99,16 @@ the accounts page; the others are linked from there.
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
-| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs` and `books_stock_differs` in `src/lib/notification-registry.ts` |
+| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs` and `books_balance_differs` in `src/lib/notification-registry.ts` |
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
 | NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `migrations/403-books-stock-item-setup.sql` (items set up wrong), `migrations/404-books-stock-ledger-parts.sql` (the ledger account by account), `migrations/405-books-stock-account-items.sql` (the items behind each account), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
 | Stock by item and an item's moves, and their APIs | `src/app/(main)/admin/books/stock/page.tsx`, `src/app/(main)/admin/books/stock/item/page.tsx`, `src/app/api/admin/books/stock/route.ts`, `src/app/api/admin/books/stock/item/route.ts` |
 | Stock by item tests | `src/lib/books/netsuite-stock.test.ts`, `src/lib/books/stock-items.test.ts`, `src/lib/books/stock-items-sql.test.ts`; the daily check's are in its test files |
+| Each customer's and vendor's balance, and the starting entry by name | `migrations/406-books-party-balances.sql`, `src/lib/books/party-balances.ts`, `partyOpeningQuery` and `storePartyOpening` in `src/lib/books/netsuite-gl.ts` |
+| Customer and vendor balances and one balance's documents, and their APIs | `src/app/(main)/admin/books/balances/page.tsx`, `src/app/(main)/admin/books/balances/party/page.tsx`, `src/app/api/admin/books/balances/route.ts`, `src/app/api/admin/books/balances/party/route.ts` |
+| Balance tests | `src/lib/books/party-balances.test.ts`, `src/lib/books/party-balances-sql.test.ts`; the starting entry by name's are in the copy test files, the daily check's in its own |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -299,7 +305,12 @@ and from **Copy now** on the trial balance page (`copyNetSuiteGl`):
 2. Read NetSuite's own totals per subsidiary, account and month, over all of
    its history, and store them. Everything before 2025 becomes the starting
    entry (`gl_netsuite_opening`); the rest (`gl_netsuite_month_totals`) is
-   what the copy is checked against.
+   what the copy is checked against. The starting entry on the receivable
+   and payable accounts is read again by name, so each customer's and
+   vendor's balance starts where NetSuite's does
+   (`gl_netsuite_opening_parties`, migration 406, see "Customer and vendor
+   balances"); when NetSuite won't give the names, the split by name it had
+   stays and that page says so.
 3. Work out the same totals from the copy. Every month that differs is
    copied again: its lines are read in pages of whole transactions, an
    unchanged transaction is only marked seen, and once the month is through,
@@ -1647,6 +1658,21 @@ When NetSuite's counts are read another way (each item company-wide
 instead of at each location, or back), the items are keyed another way, so
 the next look starts afresh and tells nobody.
 
+Customer and vendor balances are looked at the same way too (owner
+decision 2026-10-19, "Balance checks"): a customer's or vendor's balance
+that stops matching NetSuite's is noted at the first look and told about at
+the second if it still differs, and so is one more of whose documents
+differ than when the super admins last heard of it. One whose documents
+differ while its balance matches isn't told about; the page shows it. Each
+balance gets its own notification (`books_balance_differs`, in the app and
+by push) naming the newest two of its documents that differ, linking to its
+documents; more than three of a company at once get one, linking to
+Customer and vendor balances open on those that differ. The record holds
+whose balances differ, by FleetSuite's id for a customer and NetSuite's for
+a vendor (`c:` and `v:` alone for the group FleetSuite can't name), with
+how many of their documents differ, never an amount. The check's first
+look at a company's balances learns where they stand and tells nobody.
+
 ## Reports
 
 `/admin/books/reports` shows one company's profit and loss, balance sheet
@@ -1958,6 +1984,92 @@ Not yet seen in NetSuite's data, so the page is what will show it:
   2025 would differ from NetSuite's at once;
 - items bought or sold in a different unit than they're stocked in, whose
   lines' quantities may be in that unit.
+
+## Customer and vendor balances
+
+`/admin/books/balances` shows what each customer owes and each vendor is
+owed in one company's books, FleetSuite's next to NetSuite's, so a balance
+that drifts shows up by name (owner decision 2026-10-19, "Balance checks").
+Until then the books were compared account by account, month by month and
+document by document, so a payment put on the wrong customer, which leaves
+every account and month as it was, couldn't show. Nothing is written to
+NetSuite or to the books.
+
+### Who a line belongs to
+
+A customer's balance is what the lines that name it come to on the chart's
+receivable accounts, a vendor's on its payable accounts, as migration 406's
+`gl_party_balances` sums them. A customer is the FleetSuite customer a line
+names: on FleetSuite's side the journal line's customer, on NetSuite's the
+FleetSuite customer the ledger mirror matched the line's name to by its
+NetSuite id (`ledger_customers`, an exact match), the match journal
+entries, deposits and bank documents post with. One FleetSuite customer can
+be several NetSuite customers, and the page says how many. The lines that
+name no customer, or one the mirror hasn't matched, make one row, "Not
+matched to a FleetSuite customer", since FleetSuite's books can't tell them
+apart; NetSuite's names in it are listed under it with what each holds in
+NetSuite's books, the 200 largest. A vendor is NetSuite's id for the line's
+name on both sides (the journal's vendor reference), and "No vendor named"
+is the payables lines that name nobody. When the mirror matches a customer
+after FleetSuite posted its documents, its NetSuite side moves out of the
+row FleetSuite can't name at once, and its FleetSuite side when the posting
+run posts those documents again.
+
+Both sides start from the starting entry split by name: the copy of
+NetSuite's ledger reads NetSuite's lines before 2025 on the receivable and
+payable accounts by name, placing each in a month as the starting entry
+does, and keeps what each name held (`gl_netsuite_opening_parties`, see
+"NetSuite's general ledger, copied"). Then each side adds every document
+since: FleetSuite's journal on one side, the copy of NetSuite's general
+ledger on the other, a document being the same on both sides as on Report
+detail. When the split doesn't add up to the starting entry line for line
+on every account (NetSuite wouldn't give the names, or hasn't been asked
+since a change), the page says so, and what isn't split counts in the
+total but in no one's balance.
+
+A customer's balance reads positive when it owes, a vendor's when it's
+owed. A balance differs when its two sides aren't the same to the cent; a
+document differs when its two sides aren't, for that customer or vendor.
+One whose documents differ while its balance matches (two documents that
+make up for each other) is listed in amber, not red, and the daily check
+doesn't tell about it (see "Daily check").
+
+### The page
+
+The page opens on BMG's customers with how the last copy of NetSuite's
+ledger, posting run and daily check went, and says when the copy doesn't
+hold everything NetSuite's totals say moved the accounts (`copyHoldsAccounts`
+in `src/lib/books/party-balances.ts`, as the trial balance check reads
+them), since NetSuite's side may be short then. Buttons pick the company and
+Customers or Vendors, each with how many differ. The total of every
+customer's (vendor's) balance comes first, both sides, then each one: those
+whose balances differ first, the largest difference first, then by name,
+the row FleetSuite can't name last, each with how many documents moved it
+since 2025 and its balance before 2025. A balance at nothing on both sides
+with every document matching is left out. Buttons show only those that
+differ (the amber ones too), and a search finds a name, a NetSuite id or a
+NetSuite name in the row FleetSuite can't name. `?only=differs`
+(`deepLinks.booksBalances`) opens the page on those that differ.
+
+A name opens `/admin/books/balances/party` (`deepLinks.booksBalance`,
+`?company=&kind=&party=`, `party=none` for the row FleetSuite can't name):
+the balance before 2025, what the documents since came to and the balance
+now, each side, then every document that moved it, from migration 406's
+`gl_party_documents`, those that differ first, then the newest, 1,000 at
+most. Each shows as on Report detail: its date, type, number, name and first
+memo, whether only one side has it, and, for a kind FleetSuite posts, a link
+from its number to its line by line check on Invoices vs NetSuite.
+
+### What isn't known yet
+
+The first look at the real books will show whether SuiteQL in BMG's account
+gives the name on lines before 2025 grouped as the copy asks; if it can't,
+the page says the split isn't complete and every balance starts at nothing,
+which is still the same on both sides. And balances will differ wherever
+FleetSuite's books name a customer differently from NetSuite's lines (a
+document FleetSuite posted before the mirror matched its customer, or one
+NetSuite names on a line FleetSuite's rule doesn't); the documents on the
+balance's page show which.
 
 ## Posting
 

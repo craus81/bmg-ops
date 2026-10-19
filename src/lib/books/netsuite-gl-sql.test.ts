@@ -2,7 +2,7 @@
 // the journal. This runs migrations 359–363 in an in-memory Postgres
 // (PGlite) as the app's server login and holds the functions' rules, then
 // runs the whole copy job against them with a fake NetSuite that answers
-// the job's own SuiteQL.
+// the job's own SuiteQL, the starting entry by name (migration 406) with it.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -24,8 +24,8 @@ import { BOOKS_GL_SYNC, PERIODS_QUERY, copyNetSuiteGl, monthsThatDiffer, type Mo
 import { monthStatuses, trialBalance, type TbData } from './trial-balance';
 
 // A fresh database with Supabase's API roles and default grants, migrations
-// 359–363 run twice as the owner, 1084 linked to subsidiary 5 (as the
-// account sync does), then the app's server login.
+// 359–363 and 406 run twice as the owner, 1084 linked to subsidiary 5 (as
+// the account sync does), then the app's server login.
 async function freshDb(): Promise<PGlite> {
   const pg = new PGlite();
   await pg.exec(`
@@ -36,13 +36,19 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
+    -- What migration 314 points at in the app's own schema.
+    CREATE TABLE public.profiles (id UUID PRIMARY KEY);
+    CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT);
+    CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
   `);
   for (const file of [
-    '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
+    '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql',
     // The stock copy's functions, for the WHERE check below.
     '401-books-stock-by-item.sql', '402-books-stock-values.sql', '403-books-stock-item-setup.sql',
     '404-books-stock-ledger-parts.sql', '405-books-stock-account-items.sql',
+    // The starting entry by name, which the copy job stores.
+    '406-books-party-balances.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -266,8 +272,12 @@ describe('the copy\'s functions', () => {
     const functions = [
       'gl_netsuite_apply(jsonb)', 'gl_netsuite_finish_month(date, text)', 'gl_netsuite_store_totals(jsonb)',
       'gl_netsuite_totals(text)', 'gl_netsuite_claim_copy(text, integer)', 'gl_netsuite_release_copy(text)',
+      'gl_netsuite_store_opening_parties(jsonb)',
     ];
-    const tables = ['gl_netsuite_transactions', 'gl_netsuite_lines', 'gl_netsuite_opening', 'gl_netsuite_month_totals', 'gl_netsuite_copy_lock'];
+    const tables = [
+      'gl_netsuite_transactions', 'gl_netsuite_lines', 'gl_netsuite_opening', 'gl_netsuite_month_totals', 'gl_netsuite_copy_lock',
+      'gl_netsuite_opening_parties',
+    ];
     for (const role of ['anon', 'authenticated', 'service_role']) {
       for (const f of functions) {
         expect(await one<boolean>(`SELECT has_function_privilege($1::name, $2::text, 'EXECUTE') AS r`, [role, f]), `${role} ${f}`).toBe(role === 'service_role');
@@ -292,6 +302,7 @@ describe('the copy\'s functions', () => {
     )).rows;
     expect(functions.map((f) => f.name)).toEqual(expect.arrayContaining([
       'gl_netsuite_store_totals', 'gl_netsuite_lists_finish', 'gl_netsuite_stock_apply', 'gl_netsuite_stock_store_counts',
+      'gl_netsuite_store_opening_parties',
     ]));
     expect(functions.flatMap((f) => unguardedWrites(f.body).map((w) => `${f.name}: ${w}`))).toEqual([]);
   });
@@ -327,6 +338,8 @@ interface NsLine {
   period?: number | null;
   type?: string;
   memo?: string;
+  /** TransactionLine.entity, the line's own name; its transaction's is 300 + txn. */
+  entity?: number;
   /** TransactionAccountingLine.posting; false = a non-posting line. */
   posting?: boolean;
   /** Transaction.posting. */
@@ -340,7 +353,7 @@ const BOOKS: NsLine[] = [
   // Before 2025: the starting entry. The first has no period, so it counts by date.
   { txn: 1, line: 0, sub: 2, account: 10, debit: 1000, date: '2024-06-30' },
   { txn: 1, line: 1, sub: 2, account: 30, credit: 1000, date: '2024-06-30' },
-  { txn: 2, line: 0, sub: 2, account: 20, debit: 500, date: '2024-12-15', period: 101, type: 'CustInvc' },
+  { txn: 2, line: 0, sub: 2, account: 20, debit: 500, date: '2024-12-15', period: 101, type: 'CustInvc', entity: 900 },
   { txn: 2, line: 1, sub: 2, account: 40, credit: 500, date: '2024-12-15', period: 101, type: 'CustInvc' },
   // January 2025, including one dated December but posted to January.
   { txn: 3, line: 0, sub: 2, account: 20, debit: 200, date: '2025-01-10', period: 102, type: 'CustInvc' },
@@ -395,6 +408,10 @@ const rejected = (what: string) => Object.assign(new Error(`NetSuite SuiteQL err
 // NetSuite leaves empty fields out of its JSON.
 const compact = (r: Row): Row => Object.fromEntries(Object.entries(r).filter(([, v]) => v !== null && v !== undefined));
 const byTxnLine = (a: NsLine, b: NsLine) => a.txn - b.txn || a.line - b.line;
+/** The read of the starting entry by name: the only grouped read that names the lines' customers and vendors. */
+const isNamesRead = (q: string) => q.includes('GROUP BY') && q.includes('tl.entity');
+/** The ids in a query's `<column> IN (...)`, or null when it has none. */
+const listed = (q: string, re: RegExp) => q.match(re)?.[1].split(',').map((s) => Number(s.trim())) ?? null;
 
 /**
  * Answers the job's SuiteQL from a list of lines: the periods, the totals,
@@ -403,7 +420,7 @@ const byTxnLine = (a: NsLine, b: NsLine) => a.txn - b.txn || a.line - b.line;
  */
 class FakeNetSuite {
   lines: NsLine[];
-  refuse = { periods: false, txnPosting: false, extraColumns: false, noAccountTypes: false };
+  refuse = { periods: false, txnPosting: false, extraColumns: false, noAccountTypes: false, partyOpening: false };
   /** Transactions the line reads miss though the totals count them. */
   unreadable = new Set<number>();
   /** A line the line reads return twice, as with a second accounting book. */
@@ -430,7 +447,7 @@ class FakeNetSuite {
       txn_id: l.txn, line_id: l.line, account_id: l.account, debit: l.debit, credit: l.credit, subsidiary_id: l.sub,
       tran_type: l.type ?? 'Journal', tranid: `T-${l.txn}`, trandate: usDate(l.date), period_id: l.period,
     };
-    if (q.includes('tl.memo')) Object.assign(r, { memo: l.memo, txn_entity_id: 300 + l.txn, location_id: 1 });
+    if (q.includes('tl.memo')) Object.assign(r, { memo: l.memo, line_entity_id: l.entity, txn_entity_id: 300 + l.txn, location_id: 1 });
     return compact(r);
   }
 
@@ -449,6 +466,29 @@ class FakeNetSuite {
         counts.set(l.type ?? 'Journal', (counts.get(l.type ?? 'Journal') ?? 0) + 1);
       }
       return [...counts].map(([tran_type, line_count]) => ({ tran_type, line_count }));
+    }
+    if (isNamesRead(q)) {
+      // The starting entry by name: the accounts listed, before the date or in the periods listed.
+      if (this.refuse.partyOpening) throw rejected("Search error occurred: Field 'entity' was not found.");
+      const accounts = listed(q, /tal\.account IN \(([\d, ]+)\)/) ?? [];
+      const early = listed(q, /t\.postingperiod IN \(([\d, ]+)\)/) ?? [];
+      const m = q.match(/t\.trandate < TO_DATE\('(\d{2})\/01\/(\d{4})', 'MM\/DD\/YYYY'\)/);
+      if (!m) throw new Error(`no date bound in ${q}`);
+      const before = `${m[2]}-${m[1]}-01`;
+      const groups = new Map<string, Row & { debit: number; credit: number; line_count: number }>();
+      for (const l of this.posted(q)) {
+        if (!accounts.includes(l.account ?? -1) || !(l.date < before || early.includes(l.period ?? -1))) continue;
+        const key = [l.sub, l.account, l.entity, l.txn, l.period, l.date.slice(0, 7)].join('|');
+        const g = groups.get(key) ?? {
+          subsidiary_id: l.sub, account_id: l.account, line_entity_id: l.entity, txn_entity_id: 300 + l.txn,
+          period_id: l.period, date_month: l.date.slice(0, 7), debit: 0, credit: 0, line_count: 0,
+        };
+        g.debit += l.debit ?? 0;
+        g.credit += l.credit ?? 0;
+        g.line_count += 1;
+        groups.set(key, g);
+      }
+      return [...groups.values()].map(compact);
     }
     if (q.includes('GROUP BY')) {
       const groups = new Map<string, Row & { debit: number; credit: number; line_count: number }>();
@@ -470,9 +510,8 @@ class FakeNetSuite {
   page = async (q: string, limit: number): Promise<Row[]> => {
     this.queries.push(q);
     this.onPage();
-    const ids = (re: RegExp) => q.match(re)?.[1].split(',').map((s) => Number(s.trim())) ?? null;
-    const inPeriods = ids(/t\.postingperiod IN \(([\d, ]+)\)/);
-    const notInPeriods = ids(/t\.postingperiod NOT IN \(([\d, ]+)\)/);
+    const inPeriods = listed(q, /t\.postingperiod IN \(([\d, ]+)\)/);
+    const notInPeriods = listed(q, /t\.postingperiod NOT IN \(([\d, ]+)\)/);
     const bound = (op: string) => {
       const m = q.match(new RegExp(`t\\.trandate ${op} TO_DATE\\('(\\d{2})/01/(\\d{4})', 'MM/DD/YYYY'\\)`));
       if (!m) throw new Error(`no ${op} date bound in ${q}`);
@@ -504,7 +543,14 @@ describe('the copy job against the real functions', () => {
   let clock = Date.parse('2025-03-15T12:00:00Z');
   const store = new Map<string, any>();
 
-  beforeAll(async () => { pg = await freshDb(); }, 60_000);
+  beforeAll(async () => {
+    pg = await freshDb();
+    // The chart's receivable and payable accounts, for the starting entry by name.
+    await pg.exec(`
+      INSERT INTO gl_accounts (number, name, account_type, netsuite_account_id) VALUES
+        ('1200', 'Receivables', 'accounts_receivable', '20'), ('2000', 'Payables', 'accounts_payable', '25');
+    `);
+  }, 60_000);
   afterAll(async () => { await pg?.close(); });
 
   // sync_state in memory; gl_companies and every function the real ones,
@@ -526,6 +572,19 @@ describe('the copy job against the real functions', () => {
       }
       if (table === 'gl_companies') {
         return { select: async (cols: string) => ({ data: (await pg.query(`SELECT ${cols} FROM gl_companies ORDER BY code`)).rows, error: null }) };
+      }
+      if (table === 'gl_accounts') {
+        return {
+          select: (cols: string) => ({
+            in: (col: string, values: string[]) => ({
+              not: async (notCol: string, op: string, value: null) => {
+                if (op !== 'is' || value !== null) throw new Error(`unexpected filter ${notCol} ${op} ${value}`);
+                const r = await pg.query(`SELECT ${cols} FROM gl_accounts WHERE ${col} = ANY($1) AND ${notCol} IS NOT NULL ORDER BY number`, [values]);
+                return { data: r.rows, error: null };
+              },
+            }),
+          }),
+        };
       }
       throw new Error(`unexpected table ${table}`);
     },
@@ -565,8 +624,17 @@ describe('the copy job against the real functions', () => {
     'SELECT netsuite_id AS id, copied_at::text AS at FROM gl_netsuite_transactions ORDER BY netsuite_id',
   )).rows;
   const record = () => store.get(BOOKS_GL_SYNC);
+  const openingNames = async () => (await pg.query<{ company: string; account: string; entity: string; debit: string; credit: string; lines: number }>(
+    `SELECT c.code AS company, o.netsuite_account_id AS account, o.entity_id AS entity, o.debit::text AS debit, o.credit::text AS credit,
+            o.line_count AS lines
+     FROM gl_netsuite_opening_parties o JOIN gl_companies c ON c.id = o.company_id
+     ORDER BY c.code, o.netsuite_account_id, o.entity_id`,
+  )).rows;
   const startOver = async () => {
-    await pg.exec('DELETE FROM gl_netsuite_transactions; DELETE FROM gl_netsuite_opening; DELETE FROM gl_netsuite_month_totals;');
+    await pg.exec(`
+      DELETE FROM gl_netsuite_transactions; DELETE FROM gl_netsuite_opening; DELETE FROM gl_netsuite_month_totals;
+      DELETE FROM gl_netsuite_opening_parties;
+    `);
     store.clear();
     clock = Date.parse('2025-03-15T12:00:00Z');
   };
@@ -609,6 +677,16 @@ describe('the copy job against the real functions', () => {
         { company: 'BMG', netsuite_account_id: '30', debit: '0.00', credit: '1000.00', line_count: 1 },
         { company: 'BMG', netsuite_account_id: '40', debit: '0.00', credit: '500.00', line_count: 1 },
       ]);
+    });
+
+    it('keeps, by name, the part of it on the receivable and payable accounts', async () => {
+      // The December invoice's line names its customer, which stands before its transaction's.
+      expect(await openingNames()).toEqual([{ company: 'BMG', account: '20', entity: '900', debit: '500.00', credit: '0.00', lines: 1 }]);
+      expect(record().last_result).toMatchObject({ openingNames: 1 });
+      // Read only for the accounts with lines before 2025, those before the date or in a period before 2025.
+      const read = ns.queries.find(isNamesRead)!;
+      expect(read).toContain('tal.account IN (20)');
+      expect(read).toContain("t.trandate < TO_DATE('01/01/2025', 'MM/DD/YYYY') OR t.postingperiod IN (101)");
     });
 
     it('shows a trial balance that matches NetSuite\'s every month, and balances', async () => {
@@ -830,6 +908,32 @@ describe('the copy job against the real functions', () => {
       expect(r.notes?.some((n) => /memo, name, location, department and class/.test(n))).toBe(true);
       expect(await outOfStep()).toEqual([]);
       expect((await copied()).every((row) => row.memo === null)).toBe(true);
+    });
+
+    it('keeps the starting entry by name when NetSuite won\'t give the names, and empties it when there\'s none', async () => {
+      await startOver();
+      const ns = new FakeNetSuite(BOOKS);
+      await run(ns);
+      expect(await openingNames()).toHaveLength(1);
+      ns.refuse.partyOpening = true;
+      clock += 2 * HOUR;
+      const r = await run(ns);
+      expect(r.error).toBeUndefined();
+      expect(r.notes).toContain(
+        "NetSuite wouldn't give the names on its receivable and payable accounts before 2025 (NetSuite SuiteQL error (400): Search error "
+        + "occurred: Field 'entity' was not found.), so Customer and vendor balances keeps the split by name it had.",
+      );
+      expect(r.swept).toEqual([JAN]);
+      expect(await openingNames()).toHaveLength(1);
+
+      // Nothing on the receivable account before 2025: nothing to read, and nothing kept.
+      const none = new FakeNetSuite(BOOKS.filter((l) => l.txn !== 2));
+      clock += 2 * HOUR;
+      const next = await run(none);
+      expect(next.error).toBeUndefined();
+      expect(next).toMatchObject({ openingNames: 0 });
+      expect(await openingNames()).toEqual([]);
+      expect(none.queries.some(isNamesRead)).toBe(false);
     });
 
     it('changes nothing when NetSuite returns no lines at all', async () => {

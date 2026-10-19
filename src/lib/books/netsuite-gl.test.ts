@@ -14,8 +14,10 @@ import {
   noAccountNote,
   noAccountQuery,
   parseGlState,
+  partyOpeningQuery,
   periodMonths,
   postingMonth,
+  summarizePartyOpening,
   summarizeTotals,
   toCents,
   totalsQuery,
@@ -180,6 +182,57 @@ describe('summarizeTotals', () => {
     expect(t.months.find((r) => r.netsuite_account_id === '10')).toMatchObject({ debit: '25.10', line_count: 2 });
     // With no periods, a line with no date month has nowhere to go.
     expect(t.unplaced).toBe(5);
+  });
+});
+
+describe('the starting entry by name', () => {
+  it('reads the receivable and payable accounts by name, only the lines that can count before 2025', () => {
+    const q = partyOpeningQuery('transaction_and_line', ['20', '25', '20', '7 OR 1=1'], PERIODS);
+    expect(q).toContain("t.posting = 'T' AND tal.posting = 'T'");
+    expect(q).toContain('AND tal.account IN (20, 25)');
+    // December 2024's period, and anything dated before 2025.
+    expect(q).toContain("AND (t.trandate < TO_DATE('01/01/2025', 'MM/DD/YYYY') OR t.postingperiod IN (101))");
+    expect(q).toContain('GROUP BY tl.subsidiary, tal.account, tl.entity, t.entity, t.postingperiod');
+    expect(partyOpeningQuery('line', ['20'], null)).toContain("AND (t.trandate < TO_DATE('01/01/2025', 'MM/DD/YYYY'))");
+    expect(() => partyOpeningQuery('line', ['x'], null)).toThrow(/No receivable or payable account/);
+  });
+
+  it('adds up each name\'s lines before 2025, placed as the starting entry places them', () => {
+    const rows = [
+      // The line's own name stands before its transaction's.
+      { subsidiary_id: 2, account_id: 20, line_entity_id: 900, txn_entity_id: 301, period_id: 101, date_month: '2024-12', debit: '500.00', credit: 0, line_count: 1 },
+      { subsidiary_id: 2, account_id: 20, line_entity_id: null, txn_entity_id: 900, period_id: null, date_month: '2023-06', debit: 0, credit: '25.00', line_count: 2 },
+      // No name at all.
+      { subsidiary_id: 2, account_id: 20, line_entity_id: '', txn_entity_id: null, period_id: 101, date_month: '2024-12', debit: '0', credit: '40.00', line_count: 1 },
+      // Dated December 2024 but posted to January 2025: not in the starting entry.
+      { subsidiary_id: 2, account_id: 20, line_entity_id: 901, txn_entity_id: 302, period_id: 102, date_month: '2024-12', debit: '75.00', credit: 0, line_count: 1 },
+      // Dated January 2025 but posted to December 2024: in it.
+      { subsidiary_id: 5, account_id: 25, line_entity_id: null, txn_entity_id: 7001, period_id: 101, date_month: '2025-01', debit: 0, credit: '60.00', line_count: 1 },
+      // Elsewhere, and lines it can't place.
+      { subsidiary_id: 9, account_id: 20, line_entity_id: 900, period_id: 101, date_month: '2024-12', debit: 10, credit: 0, line_count: 1 },
+      { subsidiary_id: 2, account_id: 20, line_entity_id: 900, period_id: null, date_month: null, debit: 10, credit: 0, line_count: 1 },
+    ];
+    expect(summarizePartyOpening(rows, PERIODS, LINKS)).toEqual([
+      { company: 'BMG', netsuite_account_id: '20', entity_id: '900', debit: '500.00', credit: '25.00', line_count: 3 },
+      { company: 'BMG', netsuite_account_id: '20', entity_id: '', debit: '0.00', credit: '40.00', line_count: 1 },
+      { company: '1084', netsuite_account_id: '25', entity_id: '7001', debit: '0.00', credit: '60.00', line_count: 1 },
+    ]);
+    // By date when the periods couldn't be read: the January bill is 2025's, the December-dated invoice the starting entry's.
+    const byDate = summarizePartyOpening(rows, null, LINKS);
+    expect(byDate.find((r) => r.entity_id === '901')).toMatchObject({ debit: '75.00' });
+    expect(byDate.some((r) => r.entity_id === '7001')).toBe(false);
+  });
+
+  it('comes to the starting entry itself on each account', () => {
+    const rows = [
+      { subsidiary_id: 2, account_id: 20, line_entity_id: 900, period_id: 101, date_month: '2024-12', debit: '500.00', credit: 0, line_count: 2 },
+      { subsidiary_id: 2, account_id: 20, txn_entity_id: 901, period_id: 101, date_month: '2024-12', debit: 0, credit: '80.00', line_count: 1 },
+      { subsidiary_id: 2, account_id: 20, line_entity_id: 902, period_id: 102, date_month: '2025-01', debit: '9.00', credit: 0, line_count: 1 },
+    ];
+    const byName = summarizePartyOpening(rows, PERIODS, LINKS);
+    const whole = summarizeTotals(rows, PERIODS, LINKS).opening;
+    const sum = (key: 'debit' | 'credit') => byName.reduce((s, r) => s + toCents(r[key]), 0);
+    expect(whole).toEqual([{ company: 'BMG', netsuite_account_id: '20', debit: centsToString(sum('debit')), credit: centsToString(sum('credit')), line_count: 3 }]);
   });
 });
 

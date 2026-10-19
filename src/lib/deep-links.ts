@@ -371,6 +371,21 @@ export const deepLinks = {
    *  only. */
   booksStockItem: (itemId: string, locationId?: string | null) =>
     `/admin/books/stock/item?${new URLSearchParams({ item: itemId, ...(locationId ? { location: locationId } : {}) })}`,
+  /** Books → Customer and vendor balances on one company's customers
+   *  (`kind` 'customer') or vendors ('vendor'), only those whose balance
+   *  differs from NetSuite's with `differs`: the landing for the daily
+   *  books check's notification about several balances
+   *  (src/lib/books/daily-check.ts). Super admins only. */
+  booksBalances: (company: string, kind: string, differs = false) =>
+    `/admin/books/balances?${new URLSearchParams({ company, kind, ...(differs ? { only: 'differs' } : {}) })}`,
+  /** Books → Customer and vendor balances → one customer's (its FleetSuite
+   *  id) or vendor's (its NetSuite id) balance and the documents behind it,
+   *  '' for the lines FleetSuite can't name ('none' in the address), only
+   *  the documents that differ from NetSuite with `differs`: the landing
+   *  for the daily books check's notification about one balance. Super
+   *  admins only. */
+  booksBalance: (company: string, kind: string, party: string, differs = false) =>
+    `/admin/books/balances/party?${new URLSearchParams({ company, kind, party: party || 'none', ...(differs ? { only: 'differs' } : {}) })}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it

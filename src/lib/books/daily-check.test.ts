@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  alertsFor, lookOf, nextCheck, parseCheckState, stockAlertsFor,
-  type CompanyCheck, type DifferingMonths, type MonthFacts, type MonthNews, type StockNews,
+  alertsFor, balanceAlertsFor, balanceKey, lookOf, nextCheck, parseCheckState, stockAlertsFor,
+  type BalanceNews, type CompanyCheck, type DifferingMonths, type MonthFacts, type MonthNews, type StockNews,
 } from './daily-check';
 import type { DiffDocumentData } from './differences';
 import type { StockLine } from './stock-items';
@@ -53,6 +53,18 @@ describe('parseCheckState', () => {
     ]) {
       expect(parseCheckState({ companies: {}, stock })).toEqual({ companies: {} });
     }
+  });
+
+  it("reads what it holds for each company's balances, keyed by customer or vendor, and drops a part that doesn't read", () => {
+    const acme = 'c0000000-0000-4000-8000-00000000000a';
+    const balances = { BMG: { known: { [`c:${acme}`]: 2, 'c:': 1, 'v:7001': 1, 'v:': 3 }, noted: { 'v:7002': 1 } }, 1084: { known: {}, noted: {} } };
+    expect(parseCheckState({ companies: {}, balances })).toEqual({ companies: {}, balances });
+    expect(parseCheckState({ companies: {}, balances: { BMG: { known: { 'c:acme': 1 }, noted: {} } } })).toEqual({ companies: {} });
+    expect(parseCheckState({ companies: {}, balances: { BMG: { known: { 'x:7001': 1 }, noted: {} }, 1084: balances[1084] } }))
+      .toEqual({ companies: {}, balances: { 1084: { known: {}, noted: {} } } });
+    expect(parseCheckState({ companies: {}, balances: 'x' })).toEqual({ companies: {} });
+    expect(balanceKey('customer', acme)).toBe(`c:${acme}`);
+    expect(balanceKey('vendor', '')).toBe('v:');
   });
 
   it("drops a company whose part doesn't read, so it's looked at afresh, and a company that doesn't post", () => {
@@ -280,6 +292,82 @@ describe('stockAlertsFor', () => {
 
   it('tells nothing when nothing changed', () => {
     expect(stockAlertsFor([])).toEqual([]);
+  });
+});
+
+describe('balanceAlertsFor', () => {
+  const ACME = 'c0000000-0000-4000-8000-00000000000a';
+  const news = (over: Partial<BalanceNews> = {}): BalanceNews => ({
+    kind: 'customer', party: ACME, name: 'Acme Fleet', documents: 1, before: null, named: ['INV1007'], ...over,
+  });
+
+  it("names the customer, the company and the document, and links to the customer's balance", () => {
+    expect(balanceAlertsFor('BMG', [news()])).toEqual([{
+      title: "BMG's books: Acme Fleet's balance no longer matches NetSuite",
+      body: 'INV1007 differs from what NetSuite posted. Customer and vendor balances shows why.',
+      url: `/admin/books/balances/party?company=BMG&kind=customer&party=${ACME}`,
+      about: 'balance',
+    }]);
+  });
+
+  it('names the two newest documents, and how many differ when there are more, or how many before', () => {
+    expect(balanceAlertsFor('BMG', [news({ documents: 2, named: ['INV1007', 'PMT2001'] })])[0].body)
+      .toBe('INV1007 and PMT2001 differ from what NetSuite posted. Customer and vendor balances shows why.');
+    expect(balanceAlertsFor('BMG', [news({ documents: 5, named: ['INV1007', 'PMT2001'] })])[0].body)
+      .toBe('5 documents differ from what NetSuite posted, the newest INV1007 and PMT2001. Customer and vendor balances shows why.');
+    const [more] = balanceAlertsFor('1084', [news({ documents: 3, before: 1, named: ['INV1007', 'PMT2001'] })]);
+    expect(more.title).toBe("1084's books: more of Acme Fleet's documents differ from NetSuite");
+    expect(more.body).toBe('3 documents differ now, 1 before, the newest INV1007 and PMT2001. Customer and vendor balances shows why.');
+    expect(balanceAlertsFor('BMG', [news({ documents: 2, before: 1, named: ['INV1007', 'PMT2001'] })])[0].body)
+      .toBe('2 documents differ now, 1 before: INV1007 and PMT2001. Customer and vendor balances shows why.');
+    // When the documents couldn't be looked up, how many.
+    expect(balanceAlertsFor('BMG', [news({ documents: 2, named: [] })])[0].body)
+      .toBe('2 documents differ from what NetSuite posted. Customer and vendor balances shows why.');
+  });
+
+  it("names a vendor, and the lines FleetSuite can't name for what they are", () => {
+    expect(balanceAlertsFor('BMG', [news({ kind: 'vendor', party: '7001', name: 'Landlord LLC', named: ['BILL4002'] })])[0]).toMatchObject({
+      title: "BMG's books: Landlord LLC's balance no longer matches NetSuite",
+      url: '/admin/books/balances/party?company=BMG&kind=vendor&party=7001',
+    });
+    expect(balanceAlertsFor('BMG', [news({ party: '', name: 'Not matched to a FleetSuite customer' })])[0]).toMatchObject({
+      title: "BMG's books: the balance of customers not matched to FleetSuite no longer matches NetSuite",
+      url: '/admin/books/balances/party?company=BMG&kind=customer&party=none',
+    });
+    expect(balanceAlertsFor('BMG', [news({ kind: 'vendor', party: '', name: 'No vendor named', before: 1, documents: 2 })])[0].title)
+      .toBe("BMG's books: more documents of payables naming no vendor differ from NetSuite");
+  });
+
+  it('tells about up to three balances one by one, and more in one notification linking to the ones that differ', () => {
+    const many = ['Acme Fleet', 'Bravo Transit', 'Charlie Cab', 'Delta Rentals'].map((name, i) => news({ party: ACME.replace(/a$/, String(i)), name }));
+    expect(balanceAlertsFor('BMG', many.slice(0, 3))).toHaveLength(3);
+    expect(balanceAlertsFor('BMG', many)).toEqual([{
+      title: "BMG's books: 4 customer balances differ from NetSuite now",
+      body: 'Acme Fleet, Bravo Transit, Charlie Cab and 1 more. Customer and vendor balances shows why.',
+      url: '/admin/books/balances?company=BMG&kind=customer&only=differs',
+      about: 'balance',
+    }]);
+    const mixed = [...many.slice(0, 3), news({ kind: 'vendor', party: '', name: 'No vendor named' })];
+    expect(balanceAlertsFor('BMG', [mixed[3], ...mixed.slice(0, 3)])[0]).toMatchObject({
+      title: "BMG's books: 4 customer and vendor balances differ from NetSuite now",
+      body: 'The payables naming no vendor, Acme Fleet, Bravo Transit and 1 more. Customer and vendor balances shows why.',
+      url: '/admin/books/balances?company=BMG&kind=vendor&only=differs',
+    });
+  });
+
+  it('adds why it may be, when the last posting run or copy failed, and tells nothing when nothing changed', () => {
+    expect(balanceAlertsFor('BMG', [news()], 'The last posting run failed, so FleetSuite may be behind.')[0].body)
+      .toBe('INV1007 differs from what NetSuite posted. Customer and vendor balances shows why. The last posting run failed, so FleetSuite may be behind.');
+    expect(balanceAlertsFor('BMG', [])).toEqual([]);
+  });
+});
+
+describe('deepLinks.booksBalances and booksBalance', () => {
+  it("open Customer and vendor balances on a company's customers or vendors, and one balance, '' as none", () => {
+    expect(deepLinks.booksBalances('BMG', 'customer')).toBe('/admin/books/balances?company=BMG&kind=customer');
+    expect(deepLinks.booksBalances('1084', 'vendor', true)).toBe('/admin/books/balances?company=1084&kind=vendor&only=differs');
+    expect(deepLinks.booksBalance('BMG', 'vendor', '7001')).toBe('/admin/books/balances/party?company=BMG&kind=vendor&party=7001');
+    expect(deepLinks.booksBalance('BMG', 'customer', '', true)).toBe('/admin/books/balances/party?company=BMG&kind=customer&party=none&only=differs');
   });
 });
 
