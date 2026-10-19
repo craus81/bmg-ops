@@ -61,6 +61,13 @@ const SOURCE_TYPE: Readonly<Record<string, string>> = Object.fromEntries(
 
 const isNetSuiteId = (doc: string) => /^[0-9]+$/.test(doc);
 
+/** Where Invoices vs NetSuite checks a NetSuite document of this type line by line, when FleetSuite posts the type. */
+export function netsuiteCheck(type: string | null, month: string | null, date: string | null): { kind: string; month: string } | null {
+  const kind = type ? SOURCE_TYPE[type] ?? null : null;
+  const listMonth = kind ? listMonthOf(kind, month, date) : null;
+  return kind && listMonth ? { kind: listKindOf(kind), month: listMonth } : null;
+}
+
 /** The documents, amounts as the line shows them (`sign`, from lineSpan), each named and linked to its check. */
 export function detailDocuments(data: AccountDocumentsData, sign: 1 | -1): DetailDocument[] {
   return data.rows.map((r) => {

@@ -100,7 +100,7 @@ the accounts page; the others are linked from there.
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
-| NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `migrations/403-books-stock-item-setup.sql` (items set up wrong), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
+| NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `migrations/403-books-stock-item-setup.sql` (items set up wrong), `migrations/404-books-stock-ledger-parts.sql` (the ledger account by account), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
 | Stock by item and an item's moves, and their APIs | `src/app/(main)/admin/books/stock/page.tsx`, `src/app/(main)/admin/books/stock/item/page.tsx`, `src/app/api/admin/books/stock/route.ts`, `src/app/api/admin/books/stock/item/route.ts` |
 | Stock by item tests | `src/lib/books/netsuite-stock.test.ts`, `src/lib/books/stock-items.test.ts`, `src/lib/books/stock-items-sql.test.ts`; the daily check's are in its test files |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
@@ -1850,9 +1850,9 @@ only when NetSuite gives values.
 
 The page opens with how the last copy went and the value of all stock both
 ways, then each company's inventory accounts in the copy of NetSuite's
-ledger next to what its stocked items come to; what's left between them was
-posted there by journal entries or on items NetSuite doesn't stock, and
-shows in amber rather than as a difference. Each item at each location follows, the ones whose
+ledger next to what its stocked items come to, in all and account by
+account, with where they part below (see "The ledger, account by
+account"). Each item at each location follows, the ones whose
 count differs first, by item number after that: FleetSuite's count,
 NetSuite's and the difference, or the same for values, with how many
 documents moved it since 2025 and the last one's date. Buttons show only
@@ -1906,6 +1906,36 @@ does two things (owner decision 2026-10-19, "Flag them"):
   the inventory account, but names no item, so the line keeps its value
   left over, and the journal entry shows as the difference between the
   inventory accounts and the items.
+
+### The ledger, account by account
+
+The inventory accounts are the asset accounts stocked items name, so a
+fixed asset account one stocked item names (equipment, vehicles) is one,
+whole: on the real books the ledger line lumped together an inventory asset
+account that held much less than the items were worth and fixed asset
+accounts that held a lot more, and the one difference left said nothing of
+either. Migration 404's `gl_stock_ledger_parts` splits it (owner decision
+2026-10-19, "Break it down"). For each company and inventory account it
+gives what the GL copy held on December 31, 2024 (its starting entry) and
+what posted to it since; what the stocked items started at, each one's
+starting value on its own asset account (on the inventory account most of
+them name when its own isn't one), and what their stock lines posted to it
+since, as `gl_stock_items` values them; and every document since that
+posted to it on no stocked item's stock line, the biggest first, with how
+many there are and what they come to, in all and by kind. So the items less
+the ledger is the starting difference less those documents
+(`ledgerParts` in `stock-items.ts`).
+
+The value table lists each account under the company's line. Below it,
+each account shows the four rows (December 31, 2024; received, shipped,
+built and adjusted since, alike on both sides; the documents with no
+stocked item; now) and its documents, ten at first and up to the hundred
+biggest, each opening its check on Invoices vs NetSuite when FleetSuite
+posts its kind, with a link to the account's detail on Reports from
+January 2025. A fixed asset account's documents show on a tap, and its
+difference isn't amber: most of what's on it is the company's own
+equipment or vehicles. A document NetSuite deleted that the GL copy still
+has shows here until the next GL copy drops it.
 
 Not yet seen in NetSuite's data, so the page is what will show it:
 

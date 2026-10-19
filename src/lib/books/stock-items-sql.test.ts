@@ -1,17 +1,21 @@
 // Migration 401 keeps FleetSuite's own count of each item at each location,
-// 402 values only what NetSuite keeps in stock, and 403 names the stocked
-// items whose asset account isn't an asset account. This runs migrations
-// 359–363 with 401 to 403 in an in-memory Postgres (PGlite) as the app's
+// 402 values only what NetSuite keeps in stock, 403 names the stocked items
+// whose asset account isn't an asset account, and 404 breaks down where the
+// ledger and the items part on each inventory account. This runs migrations
+// 359–363 with 401 to 404 in an in-memory Postgres (PGlite) as the app's
 // server login, copies a made-up handful of NetSuite stock documents the way
 // netsuite-stock.ts hands them over, with their GL lines in the copy of
 // NetSuite's general ledger, and holds what gl_stock_items,
-// gl_stock_item_moves and gl_stock_item_setup return, as stock-items.ts puts
-// them side by side.
+// gl_stock_item_moves, gl_stock_item_setup and gl_stock_ledger_parts return,
+// as stock-items.ts puts them side by side.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { compareStock, itemMoves, stockSetup, type StockItemMovesData, type StockItemsData, type StockSetupData } from './stock-items';
+import {
+  compareStock, itemMoves, ledgerParts, stockSetup,
+  type LedgerPartsData, type StockItemMovesData, type StockItemsData, type StockSetupData,
+} from './stock-items';
 
 const WENTZVILLE = '11';
 const KANSAS_CITY = '12';
@@ -42,7 +46,7 @@ async function freshDb(): Promise<PGlite> {
   for (const file of [
     '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '401-books-stock-by-item.sql',
-    '402-books-stock-values.sql', '403-books-stock-item-setup.sql',
+    '402-books-stock-values.sql', '403-books-stock-item-setup.sql', '404-books-stock-ledger-parts.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -101,6 +105,7 @@ async function gl(pg: PGlite, id: string, type: string, date: string, lines: Arr
 
 const items = (pg: PGlite) => one<StockItemsData>(pg, 'SELECT gl_stock_items() AS r');
 const setup = (pg: PGlite) => one<StockSetupData>(pg, 'SELECT gl_stock_item_setup() AS r');
+const parts = (pg: PGlite, limit = 100) => one<LedgerPartsData>(pg, 'SELECT gl_stock_ledger_parts($1) AS r', [limit]);
 const moves = (pg: PGlite, item: string, limit = 100) =>
   one<StockItemMovesData>(pg, 'SELECT gl_stock_item_moves($1, $2) AS r', [item, limit]);
 
@@ -350,7 +355,7 @@ describe("migration 401's stock by item", () => {
     const functions = [
       'gl_netsuite_stock_apply(jsonb)', 'gl_netsuite_stock_finish(jsonb)', 'gl_netsuite_stock_store_opening(jsonb)',
       'gl_netsuite_stock_store_counts(jsonb)', 'gl_stock_inventory_accounts()', 'gl_stock_items()', 'gl_stock_item_moves(text, integer)',
-      'gl_stock_item_setup()',
+      'gl_stock_item_setup()', 'gl_stock_ledger_parts(integer)',
     ];
     const tables = ['gl_netsuite_stock_documents', 'gl_netsuite_stock_lines', 'gl_netsuite_stock_opening', 'gl_netsuite_stock_counts'];
     for (const role of ['anon', 'authenticated', 'service_role']) {
@@ -440,5 +445,129 @@ describe("migration 403's stocked items whose asset account isn't an asset accou
       ['IF5021', -2, 9060, true],
     ]);
     expect(page.leftover).toEqual([{ locationId: WENTZVILLE, location: 'Wentzville', value: 9060 }]);
+  });
+});
+
+describe("migration 404's ledger and items, account by account", () => {
+  const LIFT = '9403';
+  const TRUCKS = '700';
+  let db: PGlite;
+  beforeAll(async () => {
+    db = await freshDb();
+    await db.exec(`
+      RESET ROLE;
+      INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details) VALUES
+        -- A lift NetSuite keeps in stock on the equipment account, which makes that an inventory account.
+        ('item', '${LIFT}', 'LIFT-1', true, '{"item_type": "InvtPart", "asset_account": "${EQUIPMENT}"}'),
+        ('vendor', '${TRUCKS}', 'Truck Sales Co', true, '{}');
+      SET ROLE service_role;
+    `);
+    await call(db, 'gl_netsuite_stock_apply', {
+      documents: [RECEIPT, FULFILLMENT, TRANSFER, INVOICE, BIN_RECEIPT, BIN_COUNT, VINYL_RECEIPT,
+        doc('5960', 'ItemRcpt', 'IR5960', '2025-07-01', [['1', LIFT, WENTZVILLE, '1', true]])],
+    });
+    await gl(db, '5001', 'ItemRcpt', '2025-03-04', [['0', RECEIVED, -96000], ['1', INVENTORY, 96000]]);
+    await gl(db, '5002', 'ItemShip', '2025-03-20', [['1', INVENTORY, -46500], ['2', COGS, 46500]]);
+    await gl(db, '5003', 'InvTrnfr', '2025-04-02', [['1', INVENTORY, -31000], ['2', INVENTORY, 31000]]);
+    await gl(db, '5004', 'CustInvc', '2025-05-15', [['1', '400', -30000], ['3', COGS, 15500], ['4', INVENTORY, -15500]]);
+    await gl(db, '5005', 'ItemRcpt', '2025-06-01', [['0', RECEIVED, -10000], ['1', INVENTORY, 10000]]);
+    await gl(db, '5006', 'InvAdjst', '2026-01-10', [['0', ADJUSTMENT, 1000], ['1', INVENTORY, -1000]]);
+    await gl(db, '5007', 'ItemRcpt', '2026-02-01', [['0', RECEIVED, -30100], ['1', INVENTORY, 30100]]);
+    await gl(db, '5960', 'ItemRcpt', '2025-07-01', [['0', RECEIVED, -120000], ['1', EQUIPMENT, 120000]]);
+    // What posts to the inventory accounts without a stocked item: two
+    // journal entries, one writing stock down at the year end, and a bill
+    // for a truck, the vendor named on its payables line only.
+    await gl(db, '5900', 'Journal', '2026-06-30', [['1', INVENTORY, 2500], ['2', ADJUSTMENT, -2500]]);
+    await gl(db, '5901', 'Journal', '2025-12-31', [['1', INVENTORY, -40000], ['2', ADJUSTMENT, 40000]]);
+    await gl(db, '5950', 'VendBill', '2025-06-15', [['0', '200', -2500000], ['1', EQUIPMENT, 2500000]]);
+    await db.exec(`
+      UPDATE gl_netsuite_lines SET memo = '  Year-end count ' WHERE transaction_id = '5901' AND line_id = '1';
+      UPDATE gl_netsuite_lines SET entity_id = '${TRUCKS}' WHERE transaction_id = '5950' AND line_id = '0';
+      UPDATE gl_netsuite_lines SET memo = 'Service truck' WHERE transaction_id = '5950' AND line_id = '1';
+    `);
+    // On December 31, 2024 the ledger held $50 less on inventory than the
+    // items started at, and a truck on the equipment account.
+    await db.exec(`INSERT INTO gl_netsuite_opening (company_id, netsuite_account_id, debit, credit, line_count)
+                   SELECT id, a, d, 0, 1 FROM gl_companies, (VALUES ('${INVENTORY}', 1750.00), ('${EQUIPMENT}', 10000.00)) v(a, d)
+                   WHERE code = 'BMG'`);
+    await call(db, 'gl_netsuite_stock_store_opening', {
+      rows: [
+        { company: 'BMG', item_id: LADDER, location_id: WENTZVILLE, quantity: '10', value: '1500.00' },
+        { company: 'BMG', item_id: LADDER, location_id: KANSAS_CITY, quantity: '2', value: '300.00' },
+        // A stocked item whose asset account isn't an inventory account
+        // starts on the one most stocked items name; one NetSuite doesn't
+        // keep in stock has no value.
+        { company: 'BMG', item_id: TOOLS, location_id: WENTZVILLE, quantity: '1', value: '60.00' },
+        { company: 'BMG', item_id: KIT, location_id: WENTZVILLE, quantity: '0', value: '40.00' },
+      ],
+    });
+  }, 60_000);
+  afterAll(async () => { await db?.close(); });
+
+  it('splits each inventory account into where the ledger and the items started, their moves, and the documents with no stocked item', async () => {
+    const data = await parts(db);
+    expect(data.parts.map((p) => [p.company, p.account_id, p.number, p.name, p.type])).toEqual([
+      ['BMG', INVENTORY, '1200', 'Inventory', 'other_current_asset'],
+      ['BMG', EQUIPMENT, '1500', 'Equipment', 'fixed_asset'],
+    ]);
+    const [inventory, equipment] = data.parts;
+    // Ledger: 1750 to start; since, 960 - 465 + 0 - 155 + 100 - 10 + 301 from the stock documents and 25 - 400 from the journals.
+    // Items: the racks' 1800 and the tool kit's 60 to start, and the stock documents' 731.
+    expect(inventory).toMatchObject({
+      ledger_start: '1750.00', ledger_moves: '356.00', items_start: '1860.00', items_moves: '731.00',
+      entries: 2, entries_total: '-375.00',
+      kinds: [{ type: 'Journal', count: 2, total: '-375.00' }],
+    });
+    // The biggest first; the memo trimmed.
+    expect(inventory.rows).toEqual([
+      { doc: '5901', type: 'Journal', number: '5901', date: '2025-12-31', month: '2025-12-01', name: null, memo: 'Year-end count', amount: '-400.00' },
+      { doc: '5900', type: 'Journal', number: '5900', date: '2026-06-30', month: '2026-06-01', name: null, memo: null, amount: '25.00' },
+    ]);
+    expect(equipment).toMatchObject({
+      ledger_start: '10000.00', ledger_moves: '26200.00', items_start: '0', items_moves: '1200.00',
+      entries: 1, entries_total: '25000.00',
+      kinds: [{ type: 'VendBill', count: 1, total: '25000.00' }],
+      rows: [{ doc: '5950', type: 'VendBill', number: '5950', date: '2025-06-15', month: '2025-06-01', name: 'Truck Sales Co', memo: 'Service truck', amount: '25000.00' }],
+    });
+
+    // Each account's items less its ledger is the starting difference less the entries, and the accounts add up to the
+    // ledger line and the items' value on Stock by item.
+    const split = ledgerParts(data);
+    for (const p of split) {
+      expect(p.items.now - p.ledger.now).toBe(p.items.start - p.ledger.start - p.entries.total);
+    }
+    const whole = compareStock(await items(db));
+    expect(whole.ledger).toEqual([{
+      company: 'BMG',
+      balance: split.reduce((sum, p) => sum + p.ledger.now, 0),
+      items: split.reduce((sum, p) => sum + p.items.now, 0),
+    }]);
+    expect(split.map((p) => [p.account, p.fixedAsset, p.ledger.now, p.items.now, p.entries.more])).toEqual([
+      ['1200 Inventory', false, 210600, 259100, { count: 0, total: 0 }],
+      ['1500 Equipment', true, 3620000, 120000, { count: 0, total: 0 }],
+    ]);
+    expect(split[0].entries.rows[0]).toEqual({
+      doc: '5901', date: '2025-12-31', type: 'Journal', number: '5901', name: null, memo: 'Year-end count', amount: -40000,
+      check: { kind: 'journal_entry', month: '2025-12-01' },
+    });
+    expect(split[1].entries.rows[0]).toMatchObject({ type: 'Bill', name: 'Truck Sales Co', check: { kind: 'bill', month: '2025-06-01' } });
+  });
+
+  it('sends the biggest documents up to the limit, with how many more there are and what they come to', async () => {
+    const data = await parts(db, 1);
+    expect(data.parts[0].rows.map((r) => r.doc)).toEqual(['5901']);
+    expect(data.parts[0]).toMatchObject({ entries: 2, entries_total: '-375.00' });
+    expect(ledgerParts(data)[0].entries.more).toEqual({ count: 1, total: 2500 });
+  });
+
+  it("leaves out a document that nets to nothing on the account, and a stock document NetSuite no longer has counts as one", async () => {
+    // A journal that moves stock value between two lines of the same account nets to nothing there.
+    await gl(db, '5902', 'Journal', '2026-07-31', [['1', INVENTORY, 1000], ['2', INVENTORY, -1000]]);
+    // The vinyl receipt was deleted in NetSuite while the GL copy still has its lines.
+    expect(await call(db, 'gl_netsuite_stock_finish', { netsuite_ids: ['5001', '5002', '5003', '5004', '5005', '5006', '5960'] }))
+      .toMatchObject({ gone: 1, cut_short: false });
+    const inventory = (await parts(db)).parts[0];
+    expect(inventory.rows.map((r) => [r.doc, r.amount])).toEqual([['5901', '-400.00'], ['5007', '301.00'], ['5900', '25.00']]);
+    expect(inventory).toMatchObject({ items_moves: '430.00', entries: 3, entries_total: '-74.00' });
   });
 });

@@ -1,4 +1,5 @@
 import { TRAN_TYPE_NAMES, toCents } from './netsuite-gl';
+import { netsuiteCheck } from './report-detail';
 
 /**
  * Each item's count and value at each location, FleetSuite's next to
@@ -288,6 +289,126 @@ export function stockSetup(data: StockSetupData | null): StockSetup {
   }));
   items.sort((a, b) => byName.compare(a.item, b.item) || Number(a.itemId) - Number(b.itemId));
   return { items, usual: data?.usual ? accountText(data.usual) : null };
+}
+
+// ── Where the ledger and the items part ────────────────────────────────────
+
+/** A document that posted to an inventory account on no stocked item's stock line, as gl_stock_ledger_parts (migration 404) gives it. */
+export interface LedgerEntryData {
+  doc: string;
+  type: string | null;
+  number: string | null;
+  date: string | null;
+  /** The month NetSuite posted it to. */
+  month: string | null;
+  /** The vendor it names, if any. */
+  name: string | null;
+  memo: string | null;
+  /** What it posted to the account, debit positive. */
+  amount: string;
+}
+
+/** One company's inventory account, as gl_stock_ledger_parts (migration 404) gives it; amounts are decimal strings, debit positive. */
+export interface LedgerPartData {
+  company: string;
+  account_id: string;
+  number: string | null;
+  name: string | null;
+  type: string | null;
+  ledger_start: string;
+  ledger_moves: string;
+  items_start: string;
+  items_moves: string;
+  entries: number;
+  entries_total: string;
+  kinds: Array<{ type: string | null; count: number; total: string }>;
+  rows: LedgerEntryData[];
+}
+
+/** What gl_stock_ledger_parts (migration 404) returns. */
+export interface LedgerPartsData {
+  parts: LedgerPartData[];
+}
+
+/** A document on the breakdown, named as NetSuite's screens name it. */
+export interface LedgerEntry {
+  doc: string;
+  date: string | null;
+  type: string;
+  number: string;
+  name: string | null;
+  memo: string | null;
+  amount: number;
+  /** Where Invoices vs NetSuite checks it line by line; null for a kind FleetSuite doesn't post. */
+  check: { kind: string; month: string } | null;
+}
+
+/**
+ * One company's inventory account: what NetSuite's ledger holds on it next to
+ * what the stocked items do, each from where it stood on December 31, 2024,
+ * and the documents since that posted to it on no stocked item's stock line
+ * (owner decision 2026-10-19, "Break it down"). The items' value less the
+ * ledger's is the starting difference less what those documents posted.
+ */
+export interface LedgerPart {
+  company: string;
+  accountId: string;
+  /** Its number and name. */
+  account: string;
+  /** The chart has it as a fixed asset account: equipment or vehicles rather than stock. */
+  fixedAsset: boolean;
+  ledger: { start: number; moves: number; now: number };
+  /** Each stocked item's starting value counts on its own asset account. */
+  items: { start: number; moves: number; now: number };
+  entries: {
+    count: number;
+    total: number;
+    /** By kind of document, the biggest first. */
+    kinds: Array<{ type: string; count: number; total: number }>;
+    /** The biggest of them, as many as were sent. */
+    rows: LedgerEntry[];
+    /** The ones not sent: how many, and what they come to. */
+    more: { count: number; total: number };
+  };
+}
+
+/** Each company's inventory accounts, as gl_stock_ledger_parts orders them: by company, then account number. */
+export function ledgerParts(data: LedgerPartsData | null): LedgerPart[] {
+  return (data?.parts ?? []).map((p) => {
+    const ledger = { start: cents(p.ledger_start), moves: cents(p.ledger_moves) };
+    const items = { start: cents(p.items_start), moves: cents(p.items_moves) };
+    const rows: LedgerEntry[] = (p.rows ?? []).map((r) => ({
+      doc: r.doc,
+      date: r.date,
+      type: r.type ? TRAN_TYPE_NAMES[r.type] ?? r.type : 'Entry',
+      number: r.number || `NetSuite ${r.doc}`,
+      name: r.name,
+      memo: r.memo,
+      amount: cents(r.amount),
+      check: netsuiteCheck(r.type, r.month, r.date),
+    }));
+    const total = cents(p.entries_total);
+    const count = Number(p.entries) || 0;
+    return {
+      company: p.company,
+      accountId: p.account_id,
+      account: accountText({ netsuite_id: p.account_id, number: p.number, name: p.name ?? '' }),
+      fixedAsset: p.type === 'fixed_asset',
+      ledger: { ...ledger, now: ledger.start + ledger.moves },
+      items: { ...items, now: items.start + items.moves },
+      entries: {
+        count,
+        total,
+        kinds: (p.kinds ?? []).map((k) => ({
+          type: k.type ? TRAN_TYPE_NAMES[k.type] ?? k.type : 'Entry',
+          count: Number(k.count) || 0,
+          total: cents(k.total),
+        })),
+        rows,
+        more: { count: Math.max(0, count - rows.length), total: total - rows.reduce((sum, r) => sum + r.amount, 0) },
+      },
+    };
+  });
 }
 
 // ── One item's moves ───────────────────────────────────────────────────────
