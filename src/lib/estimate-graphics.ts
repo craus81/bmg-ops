@@ -13,6 +13,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { r2GetBytes, r2PresignGet, r2PublicUrl } from './r2';
 import { sanitizePhotoProofs, proofLabel } from './coverage-proof';
+import { fleetWorksheetIds, worksheetFilter } from './estimate-fleet';
 
 export interface EstimateGraphicsSummary {
   quoteNumber: string;
@@ -60,10 +61,12 @@ export async function loadEstimateGraphics(
   supabase: SupabaseClient,
   estimateId: string,
 ): Promise<{ summaries: EstimateGraphicsSummary[]; wrapQuotes: any[] }> {
+  // A fleet group's other estimates share the worksheet (estimate-fleet.ts).
+  const shared = await fleetWorksheetIds(supabase, estimateId);
   const { data: wrapQuotes } = await supabase
     .from('wrap_quotes')
     .select('id, quote_number, vehicle_description, diagram_path, photo_path, photo_boxes, photo_proofs, attachments, measurements, estimate_attach, total_area_sqft')
-    .eq('estimate_id', estimateId)
+    .or(worksheetFilter(estimateId, shared))
     .not('estimate_attach', 'is', null);
 
   const summaries: EstimateGraphicsSummary[] = [];

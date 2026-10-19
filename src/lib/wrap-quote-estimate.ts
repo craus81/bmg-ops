@@ -42,6 +42,10 @@ export async function addWrapQuoteToEstimate(
   estimateId: string,
   wrapQuoteId: string,
   attach?: WrapQuoteAttach,
+  /** A fleet sibling (src/lib/estimate-fleet.ts): refresh its lines only.
+   *  The worksheet stays pinned to the estimate it was built on, and its
+   *  graphics job keeps that link. */
+  sibling = false,
 ): Promise<{ status: number; body: any }> {
   const [{ data: estimate }, { data: quote }] = await Promise.all([
     supabase.from('estimates').select('id, tax_rate, tax_exempt, labor_rate, labor_hours_override, customer_approved, status, netsuite_so_id, vehicle_count, discount_type, discount_value').eq('id', estimateId).maybeSingle(),
@@ -121,11 +125,13 @@ export async function addWrapQuoteToEstimate(
   // Record the linkage (+ what the quote contributes to the estimate's
   // customer PDF, when the estimator sent its checkboxes) and refresh the
   // estimate's stored totals.
-  await supabase.from('wrap_quotes').update({
-    estimate_id: estimateId,
-    ...(attach ? { estimate_attach: attach } : {}),
-    updated_at: new Date().toISOString(),
-  }).eq('id', wrapQuoteId);
+  if (!sibling) {
+    await supabase.from('wrap_quotes').update({
+      estimate_id: estimateId,
+      ...(attach ? { estimate_attach: attach } : {}),
+      updated_at: new Date().toISOString(),
+    }).eq('id', wrapQuoteId);
+  }
 
   const { data: allLines } = await supabase
     .from('estimate_line_items')
@@ -160,7 +166,7 @@ export async function addWrapQuoteToEstimate(
   // A graphics job already made from this quote now belongs to this
   // estimate too, so invoicing and the estimate approval reach it (a job
   // only ever had the link it was created from).
-  await linkQuoteJobsToEstimate(supabase, wrapQuoteId, estimateId);
+  if (!sibling) await linkQuoteJobsToEstimate(supabase, wrapQuoteId, estimateId);
 
   return result({
     success: true,
@@ -214,9 +220,11 @@ export async function openEstimateForWrapQuote(
       // An unpriced quote still opens its estimate — the lines land once
       // it has amounts. A locked estimate (accepted / converted) is
       // reported, not silently skipped.
+      let fleet: FleetSync | null = null;
       if (priced && !keepEstimateLines) {
         const r = await addWrapQuoteToEstimate(supabase, est.id, wrapQuoteId, attach);
         if (r.status === 409) return r;
+        fleet = await syncFleetSiblings(supabase, est.id, wrapQuoteId);
       } else if (priced && attach) {
         // "Keep the estimate's numbers": the lines stay as they were edited
         // on the estimate; only the picture/files choices follow the save.
@@ -230,7 +238,7 @@ export async function openEstimateForWrapQuote(
         }).eq('id', wrapQuoteId);
         await linkQuoteJobsToEstimate(supabase, wrapQuoteId, est.id);
       }
-      return result({ success: true, estimateId: est.id, estimateNumber: est.estimate_number, netsuiteEstimateNumber: est.netsuite_estimate_number, created: false });
+      return result({ success: true, estimateId: est.id, estimateNumber: est.estimate_number, netsuiteEstimateNumber: est.netsuite_estimate_number, created: false, ...(fleet ? { fleet } : {}) });
     }
     // The estimate it pointed at is gone — fall through and make a new one.
   }
@@ -313,6 +321,56 @@ export async function openEstimateForWrapQuote(
     if (r.status >= 400) return r;
   }
   return result({ success: true, estimateId: estimate.id, estimateNumber: estimate.estimate_number, netsuiteEstimateNumber: null, created: true });
+}
+
+export interface FleetSync {
+  /** Estimate numbers whose graphics lines were rewritten to match. */
+  updated: string[];
+  /** Estimate numbers left alone because they're approved or on a sales order. */
+  locked: string[];
+}
+
+/**
+ * A Graphics Builder save rewrote this worksheet's lines on its estimate;
+ * do the same on the other estimates of its fleet order (migration 410),
+ * so the vehicles in one order can't drift apart (Craig, 2026-10-19).
+ *
+ * Only siblings that still carry this worksheet's lines are touched: a
+ * fleet copy keeps wrap_quote_id on its lines, and a sibling whose
+ * graphics someone deliberately took off stays that way. Approved or
+ * converted siblings are skipped and reported, never rewritten.
+ */
+export async function syncFleetSiblings(
+  supabase: SupabaseClient,
+  estimateId: string,
+  wrapQuoteId: string,
+): Promise<FleetSync | null> {
+  const { data: est } = await supabase.from('estimates').select('fleet_group_id').eq('id', estimateId).maybeSingle();
+  if (!est?.fleet_group_id) return null;
+  const { data: siblings } = await supabase
+    .from('estimates')
+    .select('id, estimate_number, customer_approved, status, netsuite_so_id')
+    .eq('fleet_group_id', est.fleet_group_id)
+    .neq('id', estimateId);
+  if (!siblings || siblings.length === 0) return null;
+  const { data: carrying } = await supabase
+    .from('estimate_line_items')
+    .select('estimate_id')
+    .eq('wrap_quote_id', wrapQuoteId)
+    .in('estimate_id', siblings.map(s => s.id));
+  const withLines = new Set((carrying || []).map(l => l.estimate_id));
+
+  const out: FleetSync = { updated: [], locked: [] };
+  for (const sib of siblings) {
+    if (!withLines.has(sib.id)) continue;
+    if (sib.netsuite_so_id || sib.customer_approved || sib.status === 'accepted') {
+      out.locked.push(sib.estimate_number);
+      continue;
+    }
+    const r = await addWrapQuoteToEstimate(supabase, sib.id, wrapQuoteId, undefined, true);
+    if (r.status < 400) out.updated.push(sib.estimate_number);
+  }
+  return out.updated.length || out.locked.length ? out : null;
 }
 
 /**
