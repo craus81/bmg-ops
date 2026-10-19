@@ -35,17 +35,20 @@ BMG's, part 19, a check each morning that tells the super admins when
 a month stops matching NetSuite, part 20, the documents behind each
 account line on the reports, part 21, each item's stock at each
 location, counted from a copy of every NetSuite document that moves it and
-checked against NetSuite's own count, and part 22, what each customer owes
-and each vendor is owed, next to NetSuite's and checked each morning.
+checked against NetSuite's own count, part 22, what each customer owes
+and each vendor is owed, next to NetSuite's and checked each morning, and
+part 23, FleetSuite's own copy of each invoice it makes, worked out by its
+own rules and checked against NetSuite's invoice each morning.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
 account line's detail at `/admin/books/reports/detail`, stock by item at
 `/admin/books/stock`, an item's moves at `/admin/books/stock/item`,
-customer and vendor balances at `/admin/books/balances` and the documents
-behind one at `/admin/books/balances/party`, which only super admins can
-open. Only they see the Books entry on the More page (Admin), which opens
+customer and vendor balances at `/admin/books/balances`, the documents
+behind one at `/admin/books/balances/party`, FleetSuite's own invoices at
+`/admin/books/own-invoices` and one's check at
+`/admin/books/own-invoices/invoice`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there.
 
 | Piece | Where |
@@ -99,7 +102,7 @@ the accounts page; the others are linked from there.
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
-| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs` and `books_balance_differs` in `src/lib/notification-registry.ts` |
+| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs`, `books_balance_differs` and `books_own_invoice_differs` in `src/lib/notification-registry.ts` |
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
@@ -109,6 +112,9 @@ the accounts page; the others are linked from there.
 | Each customer's and vendor's balance, and the starting entry by name | `migrations/406-books-party-balances.sql`, `src/lib/books/party-balances.ts`, `partyOpeningQuery` and `storePartyOpening` in `src/lib/books/netsuite-gl.ts` |
 | Customer and vendor balances and one balance's documents, and their APIs | `src/app/(main)/admin/books/balances/page.tsx`, `src/app/(main)/admin/books/balances/party/page.tsx`, `src/app/api/admin/books/balances/route.ts`, `src/app/api/admin/books/balances/party/route.ts` |
 | Balance tests | `src/lib/books/party-balances.test.ts`, `src/lib/books/party-balances-sql.test.ts`; the starting entry by name's are in the copy test files, the daily check's in its own |
+| FleetSuite's own invoices, saved as each is made and checked against NetSuite's, and NetSuite's customers in the lists | `migrations/407-books-own-invoices.sql`, `src/lib/books/own-invoices.ts`, `src/lib/books/own-invoice-check.ts`; saved by `src/app/api/vehicle-tracking/invoice/route.ts`, `src/app/api/netsuite/create-invoice/route.ts`, `src/app/api/pos/invoice-open/route.ts`, `src/app/api/netsuite/invoice-vehicles/route.ts` and `src/app/api/graphics/create-invoice/route.ts`, from what `createDirectInvoice` and `createInvoiceFromSO` in `src/lib/netsuite.ts` say they billed |
+| Own invoices and one invoice's check, and their API | `src/app/(main)/admin/books/own-invoices/page.tsx`, `src/app/(main)/admin/books/own-invoices/invoice/page.tsx`, `src/app/api/admin/books/own-invoices/route.ts` |
+| Own invoice tests | `src/lib/books/own-invoices.test.ts`, `src/lib/books/own-invoice-check.test.ts`, `src/lib/books/own-invoices-sql.test.ts`; the customers list's are in the lists test files, the daily check's in its own |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -217,6 +223,13 @@ cron, and from **Sync now** on the lists page:
 | Tax codes | `salestaxitem` | description, rate, tax type, tax agency |
 | Vendors | `vendor` | default expense account, payables account, terms |
 | Items | `item` | type, display name, income, asset and expense accounts |
+| Customers | `customer` | terms, whether NetSuite taxes them and with which tax code, the entity id when the name is the company's |
+
+Customers came with migration 407, for FleetSuite's own invoices: their
+terms give each invoice FleetSuite makes its due date, and whether NetSuite
+taxes them explains a sales tax that differs ("FleetSuite's own invoices").
+Each is named by its company name, else its entity id. The lists page looks
+them up by name, as it does vendors and items.
 
 Every row also keeps its NetSuite id, name, parent and inactive flag. They
 all live in `gl_netsuite_lists` (migration 363), one row per list and
@@ -251,8 +264,8 @@ How a copy works:
   field by field: the required fields, then each optional field on its
   own, so only the fields that fail are left out. SuiteQL shows little of
   tax codes, so every field of theirs but the id may be refused.
-- In the cron the lists get the first 90 seconds of the run, items last, so
-  the ledger mirror after them keeps most of its time. A list there wasn't
+- In the cron the lists get the first 90 seconds of the run, items and then
+  customers last, so the ledger mirror after them keeps most of its time. A list there wasn't
   time to start is copied by the next run.
 - Which account a tax code posts to comes from what sales tax actually
   posted to: the copy counts sales tax's GL lines since 2025 (its tax lines)
@@ -1673,6 +1686,19 @@ a vendor (`c:` and `v:` alone for the group FleetSuite can't name), with
 how many of their documents differ, never an amount. The check's first
 look at a company's balances learns where they stand and tells nobody.
 
+So are FleetSuite's own invoices (owner decision 2026-10-19, "Own
+invoices"): one that differs from NetSuite's invoice is noted at the first
+look and told about at the second if it still differs, and so is one where
+more of what's compared differs than when the super admins last heard of
+it. FleetSuite keeps them only from the day it began to, so none is taken
+as known at the check's first look at them. One that's waiting for
+NetSuite's copies, incomplete or voided isn't told about. Each gets its own
+notification (`books_own_invoice_differs`, in the app and by push) saying
+what differs first, linking to its check; more than three at once get one,
+linking to Own invoices open on the newest one's month with those that
+differ. The record holds the invoices that differ, by NetSuite's id for
+each, with how many things differ, never an amount.
+
 ## Reports
 
 `/admin/books/reports` shows one company's profit and loss, balance sheet
@@ -2070,6 +2096,118 @@ FleetSuite's books name a customer differently from NetSuite's lines (a
 document FleetSuite posted before the mirror matched its customer, or one
 NetSuite names on a line FleetSuite's rule doesn't); the documents on the
 balance's page show which.
+
+## FleetSuite's own invoices
+
+From the day part 23 shipped, FleetSuite keeps its own copy of each invoice
+it makes in NetSuite, worked out by its own rules from what it billed
+rather than read back from NetSuite (owner decision 2026-10-19, "Own
+invoices"). Until then FleetSuite's books held only what NetSuite booked;
+for the side-by-side run in 2027, and alone from 2028, FleetSuite has to be
+able to say what each invoice is on its own. The copies are
+`gl_own_invoices` and `gl_own_invoice_lines` (migration 407). Nothing is
+posted to the books from them yet, and nothing is written to NetSuite.
+
+There are five ways FleetSuite invoices, and each saves a copy right after
+NetSuite makes the invoice (`saveOwnInvoice` in
+`src/lib/books/own-invoices.ts`): a finished vehicle, off its sales order;
+a sales order's installed quantities; a PO's open quantities; the Scan
+Log; and a graphics job. Saving never stops an invoice, which already
+exists in NetSuite: a copy that can't be saved is logged (`[books] own copy
+of NetSuite invoice … not saved`) and the invoice goes on. A copy is kept
+once; saving the same invoice again changes nothing. Invoices made in
+NetSuite by hand have no copy.
+
+### How a copy is worked out
+
+- **Lines.** The ones FleetSuite sent NetSuite, at the prices it sent
+  (`createDirectInvoice` and `createInvoiceFromSO` say what they billed).
+  For a sales order billed whole, a finished vehicle's say, they are what
+  FleetSuite's copy of the order (`netsuite_sales_order_lines`, copied every
+  two hours) still had to bill: each open line, a line billed whole at the
+  order's own amount and one billed in part at its price, and the order's
+  discounts and markups when nothing of it was billed before, since NetSuite
+  bills those with an order's first invoice. An invoice off a sales order is
+  for the order's customer. Lines that never post (subtotals, descriptions,
+  item groups) and lines of nothing are left out, as the invoice rule
+  leaves them out.
+- **Amounts.** A line's amount is its quantity times its price, rounded
+  half to even to the cent; a discount is negative.
+- **Sales tax** (`tax@1`). FleetSuite's own quoting rule decides which lines
+  are taxed (`src/lib/line-taxability.ts`): service items aren't, an
+  admin's override wins either way, everything else is, and a discount is
+  taxed as the line above it. The rate is the one in Settings → Sales Tax,
+  worked out line by line and rounded half to even, as NetSuite does. A
+  customer FleetSuite has as tax-exempt (every FleetSuite record with its
+  NetSuite id) pays none, and nor does work at Social Circle, Georgia.
+  NetSuite's Taxable box isn't used.
+- **Due date.** The invoice's date, in Central time, plus the customer's
+  terms as NetSuite's customer list has them (the lists copy, "NetSuite's
+  lists"). A customer with no terms is due the day it's billed, as in
+  NetSuite. Terms due on a day of the month aren't worked out.
+- **Location.** The one FleetSuite gave NetSuite. A sales order billed whole
+  books where NetSuite's order does, which FleetSuite's copy of the order
+  doesn't say, so FleetSuite's invoice location rule
+  (`src/lib/invoice-location.ts`) names it from the customer, when the rule
+  is sure.
+
+What FleetSuite can't work out is kept on the copy as unknown, never
+guessed from NetSuite: the lines (its copy of the sales order didn't have
+the order yet), the customer, the terms (a customer the lists copy doesn't
+have, or terms due on a day of the month), a price (a line NetSuite priced
+itself) or the location (a Masterack order with no plant named).
+
+### The check
+
+`checkOwnInvoice` (`src/lib/books/own-invoice-check.ts`) puts each copy next
+to NetSuite's invoice as the ledger mirror copied it, from migration 407's
+`gl_own_invoice_pairs`: the customer, the date, the location (from the
+invoice's receivable line in the copy of NetSuite's general ledger), the due
+date, each line, paired by item and a line at the same amount first, what
+it comes to before tax, its sales tax and its total. A copy:
+
+- **waits** until NetSuite's invoice, its lines and its posting are copied;
+- is **voided** when NetSuite voided or deleted its invoice;
+- **differs** when anything compared differs;
+- is **incomplete** when nothing compared differs but FleetSuite didn't know
+  something, which then isn't compared;
+- **matches** otherwise.
+
+A sales tax that differs is explained where it can be: work at Social Circle
+or a tax-exempt customer NetSuite charged, a customer NetSuite has as not
+taxable, NetSuite's rate against the one in Settings, and the fewest lines
+that one taxed and the other didn't (searched when an invoice has 12 lines
+or fewer).
+
+The list's sentence for a copy that differs says what differs first and why,
+then names the rest, leaving out a total that differs only because the
+amount before tax or the tax does, and an amount before tax that differs
+only because the lines do.
+
+### The pages
+
+`/admin/books/own-invoices` (`deepLinks.booksOwnInvoices`, `?month=YYYY-MM`,
+`&only=differs`) lists a month's copies, those that differ first, with how
+many have each status, how the last ledger mirror run, copy of NetSuite's
+ledger, lists copy and daily check went, and a search. Each opens
+`/admin/books/own-invoices/invoice?id=` (`deepLinks.booksOwnInvoice`, by
+NetSuite's id for the invoice): what's compared, side by side with why it
+differs, each line, what FleetSuite didn't know and how it worked the copy
+out, and a link to how NetSuite's invoice posts on Invoices vs NetSuite. The
+daily check tells the super admins when one stops matching ("Daily check").
+
+### What isn't done yet
+
+- The copies aren't posted. NetSuite's invoices still post to FleetSuite's
+  books from the copy of them; posting FleetSuite's own documents from its
+  own records, invoices first, then fulfillments, receipts and bills, is
+  next.
+- There's no history: copies start the day part 23 shipped.
+- FleetSuite's sales tax is one rate for everything but Social Circle, while
+  NetSuite picks a tax code for each invoice. Where that differs, the check
+  shows which invoices, by name.
+- Shipping or handling NetSuite adds to an invoice's header shows as a line
+  FleetSuite didn't bill.
 
 ## Posting
 

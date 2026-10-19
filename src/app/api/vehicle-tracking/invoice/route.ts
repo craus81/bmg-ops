@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { createInvoiceFromSO, fulfillSalesOrder } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
 import { notifyPortalInvoice } from '@/lib/portal-invoice-notify';
+import { saveOwnInvoice } from '@/lib/books/own-invoices';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -314,6 +315,17 @@ export async function POST(req: NextRequest) {
         actorId: auth.user.id,
       });
     }
+
+    // FleetSuite's own copy of the invoice, for the books (never fails the invoice).
+    await saveOwnInvoice(supabase, {
+      netsuiteId: result.invoiceId,
+      netsuiteNumber: result.invoiceNumber || null,
+      madeFrom: 'vehicle',
+      madeFromId: checkinId,
+      madeBy: auth.user.id,
+      salesOrderId,
+      vin: checkin.vin || null,
+    });
 
     const finalLedger = ledger !== null ? await loadSoInvoices(checkinId) : null;
 

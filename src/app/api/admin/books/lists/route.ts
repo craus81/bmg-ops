@@ -11,8 +11,10 @@ export const maxDuration = 300;
 
 const SYNC_BUDGET_MS = 240_000;
 const ROW_COLUMNS = 'kind, netsuite_id, name, parent_netsuite_id, active, details, gone_at';
-/** The lists short enough to send whole; items and vendors are looked up. */
+/** The lists short enough to send whole; items, vendors and customers are looked up. */
 const SHORT_LISTS = ['location', 'department', 'class', 'term', 'tax_code'];
+/** The lists looked up by name. */
+const LOOKUP_LISTS = ['item', 'vendor', 'customer'];
 /** The account fields a lookup can filter on, per list. */
 const ACCOUNT_FIELDS: Record<string, string[]> = {
   item: ['income_account', 'asset_account', 'expense_account'],
@@ -26,9 +28,10 @@ const LOOKUP_LIMIT = 50;
  * lines carry each location, department and class, which accounts items and
  * vendors post to, and how the last copy went.
  *
- * GET ?kind=item|vendor&q=… — items or vendors whose name contains q (or
- * whose NetSuite id is q). &field=income_account&account=123 (or
- * account=none) instead lists the active ones posting to that account.
+ * GET ?kind=item|vendor|customer&q=… — items, vendors or customers whose
+ * name contains q (or whose NetSuite id is q). For items and vendors,
+ * &field=income_account&account=123 (or account=none) instead lists the
+ * active ones posting to that account.
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). Read-only — until the changeover these
@@ -43,7 +46,7 @@ export async function GET(req: NextRequest) {
 
   const kind = params.get('kind');
   if (kind) {
-    if (!ACCOUNT_FIELDS[kind]) return NextResponse.json({ error: 'Only items and vendors are looked up' }, { status: 400 });
+    if (!LOOKUP_LISTS.includes(kind)) return NextResponse.json({ error: 'Only items, vendors and customers are looked up' }, { status: 400 });
     let lookup = service
       .from('gl_netsuite_lists')
       .select(ROW_COLUMNS, { count: 'exact' })
@@ -51,7 +54,7 @@ export async function GET(req: NextRequest) {
     const field = params.get('field');
     if (field) {
       const account = params.get('account') || '';
-      if (!ACCOUNT_FIELDS[kind].includes(field) || !/^(\d+|none)$/.test(account)) {
+      if (!ACCOUNT_FIELDS[kind]?.includes(field) || !/^(\d+|none)$/.test(account)) {
         return NextResponse.json({ error: 'Unknown account filter' }, { status: 400 });
       }
       lookup = lookup.eq('active', true).is('gone_at', null);

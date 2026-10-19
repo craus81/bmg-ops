@@ -13,6 +13,7 @@ import {
   documentNumber, indexMonths, lastMonth, monthStatuses, monthText, NETSUITE_TYPE, postedKinds,
   type DiffData, type DiffDocumentData,
 } from './differences';
+import { checkOwnInvoices, type OwnInvoiceCheck, type OwnPairsData } from './own-invoice-check';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -52,13 +53,21 @@ import {
  * is noted at the first look and told about at the second if it still
  * differs, as is one more of whose documents differ than before.
  *
+ * So is each of FleetSuite's own invoices (owner decision 2026-10-19, "Own
+ * invoices"; src/lib/books/own-invoice-check.ts): one that differs from
+ * NetSuite's invoice is noted at the first look and told about at the
+ * second if it still differs, as is one where more differs than before.
+ * FleetSuite keeps them only from the day it began to, so none is known to
+ * differ beforehand, even at the check's first look at them.
+ *
  * In-app and push only (books_month_differs, books_stock_differs,
- * books_balance_differs). The record in sync_state, 'books_daily_check',
- * holds which months differ and how many of their documents, which items'
- * counts differ and by about how many, and whose balances differ and in how
- * many documents, never an amount, and is left out of HEALTH_MONITORS like
- * the other books jobs; Differences vs NetSuite says when the check last
- * looked. Nothing is written to NetSuite or to the books.
+ * books_balance_differs, books_own_invoice_differs). The record in
+ * sync_state, 'books_daily_check', holds which months differ and how many of
+ * their documents, which items' counts differ and by about how many, whose
+ * balances differ and in how many documents, and which own invoices differ
+ * and in how many things, never an amount, and is left out of
+ * HEALTH_MONITORS like the other books jobs; Differences vs NetSuite says
+ * when the check last looked. Nothing is written to NetSuite or to the books.
  */
 
 export const BOOKS_DAILY_CHECK = 'books_daily_check';
@@ -101,6 +110,11 @@ export interface DailyCheckState {
    * each with how many of their documents differ. A company is absent until the check has looked at its balances.
    */
   balances?: Partial<Record<BooksCompany, CompanyCheck>>;
+  /**
+   * FleetSuite's own invoices that differ from NetSuite's, as for a company's months: by NetSuite's id for the
+   * invoice, each with how many of the things compared differ. Absent until the check has looked at them.
+   */
+  own?: CompanyCheck;
 }
 
 const MONTH_RE = /^\d{4}-\d{2}-01$/;
@@ -108,6 +122,8 @@ const MONTH_RE = /^\d{4}-\d{2}-01$/;
 const STOCK_KEY_RE = /^\d+(\|\d*)?$/;
 /** A customer, by FleetSuite's id, or a vendor, by NetSuite's; nothing after the colon for the lines FleetSuite can't name. */
 const BALANCE_KEY_RE = /^(c:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?|v:(\d+)?)$/;
+/** An own invoice, by NetSuite's id for it. */
+const OWN_KEY_RE = /^\d+$/;
 
 /** How the check keys one customer's ('c:<FleetSuite id>') or vendor's ('v:<NetSuite id>') balance; 'c:' and 'v:' for the lines FleetSuite can't name. */
 export const balanceKey = (kind: PartyKind, party: string) => `${kind === 'customer' ? 'c' : 'v'}:${party}`;
@@ -151,7 +167,15 @@ export function parseCheckState(lastResult: unknown): DailyCheckState {
     const noted = parseCounts(last.balances?.[company]?.noted, BALANCE_KEY_RE);
     if (known && noted) balances[company] = { known, noted };
   }
-  return { companies, ...(stock ? { stock } : {}), ...(Object.keys(balances).length ? { balances } : {}) };
+  const ownKnown = parseCounts(last.own?.known, OWN_KEY_RE);
+  const ownNoted = parseCounts(last.own?.noted, OWN_KEY_RE);
+  const own = ownKnown && ownNoted ? { known: ownKnown, noted: ownNoted } : null;
+  return {
+    companies,
+    ...(stock ? { stock } : {}),
+    ...(Object.keys(balances).length ? { balances } : {}),
+    ...(own ? { own } : {}),
+  };
 }
 
 /** A month to tell the super admins about. */
@@ -194,10 +218,11 @@ export interface CheckAlert {
   body: string;
   url: string;
   /**
-   * Set on a notification about stock by item (books_stock_differs) or a customer's or vendor's balance
-   * (books_balance_differs); one about months has none (books_month_differs).
+   * Set on a notification about stock by item (books_stock_differs), a customer's or vendor's balance
+   * (books_balance_differs) or FleetSuite's own invoices (books_own_invoice_differs); one about months has none
+   * (books_month_differs).
    */
-  about?: 'stock' | 'balance';
+  about?: 'stock' | 'balance' | 'own';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -356,6 +381,34 @@ export function balanceAlertsFor(company: BooksCompany, news: BalanceNews[], hin
   }));
 }
 
+/**
+ * What the super admins are told about FleetSuite's own invoices: a notification for each, linking to its check, or
+ * one for them all, linking to the month of the newest with the ones that differ, when there are more than ONE_BY_ONE.
+ */
+export function ownAlertsFor(news: MonthNews[], checks: Map<string, OwnInvoiceCheck>): CheckAlert[] {
+  const told = news.map((n) => ({ n, check: checks.get(n.month) })).filter((t): t is { n: MonthNews; check: OwnInvoiceCheck } => !!t.check);
+  if (!told.length) return [];
+  const why = 'Own invoices shows why.';
+  const name = (c: OwnInvoiceCheck) => (c.customer ? `${c.number} (${c.customer})` : c.number);
+  if (told.length > ONE_BY_ONE) {
+    const newest = [...told].sort((a, b) => b.check.date.localeCompare(a.check.date))[0].check;
+    return [{
+      title: `Own invoices: ${told.length} differ from NetSuite's now`,
+      body: `${listed([...told.slice(0, ONE_BY_ONE).map((t) => name(t.check)), `${told.length - ONE_BY_ONE} more`])}. ${why}`,
+      url: deepLinks.booksOwnInvoices(newest.date, true),
+      about: 'own',
+    }];
+  }
+  return told.map(({ n, check }) => ({
+    title: n.before === null
+      ? `Own invoices: ${name(check)} differs from NetSuite's`
+      : `Own invoices: more of ${name(check)} differs from NetSuite's`,
+    body: `${check.summary} ${why}`,
+    url: deepLinks.booksOwnInvoice(check.netsuiteId),
+    about: 'own',
+  }));
+}
+
 // ── Looking ────────────────────────────────────────────────────────────────
 
 /** Months whose documents are looked up at once. */
@@ -426,6 +479,30 @@ async function lookAtBalances(service: SupabaseClient, company: BooksCompany): P
   return { now, names };
 }
 
+/** The last day of a 'YYYY-MM-01' month. */
+const monthEnd = (month: string) => {
+  const [y, m] = month.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+};
+
+/** FleetSuite's own invoices that differ from NetSuite's now, as Own invoices checks them, by NetSuite's id for each. */
+async function lookAtOwnInvoices(service: SupabaseClient): Promise<{ now: DifferingMonths; checks: Map<string, OwnInvoiceCheck> }> {
+  const months = await service.rpc('gl_own_invoice_months');
+  if (months.error) throw new Error(`couldn't list the months (${months.error.message})`);
+  const now: DifferingMonths = {};
+  const checks = new Map<string, OwnInvoiceCheck>();
+  await runLimited(((months.data ?? []) as Array<{ month: string }>).map(({ month }) => async () => {
+    const res = await service.rpc('gl_own_invoice_pairs', { p_from: month, p_to: monthEnd(month), p_netsuite_id: null });
+    if (res.error) throw new Error(`couldn't check ${monthText(month)}'s invoices (${res.error.message})`);
+    for (const check of checkOwnInvoices(res.data as OwnPairsData).invoices) {
+      if (check.status !== 'differs') continue;
+      now[check.netsuiteId] = Math.max(1, check.differing);
+      checks.set(check.netsuiteId, check);
+    }
+  }), LOOKUPS);
+  return { now, checks };
+}
+
 /** The newest documents that differ of each balance a notification names one by one. */
 async function balanceNews(
   service: SupabaseClient,
@@ -449,7 +526,7 @@ async function balanceNews(
 
 export interface DailyCheckResult {
   look: Look;
-  /** Months, items and balances told about. */
+  /** Months, items, balances and own invoices told about. */
   told: number;
   /** What the look couldn't do; a company it couldn't look at keeps what the check held for it. */
   error?: string;
@@ -528,10 +605,29 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     }
   }
 
+  // FleetSuite's own invoices, against the copies of NetSuite's invoices and ledger. They start the day FleetSuite
+  // began keeping them, so no difference is known before the check first looks: one is told about from the start.
+  let own = held.own;
+  try {
+    const { now, checks } = await lookAtOwnInvoices(service);
+    const { check, news } = nextCheck(held.own ?? { known: {}, noted: {} }, now, opts.look);
+    own = check;
+    alerts.push(...ownAlertsFor(news, checks));
+    told += news.length;
+  } catch (err) {
+    errors.push(`Own invoices: ${reason(err)}`);
+  }
+
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.
   if (alerts.length) await opts.tell(alerts);
   const result: DailyCheckResult = { look: opts.look, told, ...(errors.length ? { error: errors.join(' ') } : {}) };
-  const record = { ...result, companies, ...(stock ? { stock } : {}), ...(Object.keys(balances).length ? { balances } : {}) };
+  const record = {
+    ...result,
+    companies,
+    ...(stock ? { stock } : {}),
+    ...(Object.keys(balances).length ? { balances } : {}),
+    ...(own ? { own } : {}),
+  };
   const heartbeat = await recordHeartbeat(service, BOOKS_DAILY_CHECK, record, {
     startedAt,
     records: told,

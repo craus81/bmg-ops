@@ -2167,6 +2167,22 @@ export function describeRejectedItem(
 }
 
 /**
+ * A line as FleetSuite billed it on an invoice, at the price it went at: what
+ * FleetSuite's own copy of the invoice is worked out from
+ * (src/lib/books/own-invoices.ts).
+ */
+export interface BilledInvoiceLine {
+  itemId: string;
+  itemNumber?: string | null;
+  quantity: number;
+  /** Null when FleetSuite sent no price and NetSuite priced the line itself. */
+  rate: number | null;
+  description: string | null;
+  /** The sales order line it billed (its transactionline id), on an invoice off a sales order. */
+  salesOrderLineId?: string | null;
+}
+
+/**
  * Create a standalone Invoice in NetSuite (no SO required)
  * Used for direct invoicing of scanned vehicles without PO/SO flow
  */
@@ -2191,6 +2207,10 @@ export async function createDirectInvoice(payload: {
   success: boolean;
   invoiceId?: string;
   invoiceNumber?: string;
+  /** Each line as sent, a missing price filled from the item's base price. */
+  billed?: BilledInvoiceLine[];
+  /** The location the invoice was given: the caller's, else the account default. */
+  locationId?: string | null;
   error?: string;
 }> {
   const config = getConfig();
@@ -2298,7 +2318,14 @@ export async function createDirectInvoice(payload: {
       }
     }
 
-    return { success: true, invoiceId, invoiceNumber };
+    const billed: BilledInvoiceLine[] = payload.lineItems.map((li, i) => ({
+      itemId: String(li.itemId),
+      itemNumber: li.partNumber ?? null,
+      quantity: li.quantity,
+      rate: items[i].rate,
+      description: li.description || null,
+    }));
+    return { success: true, invoiceId, invoiceNumber, billed, locationId: locationId ? String(locationId) : null };
   } catch (e: any) {
     return { success: false, error: `Failed to create invoice: ${e.message}` };
   }
@@ -2877,6 +2904,8 @@ export async function createInvoiceFromSO(payload: {
   success: boolean;
   invoiceId?: string;
   invoiceNumber?: string;
+  /** The lines sent, when it billed part of the order; absent when NetSuite billed the order whole. */
+  billed?: BilledInvoiceLine[];
   error?: string;
 }> {
   const config = getConfig();
@@ -2884,6 +2913,7 @@ export async function createInvoiceFromSO(payload: {
 
   // First, get the SO line items to build the invoice with installed quantities
   let lineOverrides: any[] | undefined;
+  let billed: BilledInvoiceLine[] | undefined;
 
   if (payload.installedQuantities && Object.keys(payload.installedQuantities).length > 0) {
     // Get SO line details first to map line numbers to items
@@ -2893,7 +2923,7 @@ export async function createInvoiceFromSO(payload: {
       // sent without a description reverts to the item record's default —
       // silently dropping estimate/SO-level notes (placement notes etc.).
       const linesQuery = `
-        SELECT tl.linesequencenumber, tl.item, tl.quantity, tl.rate, tl.memo
+        SELECT tl.id, tl.linesequencenumber, tl.item, tl.quantity, tl.rate, tl.memo
         FROM transactionline tl
         WHERE tl.transaction = ${payload.salesOrderId}
         AND tl.mainline = 'F'
@@ -2933,6 +2963,13 @@ export async function createInvoiceFromSO(payload: {
           ...(line.memo ? { description: line.memo } : {}),
         };
       });
+      billed = billableLines.map((line: any, i: number) => ({
+        itemId: String(line.item),
+        quantity: lineOverrides![i].quantity,
+        rate: lineOverrides![i].rate ?? null,
+        description: line.memo || null,
+        salesOrderLineId: line.id != null ? String(line.id) : null,
+      }));
     } catch (e) {
       console.warn('Could not fetch SO lines for partial invoice, will invoice full SO:', e);
     }
@@ -3012,6 +3049,7 @@ export async function createInvoiceFromSO(payload: {
       success: true,
       invoiceId,
       invoiceNumber,
+      ...(lineOverrides && lineOverrides.length > 0 ? { billed } : {}),
     };
   } catch (e: any) {
     return { success: false, error: `Failed to create invoice: ${e.message}` };

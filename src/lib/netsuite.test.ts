@@ -288,7 +288,11 @@ describe('createDirectInvoice', () => {
       location: { id: '7' },
       otherRefNum: 'PO-1',
     });
-    expect(result).toEqual({ success: true, invoiceId: '777', invoiceNumber: 'INV-2001' });
+    // What was billed comes back, for FleetSuite's own copy of the invoice.
+    expect(result).toEqual({
+      success: true, invoiceId: '777', invoiceNumber: 'INV-2001', locationId: '7',
+      billed: [{ itemId: '55', itemNumber: null, quantity: 3, rate: 42.5, description: null }],
+    });
   });
 
   it('writes the VIN to custbody_vin_number_ like the SO path, and omits it when absent', async () => {
@@ -338,6 +342,8 @@ describe('createDirectInvoice', () => {
     const recordBody = JSON.parse(fetchMock.mock.calls[1][1].body);
     expect(recordBody.item.items[0].rate).toBe(42.5);
     expect(result.success).toBe(true);
+    // The line is billed at the price it went at, not the 0 it was asked for.
+    expect(result.billed).toEqual([{ itemId: '55', itemNumber: null, quantity: 1, rate: 42.5, description: null }]);
   });
 
   it('refuses to invoice when no price exists anywhere, without posting', async () => {
@@ -461,8 +467,8 @@ describe('createInvoiceFromSO', () => {
     fetchMock
       // SO line lookup
       .mockResolvedValueOnce(jsonResponse({ items: [
-        { linesequencenumber: '1', item: '55', quantity: '4', rate: '125.5', memo: 'Shelf unit — mount behind driver bulkhead' },
-        { linesequencenumber: '2', item: '56', quantity: '2', rate: '80' }, // no memo on the SO line
+        { id: '3', linesequencenumber: '1', item: '55', quantity: '4', rate: '125.5', memo: 'Shelf unit — mount behind driver bulkhead' },
+        { id: '4', linesequencenumber: '2', item: '56', quantity: '2', rate: '80' }, // no memo on the SO line
       ] }))
       // invoice transform POST
       .mockResolvedValueOnce(new Response(null, {
@@ -498,7 +504,30 @@ describe('createInvoiceFromSO', () => {
       { item: { id: '56' }, quantity: 1, price: { id: '-1' }, rate: 80 },
     ]);
     expect(body.location).toEqual({ id: '7' });
-    expect(result).toEqual({ success: true, invoiceId: '900', invoiceNumber: 'INV-3001' });
+    // The lines billed come back with the sales order lines they billed, for FleetSuite's own copy.
+    expect(result).toEqual({
+      success: true, invoiceId: '900', invoiceNumber: 'INV-3001',
+      billed: [
+        { itemId: '55', quantity: 2, rate: 125.5, description: 'Shelf unit — mount behind driver bulkhead', salesOrderLineId: '3' },
+        { itemId: '56', quantity: 1, rate: 80, description: null, salesOrderLineId: '4' },
+      ],
+    });
+  });
+
+  it('says NetSuite priced a partial line it sent no price for', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ items: [{ id: '9', linesequencenumber: '1', item: '57', quantity: '1', rate: '0' }] }))
+      // getItemBasePrices: none of the three sources has a price
+      .mockResolvedValueOnce(jsonResponse({ items: [] }))
+      .mockResolvedValueOnce(jsonResponse({ items: [] }))
+      .mockResolvedValueOnce(jsonResponse({ items: [] }))
+      .mockResolvedValueOnce(new Response(null, { status: 204, headers: { Location: 'https://x/invoice/902' } }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'INV-3003' }] }));
+
+    const result = await createInvoiceFromSO({ salesOrderId: '12346', installedQuantities: { 1: 1 } });
+
+    expect(JSON.parse(fetchMock.mock.calls[4][1].body).item.items).toEqual([{ item: { id: '57' }, quantity: 1 }]);
+    expect(result.billed).toEqual([{ itemId: '57', quantity: 1, rate: null, description: null, salesOrderLineId: '9' }]);
   });
 
   it('bills the full SO with no replace=item and no line body (vehicle completion path)', async () => {
@@ -521,7 +550,9 @@ describe('createInvoiceFromSO', () => {
       'https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/salesOrder/766/!transform/invoice'
     );
     expect(JSON.parse(init.body)).toEqual({});
+    // No lines were sent, so none come back: the order was billed whole.
     expect(result).toEqual({ success: true, invoiceId: '901', invoiceNumber: 'INV-3002' });
+    expect(result).not.toHaveProperty('billed');
   });
 });
 

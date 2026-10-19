@@ -7,6 +7,7 @@ import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { recomputePoFulfillment } from '@/lib/scan-match';
 import { normPart, distributeInstalled, verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
 import { refreshPoInvoiceLinks } from '@/lib/po-invoice-sync';
+import { saveOwnInvoice } from '@/lib/books/own-invoices';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -144,10 +145,11 @@ export async function POST(req: NextRequest) {
       else invoiceLines.set(key, { itemId, quantity: l.quantity, rate: l.rate, description: l.description, partNumber: l.partNumber });
     }
 
+    const memo = `Invoice from BMG FleetSuite — PO #${po.po_number} (open quantities)`;
     const invoiceResult = await createDirectInvoice({
       customerId,
       locationId,
-      memo: `Invoice from BMG FleetSuite — PO #${po.po_number} (open quantities)`,
+      memo,
       otherrefnum: po.po_number,
       lineItems: [...invoiceLines.values()],
     });
@@ -208,6 +210,20 @@ export async function POST(req: NextRequest) {
       }
     }
     await recomputePoFulfillment(service, [po.id]);
+
+    // FleetSuite's own copy of the invoice, for the books (never fails the invoice).
+    await saveOwnInvoice(service, {
+      netsuiteId: invoiceResult.invoiceId,
+      netsuiteNumber: invoiceResult.invoiceNumber || null,
+      madeFrom: 'po',
+      madeFromId: po.id,
+      madeBy: auth.user.id,
+      customerNetsuiteId: String(customerId),
+      locationId: invoiceResult.locationId ?? locationId,
+      poNumber: po.po_number || null,
+      memo,
+      billed: invoiceResult.billed ?? null,
+    });
 
     return NextResponse.json({
       success: true,

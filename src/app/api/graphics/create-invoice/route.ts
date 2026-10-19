@@ -8,6 +8,7 @@ import { notifyPortalInvoice } from '@/lib/portal-invoice-notify';
 import { resolveLocationWithOverride } from '@/lib/invoice-location';
 import { validateBody, z } from '@/lib/validate';
 import { partNumberPattern } from '@/lib/part-number';
+import { saveOwnInvoice } from '@/lib/books/own-invoices';
 
 export const dynamic = 'force-dynamic';
 
@@ -355,6 +356,21 @@ export async function POST(req: NextRequest) {
       source: 'a graphics job',
       detail: job.title || (job.job_number ? `Job #${job.job_number}` : null),
       actorId: userId || auth.user.id,
+    });
+
+    // FleetSuite's own copy of the invoice, for the books (never fails the invoice).
+    await saveOwnInvoice(supabase, {
+      netsuiteId: result.invoiceId,
+      netsuiteNumber: result.invoiceNumber || null,
+      madeFrom: 'graphics',
+      madeFromId: jobId,
+      madeBy: userId || auth.user.id,
+      customerNetsuiteId: String(customerNsId),
+      locationId: result.locationId ?? locationId,
+      poNumber: poNumber || null,
+      memo,
+      vin: estimateVin || null,
+      billed: result.billed ?? null,
     });
 
     // Backfill prices into the catalog — only where a price is missing, so we
