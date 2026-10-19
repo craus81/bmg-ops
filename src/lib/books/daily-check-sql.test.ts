@@ -1,14 +1,15 @@
 // The daily books check (src/lib/books/daily-check.ts) looks at both
 // companies' books the way Differences vs NetSuite does, through migration
 // 377's functions, at each item's count the way Stock by item does, through
-// migration 401's, and at each customer's and vendor's balance the way
-// Customer and vendor balances does, through migration 406's. This runs the
-// same migrations as differences-sql.test.ts, with 401 and 406, in an
+// migration 401's, at each customer's and vendor's balance the way Customer
+// and vendor balances does, through migration 406's, and at FleetSuite's own
+// invoices the way Own invoices does, through migration 407's. This runs the
+// same migrations as differences-sql.test.ts, with 401, 406 and 407, in an
 // in-memory Postgres (PGlite) as the app's server login, copies a made-up
 // handful of NetSuite documents for BMG and 1084, posts FleetSuite's entries
-// for some of them, copies a few stock moves and NetSuite's counts, and runs
-// the check's looks against it the way the cron does, holding what it tells
-// the super admins and what it records.
+// for some of them, copies a few stock moves and NetSuite's counts, saves an
+// own invoice, and runs the check's looks against it the way the cron does,
+// holding what it tells the super admins and what it records.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -55,7 +56,7 @@ async function freshDb(): Promise<PGlite> {
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
-    '402-books-stock-values.sql', '406-books-party-balances.sql',
+    '402-books-stock-values.sql', '406-books-party-balances.sql', '407-books-own-invoices.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -128,9 +129,10 @@ describe('the daily books check', () => {
   const store = new Map<string, { last_result: unknown; updated_at: string }>();
   /** When a function fails, by what it was asked. */
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
-  /** What a look told about months and stock; about balances, apart. */
+  /** What a look told about months and stock; about balances and own invoices, apart. */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
+  let toldOwn: CheckAlert[] = [];
 
   // sync_state and cron_runs in memory; every function the real one, called the way supabase-js calls it.
   const service = () => ({
@@ -169,10 +171,11 @@ describe('the daily books check', () => {
   const look = async (which: Look) => {
     told = [];
     toldBalances = [];
+    toldOwn = [];
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
-        for (const alert of alerts) (alert.about === 'balance' ? toldBalances : told).push(alert);
+        for (const alert of alerts) (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn : told).push(alert);
       },
     });
   };
@@ -310,6 +313,7 @@ describe('the daily books check', () => {
         BMG: { known: { 'c:': 3 }, noted: {} },
         1084: { known: {}, noted: {} },
       },
+      own: { known: {}, noted: {} },
     });
   });
 
@@ -472,7 +476,7 @@ describe('the daily books check', () => {
 
   it('records items and how far apart their counts are, never an amount', () => {
     const record = store.get(BOOKS_DAILY_CHECK)!.last_result as Record<string, unknown>;
-    expect(Object.keys(record).sort()).toEqual(['balances', 'companies', 'look', 'stock', 'told']);
+    expect(Object.keys(record).sort()).toEqual(['balances', 'companies', 'look', 'own', 'stock', 'told']);
     expect(record.stock).toEqual({ by: 'item', known: { [LADDER]: 1, [BINS]: 5 }, noted: {} });
   });
 
@@ -553,5 +557,82 @@ describe('the daily books check', () => {
       BMG: { known: { 'c:': 4, [`c:${ACME}`]: 1, 'v:7101': 1 }, noted: {} },
       1084: { known: {}, noted: {} },
     });
+  });
+
+  // ── FleetSuite's own invoices ──────────────────────────────────────────
+
+  const heldOwn = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.own;
+
+  it("tells when one of FleetSuite's own invoices stops matching NetSuite's, linking to its check", async () => {
+    // FleetSuite's copy of an invoice it made for Acme, due the day it was made, as Acme has no terms...
+    await pg.query('SELECT gl_own_invoice_save($1::jsonb)', [JSON.stringify({
+      netsuite_id: '5201', netsuite_number: 'INV5201', company: 'BMG', made_from: 'po', customer_netsuite_id: '9001', customer_id: ACME,
+      invoice_date: '2026-10-15', location_netsuite_id: '1', location_from: 'sent', terms_days: 0, due_date: '2026-10-15',
+      tax_rule: 'tax@1', tax_basis: 'rate', tax_rate: '0.084880', subtotal: '100.00', tax: '8.49', total: '108.49', lines_from: 'sent', unknowns: [],
+      lines: [{ line_no: 1, item_netsuite_id: '55', item_number: 'SHELF-1', quantity: 1, rate: 100, amount: '100.00', priced: true, taxable: true, tax: '8.49' }],
+    })]);
+    // ...and NetSuite's, due 30 days on, which posted as FleetSuite posted it, so the books and the balances still match.
+    await pg.query(
+      `INSERT INTO gl_netsuite_transactions (netsuite_id, tran_type, tranid, trandate, posting_month, content_hash, sweep)
+       VALUES ('5201', 'CustInvc', 'INV5201', '2026-10-15', $1, 'x', 's')`,
+      [OCT],
+    );
+    for (const [line, account, cents, location] of [['0', '120', 10849, '1'], ['1', '400', -10000, '1'], ['2', '220', -849, null]] as const) {
+      await pg.query(
+        `INSERT INTO gl_netsuite_lines (transaction_id, line_id, company_id, netsuite_account_id, posting_month, trandate, debit, credit, entity_id, location_id)
+         SELECT '5201', $1, id, $2, $3, '2026-10-15', $4, $5, '9001', $6 FROM gl_companies WHERE code = 'BMG'`,
+        [line, account, OCT, cents > 0 ? money(cents) : '0', cents < 0 ? money(cents) : '0', location],
+      );
+    }
+    await post(pg, 'BMG', 'invoice', '5201', '2026-10-15', [['120', 10849, ACME], ['400', -10000], ['220', -849]]);
+    const doc = await pg.query<{ id: string }>(
+      `INSERT INTO ledger_invoices (source, external_id, external_ref, doc_type, doc_number, doc_date, due_date, total, customer_netsuite_id, party_name, voided, deleted_at, lines_synced_at)
+       VALUES ('netsuite', 'CustInvc/5201', '5201', 'invoice', 'INV5201', '2026-10-15', '2026-11-14', 108.49, '9001', 'Acme Fleet Services', false, NULL, now())
+       RETURNING id`,
+    );
+    for (const [line, kind, item, amount, quantity] of [['1', 'item', '55', '100.00', '1'], ['2', 'tax', '77', '8.49', null]] as const) {
+      await pg.query(
+        `INSERT INTO ledger_invoice_lines (document_id, line_external_id, line_no, line_kind, item_external_id, amount, quantity, raw)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+        [doc.rows[0].id, line, Number(line), kind, item, amount, quantity, JSON.stringify({ netamount: `-${amount}` })],
+      );
+    }
+
+    await look('first');
+    expect(toldOwn).toEqual([]);
+    expect(heldOwn()).toEqual({ known: {}, noted: { 5201: 1 } });
+
+    expect(await look('second')).toMatchObject({ told: 1 });
+    expect(toldOwn).toEqual([{
+      title: "Own invoices: INV5201 (Acme Fleet) differs from NetSuite's",
+      body: "Due: FleetSuite's is the invoice's date, as the customer has no terms in NetSuite, and NetSuite's is 30 days later. "
+        + 'Own invoices shows why.',
+      url: '/admin/books/own-invoices/invoice?id=5201',
+      about: 'own',
+    }]);
+    expect(told).toEqual([]);
+    expect(toldBalances).toEqual([]);
+    expect(heldOwn()).toEqual({ known: { 5201: 1 }, noted: {} });
+
+    // The next morning, nothing more.
+    await look('first');
+    await look('second');
+    expect(toldOwn).toEqual([]);
+  });
+
+  it("keeps what it held for the own invoices when it couldn't look, and says why", async () => {
+    const before = heldOwn();
+    failing = (name) => name === 'gl_own_invoice_pairs';
+    try {
+      const result = await look('first');
+      expect(result.error).toBe("Own invoices: couldn't check October 2026's invoices (gl_own_invoice_pairs failed)");
+      expect(heldOwn()).toEqual(before);
+    } finally {
+      failing = null;
+    }
+  });
+
+  it('records which own invoices differ and in how many things, never an amount', () => {
+    expect(heldOwn()).toEqual({ known: { 5201: 1 }, noted: {} });
   });
 });

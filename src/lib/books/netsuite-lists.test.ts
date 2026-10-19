@@ -68,8 +68,8 @@ describe('the list queries', () => {
     );
   });
 
-  it('copies the lists in order, the items last', () => {
-    expect(LISTS.map((d) => d.kind)).toEqual(['location', 'department', 'class', 'term', 'tax_code', 'vendor', 'item']);
+  it('copies the lists in order, the items after the small ones and the customers last', () => {
+    expect(LISTS.map((d) => d.kind)).toEqual(['location', 'department', 'class', 'term', 'tax_code', 'vendor', 'item', 'customer']);
   });
 
   it('counts sales tax lines from the start of the GL copy', () => {
@@ -200,6 +200,17 @@ describe('mapping NetSuite rows', () => {
         details: { entity_id: 'V-50', expense_account: '601', payables_account: '200', terms_id: '4' },
       });
     expect(mapListRow(def('vendor'), { id: 51, entityid: 'Pat Example', isinactive: 'F' })).toMatchObject({ name: 'Pat Example', details: {} });
+  });
+
+  it('names a customer by its company, keeping its terms and how NetSuite taxes it', () => {
+    expect(mapListRow(def('customer'), { id: 9001, entityid: 'C-9001', companyname: 'Sample Fleet Co', isinactive: 'F', terms: '4', taxable: 'T', taxitem: '77' }))
+      .toEqual({
+        netsuite_id: '9001', name: 'Sample Fleet Co', parent_netsuite_id: null, active: true,
+        details: { entity_id: 'C-9001', terms_id: '4', taxable: 'T', tax_item_id: '77' },
+      });
+    expect(mapListRow(def('customer'), { id: 9002, entityid: 'Pat Example', isinactive: 'T', taxable: 'F' }))
+      .toEqual({ netsuite_id: '9002', name: 'Pat Example', parent_netsuite_id: null, active: false, details: { taxable: 'F' } });
+    expect(mapListRow(def('customer'), { id: 9003, entityid: 'Same Name', companyname: 'Same Name', terms: 'x' })!.details).toEqual({});
   });
 
   it('keeps an item\'s type and the accounts it posts to', () => {

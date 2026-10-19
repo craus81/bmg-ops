@@ -16,7 +16,9 @@ import { apiFetch } from '@/lib/api-client';
  * admins only while the books are built, linked from the accounts page.
  */
 
-type Kind = 'location' | 'department' | 'class' | 'term' | 'tax_code' | 'vendor' | 'item';
+type Kind = 'location' | 'department' | 'class' | 'term' | 'tax_code' | 'vendor' | 'item' | 'customer';
+/** The lists too long to send whole, looked up instead. */
+type LongKind = 'vendor' | 'item' | 'customer';
 
 interface ListRow {
   kind: Kind;
@@ -73,15 +75,16 @@ const TABS: [Kind, string][] = [
   ['tax_code', 'Tax codes'],
   ['vendor', 'Vendors'],
   ['item', 'Items'],
+  ['customer', 'Customers'],
 ];
 
 const PLURAL: Record<Kind, string> = {
   location: 'locations', department: 'departments', class: 'classes', term: 'terms',
-  tax_code: 'tax codes', vendor: 'vendors', item: 'items',
+  tax_code: 'tax codes', vendor: 'vendors', item: 'items', customer: 'customers',
 };
 const SINGULAR: Record<Kind, string> = {
   location: 'location', department: 'department', class: 'class', term: 'term',
-  tax_code: 'tax code', vendor: 'vendor', item: 'item',
+  tax_code: 'tax code', vendor: 'vendor', item: 'item', customer: 'customer',
 };
 
 /** The accounts each item and vendor posts to, in the order the page shows them. */
@@ -387,6 +390,38 @@ export default function BooksListsPage() {
   };
 
   // ── Vendors and items ────────────────────────────────────────────────────
+  const taxCodeName = (id: string | number | undefined) => {
+    if (id === undefined) return '—';
+    return (byKind.get('tax_code') ?? []).find((t) => t.netsuite_id === String(id))?.name ?? `NetSuite tax code ${id}`;
+  };
+
+  /** A customer's terms and how NetSuite taxes them, which FleetSuite's own invoices go by. */
+  const renderCustomerRows = (rows: ListRow[]) => (
+    <div style={box}>
+      <div style={{ ...rowStyle(0, false), fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>
+        <span style={{ flex: 1 }}>Customer</span>
+        <span style={{ width: '110px' }}>Terms</span>
+        <span style={{ width: '90px' }}>Taxed</span>
+        <span style={{ flex: 1 }}>Tax code</span>
+        <span style={{ width: '120px' }} />
+      </div>
+      {rows.map((r) => (
+        <div key={r.netsuite_id} style={rowStyle(1, !r.active || !!r.gone_at)}>
+          <span style={{ flex: 1, minWidth: 0 }} title={`NetSuite id ${r.netsuite_id}`}>
+            {r.name}
+            {r.details.entity_id && <span style={{ color: 'var(--text-muted)' }}> · {String(r.details.entity_id)}</span>}
+          </span>
+          <span style={{ width: '110px' }}>{termName(r.details.terms_id)}</span>
+          <span style={{ width: '90px', color: r.details.taxable === undefined ? 'var(--text-muted)' : undefined }}>
+            {r.details.taxable === undefined ? '—' : r.details.taxable === 'T' ? 'Yes' : 'No'}
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>{taxCodeName(r.details.tax_item_id)}</span>
+          <span style={{ width: '120px' }}><StatusChips row={r} /></span>
+        </div>
+      ))}
+    </div>
+  );
+
   const renderLookupRows = (kind: 'vendor' | 'item', rows: ListRow[]) => (
     <div style={box}>
       <div style={{ ...rowStyle(0, false), fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>
@@ -414,6 +449,18 @@ export default function BooksListsPage() {
       ))}
     </div>
   );
+
+  const renderCustomerCount = () => {
+    const count = counts.get('customer');
+    const missing = lists.customer?.missing ?? [];
+    return (
+      <div style={{ ...muted, marginBottom: '8px' }}>
+        {count ? `${howMany(count.listed, 'customer')} in NetSuite, ${n(count.active)} active.` : 'No customers copied from NetSuite yet.'}
+        {' '}FleetSuite&apos;s own invoices take each customer&apos;s terms from here.
+        {missing.length > 0 && " NetSuite didn't give all of their details on the last copy."}
+      </div>
+    );
+  };
 
   const renderAccounts = (kind: 'vendor' | 'item') => {
     const groups = (data?.overview.accounts ?? []).filter((a) => a.kind === kind);
@@ -508,19 +555,25 @@ export default function BooksListsPage() {
     </>
   );
 
-  const renderLong = (kind: 'vendor' | 'item') => (
+  const LOOKUP_WORDS: Record<LongKind, { title: string; placeholder: string }> = {
+    item: { title: 'Items', placeholder: 'Look up an item by number or NetSuite id' },
+    vendor: { title: 'Vendors', placeholder: 'Look up a vendor by name or NetSuite id' },
+    customer: { title: 'Customers', placeholder: 'Look up a customer by name or NetSuite id' },
+  };
+
+  const renderLong = (kind: LongKind) => (
     <>
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (query.trim()) runLookup({ kind, q: query.trim() }, `${kind === 'item' ? 'Items' : 'Vendors'} matching "${query.trim()}"`);
+          if (query.trim()) runLookup({ kind, q: query.trim() }, `${LOOKUP_WORDS[kind].title} matching "${query.trim()}"`);
         }}
         style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}
       >
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder={kind === 'item' ? 'Look up an item by number or NetSuite id' : 'Look up a vendor by name or NetSuite id'}
+          placeholder={LOOKUP_WORDS[kind].placeholder}
           style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', minWidth: '260px' }}
         />
         <button
@@ -540,10 +593,11 @@ export default function BooksListsPage() {
               ({lookup.total > lookup.rows.length ? `first ${n(lookup.rows.length)} of ${n(lookup.total)}` : n(lookup.total)})
             </span>
           </div>
-          {lookup.rows.length === 0 ? <div style={muted}>None found.</div> : renderLookupRows(kind, lookup.rows)}
+          {lookup.rows.length === 0 ? <div style={muted}>None found.</div>
+            : kind === 'customer' ? renderCustomerRows(lookup.rows) : renderLookupRows(kind, lookup.rows)}
         </>
       )}
-      {renderAccounts(kind)}
+      {kind === 'customer' ? renderCustomerCount() : renderAccounts(kind)}
       {kind === 'item' && renderItemPostings()}
     </>
   );
@@ -578,6 +632,8 @@ export default function BooksListsPage() {
             <Link href="/admin/books/stock" style={{ color: 'var(--text-secondary)' }}>Stock by item</Link>
             {' · '}
             <Link href="/admin/books/balances" style={{ color: 'var(--text-secondary)' }}>Customer and vendor balances</Link>
+            {' · '}
+            <Link href="/admin/books/own-invoices" style={{ color: 'var(--text-secondary)' }}>Own invoices</Link>
           </div>
         </div>
         <button
@@ -634,7 +690,7 @@ export default function BooksListsPage() {
           {(tab === 'location' || tab === 'department' || tab === 'class') && renderShort(tab)}
           {tab === 'term' && renderTerms()}
           {tab === 'tax_code' && renderTaxCodes()}
-          {(tab === 'vendor' || tab === 'item') && renderLong(tab)}
+          {(tab === 'vendor' || tab === 'item' || tab === 'customer') && renderLong(tab)}
         </>
       )}
       {loading && !error && <div style={muted}>Loading…</div>}

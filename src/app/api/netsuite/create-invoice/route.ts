@@ -7,6 +7,7 @@ import { validateBody, z } from '@/lib/validate';
 import { normPart } from '@/lib/po-invoice-verify';
 import { logAudit, type AuditEntry } from '@/lib/audit';
 import { notifyPortalInvoice } from '@/lib/portal-invoice-notify';
+import { saveOwnInvoice } from '@/lib/books/own-invoices';
 
 const Schema = z.object({
   salesOrderIds: z.array(z.string().regex(/^\d{1,15}$/, 'Sales order id must be numeric')).min(1).max(200),
@@ -316,11 +317,12 @@ export async function POST(req: NextRequest) {
         }
 
         // Create the invoice
+        const memo = `Invoice from BMG FleetSuite — PO #${po.po_number}`;
         const invoiceResult = await createInvoiceFromSO({
           salesOrderId: soId,
           installedQuantities,
           locationId: locationId ?? undefined,
-          memo: `Invoice from BMG FleetSuite — PO #${po.po_number}`,
+          memo,
         });
 
         if (invoiceResult.success) {
@@ -396,6 +398,21 @@ export async function POST(req: NextRequest) {
               actorId: auth.user.id,
             });
           }
+
+          // FleetSuite's own copy of the invoice, for the books (never fails the invoice).
+          await saveOwnInvoice(supabase, {
+            netsuiteId: invoiceResult.invoiceId,
+            netsuiteNumber: invoiceResult.invoiceNumber || null,
+            madeFrom: 'sales_order',
+            madeFromId: po.id,
+            madeBy: auth.user.id,
+            salesOrderId: soId,
+            customerNetsuiteId: po.customer_netsuite_id || null,
+            locationId: locationId ?? null,
+            poNumber: po.po_number || null,
+            memo,
+            billed: invoiceResult.billed ?? null,
+          });
 
           results.push({
             poId: po.id,

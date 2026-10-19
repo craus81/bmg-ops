@@ -1,8 +1,9 @@
 // Migration 363 keeps a copy of the NetSuite lists FleetSuite's posting
-// rules need. This runs migrations 359–363 in an in-memory Postgres (PGlite)
-// as the app's server login and holds the functions' rules, then runs the
-// whole copy against them with a fake NetSuite that answers the job's own
-// SuiteQL.
+// rules need, and 407 lets it hold the customers too. This runs migrations
+// 359–363 and 407 (with 314, which 407 reads from) in an in-memory Postgres
+// (PGlite) as the app's server login and holds the functions' rules, then
+// runs the whole copy against them with a fake NetSuite that answers the
+// job's own SuiteQL.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -23,7 +24,7 @@ vi.mock('@/lib/system-health', () => ({
 import { BOOKS_LISTS_SYNC, syncBooksLists, type BooksListsSyncResult } from './netsuite-lists';
 
 // A fresh database with Supabase's API roles and default grants, migrations
-// 359–363 run twice as the owner, then the app's server login.
+// 314, 359–363 and 407 run twice as the owner, then the app's server login.
 async function freshDb(): Promise<PGlite> {
   const pg = new PGlite();
   await pg.exec(`
@@ -34,10 +35,14 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
+    -- What migrations 314 and 407 point at in the app's own schema.
+    CREATE TABLE public.profiles (id UUID PRIMARY KEY);
+    CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT, netsuite_id TEXT, tax_exempt BOOLEAN);
+    CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
   `);
   for (const file of [
-    '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
-    '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql',
+    '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
+    '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '407-books-own-invoices.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -123,7 +128,7 @@ describe('the lists functions', () => {
     await expect(apply('location', [listRow('1', 'Renamed'), { netsuite_id: '8' }])).rejects.toThrow(/location 8 has no name/);
     await expect(apply('location', [listRow('1', 'Renamed', { parent_netsuite_id: 'top' })])).rejects.toThrow(/check constraint/);
     await expect(apply('location', [listRow('1', 'Renamed', { details: ['not', 'an', 'object'] })])).rejects.toThrow(/check constraint/);
-    await expect(apply('customer', [listRow('1', 'Renamed')])).rejects.toThrow(/unknown NetSuite list customer/);
+    await expect(apply('employee', [listRow('1', 'Renamed')])).rejects.toThrow(/unknown NetSuite list employee/);
     await expect(db.query('SELECT gl_netsuite_lists_apply($1::jsonb)', [JSON.stringify({ kind: 'location' })])).rejects.toThrow(/rows must be a list/);
     await expect(db.query('SELECT gl_netsuite_lists_finish($1::jsonb)', [JSON.stringify({ kind: 'location' })])).rejects.toThrow(/netsuite_ids must be a list/);
     expect(await stored('location', '1')).toEqual(before);
@@ -260,6 +265,10 @@ function netsuite(): FakeNetSuite {
       { id: 901, itemid: 'LABOR', itemtype: 'Service', isinactive: 'F', incomeaccount: 41 },
       { id: 902, itemid: 'GR-1', itemtype: 'NonInvtPart', isinactive: 'F', incomeaccount: 42, expenseaccount: 51 },
     ],
+    customer: [
+      { id: 9001, entityid: 'C-9001', companyname: 'Sample Fleet Co', isinactive: 'F', terms: 4, taxable: 'T', taxitem: 12 },
+      { id: 9002, entityid: 'Pat Example', isinactive: 'F', taxable: 'F' },
+    ],
   };
   // NetSuite won't give the tax codes' rates or agencies, nor let the role see
   // classes, and answers 500 for an item's COGS account as this account does.
@@ -326,6 +335,7 @@ describe('the copy job against the real functions', () => {
       tax_code: { received: 1, added: 1, missing: ['rate', 'tax_agency_id'] },
       vendor: { received: 2, added: 2 },
       item: { received: 3, added: 3 },
+      customer: { received: 2, added: 2 },
     });
     expect(r.lists.class?.error).toMatch(/Record 'classification' was not found/);
     // Nothing about the items' COGS account, which NetSuite fails on: the copy doesn't ask for it.
@@ -360,6 +370,10 @@ describe('the copy job against the real functions', () => {
       { id: '901', name: 'LABOR', active: true, gone: false, details: { item_type: 'Service', income_account: '41' } },
       { id: '902', name: 'GR-1', active: true, gone: false, details: { item_type: 'NonInvtPart', income_account: '42', expense_account: '51' } },
     ]);
+    expect(await rows('customer')).toEqual([
+      { id: '9001', name: 'Sample Fleet Co', active: true, gone: false, details: { entity_id: 'C-9001', terms_id: '4', taxable: 'T', tax_item_id: '12' } },
+      { id: '9002', name: 'Pat Example', active: true, gone: false, details: { taxable: 'F' } },
+    ]);
 
     const recorded = store.get(BOOKS_LISTS_SYNC);
     expect(recorded.last_result.lists.item).toEqual({ received: 3, added: 3, changed: 0, gone: 0 });
@@ -367,7 +381,7 @@ describe('the copy job against the real functions', () => {
 
   it('changes nothing when NetSuite hasn\'t changed', async () => {
     const r = await run(netsuite());
-    for (const kind of ['location', 'department', 'term', 'tax_code', 'vendor', 'item'] as const) {
+    for (const kind of ['location', 'department', 'term', 'tax_code', 'vendor', 'item', 'customer'] as const) {
       expect(r.lists[kind], kind).toMatchObject({ added: 0, changed: 0, gone: 0 });
     }
   });
@@ -416,6 +430,8 @@ describe('the copy job against the real functions', () => {
     expect(r.lists.vendor).toMatchObject({ received: 2 });
     expect(r.lists.item).toEqual({ skipped: true });
     expect(r.notes).toContain("There wasn't time left to copy the items; the next run will.");
+    // The customers need less time than the items, so they're still copied.
+    expect(r.lists.customer).toMatchObject({ received: 2 });
     expect(r.itemAccounts).toEqual([{ item_id: '903', item_name: 'PREPAYMENT', account_id: '11', lines: 2 }]);
   });
 

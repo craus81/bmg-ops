@@ -8,6 +8,7 @@ import { validateBody, z } from '@/lib/validate';
 import { refreshPoInvoiceLinks } from '@/lib/po-invoice-sync';
 import { getPoBilledByPart, computeOverbillProblems } from '@/lib/po-invoice-verify';
 import { fetchPartRowsCI } from '@/lib/part-number';
+import { saveOwnInvoice } from '@/lib/books/own-invoices';
 
 // Each customer/PO group costs 5-7 sequential NetSuite round trips (the
 // over-billing gate's SuiteQL, customer + item lookups, the invoice create),
@@ -394,6 +395,21 @@ export async function POST(req: NextRequest) {
             source: 'the Scan Log',
             detail: `${seenVins.size || custScans.length} vehicle${(seenVins.size || custScans.length) !== 1 ? 's' : ''}${soloVin ? ` (VIN ${soloVin})` : ''}`,
             actorId: auth.user.id,
+          });
+
+          // FleetSuite's own copy of the invoice, for the books (never fails the invoice).
+          await saveOwnInvoice(supabase, {
+            netsuiteId: invoiceResult.invoiceId,
+            netsuiteNumber: invoiceResult.invoiceNumber || null,
+            madeFrom: 'scans',
+            madeFromId: poRow?.id ?? null,
+            madeBy: auth.user.id,
+            customerNetsuiteId: String(nsCustomer.id),
+            locationId: invoiceResult.locationId ?? locationId,
+            poNumber: poNumber || null,
+            memo,
+            vin: soloVin,
+            billed: invoiceResult.billed ?? null,
           });
 
           results.push({

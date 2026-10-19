@@ -10,7 +10,9 @@ import { COPY_FROM } from './netsuite-gl';
  * FleetSuite"): locations, departments, classes, terms and tax codes, plus
  * the accounts each item and vendor posts to. With them the rules can pick
  * the same accounts NetSuite does, and the copied GL lines' locations,
- * departments and classes have names.
+ * departments and classes have names. Since migration 407 its customers
+ * too, with their terms and how NetSuite taxes them, for FleetSuite's own
+ * invoices (src/lib/books/own-invoices.ts).
  *
  * It runs right after the chart of accounts in the ledger mirror cron
  * (/api/cron/ledger-netsuite-mirror, :35 on even hours), and from "Sync now"
@@ -31,7 +33,7 @@ import { COPY_FROM } from './netsuite-gl';
 
 export const BOOKS_LISTS_SYNC = 'books_netsuite_lists';
 
-export type ListKind = 'location' | 'department' | 'class' | 'term' | 'tax_code' | 'vendor' | 'item';
+export type ListKind = 'location' | 'department' | 'class' | 'term' | 'tax_code' | 'vendor' | 'item' | 'customer';
 
 /** Rows per gl_netsuite_lists_apply call: one transaction each, well inside the API's request limit. */
 const APPLY_PAGE = 1000;
@@ -75,7 +77,10 @@ export interface ListDef {
 const PARENT: OptionalField = { field: 'parent', label: 'parents' };
 const FULL_NAME: OptionalField = { field: 'fullname', key: 'full_name', label: 'full names' };
 
-/** In the order they're copied: the small lists first, the items, by far the longest, last. */
+/**
+ * In the order they're copied: the small lists first, then the items, by far the longest, and the customers after
+ * them, so the items never wait on the customers for time.
+ */
 export const LISTS: readonly ListDef[] = [
   {
     kind: 'location', label: 'locations', singular: 'Location', record: 'location',
@@ -148,6 +153,19 @@ export const LISTS: readonly ListDef[] = [
     ],
     where: "r.itemtype NOT IN ('TaxItem', 'TaxGroup')",
     minLeftMs: 40_000,
+  },
+  {
+    // Their terms give FleetSuite's own invoices a due date; whether NetSuite
+    // taxes them, and with which tax code, explains a tax that differs.
+    kind: 'customer', label: 'customers', singular: 'Customer', record: 'customer',
+    required: ['id', 'entityid', 'isinactive'],
+    optional: [
+      { field: 'companyname', label: 'company names' },
+      { field: 'terms', key: 'terms_id', label: 'terms' },
+      { field: 'taxable', key: 'taxable', label: 'taxable flags' },
+      { field: 'taxitem', key: 'tax_item_id', label: 'tax codes' },
+    ],
+    minLeftMs: 20_000,
   },
 ];
 
@@ -298,6 +316,13 @@ export function mapListRow(def: ListDef, row: Row): ListRow | null {
       put('income_account', numericId(row.incomeaccount));
       put('asset_account', numericId(row.assetaccount));
       put('expense_account', numericId(row.expenseaccount));
+      break;
+    case 'customer':
+      name = text(row.companyname) || text(row.entityid);
+      if (text(row.entityid) !== name) put('entity_id', text(row.entityid));
+      put('terms_id', numericId(row.terms));
+      if (text(row.taxable)) put('taxable', isTrue(row.taxable) ? 'T' : 'F');
+      put('tax_item_id', numericId(row.taxitem));
       break;
   }
   return {
