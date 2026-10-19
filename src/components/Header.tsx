@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import UniversalSearch from '@/components/UniversalSearch';
+import VinLookupModal from '@/components/VinLookupModal';
 import { useFocusTrap } from '@/lib/use-focus-trap';
 import { useMentions } from '@/lib/use-mentions';
 import { deepLinks } from '@/lib/deep-links';
@@ -68,6 +69,8 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
   // an account the API will refuse.
   const canSearch = INTERNAL_STAFF_ROLES.some(r => hasRole(r));
   const [showSearch, setShowSearch] = useState(false);
+  // Stand-alone VIN decoder, staff only like Search.
+  const [showVin, setShowVin] = useState(false);
   // Resolved on the client only — navigator doesn't exist during SSR, and
   // rendering "Ctrl K" then swapping to "⌘K" would be a hydration mismatch.
   const [chordLabel, setChordLabel] = useState('');
@@ -489,6 +492,24 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
           </button>
           )}
 
+          {canSearch && (
+          <button
+            onClick={() => setShowVin(true)}
+            title="VIN lookup"
+            aria-label="VIN lookup"
+            style={{
+              background: 'transparent',
+              border: '1px solid transparent', borderRadius: '8px',
+              padding: '6px 6px', fontSize: '11px', fontWeight: 600,
+              color: 'rgba(255,255,255,0.7)',
+              cursor: 'pointer', transition: 'all 0.15s',
+              lineHeight: 1,
+            }}
+          >
+            VIN
+          </button>
+          )}
+
           {/* Chat / Messages — hidden for roles without the feature (customer,
               executive): /messages bounces them, so the button is a dead click. */}
           {hasFeature('messages') && (
@@ -894,6 +915,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
       </button>
       )}
       <UniversalSearch open={showSearch} onClose={() => setShowSearch(false)} />
+      <VinLookupModal open={showVin} onClose={() => setShowVin(false)} />
     </>
   );
 }

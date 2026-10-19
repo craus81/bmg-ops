@@ -147,3 +147,120 @@ export async function decodeVinsBatch(
   }
   return decoded;
 }
+
+/** One labelled row in the VIN lookup window; value '' means "not in the VIN". */
+export interface VinDetailRow { label: string; value: string }
+
+export interface VinDetails {
+  /** Headline, e.g. "2024 Ford F-150 XLT". Empty when vPIC knew nothing. */
+  title: string;
+  make: string;
+  groups: { heading: string; rows: VinDetailRow[] }[];
+  /** vPIC's own warning (bad check digit, partial decode), when it had one. */
+  warning: string;
+}
+
+const inchesAndFeet = (raw: string): string => {
+  const n = parseFloat(raw);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return `${+n.toFixed(1)}" (${+(n / 12).toFixed(1)} ft)`;
+};
+
+/**
+ * Full decode for the stand-alone VIN lookup window: everything vPIC knows
+ * that matters for an upfit, grouped for display. Unlike decodeVIN there's no
+ * offline guess — the window says plainly what the VIN doesn't carry rather
+ * than show a make inferred from the first three characters. Throws when
+ * vPIC can't be reached so the window can say so.
+ */
+export async function decodeVinDetails(vin: string): Promise<VinDetails> {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), 10000);
+  let r: Record<string, string>;
+  try {
+    const res = await fetch(
+      `https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvalues/${encodeURIComponent(vin)}?format=json`,
+      { signal: c.signal },
+    );
+    r = (await res.json()).Results?.[0] || {};
+  } finally {
+    clearTimeout(t);
+  }
+  const v = (k: string) => {
+    const s = (r[k] || '').trim();
+    return s === 'Not Applicable' ? '' : s;
+  };
+  const engine = [
+    v('DisplacementL') && `${+parseFloat(v('DisplacementL')).toFixed(1)}L`,
+    v('EngineConfiguration') && v('EngineCylinders')
+      ? `${v('EngineConfiguration').replace(/-Shaped/i, '')}${v('EngineCylinders')}`
+      : v('EngineCylinders') && `${v('EngineCylinders')} cyl`,
+    v('EngineModel'),
+  ].filter(Boolean).join(' ');
+  const transmission = [v('TransmissionSpeeds') && `${v('TransmissionSpeeds')}-speed`, v('TransmissionStyle')]
+    .filter(Boolean).join(' ');
+  const wheelbase = v('WheelBaseShort') && v('WheelBaseLong') && v('WheelBaseShort') !== v('WheelBaseLong')
+    ? `${v('WheelBaseShort')}" – ${v('WheelBaseLong')}"`
+    : inchesAndFeet(v('WheelBaseShort') || v('WheelBaseLong'));
+  const plant = [v('PlantCity'), v('PlantState'), v('PlantCountry')]
+    .map(s => s.replace(/\s*\(.*\)$/, '')).filter(Boolean).join(', ');
+
+  // vPIC's ErrorCode "0" is a clean decode; anything else carries a
+  // human-readable ErrorText ("1 - Check Digit (9th position) does not
+  // calculate properly"). Drop its leading code numbers.
+  const codes = v('ErrorCode').split(',').map(s => s.trim());
+  const warning = codes.length && !codes.every(c => c === '0' || c === '')
+    ? v('ErrorText').replace(/^\d+\s*-\s*/, '').replace(/;\s*\d+\s*-\s*/g, '; ')
+    : '';
+
+  return {
+    title: [v('ModelYear'), v('Make'), v('Model'), v('Trim')].filter(Boolean).join(' '),
+    make: v('Make'),
+    warning,
+    groups: [
+      { heading: 'Vehicle', rows: [
+        { label: 'Year', value: v('ModelYear') },
+        { label: 'Make', value: v('Make') },
+        { label: 'Model', value: v('Model') },
+        { label: 'Trim', value: [v('Trim'), v('Trim2')].filter(Boolean).join(' / ') },
+        { label: 'Series', value: [v('Series'), v('Series2')].filter(Boolean).join(' / ') },
+      ] },
+      { heading: 'Body', rows: [
+        { label: 'Body', value: v('BodyClass') },
+        { label: 'Cab', value: v('BodyCabType') },
+        { label: 'Bed length', value: inchesAndFeet(v('BedLengthIN')) },
+        { label: 'Bed type', value: v('BedType') },
+        { label: 'Wheelbase', value: wheelbase },
+        { label: 'Doors', value: v('Doors') },
+      ] },
+      { heading: 'Drivetrain', rows: [
+        { label: 'Drive', value: v('DriveType') },
+        { label: 'Engine', value: engine },
+        { label: 'Fuel', value: [v('FuelTypePrimary'), v('FuelTypeSecondary')].filter(Boolean).join(' / ') },
+        { label: 'Transmission', value: transmission },
+      ] },
+      { heading: 'Weight', rows: [
+        { label: 'GVWR', value: v('GVWR') },
+        { label: 'Curb weight', value: v('CurbWeightLB') && `${v('CurbWeightLB')} lb` },
+      ] },
+      { heading: 'Built', rows: [
+        { label: 'Plant', value: plant },
+        { label: 'Maker', value: v('Manufacturer') },
+      ] },
+    ],
+  };
+}
+
+/**
+ * The maker's own window sticker for a VIN, where the maker publishes one —
+ * it lists the factory options (bed length, axle, packages) the VIN itself
+ * doesn't encode. Newer vehicles only; older or fleet-ordered ones can 404.
+ */
+export function windowStickerUrl(make: string, vin: string): string | null {
+  const m = make.toUpperCase();
+  const v = encodeURIComponent(vin);
+  if (/FORD|LINCOLN/.test(m)) return `https://www.windowsticker.forddirect.com/windowsticker.pdf?vin=${v}`;
+  if (/CHEVROLET|GMC|BUICK|CADILLAC/.test(m)) return `https://cws.gm.com/vs-cws/vehshop/v2/vehicle/windowsticker?vin=${v}`;
+  if (/RAM|DODGE|JEEP|CHRYSLER/.test(m)) return `https://www.chrysler.com/hostd/windowsticker/getWindowStickerPdf.do?vin=${v}`;
+  return null;
+}
