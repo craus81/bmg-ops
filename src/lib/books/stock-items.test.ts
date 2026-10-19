@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { compareStock, itemMoves, quantityText, stockSetup, type StockItemMovesData, type StockItemsData } from './stock-items';
+import {
+  compareStock, itemMoves, ledgerParts, quantityText, stockSetup, type StockItemMovesData, type StockItemsData,
+} from './stock-items';
 
 /** Made-up items and locations: every name and amount here is invented. */
 const ITEMS = [
@@ -216,5 +218,50 @@ describe('quantityText', () => {
     expect(quantityText(-0)).toBe('0');
     expect(quantityText(-3)).toBe('-3');
     expect(quantityText(1 / 3)).toBe('0.33333');
+  });
+});
+
+describe('ledgerParts', () => {
+  const part = {
+    company: 'BMG', account_id: '190', number: '1200', name: 'Inventory', type: 'other_current_asset',
+    ledger_start: '1750.00', ledger_moves: '356.00', items_start: '1860.00', items_moves: '731.00',
+    entries: 4, entries_total: '-374.99',
+    kinds: [{ type: 'Journal', count: 3, total: '-375.00' }, { type: null, count: 1, total: '0.01' }],
+    rows: [
+      { doc: '5901', type: 'Journal', number: 'JE77', date: '2025-12-31', month: '2025-12-01', name: null, memo: 'Year-end count', amount: '-400.00' },
+      { doc: '5903', type: null, number: null, date: null, month: null, name: null, memo: null, amount: '0.01' },
+    ],
+  };
+
+  it("puts each account's ledger and items side by side, and says what the documents not sent come to", () => {
+    const [p] = ledgerParts({ parts: [part] });
+    expect(p).toMatchObject({
+      company: 'BMG', accountId: '190', account: '1200 Inventory', fixedAsset: false,
+      ledger: { start: 175000, moves: 35600, now: 210600 },
+      items: { start: 186000, moves: 73100, now: 259100 },
+    });
+    expect(p.entries).toEqual({
+      count: 4,
+      total: -37499,
+      kinds: [{ type: 'Journal', count: 3, total: -37500 }, { type: 'Entry', count: 1, total: 1 }],
+      rows: [
+        { doc: '5901', date: '2025-12-31', type: 'Journal', number: 'JE77', name: null, memo: 'Year-end count', amount: -40000, check: { kind: 'journal_entry', month: '2025-12-01' } },
+        // A document the copy has no transaction for: named by its id, with nowhere to check it.
+        { doc: '5903', date: null, type: 'Entry', number: 'NetSuite 5903', name: null, memo: null, amount: 1, check: null },
+      ],
+      more: { count: 2, total: 2500 },
+    });
+  });
+
+  it('names an account the chart lacks by its NetSuite id, and marks a fixed asset account', () => {
+    const [missing, equipment] = ledgerParts({
+      parts: [
+        { ...part, account_id: '777', number: null, name: null, type: null, entries: 0, entries_total: '0', kinds: [], rows: [] },
+        { ...part, account_id: '195', number: '1500', name: 'Equipment', type: 'fixed_asset' },
+      ],
+    });
+    expect(missing).toMatchObject({ account: 'NetSuite account 777', fixedAsset: false, entries: { count: 0, total: 0, more: { count: 0, total: 0 } } });
+    expect(equipment).toMatchObject({ account: '1500 Equipment', fixedAsset: true });
+    expect(ledgerParts(null)).toEqual([]);
   });
 });

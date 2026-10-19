@@ -1,13 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
-import type { CountsBy, StockLine, StockSetup } from '@/lib/books/stock-items';
+import type { CountsBy, LedgerEntry, LedgerPart, StockLine, StockSetup } from '@/lib/books/stock-items';
 
 /**
  * Books → Stock by item (migration 401, src/lib/books/stock-items.ts,
@@ -24,7 +24,11 @@ import type { CountsBy, StockLine, StockSetup } from '@/lib/books/stock-items';
  * isn't an asset account are listed with what to set it to, and an item none
  * is left of on either side that still has value on NetSuite's ledger is
  * labelled value left over (migration 403; owner decision 2026-10-19, "Flag
- * them"). Super admins only, as the books are.
+ * them"). Each inventory account on NetSuite's ledger is put next to the
+ * stocked items on it, with where they stood on December 31, 2024 and the
+ * documents since that posted to it without a stocked item (migration 404;
+ * owner decision 2026-10-19, "Break it down"). Super admins only, as the
+ * books are.
  */
 
 interface CopyResult {
@@ -50,6 +54,7 @@ interface Payload {
   ledger: Array<{ company: string; balance: number; items: number }>;
   accounts: Array<{ number: string | null; name: string }>;
   setup: StockSetup;
+  ledgerParts: LedgerPart[];
   lastCopy: { at: string; result: CopyResult } | null;
 }
 
@@ -58,6 +63,8 @@ type Filter = 'all' | 'differs';
 
 /** Lines shown at once; Show more adds as many again. */
 const PAGE = 300;
+/** Documents an account's breakdown lists at first; Show all lists every one sent. */
+const ENTRIES_FIRST = 10;
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' });
 const fmt = (cents: number) => money.format(cents / 100);
@@ -83,6 +90,12 @@ function ago(iso: string): string {
 }
 
 const count = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+
+/** "3 journals", "1 bill": how many documents of a kind, as a sentence names them. */
+const documents = (type: string, n: number) => {
+  const one = type.toLowerCase();
+  return count(n, one, one.endsWith('y') ? `${one.slice(0, -1)}ies` : `${one}s`);
+};
 
 const GREEN = '#22c55e';
 const RED = '#ef4444';
@@ -199,6 +212,133 @@ function SetupList({ setup }: { setup: StockSetup }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** An inventory account's difference: amber on stock, quieter on a fixed asset account, where most of it is the company's own. */
+const partColor = (part: LedgerPart, cents: number) => (!cents ? 'var(--text-muted)' : part.fixedAsset ? 'var(--text-secondary)' : AMBER);
+
+const thisMonth = () => new Date().toISOString().slice(0, 7);
+
+/** A document that posted to an inventory account without a stocked item: its number (opening its check), what, when, and what it posted. */
+function EntryRow({ entry, company }: { entry: LedgerEntry; company: string }) {
+  const about = [entry.name, entry.memo].filter(Boolean).join(' · ');
+  return (
+    <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '6px 0', borderTop: '1px solid var(--border)', fontSize: '12px' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ overflowWrap: 'anywhere' }}>
+          {entry.check ? (
+            <Link href={deepLinks.booksDocument(company, entry.check.kind, entry.check.month, entry.doc)} className="rep-link" style={{ fontWeight: 700 }}>
+              {entry.number}
+            </Link>
+          ) : <span style={{ fontWeight: 700 }}>{entry.number}</span>}
+          <span style={{ color: 'var(--text-secondary)', marginLeft: '6px' }}>{entry.type}{entry.date ? ` · ${dayText(entry.date)}` : ''}</span>
+        </div>
+        {about && <div style={{ fontSize: '11px', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{about}</div>}
+      </div>
+      <div style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', fontWeight: 700 }}>{fmt(entry.amount)}</div>
+    </div>
+  );
+}
+
+/**
+ * One company's inventory account: what the stocked items and NetSuite's
+ * ledger held on it on December 31, 2024, the items' moves since (on both
+ * sides alike), and the documents since that posted to it without a stocked
+ * item, which with the starting difference make up the rest (migration 404;
+ * owner decision 2026-10-19, "Break it down"). Its documents show at first
+ * on a stock account, and on a tap on a fixed asset account.
+ */
+function LedgerBreakdown({ part, named }: { part: LedgerPart; named: boolean }) {
+  const [open, setOpen] = useState(!part.fixedAsset);
+  const [all, setAll] = useState(false);
+  const { entries } = part;
+  const start = part.items.start - part.ledger.start;
+  const now = part.items.now - part.ledger.now;
+  const gap = part.ledger.now - part.items.now;
+  const rows = all ? entries.rows : entries.rows.slice(0, ENTRIES_FIRST);
+  const amount = (cents: number, color?: string, bold = false): React.ReactNode => (
+    <td style={{ ...cell, color, fontWeight: bold ? 700 : 400 }}>{fmt(cents)}</td>
+  );
+  const none = <td style={{ ...cell, color: 'var(--text-muted)' }}>—</td>;
+  return (
+    <div id={`ledger-${part.company}-${part.accountId}`} style={{ border: '1px solid var(--border)', borderRadius: '8px', marginBottom: '10px', background: 'var(--card)', overflow: 'hidden' }}>
+      <div style={{ padding: '10px 12px 6px' }}>
+        <div style={{ fontSize: '13px', fontWeight: 800 }}>{named ? `${part.company} · ` : ''}{part.account}</div>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          {part.fixedAsset ? 'A fixed asset account. ' : ''}
+          {!gap ? 'NetSuite\'s ledger holds what the stocked items on it are worth.'
+            : `NetSuite's ledger holds ${fmt(Math.abs(gap))} ${gap < 0 ? 'less' : 'more'} than the stocked items on it are worth${
+              part.fixedAsset && gap > 0 ? ', most likely the company\'s own equipment or vehicles' : ''}.`}
+          {' '}
+          <Link href={deepLinks.booksAccountDetail(part.company, part.accountId, 'balance_sheet', '2025-01', thisMonth())} className="rep-link">
+            Every document on it since 2025
+          </Link>
+        </div>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="rep-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+          <thead>
+            <tr style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>
+              <th className="rep-label" style={{ ...cell, textAlign: 'left' }}>On the account</th>
+              <th style={amountHead}>Stocked items</th>
+              <th style={amountHead}>Ledger</th>
+              <th style={amountHead}>Difference</th>
+            </tr>
+          </thead>
+          <tbody>
+            <Row label="December 31, 2024" style={{ borderTop: '1px solid var(--border)' }}>
+              {amount(part.items.start)}
+              {amount(part.ledger.start)}
+              {start ? amount(start, partColor(part, start)) : none}
+            </Row>
+            <Row label="Received, shipped, built and adjusted since" style={{ borderTop: '1px solid var(--border)' }}>
+              {amount(part.items.moves)}
+              {amount(part.items.moves)}
+              {none}
+            </Row>
+            <Row
+              label={`${count(entries.count, 'document', 'documents')} since with no stocked item${entries.count ? ', below' : ''}`}
+              style={{ borderTop: '1px solid var(--border)' }}
+            >
+              {none}
+              {amount(entries.total)}
+              {entries.total ? amount(-entries.total, partColor(part, entries.total)) : none}
+            </Row>
+            <Row label={<span style={{ fontWeight: 700 }}>Now</span>} style={{ borderTop: '1px solid var(--border)' }}>
+              {amount(part.items.now, undefined, true)}
+              {amount(part.ledger.now, undefined, true)}
+              {now ? amount(now, partColor(part, now), true) : none}
+            </Row>
+          </tbody>
+        </table>
+      </div>
+      {entries.count > 0 && (
+        <div style={{ padding: '6px 12px 10px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+            {entries.kinds.map((k) => `${documents(k.type, k.count)}: ${fmt(k.total)}`).join(' · ')}.
+            {' '}The biggest first, as each posted to the account.
+          </div>
+          {!open ? (
+            <button onClick={() => setOpen(true)} style={button(false)}>Show the {count(entries.count, 'document', 'documents')}</button>
+          ) : (
+            <>
+              {rows.map((e) => <EntryRow key={e.doc} entry={e} company={part.company} />)}
+              {entries.rows.length > rows.length && (
+                <button onClick={() => setAll(true)} style={{ ...button(false), marginTop: '6px' }}>
+                  Show all {entries.rows.length.toLocaleString('en-US')}
+                </button>
+              )}
+              {(all || entries.rows.length <= ENTRIES_FIRST) && entries.more.count > 0 && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                  {count(entries.more.count, 'smaller document comes', 'smaller documents come')} to {fmt(entries.more.total)} more.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -405,29 +545,61 @@ export default function BooksStockPage() {
                   <td style={{ ...cell, color: valueDiffColor, fontWeight: valueDiff ? 700 : 400 }}>{valueDiff ? fmt(valueDiff) : '—'}</td>
                 </Row>
                 {data.ledger.map((l) => (
-                  <Row
-                    key={l.company}
-                    label={(
-                      <div>
-                        <div>{l.company}&apos;s inventory accounts in NetSuite&apos;s ledger</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                          {accountNames || 'No inventory account yet'}. Its stocked items come to {fmt(l.items)}
-                          {l.balance !== l.items ? `; the other ${fmt(l.balance - l.items)} was posted there by journal entries or on items NetSuite doesn't stock` : ''}.
+                  <Fragment key={l.company}>
+                    <Row
+                      label={(
+                        <div>
+                          <div>{l.company}&apos;s inventory accounts in NetSuite&apos;s ledger</div>
+                          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                            {accountNames || 'No inventory account yet'}. Its stocked items come to {fmt(l.items)}; each account is below.
+                          </div>
                         </div>
-                      </div>
-                    )}
-                    style={{ borderTop: '1px solid var(--border)' }}
-                  >
-                    <td style={cell}>{fmt(l.items)}</td>
-                    <td style={cell}>{fmt(l.balance)}</td>
-                    <td style={{ ...cell, color: l.items !== l.balance ? AMBER : 'var(--text-muted)', fontWeight: l.items !== l.balance ? 700 : 400 }}>
-                      {l.items !== l.balance ? fmt(l.items - l.balance) : '—'}
-                    </td>
-                  </Row>
+                      )}
+                      style={{ borderTop: '1px solid var(--border)' }}
+                    >
+                      <td style={cell}>{fmt(l.items)}</td>
+                      <td style={cell}>{fmt(l.balance)}</td>
+                      <td style={{ ...cell, color: l.items !== l.balance ? AMBER : 'var(--text-muted)', fontWeight: l.items !== l.balance ? 700 : 400 }}>
+                        {l.items !== l.balance ? fmt(l.items - l.balance) : '—'}
+                      </td>
+                    </Row>
+                    {data.ledgerParts.filter((p) => p.company === l.company).map((p) => (
+                      <Row
+                        key={p.accountId}
+                        label={(
+                          <div style={{ paddingLeft: '12px' }}>
+                            <a href={`#ledger-${p.company}-${p.accountId}`} className="rep-link">{p.account}</a>
+                            {p.fixedAsset && <span style={{ color: 'var(--text-muted)' }}> · fixed asset</span>}
+                          </div>
+                        )}
+                      >
+                        <td style={cell}>{fmt(p.items.now)}</td>
+                        <td style={cell}>{fmt(p.ledger.now)}</td>
+                        <td style={{ ...cell, color: partColor(p, p.items.now - p.ledger.now) }}>
+                          {p.items.now !== p.ledger.now ? fmt(p.items.now - p.ledger.now) : '—'}
+                        </td>
+                      </Row>
+                    ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
           </div>
+
+          {data.ledgerParts.length > 0 && (
+            <div style={{ marginBottom: '14px' }}>
+              <div style={{ fontSize: '14px', fontWeight: 800, marginBottom: '2px' }}>Where NetSuite&apos;s ledger and the stocked items part</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                NetSuite moves an inventory account with the stocked items on it as they&apos;re received, shipped, built or adjusted.
+                Anything else that posts to one, a journal entry say, or a bill for a truck on a fixed asset account, is listed here
+                under the account, with where the account and its items stood on December 31, 2024. Each item&apos;s starting value
+                counts on its own asset account.
+              </div>
+              {data.ledgerParts.map((p) => (
+                <LedgerBreakdown key={`${p.company}-${p.accountId}`} part={p} named={data.ledger.length > 1} />
+              ))}
+            </div>
+          )}
 
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '8px' }}>
             <button onClick={() => setShow('count')} style={button(show === 'count')}>Counts</button>
