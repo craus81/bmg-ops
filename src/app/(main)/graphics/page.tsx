@@ -233,7 +233,15 @@ export default function GraphicsPage() {
     estimateId: string; estimateNumber: string | null; customerNetsuiteId: string | null;
     /** The estimate's wrap quote, when it has exactly one no job holds yet. */
     wrapQuoteId: string | null;
+    /** The estimate's fleet order (migration 410), when it has other vehicles. */
+    fleet?: {
+      count: number; units: string[]; contentLine: string; singleQuantity: number;
+      existingJob: { id: string; jobNumber: string | null } | null;
+    } | null;
   } | null>(null);
+  // One job for the whole fleet order (one kit per vehicle), or just this
+  // vehicle. Defaults to the whole order (Craig, 2026-10-19).
+  const [fleetChoice, setFleetChoice] = useState<'one' | 'single'>('one');
   // Set when a job page's Duplicate button opens the create modal
   // (?new=1&copyFrom=<id>). The form is filled from that job; the submit
   // links the chosen files onto the copy and starts it at the chosen stage.
@@ -480,11 +488,18 @@ export default function GraphicsPage() {
             }));
             if (p.customer) setCustomerSearch(p.customer);
             if (p.defaultAssigneeId) setCreateAssignees([p.defaultAssigneeId]);
+            const fleet = p.fleet ? { ...p.fleet, singleQuantity: p.quantity || 1 } : null;
+            const oneJob = !!fleet && !fleet.existingJob;
+            setFleetChoice(oneJob ? 'one' : 'single');
+            if (oneJob) {
+              setCreateForm(f => ({ ...f, quantity: fleet!.count, content: [fleet!.contentLine, f.content].filter(Boolean).join('\n\n') }));
+            }
             setPrefillEstimateLink({
               estimateId: fromEstimate,
               estimateNumber: p.estimateNumber || null,
               customerNetsuiteId: p.customerNetsuiteId || null,
               wrapQuoteId: p.wrapQuoteId || null,
+              fleet,
             });
             setPrefillNote(`Filled in from ${p.soNumber ? `SO #${p.soNumber} (estimate ${p.estimateNumber})` : `estimate ${p.estimateNumber}`}${p.wrapQuoteNumber ? ` and wrap quote ${p.wrapQuoteNumber}` : ''}. Check it over, then create.`);
           } catch (e: any) {
@@ -945,8 +960,24 @@ export default function GraphicsPage() {
       });
 
       // A job from an estimate marks a customer-approved estimate won, same
-      // as the old one-click spawn did.
-      if (prefillEstimateLink) {
+      // as the old one-click spawn did. A fleet order job also becomes the
+      // job for every vehicle in the order (one kit each), so wait for it.
+      const fleetJob = !!prefillEstimateLink?.fleet && !prefillEstimateLink.fleet.existingJob && fleetChoice === 'one';
+      if (prefillEstimateLink && fleetJob) {
+        try {
+          const res = await fetch('/api/graphics/from-estimate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ estimateId: prefillEstimateLink.estimateId, mode: 'created', existingJobId: data.id, fleet: true }),
+          });
+          if (!res.ok) {
+            const d = await res.json().catch(() => ({}));
+            await dialog.alert(`${jobNumber} was created, but not as the fleet order's job: ${d.error || 'unknown error'}. It covers ${prefillEstimateLink.estimateNumber || 'this estimate'} only.`);
+          }
+        } catch {
+          await dialog.alert(`${jobNumber} was created, but the fleet order link didn't save (network). Open the job and check its Kits card.`);
+        }
+      } else if (prefillEstimateLink) {
         fetch('/api/graphics/from-estimate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1821,6 +1852,18 @@ export default function GraphicsPage() {
                               {GRAPHICS_CATEGORY_LABELS[job.job_category]}
                             </span>
                           )}
+                          {(job as any).fleet_group_id && (
+                            <span
+                              title="Fleet order: one kit per vehicle, identical except for the unit number"
+                              style={{
+                                marginLeft: '6px', fontSize: '8px', fontWeight: 700, padding: '1px 5px', borderRadius: '3px',
+                                background: 'rgba(238,49,32,0.12)', color: '#ee3120',
+                                textTransform: 'uppercase', letterSpacing: '0.3px', verticalAlign: '1px',
+                              }}
+                            >
+                              {job.quantity || 1} kits
+                            </span>
+                          )}
                         </td>
                         <td style={{ ...tdStyle, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {job.customer || <span style={{ color: 'var(--text-muted)' }}>—</span>}
@@ -1983,6 +2026,53 @@ export default function GraphicsPage() {
                 {prefillNote}
               </div>
             )}
+
+            {/* Fleet order (migration 411): one job with a kit per vehicle,
+                or a job for this vehicle alone. */}
+            {prefillEstimateLink?.fleet && (() => {
+              const fl = prefillEstimateLink.fleet!;
+              if (fl.existingJob) {
+                return (
+                  <div style={{ padding: '9px 11px', borderRadius: '9px', marginBottom: '12px', fontSize: '11.5px', lineHeight: 1.45, background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.35)', color: 'var(--text-body)' }}>
+                    This estimate is one of {fl.count} vehicles in a fleet order that already has graphics job{' '}
+                    <a href={deepLinks.graphicsJob(fl.existingJob.id)} style={{ color: '#f59e0b', fontWeight: 700 }}>{fl.existingJob.jobNumber || 'Open it'}</a>,
+                    {' '}with a kit for each unit. Creating a job here makes a separate one for this vehicle only.
+                  </div>
+                );
+              }
+              const pick = (choice: 'one' | 'single') => {
+                if (choice === fleetChoice) return;
+                setFleetChoice(choice);
+                setCreateForm(f => ({
+                  ...f,
+                  quantity: choice === 'one' ? fl.count : fl.singleQuantity,
+                  content: choice === 'one'
+                    ? [fl.contentLine, f.content].filter(Boolean).join('\n\n')
+                    : (f.content || '').replace(fl.contentLine, '').replace(/^\s+/, ''),
+                }));
+              };
+              const option = (choice: 'one' | 'single', title: string, desc: string) => (
+                <button
+                  type="button"
+                  onClick={() => pick(choice)}
+                  style={{
+                    display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left', padding: '9px 11px', borderRadius: '9px',
+                    border: fleetChoice === choice ? '1px solid rgba(238,49,32,0.6)' : '1px solid var(--border)',
+                    background: fleetChoice === choice ? 'rgba(238,49,32,0.08)' : 'var(--card)',
+                    color: 'var(--text-body)', cursor: 'pointer',
+                  }}
+                >
+                  <span style={{ fontSize: '12.5px', fontWeight: 800 }}>{fleetChoice === choice ? '● ' : '○ '}{title}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.4 }}>{desc}</span>
+                </button>
+              );
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
+                  {option('one', `One job, ${fl.count} kits (units ${fl.units.join(', ')})`, 'The kits are the same except for the unit number. Every vehicle in the order links to this job, and a vehicle added to the order later gets a kit too.')}
+                  {option('single', `Just this vehicle (${prefillEstimateLink.estimateNumber || 'this estimate'})`, 'For the rare order where one vehicle\u2019s graphics differ.')}
+                </div>
+              );
+            })()}
 
             {/* ─── STEP 1: Choose Job Type ─── */}
             {createStep === 'category' && (

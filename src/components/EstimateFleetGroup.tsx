@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useDialog } from '@/components/DialogProvider';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { deepLinks } from '@/lib/deep-links';
 import type { FleetMember } from '@/lib/estimate-fleet';
 
 /**
@@ -40,6 +41,7 @@ export default function EstimateFleetGroup({
 }) {
   const dialog = useDialog();
   const [members, setMembers] = useState<FleetMember[]>([]);
+  const [job, setJob] = useState<{ id: string; job_number: string | null; status: string } | null>(null);
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<{ unit: string; vin: string }[]>([{ unit: '', vin: '' }]);
   const [sourceUnit, setSourceUnit] = useState('');
@@ -52,8 +54,10 @@ export default function EstimateFleetGroup({
       const res = await fetch(`/api/estimates/${estimateId}/fleet-group`);
       const d = await res.json().catch(() => ({}));
       setMembers(res.ok && Array.isArray(d.members) ? d.members : []);
+      setJob(res.ok && d.job ? d.job : null);
     } catch {
       setMembers([]);
+      setJob(null);
     }
   }, [estimateId]);
 
@@ -132,8 +136,17 @@ export default function EstimateFleetGroup({
     <>
       {inGroup && (
         <div style={{ border: '1px solid rgba(238,49,32,0.3)', background: 'rgba(238,49,32,0.06)', borderRadius: '10px', padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>
-            Fleet order · {members.length} vehicles
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>Fleet order · {members.length} vehicles</span>
+            {job && (
+              <a
+                href={deepLinks.graphicsJob(job.id)}
+                title="The order's one graphics job, with a kit for each unit"
+                style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}
+              >
+                Graphics {job.job_number || 'job'} · {members.length} kits ›
+              </a>
+            )}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {members.map(m => {

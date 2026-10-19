@@ -3347,10 +3347,14 @@ export default function EstimatesPage() {
 
   // ── Graphics job linkage ──
   const loadLinkedGraphicsJobs = useCallback(async (estimateId: string) => {
+    // A fleet order's one graphics job (migration 411) belongs to every
+    // estimate in the order, not just the one it was made from.
+    const { data: est } = await supabase.from('estimates').select('fleet_group_id').eq('id', estimateId).maybeSingle();
+    const groupId = (est as any)?.fleet_group_id as string | null | undefined;
     const { data } = await supabase
       .from('graphics_jobs')
       .select('id, job_number, title, status, assigned_to, estimate_attach, approval_proof_file_id')
-      .eq('estimate_id', estimateId)
+      .or(groupId ? `estimate_id.eq.${estimateId},fleet_group_id.eq.${groupId}` : `estimate_id.eq.${estimateId}`)
       .order('created_at', { ascending: true });
     setLinkedGraphicsJobs((data as LinkedGraphicsJob[]) || []);
   }, [supabase]);

@@ -64,6 +64,17 @@ export async function scanCheckinForGraphics(
 
   const signal = firstGraphicsMatch(lines);
   const update: Record<string, any> = {};
+  // A vehicle in a fleet order whose graphics job already exists
+  // (migration 411) links straight to it: its kit is on that job, so it
+  // never waits on the Needs Graphics queue.
+  if (!checkin.matched_graphics_job_id) {
+    const fleetJobId = await fleetJobForCheckin(service, checkin.source_estimate_id, soIds);
+    if (fleetJobId) {
+      update.matched_graphics_job_id = fleetJobId;
+      update.needs_graphics = false;
+      checkin.matched_graphics_job_id = fleetJobId;
+    }
+  }
   // A NetSuite outage with nothing found is not "scanned, no graphics" —
   // leave the stamp off so the next open tries again.
   if (!(netsuiteFailed && !signal)) update.graphics_scanned_at = new Date().toISOString();
@@ -75,4 +86,37 @@ export async function scanCheckinForGraphics(
     await service.from('fleet_checkins').update(update).eq('id', checkinId);
   }
   return { signal: signal || checkin.graphics_signal || null, scanned: !!update.graphics_scanned_at };
+}
+
+/**
+ * The fleet order graphics job (migration 411) a checked-in vehicle's kit
+ * is on: its source estimate, or the estimate behind one of its sales
+ * orders, is in a fleet order that has a live job.
+ */
+async function fleetJobForCheckin(
+  service: SupabaseClient,
+  sourceEstimateId: string | null,
+  soIds: string[],
+): Promise<string | null> {
+  const filters = [
+    sourceEstimateId ? `id.eq.${sourceEstimateId}` : null,
+    soIds.length ? `netsuite_so_id.in.(${soIds.join(',')})` : null,
+  ].filter(Boolean);
+  if (filters.length === 0) return null;
+  const { data: ests } = await service
+    .from('estimates')
+    .select('fleet_group_id')
+    .not('fleet_group_id', 'is', null)
+    .or(filters.join(','));
+  const groups = [...new Set((ests || []).map((e: any) => e.fleet_group_id))];
+  if (groups.length === 0) return null;
+  const { data: job } = await service
+    .from('graphics_jobs')
+    .select('id')
+    .in('fleet_group_id', groups)
+    .neq('status', 'cancelled')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return job?.id || null;
 }
