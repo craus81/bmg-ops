@@ -42,7 +42,7 @@ async function freshDb(): Promise<PGlite> {
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql',
     // The stock copy's functions, for the WHERE check below.
     '401-books-stock-by-item.sql', '402-books-stock-values.sql', '403-books-stock-item-setup.sql',
-    '404-books-stock-ledger-parts.sql',
+    '404-books-stock-ledger-parts.sql', '405-books-stock-account-items.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);

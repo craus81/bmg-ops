@@ -323,11 +323,27 @@ export interface LedgerPartData {
   entries_total: string;
   kinds: Array<{ type: string | null; count: number; total: string }>;
   rows: LedgerEntryData[];
+  /** It's the inventory account most stocked items name (migration 405). */
+  usual: boolean;
+  /** How many stocked items NetSuite still has name it as their asset account. */
+  named: number;
+  /** On any account but the usual one, the first 20 of them by name. */
+  named_items: NamedItemData[];
 }
 
-/** What gl_stock_ledger_parts (migration 404) returns. */
+/** A stocked item NetSuite still has that names an inventory account as its asset account (migration 405). */
+export interface NamedItemData {
+  netsuite_id: string;
+  name: string;
+  display_name: string | null;
+  active: boolean;
+}
+
+/** What gl_stock_ledger_parts (migrations 404 and 405) returns. */
 export interface LedgerPartsData {
   parts: LedgerPartData[];
+  /** The inventory account most stocked items name; null when none does. */
+  usual?: { netsuite_id: string; number: string | null; name: string | null } | null;
 }
 
 /** A document on the breakdown, named as NetSuite's screens name it. */
@@ -341,6 +357,16 @@ export interface LedgerEntry {
   amount: number;
   /** Where Invoices vs NetSuite checks it line by line; null for a kind FleetSuite doesn't post. */
   check: { kind: string; month: string } | null;
+}
+
+/** A stocked item that names an inventory account as its asset account. */
+export interface NamedItem {
+  itemId: string;
+  /** NetSuite's item name (its number). */
+  item: string;
+  /** Its display name, when NetSuite has one apart from the name. */
+  description: string | null;
+  active: boolean;
 }
 
 /**
@@ -370,10 +396,18 @@ export interface LedgerPart {
     /** The ones not sent: how many, and what they come to. */
     more: { count: number; total: number };
   };
+  /**
+   * On an account other than the one most stocked items name, the stocked
+   * items that put it on the page (owner decision 2026-10-19, "Name it"):
+   * how many, the first of them by name, how many more, and the usual
+   * account to set them to. Null on the usual account.
+   */
+  namedBy: { count: number; items: NamedItem[]; more: number; usual: string | null } | null;
 }
 
 /** Each company's inventory accounts, as gl_stock_ledger_parts orders them: by company, then account number. */
 export function ledgerParts(data: LedgerPartsData | null): LedgerPart[] {
+  const usual = data?.usual ? accountText({ ...data.usual, name: data.usual.name ?? '' }) : null;
   return (data?.parts ?? []).map((p) => {
     const ledger = { start: cents(p.ledger_start), moves: cents(p.ledger_moves) };
     const items = { start: cents(p.items_start), moves: cents(p.items_moves) };
@@ -389,6 +423,13 @@ export function ledgerParts(data: LedgerPartsData | null): LedgerPart[] {
     }));
     const total = cents(p.entries_total);
     const count = Number(p.entries) || 0;
+    const named = Number(p.named) || 0;
+    const namedItems: NamedItem[] = (p.named_items ?? []).map((i) => ({
+      itemId: i.netsuite_id,
+      item: i.name,
+      description: i.display_name && i.display_name !== i.name ? i.display_name : null,
+      active: i.active !== false,
+    }));
     return {
       company: p.company,
       accountId: p.account_id,
@@ -407,6 +448,7 @@ export function ledgerParts(data: LedgerPartsData | null): LedgerPart[] {
         rows,
         more: { count: Math.max(0, count - rows.length), total: total - rows.reduce((sum, r) => sum + r.amount, 0) },
       },
+      namedBy: p.usual || !named ? null : { count: named, items: namedItems, more: Math.max(0, named - namedItems.length), usual },
     };
   });
 }

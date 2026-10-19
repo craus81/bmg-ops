@@ -231,6 +231,7 @@ describe('ledgerParts', () => {
       { doc: '5901', type: 'Journal', number: 'JE77', date: '2025-12-31', month: '2025-12-01', name: null, memo: 'Year-end count', amount: '-400.00' },
       { doc: '5903', type: null, number: null, date: null, month: null, name: null, memo: null, amount: '0.01' },
     ],
+    usual: true, named: 3, named_items: [],
   };
 
   it("puts each account's ledger and items side by side, and says what the documents not sent come to", () => {
@@ -263,5 +264,33 @@ describe('ledgerParts', () => {
     expect(missing).toMatchObject({ account: 'NetSuite account 777', fixedAsset: false, entries: { count: 0, total: 0, more: { count: 0, total: 0 } } });
     expect(equipment).toMatchObject({ account: '1500 Equipment', fixedAsset: true });
     expect(ledgerParts(null)).toEqual([]);
+  });
+
+  it('names the stocked items behind any account but the usual one, with the usual account to set them to', () => {
+    const [inventory, vehicles, unnamed] = ledgerParts({
+      parts: [
+        part,
+        {
+          ...part, account_id: '196', number: '1510', name: 'Vehicles', type: 'fixed_asset', usual: false, named: 22,
+          named_items: [
+            { netsuite_id: '9500', name: 'VAN-14', display_name: 'Cargo van, unit 14', active: false },
+            { netsuite_id: '9501', name: 'VAN-15', display_name: 'VAN-15', active: true },
+          ],
+        },
+        { ...part, account_id: '197', usual: false, named: 0, named_items: [] },
+      ],
+      usual: { netsuite_id: '190', number: '1200', name: 'Inventory' },
+    });
+    expect(inventory.namedBy).toBeNull();
+    expect(vehicles.namedBy).toEqual({
+      count: 22,
+      items: [
+        { itemId: '9500', item: 'VAN-14', description: 'Cargo van, unit 14', active: false },
+        { itemId: '9501', item: 'VAN-15', description: null, active: true },
+      ],
+      more: 20,
+      usual: '1200 Inventory',
+    });
+    expect(unnamed.namedBy).toBeNull();
   });
 });
