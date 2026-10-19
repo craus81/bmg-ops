@@ -57,6 +57,11 @@ import { holdAwareFetch } from '@/lib/hold-aware-fetch';
 import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
 import { DeliveryPicker } from '@/components/DeliveryPicker';
 import { EMPTY_DELIVERY, deliveryColumns, deliveryFromRow, deliveryText, sameDelivery, type Delivery } from '@/lib/delivery';
+import VehicleTemplatePicker from '@/components/VehicleTemplatePicker';
+import {
+  EMPTY_FILTERS, TEMPLATE_COLUMNS, estimateVehicleFields, searchTemplates, templateLabel,
+  type TemplateFilters, type VehicleTemplate,
+} from '@/lib/vehicle-templates';
 
 interface Part {
   id: string;
@@ -330,6 +335,10 @@ interface Estimate {
   vehicle_other: string | null;
   unit_number: string | null;
   vehicle_platform_id: string | null;
+  // Migration 410: the template-library pick.
+  vehicle_template_id?: string | null;
+  vehicle_make?: string | null;
+  vehicle_model?: string | null;
   vehicle_year: string | null;
   vehicle_wheelbase: string | null;
   vehicle_roof: string | null;
@@ -382,9 +391,6 @@ interface VehiclePlatform {
   config: PlatformConfig | null;
 }
 
-// Sentinel option value for the vehicle dropdown's free-text "Other" entry
-// (not a platform id — pickPlatform intercepts it).
-const OTHER_VEHICLE = '__other__';
 
 // Live feedback under the VIN input — the decode is never silent.
 type VinStatus =
@@ -645,7 +651,46 @@ export default function EstimatesPage() {
   const [vehicleCab, setVehicleCab] = useState('');
   const [vehicleBed, setVehicleBed] = useState('');
   const selectedPlatform = platforms.find(p => p.id === vehiclePlatformId) || null;
-  const platformConfig: PlatformConfig = selectedPlatform?.config || {};
+  // The vehicle picker is the Graphics Builder's (Craig 2026-10-19: "the
+  // vehicle make and model selector on the estimates should mirror the
+  // graphics builder selections"): the template library's years, makes and
+  // models. The platform above is no longer picked by hand; it's worked out
+  // from the picked make / model (applyPickedVehicle) because it's what the
+  // parts catalog filters by. Migration 410.
+  const [vehicleTemplate, setVehicleTemplate] = useState<VehicleTemplate | null>(null);
+  const [vehicleMake, setVehicleMake] = useState('');
+  const [vehicleModel, setVehicleModel] = useState('');
+  // What the picker's dropdowns open on; bumping the key re-seeds them
+  // (another estimate loaded, a VIN decoded).
+  const [vehicleSeed, setVehicleSeed] = useState<{ filters: Partial<TemplateFilters>; key: number }>({ filters: {}, key: 0 });
+  const seedVehiclePicker = (filters: Partial<TemplateFilters>) => {
+    vehicleFiltersRef.current = { ...EMPTY_FILTERS, ...filters };
+    setVehicleSeed(prev => ({ filters, key: prev.key + 1 }));
+  };
+  const vehicleTemplateRef = useRef<VehicleTemplate | null>(null);
+  vehicleTemplateRef.current = vehicleTemplate;
+  const applyPickedVehicle = (t: VehicleTemplate | null, filters: Partial<TemplateFilters>) => {
+    setVehicleTemplate(t);
+    const f = estimateVehicleFields(t, filters, platforms);
+    setVehicleMake(f.vehicle_make || '');
+    setVehicleModel(f.vehicle_model || '');
+    if (f.vehicle_year) setVehicleYear(f.vehicle_year);
+    setVehiclePlatformId(f.vehicle_platform_id);
+    setVehicleOther(f.vehicle_other || '');
+    setVehicleOtherMode(false);
+    setVehicleWheelbase(f.vehicle_wheelbase || '');
+    setVehicleRoof(f.vehicle_roof || '');
+    setVehicleCab(f.vehicle_cab || '');
+    setVehicleBed(f.vehicle_bed || '');
+  };
+  // The picker's current filters, so a template pick and a later clear both
+  // know the make / model still chosen.
+  const vehicleFiltersRef = useRef<TemplateFilters>({ ...EMPTY_FILTERS });
+  const loadVehicleTemplate = async (id: string | null | undefined) => {
+    if (!id) { setVehicleTemplate(null); return; }
+    const { data } = await supabase.from('vehicle_templates').select(TEMPLATE_COLUMNS).eq('id', id).maybeSingle();
+    setVehicleTemplate((data as VehicleTemplate) || null);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -659,24 +704,18 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- platform vocabulary loads once
   }, []);
 
-  // Manual platform switch: keep qualifier values the new platform also
-  // offers (same roof label etc.), drop the ones it doesn't.
-  const pickPlatform = (id: string | null) => {
-    if (id === OTHER_VEHICLE) {
-      // "Other" — free-text vehicle, no platform (and no fitment filtering).
-      setVehiclePlatformId(null);
-      setVehicleOtherMode(true);
-      setVehicleWheelbase(''); setVehicleRoof(''); setVehicleCab(''); setVehicleBed('');
-      return;
-    }
-    setVehiclePlatformId(id);
+  // "Other — type it in": a vehicle the template library doesn't have.
+  const startOtherVehicle = () => {
+    setVehicleTemplate(null);
+    setVehicleMake(''); setVehicleModel('');
+    setVehiclePlatformId(null);
+    setVehicleOtherMode(true);
+    setVehicleWheelbase(''); setVehicleRoof(''); setVehicleCab(''); setVehicleBed('');
+    seedVehiclePicker({});
+  };
+  const leaveOtherVehicle = () => {
     setVehicleOtherMode(false);
-    if (id) setVehicleOther('');
-    const cfg: PlatformConfig = platforms.find(p => p.id === id)?.config || {};
-    setVehicleWheelbase(prev => (cfg.wheelbases || []).includes(prev) ? prev : '');
-    setVehicleRoof(prev => (cfg.roofs || []).includes(prev) ? prev : '');
-    setVehicleCab(prev => (cfg.cabs || []).includes(prev) ? prev : '');
-    setVehicleBed(prev => (cfg.beds || []).includes(prev) ? prev : '');
+    setVehicleOther('');
   };
 
   // The decode is never silent (Craig 2026-08-12: "I don't see the vin field
@@ -701,6 +740,24 @@ export default function EstimatesPage() {
         }
         const res = resolvePlatform({ make: decoded.make, model: decoded.model, series: decoded.series, year: decoded.year }, vin);
         if (decoded.year) setVehicleYear(decoded.year);
+        // Land the decode on the template picker too: year / make / model
+        // as its filters, and the template itself when exactly one fits.
+        // A template already picked is left alone.
+        const decodedModel = decoded.model === 'Vehicle' ? '' : decoded.model;
+        if (!vehicleTemplateRef.current && (decoded.make || decodedModel)) {
+          const filters = { year: decoded.year || '', make: decoded.make || '', model: decodedModel || '' };
+          setVehicleMake(filters.make);
+          setVehicleModel(filters.model);
+          seedVehiclePicker(filters);
+          const narrow = {
+            ...filters,
+            ...(res.roof ? { roof: res.roof } : {}),
+            ...(res.wheelbase ? { wheelbase: res.wheelbase.replace(/\s*EL$/i, ' Extended') } : {}),
+          };
+          searchTemplates(supabase, { filters: narrow, limit: 2 }).then(found => {
+            if (!cancelled && found?.total === 1) setVehicleTemplate(found.rows[0]);
+          });
+        }
         const vehicleName = [decoded.year, decoded.make, decoded.model === 'Vehicle' ? '' : decoded.model]
           .filter(Boolean).join(' ');
         // Off-platform vehicle: still land the decode on the estimate as the
@@ -710,11 +767,10 @@ export default function EstimatesPage() {
           const makeModel = [decoded.make, decoded.model === 'Vehicle' ? '' : decoded.model]
             .filter(Boolean).join(' ');
           if (!makeModel) return;
+          // Printed through vehicle_other; the picker shows it as its
+          // make / model.
           setVehiclePlatformId(prev => {
-            if (!prev) {
-              setVehicleOther(makeModel);
-              setVehicleOtherMode(true);
-            }
+            if (!prev) setVehicleOther(makeModel);
             return prev;
           });
         };
@@ -1216,6 +1272,7 @@ export default function EstimatesPage() {
     taxRate, taxExempt, vehicleCount, laborRate, laborOverride, discountType, discountInput, discountDescription, lines,
     vin, unitNumber, vehiclePlatformId, vehicleOther, vehicleOtherMode,
     vehicleYear, vehicleWheelbase, vehicleRoof, vehicleCab, vehicleBed,
+    vehicleTemplateId: vehicleTemplate?.id || null, vehicleMake, vehicleModel,
     installInstructions, onSiteContactName, onSiteContactPhone,
     deliveryPreferences, poNumber, expirationDate, internalNotes,
     fleetCheckinId, delivery,
@@ -1309,6 +1366,10 @@ export default function EstimatesPage() {
     setVehicleRoof(f.vehicleRoof || '');
     setVehicleCab(f.vehicleCab || '');
     setVehicleBed(f.vehicleBed || '');
+    setVehicleMake((f as any).vehicleMake || '');
+    setVehicleModel((f as any).vehicleModel || '');
+    loadVehicleTemplate((f as any).vehicleTemplateId);
+    seedVehiclePicker({ year: f.vehicleYear || '', make: (f as any).vehicleMake || '', model: (f as any).vehicleModel || '' });
     setInstallInstructions(f.installInstructions || '');
     setOnSiteContactName(f.onSiteContactName || '');
     setOnSiteContactPhone(f.onSiteContactPhone || '');
@@ -1965,6 +2026,9 @@ export default function EstimatesPage() {
         vehicle_roof: vehicleRoof,
         vehicle_cab: vehicleCab,
         vehicle_bed: vehicleBed,
+        vehicle_template_id: vehicleOtherMode ? null : vehicleTemplate?.id || null,
+        vehicle_make: vehicleOtherMode ? null : vehicleMake || null,
+        vehicle_model: vehicleOtherMode ? null : vehicleModel || null,
         // A kit's lines always save together, under the kit's first line.
         line_items: gatherKitGroups(lines).map(l => ({
           part_id: l.part_id,
@@ -3215,6 +3279,10 @@ export default function EstimatesPage() {
     setVehicleRoof(est.vehicle_roof || '');
     setVehicleCab(est.vehicle_cab || '');
     setVehicleBed(est.vehicle_bed || '');
+    setVehicleMake(est.vehicle_make || '');
+    setVehicleModel(est.vehicle_model || '');
+    loadVehicleTemplate(est.vehicle_template_id);
+    seedVehiclePicker({ year: est.vehicle_template_id ? '' : est.vehicle_year || '', make: est.vehicle_make || '', model: est.vehicle_model || '' });
     setFleetCheckinId(est.fleet_checkin_id || null);
     setCheckinSuggestion(null);
     setCheckinPickerOpen(false);
@@ -3543,6 +3611,10 @@ export default function EstimatesPage() {
     setVehicleRoof('');
     setVehicleCab('');
     setVehicleBed('');
+    setVehicleTemplate(null);
+    setVehicleMake('');
+    setVehicleModel('');
+    seedVehiclePicker({});
     setInstallInstructions('');
     setOnSiteContactName('');
     setOnSiteContactPhone('');
@@ -4339,108 +4411,77 @@ export default function EstimatesPage() {
           </div>
         )}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginBottom: '12px' }}>
-        <div>
-          <div style={labelStyle}>Vehicle (Make & Model)</div>
-          <select
-            style={inputStyle}
-            value={vehiclePlatformId || (vehicleOtherMode ? OTHER_VEHICLE : '')}
-            onChange={e => pickPlatform(e.target.value || null)}
-          >
-            <option value="">— select vehicle —</option>
-            <optgroup label="Vans">
-              {platforms.filter(p => p.body_type === 'van').map(p => (
-                <option key={p.id} value={p.id}>{p.label}</option>
-              ))}
-            </optgroup>
-            <optgroup label="Trucks">
-              {platforms.filter(p => p.body_type === 'truck').map(p => (
-                <option key={p.id} value={p.id}>{p.label}</option>
-              ))}
-            </optgroup>
-            {platforms.some(p => p.body_type === 'other') && (
-              <optgroup label="Other">
-                {platforms.filter(p => p.body_type === 'other').map(p => (
-                  <option key={p.id} value={p.id}>{p.label}</option>
-                ))}
-              </optgroup>
-            )}
-            <option value={OTHER_VEHICLE}>Other — type it in…</option>
-          </select>
-          {vehicleOtherMode && (
+      {/* Vehicle: the Graphics Builder's picker over the same template
+          library, so the estimate and its worksheets name the vehicle the
+          same way (and every worksheet save keeps them in step). */}
+      <div style={{ marginBottom: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
+          <div style={labelStyle}>Vehicle</div>
+          <span style={{ flex: 1 }} />
+          {vehicleOtherMode ? (
+            <button type="button" onClick={leaveOtherVehicle} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11px', fontWeight: 600, color: '#06b6d4' }}>
+              Pick from the vehicle list instead
+            </button>
+          ) : (
+            <button type="button" onClick={startOtherVehicle} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>
+              Not in the list? Type it in
+            </button>
+          )}
+        </div>
+        {vehicleOtherMode ? (
+          <>
             <input
-              style={{ ...inputStyle, marginTop: '6px' }}
+              style={inputStyle}
               value={vehicleOther}
               onChange={e => setVehicleOther(e.target.value)}
               placeholder="Make & model — e.g. Honda Civic, Isuzu NPR box truck"
               autoFocus={!vehicleOther}
             />
-          )}
-          {vehicleOtherMode && (
             <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
-              Prints on the estimate and pushes to NetSuite. Catalog fitment filtering only works for vehicles in the list above.
+              Prints on the estimate and pushes to NetSuite. Browse Catalog can&apos;t filter parts for a typed-in vehicle.
             </div>
-          )}
-          {selectedPlatform && (
-            <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
-              Browse Catalog will filter to parts that fit the {selectedPlatform.label}
-              {vehicleRoof ? ` · ${vehicleRoof} roof` : ''}
-              {vehicleWheelbase ? ` · ${/^\d/.test(vehicleWheelbase) ? `${vehicleWheelbase}" WB` : vehicleWheelbase}` : ''}
-            </div>
-          )}
-        </div>
-        <div>
-          <div style={labelStyle}>Year</div>
+          </>
+        ) : (
+          <VehicleTemplatePicker
+            supabase={supabase}
+            template={vehicleTemplate}
+            onPick={t => applyPickedVehicle(t, vehicleFiltersRef.current)}
+            onClear={() => applyPickedVehicle(null, vehicleFiltersRef.current)}
+            onFiltersChange={f => { vehicleFiltersRef.current = f; }}
+            initialFilters={vehicleSeed.filters}
+            seedKey={vehicleSeed.key}
+            inputStyle={{ ...inputStyle, width: undefined }}
+          />
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '6px' }}>
+          <div style={{ ...labelStyle, marginBottom: 0 }}>Model year</div>
           <input
-            style={inputStyle}
+            style={{ ...inputStyle, width: '110px' }}
             value={vehicleYear}
-            onChange={e => setVehicleYear(e.target.value.replace(/\D/g, ''))}
-            maxLength={4}
+            onChange={e => setVehicleYear(e.target.value.replace(/[^\d-]/g, ''))}
+            maxLength={9}
             inputMode="numeric"
             placeholder="e.g. 2025"
           />
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+            {selectedPlatform
+              ? <>Browse Catalog will filter to parts that fit the {selectedPlatform.label}
+                  {vehicleRoof ? ` · ${vehicleRoof} roof` : ''}
+                  {vehicleWheelbase ? ` · ${/^\d/.test(vehicleWheelbase) ? `${vehicleWheelbase}" WB` : vehicleWheelbase}` : ''}
+                  {vehicleCab ? ` · ${vehicleCab} cab` : ''}
+                  {vehicleBed ? ` · ${vehicleBed}' bed` : ''}</>
+              : vehicleTemplate || vehicleMake
+                ? 'Browse Catalog has no parts list for this vehicle, so it shows every part.'
+                : null}
+          </span>
         </div>
+        {vehicleTemplate && (
+          <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            Template: <b style={{ color: 'var(--text-secondary)' }}>{templateLabel(vehicleTemplate)}</b>
+            {vehicleTemplate.template_code ? ` (${vehicleTemplate.template_code})` : ''}. Add Graphics opens this same vehicle in the Graphics Builder.
+          </div>
+        )}
       </div>
-      {selectedPlatform && (platformConfig.roofs || platformConfig.wheelbases || platformConfig.cabs || platformConfig.beds) && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px', marginBottom: '12px' }}>
-          {platformConfig.roofs && platformConfig.roofs.length > 0 && (
-            <div>
-              <div style={labelStyle}>Roof Height</div>
-              <select style={inputStyle} value={vehicleRoof} onChange={e => setVehicleRoof(e.target.value)}>
-                <option value="">— roof —</option>
-                {platformConfig.roofs.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </div>
-          )}
-          {platformConfig.wheelbases && platformConfig.wheelbases.length > 0 && (
-            <div>
-              <div style={labelStyle}>Wheelbase</div>
-              <select style={inputStyle} value={vehicleWheelbase} onChange={e => setVehicleWheelbase(e.target.value)}>
-                <option value="">— wheelbase —</option>
-                {platformConfig.wheelbases.map(w => <option key={w} value={w}>{/^\d/.test(w) ? `${w}"` : w}</option>)}
-              </select>
-            </div>
-          )}
-          {platformConfig.cabs && platformConfig.cabs.length > 0 && (
-            <div>
-              <div style={labelStyle}>Cab Size</div>
-              <select style={inputStyle} value={vehicleCab} onChange={e => setVehicleCab(e.target.value)}>
-                <option value="">— cab —</option>
-                {platformConfig.cabs.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-          )}
-          {platformConfig.beds && platformConfig.beds.length > 0 && (
-            <div>
-              <div style={labelStyle}>Bed Length</div>
-              <select style={inputStyle} value={vehicleBed} onChange={e => setVehicleBed(e.target.value)}>
-                <option value="">— bed —</option>
-                {platformConfig.beds.map(b => <option key={b} value={b}>{b}&apos;</option>)}
-              </select>
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ── Internal notes — the surviving piece of the old Install Context
           section (removed 2026-08-12; the retired fields still round-trip
