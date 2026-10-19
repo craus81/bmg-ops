@@ -56,6 +56,7 @@ import NumberInput from '@/components/NumberInput';
 import BriefMeSheet from '@/components/BriefMeSheet';
 import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
 import type { HistoryRow } from '@/lib/ledger/history';
+import { TXN_SEARCH_MIN, type TxnSearchHit } from '@/lib/customer-txn-search';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { looseMatcher, looseSearchRegex } from '@/lib/loose-search';
@@ -225,7 +226,30 @@ interface Txn {
   /** Imported from QuickBooks (before the cutover): read-only, never in a
    *  balance, opens its own record window (src/lib/ledger/history.ts). */
   qbo: { id: string; pdfDocumentId: string | null } | null;
+  /** Set while searching: why this row matched beyond its number
+   *  ("Line: …", "PO: …", "VIN: …"), shown under the number. */
+  why?: string | null;
 }
+
+/** One QuickBooks history row as a Transactions row. */
+function qbTxn(r: HistoryRow): Txn {
+  const kind: TxnKind =
+    r.docType === 'estimate' ? 'estimate'
+    : r.docType === 'credit_memo' || r.docType === 'refund_receipt' ? 'credit'
+    : 'invoice';
+  return {
+    key: `qb-${r.id}`,
+    kind, typeLabel: r.typeLabel, number: r.number,
+    date: r.date, dueDate: r.dueDate,
+    status: r.status, statusNorm: r.paid ? 'paid' : 'other', daysPastDue: 0, total: r.total,
+    nsId: null, nsPdfType: null, origin: null,
+    qbo: { id: r.id, pdfDocumentId: r.pdfDocumentId },
+  };
+}
+
+const HIT_LABEL: Record<TxnSearchHit['kind'], string> = {
+  invoice: 'Invoice', credit: 'Credit', salesOrder: 'Sales Order', estimate: 'Estimate',
+};
 
 const TXN_FILTERS = [
   ['all', 'All'],
@@ -368,6 +392,11 @@ export default function CustomerRecordPage() {
   const [docFilter, setDocFilter] = useState<TxnFilter>('all');
   const [docStatus, setDocStatus] = useState<'all' | 'open' | 'pastdue' | 'paid'>('all');
   const [docSearch, setDocSearch] = useState('');
+  // What the search box found beyond the loaded rows: every line, memo, PO
+  // and VIN in this customer's history (src/lib/customer-txn-search.ts), and
+  // QuickBooks history's own line search. Keyed by the query it answers.
+  const [lineSearch, setLineSearch] = useState<{ q: string; hits: TxnSearchHit[]; qb: HistoryRow[] } | null>(null);
+  const [lineSearching, setLineSearching] = useState(false);
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
 
   // Bulk PDF download — pick specific documents (e.g. the invoices a
@@ -1942,26 +1971,91 @@ export default function CustomerRecordPage() {
     }
     // QuickBooks history. Its status is a word, never an open amount, so
     // nothing here reaches the open balance or the Open/Past due chips.
-    for (const r of qbRows || []) {
-      const kind: TxnKind =
-        r.docType === 'estimate' ? 'estimate'
-        : r.docType === 'credit_memo' || r.docType === 'refund_receipt' ? 'credit'
-        : 'invoice';
-      rows.push({
-        key: `qb-${r.id}`,
-        kind, typeLabel: r.typeLabel, number: r.number,
-        date: r.date, dueDate: r.dueDate,
-        status: r.status, statusNorm: r.paid ? 'paid' : 'other', daysPastDue: 0, total: r.total,
-        nsId: null, nsPdfType: null, origin: null,
-        qbo: { id: r.id, pdfDocumentId: r.pdfDocumentId },
-      });
-    }
+    for (const r of qbRows || []) rows.push(qbTxn(r));
     return rows;
   }, [docs, payments, estimatesList, wrapQuotes, originByNsDoc, qbRows, recordRouteId]);
 
+  // The search box looks past the number: after a pause in typing, ask the
+  // server for this customer's transactions whose lines, memo, PO or VIN
+  // match (all of history, not just the rows paged in), plus QuickBooks
+  // history's own line search for those who can see it.
+  useEffect(() => {
+    const q = docSearch.trim();
+    const nsId = prospect?.netsuite_id || customer?.netsuite_id || null;
+    const qbCustomer = canSeeMoney ? customer?.id || null : null;
+    if (q.length < TXN_SEARCH_MIN || (!nsId && !qbCustomer)) { setLineSearch(null); setLineSearching(false); return; }
+    let cancelled = false;
+    setLineSearching(true);
+    const timer = setTimeout(async () => {
+      const [hits, qb] = await Promise.all([
+        nsId
+          ? fetch(`/api/customers/transaction-search?nsId=${nsId}&q=${encodeURIComponent(q)}`)
+              .then(r => r.json()).then(b => (b?.success ? b.hits as TxnSearchHit[] : [])).catch(() => [] as TxnSearchHit[])
+          : Promise.resolve([] as TxnSearchHit[]),
+        qbCustomer
+          ? fetch(`/api/ledger/history?customerId=${qbCustomer}&q=${encodeURIComponent(q)}&limit=200`)
+              .then(r => r.json()).then(b => (b?.success ? b.rows as HistoryRow[] : [])).catch(() => [] as HistoryRow[])
+          : Promise.resolve([] as HistoryRow[]),
+      ]);
+      if (cancelled) return;
+      setLineSearch({ q, hits, qb });
+      setLineSearching(false);
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [docSearch, prospect?.netsuite_id, customer?.netsuite_id, customer?.id, canSeeMoney]);
+
+  // Rows the server search found: a reason for rows already listed, and a
+  // row of their own for ones not paged in yet.
+  const searchFound = useMemo(() => {
+    const why = new Map<string, string>();
+    const extra: Txn[] = [];
+    if (!lineSearch || lineSearch.q !== docSearch.trim()) return { why, extra };
+    const listed = new Set(txns.map(t => t.key));
+    // A FleetSuite estimate pushed to NetSuite shows as the NetSuite row.
+    const byOrigin = new Map<string, string>();
+    for (const t of txns) if (t.origin?.kind === 'estimate') byOrigin.set(t.origin.id, t.key);
+    const claim = (key: string, reason: string, make: () => Txn) => {
+      if (why.has(key)) return;
+      why.set(key, reason);
+      if (!listed.has(key)) { extra.push(make()); listed.add(key); }
+    };
+    for (const h of lineSearch.hits) {
+      if (h.source === 'fleetsuite') {
+        const key = byOrigin.get(h.id)
+          || (h.linkedNsId && listed.has(`ns-estimate-${h.linkedNsId}`) ? `ns-estimate-${h.linkedNsId}` : `fs-estimate-${h.id}`);
+        claim(key, h.why, () => ({
+          key, kind: 'estimate', typeLabel: 'Estimate', number: h.number,
+          date: h.date, dueDate: null, status: h.status, statusNorm: 'other', daysPastDue: 0, total: h.total,
+          nsId: null, nsPdfType: null, qbo: null,
+          origin: {
+            kind: 'estimate', id: h.id, number: h.number,
+            url: deepLinks.estimate(h.id, { fromCustomer: recordRouteId }), pdfUrl: deepLinks.estimatePdf(h.id),
+          },
+        }));
+        continue;
+      }
+      const key = h.kind === 'credit' ? `pay-credit-${h.id}` : `ns-${h.kind}-${h.id}`;
+      claim(key, h.why, () => {
+        const days = h.kind === 'invoice' && h.paid === false ? docDaysPastDue(h.dueDate) : 0;
+        return {
+          key, kind: h.kind, typeLabel: HIT_LABEL[h.kind], number: h.number,
+          date: h.date, dueDate: h.dueDate, status: h.status,
+          statusNorm: h.kind !== 'invoice' ? 'other' : h.paid ? 'paid' : h.paid === false ? (days > 0 ? 'pastdue' : 'open') : 'other',
+          daysPastDue: days > 0 ? days : 0, total: h.total,
+          nsId: h.id, nsPdfType: h.kind === 'credit' ? null : h.kind, origin: null, qbo: null,
+        };
+      });
+    }
+    for (const r of lineSearch.qb) {
+      const reason = r.matchedLine ? `Line: ${r.matchedLine}` : r.po ? `PO: ${r.po}` : r.memo ? `Memo: ${r.memo}` : 'Number, PO or memo';
+      claim(`qb-${r.id}`, reason, () => qbTxn(r));
+    }
+    return { why, extra };
+  }, [lineSearch, docSearch, txns, recordRouteId]);
+
   // Transactions: filter chips + search narrow the loaded set; headers sort it.
   const filteredTxns = useMemo(() => {
-    let list = txns;
+    let list = searchFound.extra.length ? [...txns, ...searchFound.extra] : txns;
     if (docFilter !== 'all') {
       const kinds = TXN_FILTER_KINDS[docFilter];
       list = list.filter(t => kinds.includes(t.kind));
@@ -1974,10 +2068,15 @@ export default function CustomerRecordPage() {
     else if (docStatus !== 'all') list = list.filter(t => t.statusNorm === docStatus);
     if (docSearch.trim()) {
       const match = looseMatcher(docSearch);
-      list = list.filter(t => match(t.number, t.status, t.origin?.number, t.origin?.title));
+      list = list
+        .filter(t => match(t.number, t.status, t.origin?.number, t.origin?.title) || searchFound.why.has(t.key))
+        .map(t => {
+          const why = match(t.number, t.status, t.origin?.number, t.origin?.title) ? null : searchFound.why.get(t.key);
+          return why ? { ...t, why } : t;
+        });
     }
     return list;
-  }, [txns, docFilter, docStatus, docSearch]);
+  }, [txns, docFilter, docStatus, docSearch, searchFound]);
   const { sorted: sortedTxns, sort: docSort, toggle: toggleDocSort } = useTableSort(filteredTxns, TXN_SORT_COLS, { key: 'date', dir: 'desc' });
   const zippableShown = zippableTxns(sortedTxns);
   const selectedShown = zippableShown.filter(t => selectedDocKeys.has(t.key)).length;
@@ -2872,7 +2971,7 @@ export default function CustomerRecordPage() {
             <input
               value={docSearch}
               onChange={e => setDocSearch(e.target.value)}
-              placeholder="Search number…"
+              placeholder="Search number, part, description, memo, PO or VIN…"
               style={{ flex: '1 1 140px', minWidth: '120px', padding: '6px 10px', borderRadius: '8px', fontSize: '11.5px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-primary)' }}
             />
           </div>
@@ -2885,7 +2984,8 @@ export default function CustomerRecordPage() {
             </div>
           )}
           {!docs && !docsError && (prospect?.netsuite_id || customer) && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading transactions…</div>}
-          {(docs || txns.length > 0) && sortedTxns.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>No transactions match.</div>}
+          {lineSearching && <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', padding: '2px 0 6px' }}>Searching every line, memo, PO and VIN…</div>}
+          {(docs || txns.length > 0) && sortedTxns.length === 0 && !lineSearching && <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>No transactions match.</div>}
           {sortedTxns.length > 0 && (
             <>
               {zippableShown.length > 0 && (
@@ -2950,6 +3050,11 @@ export default function CustomerRecordPage() {
                           {t.origin?.title && (
                             <div title={t.origin.title} style={{ fontSize: '10.5px', fontWeight: 500, color: 'var(--text-label)', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {t.origin.title}
+                            </div>
+                          )}
+                          {t.why && (
+                            <div title={t.why} style={{ fontSize: '10.5px', fontWeight: 500, color: '#60a5fa', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {t.why}
                             </div>
                           )}
                         </td>
