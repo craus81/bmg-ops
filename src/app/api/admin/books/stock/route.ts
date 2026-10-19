@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireSuperAdmin } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { BOOKS_STOCK_SYNC, copyNetSuiteStock, type StockCopyResult } from '@/lib/books/netsuite-stock';
-import { compareStock, type StockItemsData } from '@/lib/books/stock-items';
+import { compareStock, stockSetup, type StockItemsData, type StockSetupData } from '@/lib/books/stock-items';
 
 export const dynamic = 'force-dynamic';
 // "Copy now" runs the same job as the cron, with the same budget.
@@ -19,8 +19,10 @@ const COPY_FIELDS: Array<keyof StockCopyResult> = [
  * GET /api/admin/books/stock — each item's count and value at each
  * location, FleetSuite's next to NetSuite's own (compareStock in
  * src/lib/books/stock-items.ts, migration 401), with how the last copy of
- * NetSuite's stock moves went and the inventory accounts its ledger tie-out
- * adds up. Values are whole cents.
+ * NetSuite's stock moves went, the inventory accounts its ledger tie-out
+ * adds up, and the stocked items NetSuite has set up with an asset account
+ * that isn't an asset account (stockSetup, migration 403). Values are whole
+ * cents.
  *
  * POST — copy NetSuite's stock moves and read its counts now rather than
  * wait for the two-hourly run (/api/cron/books-netsuite-stock). Same job,
@@ -33,11 +35,12 @@ export async function GET(req: NextRequest) {
   if (auth.error) return auth.error;
 
   const service = createServiceClient();
-  const [items, copy] = await Promise.all([
+  const [items, setup, copy] = await Promise.all([
     service.rpc('gl_stock_items'),
+    service.rpc('gl_stock_item_setup'),
     service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_STOCK_SYNC).maybeSingle(),
   ]);
-  const error = items.error || copy.error;
+  const error = items.error || setup.error || copy.error;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const data = (items.data ?? {}) as StockItemsData;
@@ -52,6 +55,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     ...compareStock(data),
     accounts: accountIds.map((id) => ({ number: chart.get(id)?.number ?? null, name: chart.get(id)?.name ?? `NetSuite account ${id}` })),
+    setup: stockSetup(setup.data as StockSetupData | null),
     lastCopy: copy.data && last
       ? { at: copy.data.updated_at, result: Object.fromEntries(COPY_FIELDS.filter((k) => k in last).map((k) => [k, last[k]])) }
       : null,

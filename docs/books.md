@@ -100,7 +100,7 @@ the accounts page; the others are linked from there.
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
-| NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
+| NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `migrations/403-books-stock-item-setup.sql` (items set up wrong), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
 | Stock by item and an item's moves, and their APIs | `src/app/(main)/admin/books/stock/page.tsx`, `src/app/(main)/admin/books/stock/item/page.tsx`, `src/app/api/admin/books/stock/route.ts`, `src/app/api/admin/books/stock/item/route.ts` |
 | Stock by item tests | `src/lib/books/netsuite-stock.test.ts`, `src/lib/books/stock-items.test.ts`, `src/lib/books/stock-items-sql.test.ts`; the daily check's are in its test files |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
@@ -1870,6 +1870,42 @@ counted in but not listed. A document's number opens its line by line
 check on Invoices vs NetSuite under the month NetSuite posted it to: the
 Stock and cost switch for a stock document or an invoice's or credit
 memo's stock, the Bills switch for a bill or bill credit.
+
+### Items set up wrong, and value left over
+
+On the first look at the real books after migration 402, two items' values
+still stood apart from NetSuite's: in NetSuite each had its asset account
+and its cost of goods sold account swapped. Their receipts put what they
+cost on the cost of goods sold account instead of inventory, and each
+shipment put it into inventory instead of taking it out, so NetSuite's
+ledger held value on items none were left of. NetSuite's own count didn't
+show it, as it values what's on hand at the average cost. So the page now
+does two things (owner decision 2026-10-19, "Flag them"):
+
+- **Before a sale.** Migration 403's `gl_stock_item_setup` lists each
+  active item NetSuite keeps in stock whose asset account, in the copy of
+  NetSuite's lists, the chart of accounts has as anything but an asset
+  account, and the asset account most stocked items use. The page lists
+  them in red with what to set the asset account to on the item's
+  Accounting tab in NetSuite, marks their rows, and says so on each one's
+  page; once every one is right, a green chip says the asset accounts
+  check out. An item drops off once NetSuite has it right and the lists
+  copy has read it again. FleetSuite can't read an item's cost of goods
+  sold account (NetSuite answers 500 for it, see "NetSuite's lists"), so the
+  page asks for that one to be checked by hand.
+- **After a sale.** A line neither side has any of on hand, that NetSuite
+  values at nothing while FleetSuite's value of it isn't nothing, is value
+  left over (`StockLine.leftover`): amber rather than red, counted apart
+  from the values that differ, with the amount beside the item and how
+  much of the total's difference it makes. The item's page says where, and
+  marks in amber each move that moved the count one way and the value the
+  other (`StockMove.backwards`), which is how NetSuite posts a shipment
+  when an item's cost of goods sold account is an inventory account.
+  Fixing the item in NetSuite puts its next moves right. What it posted
+  already stays on those documents' lines: a journal entry can move it off
+  the inventory account, but names no item, so the line keeps its value
+  left over, and the journal entry shows as the difference between the
+  inventory accounts and the items.
 
 Not yet seen in NetSuite's data, so the page is what will show it:
 

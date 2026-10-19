@@ -16,7 +16,10 @@ import type { CountsBy, StockMove, StockPlace } from '@/lib/books/stock-items';
  * has it now next to NetSuite's own count, and every NetSuite document since
  * that moved it, oldest first, each with the count it left at its location.
  * Opened from Stock by item, or from the daily check's notification about the
- * item, which names a location (?location=) to pick out. Super admins only.
+ * item, which names a location (?location=) to pick out. Says when NetSuite
+ * has the item's asset account wrong (migration 403) and where it has value
+ * left over, with the moves that posted its value the wrong way round (owner
+ * decision 2026-10-19, "Flag them"). Super admins only.
  */
 
 interface Payload {
@@ -27,6 +30,9 @@ interface Payload {
   more: number;
   by: CountsBy | null;
   netsuite: { quantity: number; value: number | null } | null;
+  leftover: Array<{ locationId: string | null; location: string | null; value: number }>;
+  /** When NetSuite has the item's asset account as something other than an asset account: that account, and the one most stocked items use. */
+  setup: { account: string; accountKind: string; usual: string | null } | null;
 }
 
 type Show = 'count' | 'value';
@@ -113,15 +119,20 @@ function Started({ name, start }: { name: string; start: string }) {
   );
 }
 
-/** FleetSuite's less NetSuite's, red when they differ; nothing when NetSuite has no count to compare. */
-function Difference({ show, ours, theirs }: {
-  show: Show; ours: { quantity: number; value: number }; theirs: { quantity: number; value: number | null } | null;
+/**
+ * FleetSuite's less NetSuite's, red when they differ, amber when it's value
+ * left over (explained above the table); nothing when NetSuite has no count
+ * to compare.
+ */
+function Difference({ show, ours, theirs, leftover = false }: {
+  show: Show; ours: { quantity: number; value: number }; theirs: { quantity: number; value: number | null } | null; leftover?: boolean;
 }) {
   let text = '—';
   if (theirs && show === 'count' && Math.abs(ours.quantity - theirs.quantity) >= SAME) text = signed(ours.quantity - theirs.quantity);
   if (theirs && show === 'value' && theirs.value !== null && ours.value !== theirs.value) text = fmt(ours.value - theirs.value);
   const differs = text !== '—';
-  return <td style={{ ...cell, color: differs ? RED : 'var(--text-muted)', fontWeight: differs ? 700 : 400 }}>{text}</td>;
+  const color = !differs ? 'var(--text-muted)' : leftover && show === 'value' ? AMBER : RED;
+  return <td style={{ ...cell, color, fontWeight: differs ? 700 : 400 }}>{text}</td>;
 }
 
 /** A move: its date, type and number (opening its check on Invoices vs NetSuite), and where, unless only one location's moves are listed. */
@@ -181,6 +192,10 @@ export default function BooksStockItemPage() {
   }, [data, picked]);
 
   const moves = useMemo(() => (data?.moves ?? []).filter((m) => !where || m.locationId === where), [data, where]);
+  const backwards = useMemo(() => (data?.moves ?? []).filter((m) => m.backwards).length, [data]);
+  const leftoverAt = useMemo(() => new Set((data?.leftover ?? []).map((l) => l.locationId ?? '')), [data]);
+  const leftoverValue = (data?.leftover ?? []).reduce((total, l) => total + l.value, 0);
+  const leftoverWhere = (data?.leftover ?? []).map((l) => l.location).filter(Boolean).join(', ');
 
   const total = useMemo(() => {
     const places = data?.places ?? [];
@@ -189,6 +204,9 @@ export default function BooksStockItemPage() {
     return { start: add((p) => p.start), fleetsuite: add((p) => p.fleetsuite) };
   }, [data]);
   const countDiff = data?.netsuite ? total.fleetsuite.quantity - data.netsuite.quantity : 0;
+  // The whole item's difference is amber when value left over is all of it.
+  const allLeftover = !!data?.netsuite && data.netsuite.value !== null && leftoverValue !== 0
+    && total.fleetsuite.value - data.netsuite.value === leftoverValue;
   const differs = Math.abs(countDiff) >= SAME;
   // A location NetSuite counts none of the item at: nothing there, valued at nothing when NetSuite gives values.
   const theirs = (p: StockPlace) => p.netsuite ?? { quantity: 0, value: data?.netsuite?.value === null ? null : 0 };
@@ -228,6 +246,31 @@ export default function BooksStockItemPage() {
           {data.by === 'item' && (
             <div style={banner(AMBER)}>NetSuite gave only its company-wide count, so the item is compared across every location at once.</div>
           )}
+          {data.setup && (
+            <div style={banner(RED)}>
+              In NetSuite, this item&apos;s asset account is {data.setup.account}, {data.setup.accountKind}, not an asset account, so what
+              it costs lands in the wrong place when it&apos;s received and when it ships. On its Accounting tab in NetSuite, set Asset
+              Account to {data.setup.usual ? `${data.setup.usual}, as most stocked items have it,` : 'your inventory asset account'} and
+              check COGS Account is your cost of goods sold account: FleetSuite can&apos;t read that one. This goes once{' '}
+              <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied again, every two hours or on Sync now.
+            </div>
+          )}
+          {data.leftover.length > 0 && (
+            <div style={banner(AMBER)}>
+              Value left over: none is on hand {leftoverWhere ? `at ${leftoverWhere} ` : ''}on either side, but NetSuite&apos;s ledger still
+              holds {fmt(leftoverValue)} on the item&apos;s lines{leftoverWhere ? ' there' : ''}. NetSuite&apos;s own count doesn&apos;t show
+              it: it values what&apos;s on hand at the average cost, so nothing at none.
+            </div>
+          )}
+          {backwards > 0 && (
+            <div style={banner(AMBER)}>
+              {backwards.toLocaleString('en-US')} of its moves took the item out of stock but put value into inventory, or the other way
+              round (in amber under Values). NetSuite posts a shipment that way when the item&apos;s COGS account is an inventory account, as
+              when it&apos;s swapped with the asset account. Fixing the item in NetSuite puts its next moves right. What&apos;s posted already
+              stays on these documents: a journal entry can move it off the inventory account, but a journal entry names no item, so
+              FleetSuite still counts it in this item&apos;s value.
+            </div>
+          )}
 
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '8px' }}>
             <button onClick={() => setShow('count')} style={button(show === 'count')}>Counts</button>
@@ -259,7 +302,7 @@ export default function BooksStockItemPage() {
                     <td style={cell}>{amount(show, p.fleetsuite)}</td>
                     <td style={cell}>{data.by === 'location' ? amount(show, theirs(p)) : '—'}</td>
                     {data.by === 'location'
-                      ? <Difference show={show} ours={p.fleetsuite} theirs={theirs(p)} />
+                      ? <Difference show={show} ours={p.fleetsuite} theirs={theirs(p)} leftover={leftoverAt.has(p.locationId ?? '')} />
                       : <td style={{ ...cell, color: 'var(--text-muted)' }}>—</td>}
                   </Row>
                 ))}
@@ -273,7 +316,7 @@ export default function BooksStockItemPage() {
                     <td className="rep-wide" style={cell}>{amount(show, total.start)}</td>
                     <td style={cell}>{amount(show, total.fleetsuite)}</td>
                     <td style={cell}>{amount(show, data.netsuite)}</td>
-                    <Difference show={show} ours={total.fleetsuite} theirs={data.netsuite} />
+                    <Difference show={show} ours={total.fleetsuite} theirs={data.netsuite} leftover={allLeftover} />
                   </Row>
                 ) : null}
               </tbody>
@@ -309,7 +352,9 @@ export default function BooksStockItemPage() {
                 )}
                 {moves.map((m) => (
                   <Row key={`${m.documentId}|${m.company}|${m.locationId ?? ''}`} span={2} label={<MoveLabel m={m} where={!where} />} style={{ borderTop: '1px solid var(--border)' }}>
-                    <td style={cell}>{show === 'count' ? signed(m.quantity) : fmt(m.value)}</td>
+                    <td style={{ ...cell, ...(show === 'value' && m.backwards ? { color: AMBER, fontWeight: 700 } : {}) }}>
+                      {show === 'count' ? signed(m.quantity) : fmt(m.value)}
+                    </td>
                     <td style={cell}>{show === 'count' ? qty(m.after.quantity) : fmt(m.after.value)}</td>
                   </Row>
                 ))}

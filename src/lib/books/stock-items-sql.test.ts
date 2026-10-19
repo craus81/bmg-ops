@@ -1,15 +1,17 @@
 // Migration 401 keeps FleetSuite's own count of each item at each location,
-// and 402 values only what NetSuite keeps in stock. This runs migrations
-// 359–363 with 401 and 402 in an in-memory Postgres (PGlite) as
-// the app's server login, copies a made-up handful of NetSuite stock
-// documents the way netsuite-stock.ts hands them over, with their GL lines in
-// the copy of NetSuite's general ledger, and holds what gl_stock_items and
-// gl_stock_item_moves return, as stock-items.ts puts them side by side.
+// 402 values only what NetSuite keeps in stock, and 403 names the stocked
+// items whose asset account isn't an asset account. This runs migrations
+// 359–363 with 401 to 403 in an in-memory Postgres (PGlite) as the app's
+// server login, copies a made-up handful of NetSuite stock documents the way
+// netsuite-stock.ts hands them over, with their GL lines in the copy of
+// NetSuite's general ledger, and holds what gl_stock_items,
+// gl_stock_item_moves and gl_stock_item_setup return, as stock-items.ts puts
+// them side by side.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { compareStock, itemMoves, type StockItemMovesData, type StockItemsData } from './stock-items';
+import { compareStock, itemMoves, stockSetup, type StockItemMovesData, type StockItemsData, type StockSetupData } from './stock-items';
 
 const WENTZVILLE = '11';
 const KANSAS_CITY = '12';
@@ -40,7 +42,7 @@ async function freshDb(): Promise<PGlite> {
   for (const file of [
     '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '401-books-stock-by-item.sql',
-    '402-books-stock-values.sql',
+    '402-books-stock-values.sql', '403-books-stock-item-setup.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -98,6 +100,7 @@ async function gl(pg: PGlite, id: string, type: string, date: string, lines: Arr
 }
 
 const items = (pg: PGlite) => one<StockItemsData>(pg, 'SELECT gl_stock_items() AS r');
+const setup = (pg: PGlite) => one<StockSetupData>(pg, 'SELECT gl_stock_item_setup() AS r');
 const moves = (pg: PGlite, item: string, limit = 100) =>
   one<StockItemMovesData>(pg, 'SELECT gl_stock_item_moves($1, $2) AS r', [item, limit]);
 
@@ -347,6 +350,7 @@ describe("migration 401's stock by item", () => {
     const functions = [
       'gl_netsuite_stock_apply(jsonb)', 'gl_netsuite_stock_finish(jsonb)', 'gl_netsuite_stock_store_opening(jsonb)',
       'gl_netsuite_stock_store_counts(jsonb)', 'gl_stock_inventory_accounts()', 'gl_stock_items()', 'gl_stock_item_moves(text, integer)',
+      'gl_stock_item_setup()',
     ];
     const tables = ['gl_netsuite_stock_documents', 'gl_netsuite_stock_lines', 'gl_netsuite_stock_opening', 'gl_netsuite_stock_counts'];
     for (const role of ['anon', 'authenticated', 'service_role']) {
@@ -363,5 +367,78 @@ describe("migration 401's stock by item", () => {
     expect(rls.rows).toHaveLength(tables.length);
     expect(rls.rows.every((r) => r.relrowsecurity)).toBe(true);
     expect(await one(db, 'SELECT gl_stock_inventory_accounts() AS r')).toEqual([INVENTORY]);
+  });
+});
+
+describe("migration 403's stocked items whose asset account isn't an asset account", () => {
+  let db: PGlite;
+  beforeAll(async () => {
+    db = await freshDb();
+    await db.exec(`
+      RESET ROLE;
+      INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details, gone_at) VALUES
+        -- An assembly whose asset account is an expense account; an inactive
+        -- part and one gone from NetSuite set up the same way, which nothing
+        -- can be received or shipped on now.
+        ('item', '9400', 'ASSY-1', true, '{"display_name": "Rack assembly", "item_type": "Assembly", "asset_account": "640"}', NULL),
+        ('item', '9401', 'OLD-1', false, '{"item_type": "InvtPart", "asset_account": "${COGS}"}', NULL),
+        ('item', '9402', 'GONE-1', true, '{"item_type": "InvtPart", "asset_account": "${COGS}"}', now()),
+        -- An inventory part on the equipment account: an asset, so it's fine.
+        ('item', '9403', 'LIFT-1', true, '{"item_type": "InvtPart", "asset_account": "${EQUIPMENT}"}', NULL);
+      INSERT INTO gl_accounts (number, name, account_type, netsuite_account_id) VALUES ('6400', 'Shop supplies', 'expense', '640');
+      SET ROLE service_role;
+    `);
+  }, 60_000);
+  afterAll(async () => { await db?.close(); });
+
+  it('lists each active stocked item whose asset account is something else, and the asset account most stocked items use', async () => {
+    const data = await setup(db);
+    expect(data).toEqual({
+      items: [
+        { netsuite_id: '9400', name: 'ASSY-1', display_name: 'Rack assembly', account: { netsuite_id: '640', number: '6400', name: 'Shop supplies', type: 'expense' } },
+        { netsuite_id: TOOLS, name: 'TOOL-KIT', display_name: null, account: { netsuite_id: COGS, number: '5000', name: 'Cost of goods sold', type: 'cost_of_goods_sold' } },
+      ],
+      // The ladders, bins and vinyl, over the one lift on the equipment account.
+      usual: { netsuite_id: INVENTORY, number: '1200', name: 'Inventory' },
+    });
+    expect(stockSetup(data).items.map((i) => `${i.item}: ${i.account}, ${i.accountKind}`)).toEqual([
+      'ASSY-1: 6400 Shop supplies, an expense account',
+      'TOOL-KIT: 5000 Cost of goods sold, a cost of goods sold account',
+    ]);
+  });
+
+  it("drops an item once NetSuite's lists have it right", async () => {
+    await db.exec(`RESET ROLE; UPDATE gl_netsuite_lists SET details = details || '{"asset_account": "${INVENTORY}"}' WHERE kind = 'item' AND netsuite_id = '9400'; SET ROLE service_role;`);
+    expect((await setup(db)).items.map((i) => i.name)).toEqual(['TOOL-KIT']);
+  });
+
+  it('shows what a swapped item leaves: value on the inventory account with none on hand, from shipments posted the wrong way round', async () => {
+    // Two tool kits received into Wentzville: NetSuite put their cost on the
+    // kit's asset account, the cost of goods account, so none on inventory.
+    await call(db, 'gl_netsuite_stock_apply', {
+      documents: [
+        doc('5020', 'ItemRcpt', 'IR5020', '2025-08-01', [['1', TOOLS, WENTZVILLE, '2', true]]),
+        // Both shipped: the asset line takes the cost off the cost of goods
+        // account, and the cost of goods line, its COGS account being the
+        // inventory account, puts it on inventory.
+        doc('5021', 'ItemShip', 'IF5021', '2025-09-01', [['1', TOOLS, WENTZVILLE, '-2', true], ['2', TOOLS, WENTZVILLE, '-2', false]]),
+      ],
+    });
+    await gl(db, '5020', 'ItemRcpt', '2025-08-01', [['0', RECEIVED, -9060], ['1', COGS, 9060]]);
+    await gl(db, '5021', 'ItemShip', '2025-09-01', [['1', COGS, -9060], ['2', INVENTORY, 9060]]);
+    // NetSuite has none, so it gives no count of the kits.
+    await call(db, 'gl_netsuite_stock_store_counts', { rows: [{ item_id: LADDER, location_id: WENTZVILLE, quantity: '1', value: '10.00' }] });
+
+    const line = compareStock(await items(db)).lines.find((l) => l.itemId === TOOLS)!;
+    expect(line).toMatchObject({
+      fleetsuite: { quantity: 0, value: 9060 }, netsuite: { quantity: 0, value: 0 },
+      countDiffers: false, valueDiffers: true, leftover: true,
+    });
+    const page = itemMoves(await moves(db, TOOLS));
+    expect(page.moves.map((m) => [m.number, m.quantity, m.value, m.backwards])).toEqual([
+      ['IR5020', 2, 0, false],
+      ['IF5021', -2, 9060, true],
+    ]);
+    expect(page.leftover).toEqual([{ locationId: WENTZVILLE, location: 'Wentzville', value: 9060 }]);
   });
 });

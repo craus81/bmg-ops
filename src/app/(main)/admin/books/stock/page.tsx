@@ -7,7 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
-import type { CountsBy, StockLine } from '@/lib/books/stock-items';
+import type { CountsBy, StockLine, StockSetup } from '@/lib/books/stock-items';
 
 /**
  * Books → Stock by item (migration 401, src/lib/books/stock-items.ts,
@@ -20,7 +20,11 @@ import type { CountsBy, StockLine } from '@/lib/books/stock-items';
  * accounts on those documents' lines. NetSuite's count is its own, read as
  * each copy ends. Tap an item for its moves. The daily check tells the super
  * admins when a count stops matching and links here (?only=differs) or to
- * the item. Super admins only, as the books are.
+ * the item. The stocked items NetSuite has set up with an asset account that
+ * isn't an asset account are listed with what to set it to, and an item none
+ * is left of on either side that still has value on NetSuite's ledger is
+ * labelled value left over (migration 403; owner decision 2026-10-19, "Flag
+ * them"). Super admins only, as the books are.
  */
 
 interface CopyResult {
@@ -45,6 +49,7 @@ interface Payload {
   value: { fleetsuite: number; netsuite: number | null };
   ledger: Array<{ company: string; balance: number; items: number }>;
   accounts: Array<{ number: string | null; name: string }>;
+  setup: StockSetup;
   lastCopy: { at: string; result: CopyResult } | null;
 }
 
@@ -133,17 +138,23 @@ function Sides({ line, show }: { line: StockLine; show: Show }) {
   }
   const theirs = line.netsuite.value;
   const diff = theirs === null ? 0 : line.fleetsuite.value - theirs;
+  // Value left over is explained beside the item, so it's amber rather than red.
+  const color = !diff ? 'var(--text-muted)' : line.leftover ? AMBER : RED;
   return (
     <>
       <td style={cell}>{fmt(line.fleetsuite.value)}</td>
       <td style={cell}>{theirs === null ? '—' : fmt(theirs)}</td>
-      <td style={{ ...cell, color: diff ? RED : 'var(--text-muted)', fontWeight: diff ? 700 : 400 }}>{diff ? fmt(diff) : '—'}</td>
+      <td style={{ ...cell, color, fontWeight: diff ? 700 : 400 }}>{diff ? fmt(diff) : '—'}</td>
     </>
   );
 }
 
-/** An item: its number (opening its moves), where, what it is, and when it last moved. */
-function ItemLabel({ line }: { line: StockLine }) {
+/**
+ * An item: its number (opening its moves), where, what it is, and when it
+ * last moved; whether NetSuite has its asset account wrong, and when it has
+ * value left over, how much.
+ */
+function ItemLabel({ line, wrong }: { line: StockLine; wrong: boolean }) {
   const other = line.companies.filter((c) => c !== 'BMG');
   const about = [
     line.description,
@@ -155,8 +166,39 @@ function ItemLabel({ line }: { line: StockLine }) {
         <Link href={deepLinks.booksStockItem(line.itemId, line.locationId)} className="rep-link" style={{ fontWeight: 700 }}>{line.item}</Link>
         {line.location && <span style={{ color: 'var(--text-secondary)', marginLeft: '6px' }}>at {line.location}</span>}
         {other.length > 0 && <span style={{ ...chip('#60a5fa'), marginLeft: '6px' }}>{line.companies.join(' + ')}</span>}
+        {wrong && <span style={{ ...chip(RED), marginLeft: '6px' }}>Asset account wrong in NetSuite</span>}
+        {line.leftover && <span style={{ ...chip(AMBER), marginLeft: '6px' }}>Value left over</span>}
       </div>
       <div style={{ fontSize: '11px', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{about}</div>
+      {line.leftover && (
+        <div style={{ fontSize: '11px', color: AMBER, overflowWrap: 'anywhere' }}>
+          None on hand on either side, but NetSuite&apos;s ledger still holds {fmt(line.fleetsuite.value)} on its lines. Its page says why.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The stocked items NetSuite has set up with an asset account that isn't an asset account, and what to set it to. */
+function SetupList({ setup }: { setup: StockSetup }) {
+  return (
+    <div style={banner(RED)}>
+      <div>
+        {count(setup.items.length, 'stocked item has', 'stocked items have')} an asset account in NetSuite that isn&apos;t an asset
+        account. NetSuite puts what a stocked item costs on its asset account when it&apos;s received and takes it off when it ships,
+        so {setup.items.length === 1 ? 'its' : 'their'} cost lands in the wrong place. On {setup.items.length === 1 ? 'its' : 'each one\'s'}{' '}
+        Accounting tab in NetSuite, set Asset Account to {setup.usual ? `${setup.usual}, as most stocked items have it,` : 'your inventory asset account'} and check COGS
+        Account is your cost of goods sold account: FleetSuite can&apos;t read that one. An item drops off this list once{' '}
+        <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied again, every two hours or on Sync now.
+      </div>
+      <ul style={{ margin: '6px 0 0', paddingLeft: '18px', fontWeight: 400 }}>
+        {setup.items.map((i) => (
+          <li key={i.itemId} style={{ overflowWrap: 'anywhere' }}>
+            <Link href={deepLinks.booksStockItem(i.itemId)} className="rep-link" style={{ fontWeight: 700 }}>{i.item}</Link>
+            {i.description ? ` · ${i.description}` : ''}: asset account {i.account}, {i.accountKind}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -224,7 +266,13 @@ export default function BooksStockPage() {
   const differs = (l: StockLine) => l.countDiffers || l.valueDiffers;
   const differing = useMemo(() => (data?.lines ?? []).filter(differs).length, [data]);
   const countsDiffering = useMemo(() => (data?.lines ?? []).filter((l) => l.countDiffers).length, [data]);
-  const valuesDiffering = useMemo(() => (data?.lines ?? []).filter((l) => l.valueDiffers).length, [data]);
+  // Value left over is counted apart from the other values that differ: it's explained.
+  const valuesDiffering = useMemo(() => (data?.lines ?? []).filter((l) => l.valueDiffers && !l.leftover).length, [data]);
+  const leftover = useMemo(() => {
+    const lines = (data?.lines ?? []).filter((l) => l.leftover);
+    return { lines: lines.length, value: lines.reduce((total, l) => total + l.fleetsuite.value - (l.netsuite.value ?? 0), 0) };
+  }, [data]);
+  const wrong = useMemo(() => new Set((data?.setup.items ?? []).map((i) => i.itemId)), [data]);
 
   const visible = useMemo(() => {
     const match = looseMatcher(search);
@@ -235,6 +283,8 @@ export default function BooksStockPage() {
   const r = data?.lastCopy?.result;
   const at = data?.lastCopy?.at ?? '';
   const valueDiff = data && data.value.netsuite !== null ? data.value.fleetsuite - data.value.netsuite : 0;
+  // Amber when all of the difference is value left over, explained on its items.
+  const valueDiffColor = !valueDiff ? 'var(--text-muted)' : valueDiff === leftover.value ? AMBER : RED;
   const accountNames = (data?.accounts ?? []).map((a) => [a.number, a.name].filter(Boolean).join(' ')).join(', ');
 
   return (
@@ -300,6 +350,7 @@ export default function BooksStockPage() {
               NetSuite&apos;s own counts haven&apos;t been read yet, so nothing is compared. A copy reads them once it has every move.
             </div>
           )}
+          {data.setup.items.length > 0 && <SetupList setup={data.setup} />}
 
           {data.by && (
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px', fontSize: '12px' }}>
@@ -308,8 +359,15 @@ export default function BooksStockPage() {
               </span>
               {data.value.netsuite !== null && (
                 <span style={chip(valuesDiffering ? RED : GREEN)}>
-                  {valuesDiffering ? `${count(valuesDiffering, 'value differs', 'values differ')}` : 'Every value matches'}
+                  {valuesDiffering ? `${count(valuesDiffering, 'value differs', 'values differ')}`
+                    : leftover.lines ? 'Every other value matches' : 'Every value matches'}
                 </span>
+              )}
+              {leftover.lines > 0 && (
+                <span style={chip(AMBER)}>{count(leftover.lines, 'item', 'items')} with value left over</span>
+              )}
+              {!data.setup.items.length && (
+                <span style={chip(GREEN)}>Every stocked item&apos;s asset account checks out</span>
               )}
               <span style={{ color: 'var(--text-muted)' }}>
                 {count(data.lines.length, 'item', 'items')}{data.by === 'item' ? ', each counted company-wide' : ' at their locations'}.
@@ -329,10 +387,22 @@ export default function BooksStockPage() {
                 </tr>
               </thead>
               <tbody>
-                <Row label="Every item at every location">
+                <Row
+                  label={(
+                    <div>
+                      <div>Every item at every location</div>
+                      {leftover.lines > 0 && (
+                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          {valueDiff === leftover.value ? 'All' : fmt(leftover.value)} of the difference is value left over
+                          on {count(leftover.lines, 'item', 'items')} neither side has any of.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                >
                   <td style={cell}>{fmt(data.value.fleetsuite)}</td>
                   <td style={cell}>{data.value.netsuite === null ? '—' : fmt(data.value.netsuite)}</td>
-                  <td style={{ ...cell, color: valueDiff ? RED : 'var(--text-muted)', fontWeight: valueDiff ? 700 : 400 }}>{valueDiff ? fmt(valueDiff) : '—'}</td>
+                  <td style={{ ...cell, color: valueDiffColor, fontWeight: valueDiff ? 700 : 400 }}>{valueDiff ? fmt(valueDiff) : '—'}</td>
                 </Row>
                 {data.ledger.map((l) => (
                   <Row
@@ -364,7 +434,10 @@ export default function BooksStockPage() {
             <button onClick={() => setShow('value')} style={button(show === 'value')}>Values</button>
             <span style={{ width: '8px' }} />
             <button onClick={() => pickFilter('all')} style={button(filter === 'all')}>All {data.lines.length.toLocaleString('en-US')}</button>
-            <button onClick={() => pickFilter('differs')} style={{ ...button(filter === 'differs'), color: differing ? RED : 'var(--text-primary)' }}>
+            <button
+              onClick={() => pickFilter('differs')}
+              style={{ ...button(filter === 'differs'), color: !differing ? 'var(--text-primary)' : differing === leftover.lines ? AMBER : RED }}
+            >
               {differing ? `${count(differing, 'differs', 'differ')} from NetSuite` : 'None differ from NetSuite'}
             </button>
             <input
@@ -394,7 +467,7 @@ export default function BooksStockPage() {
                   </td></tr>
                 )}
                 {visible.slice(0, shown).map((l) => (
-                  <Row key={l.key} label={<ItemLabel line={l} />} style={{ borderTop: '1px solid var(--border)' }}>
+                  <Row key={l.key} label={<ItemLabel line={l} wrong={wrong.has(l.itemId)} />} style={{ borderTop: '1px solid var(--border)' }}>
                     <Sides line={l} show={show} />
                   </Row>
                 ))}

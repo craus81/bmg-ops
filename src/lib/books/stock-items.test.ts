@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compareStock, itemMoves, quantityText, type StockItemMovesData, type StockItemsData } from './stock-items';
+import { compareStock, itemMoves, quantityText, stockSetup, type StockItemMovesData, type StockItemsData } from './stock-items';
 
 /** Made-up items and locations: every name and amount here is invented. */
 const ITEMS = [
@@ -62,12 +62,66 @@ describe('compareStock', () => {
     expect(compared.cleared).toBe(1);
   });
 
+  it('labels value left over where neither side has any on hand and NetSuite values it at nothing', () => {
+    const compared = compareStock(data({
+      rows: [
+        // Sold out on both sides, but its shipments left value on the inventory account.
+        row('9001', '11', '0', '90.60'),
+        // On hand, worth less in NetSuite.
+        row('9002', '11', '2', '20.00'),
+        // None here, but NetSuite has one.
+        row('9003', '11', '0', '5.00'),
+      ],
+      netsuite: [{ item_id: '9002', location_id: '11', quantity: '2', value: '15.00' }, { item_id: '9003', location_id: '11', quantity: '1', value: '5.00' }],
+    }));
+    const byKey = new Map(compared.lines.map((l) => [l.key, l]));
+    expect(byKey.get('9001|11')).toMatchObject({ countDiffers: false, valueDiffers: true, leftover: true, netsuite: { quantity: 0, value: 0 } });
+    expect(byKey.get('9002|11')).toMatchObject({ countDiffers: false, valueDiffers: true, leftover: false });
+    expect(byKey.get('9003|11')).toMatchObject({ countDiffers: true, valueDiffers: false, leftover: false });
+  });
+
+  it("doesn't label value left over when NetSuite gives no values, or before its counts are read", () => {
+    const unvalued = compareStock(data({
+      rows: [row('9001', '11', '0', '90.60'), row('9002', '11', '1', '1.00')],
+      netsuite: [{ item_id: '9002', location_id: '11', quantity: '1', value: null }],
+    }));
+    expect(unvalued.lines.find((l) => l.key === '9001|11')).toMatchObject({ valueDiffers: false, leftover: false });
+    const unread = compareStock(data({ rows: [row('9001', '11', '0', '90.60')], netsuite_read_at: null }));
+    expect(unread.lines[0]).toMatchObject({ valueDiffers: false, leftover: false });
+  });
+
   it("adds each company's items up next to what the copy of NetSuite's ledger holds on the inventory accounts", () => {
     const compared = compareStock(data({
       rows: [row('9001', '11', '1', '100.00'), row('9002', '12', '1', '50.00'), row('9001', '13', '1', '20.00', '1084')],
       ledger: [{ company: 'BMG', balance: '175.00' }, { company: '1084', balance: '20.00' }, { company: 'ACME', balance: '0' }],
     }));
     expect(compared.ledger).toEqual([{ company: 'BMG', balance: 17500, items: 15000 }, { company: '1084', balance: 2000, items: 2000 }]);
+  });
+});
+
+describe('stockSetup', () => {
+  it('names each item and its asset account, says what kind of account that is, and orders them by item number', () => {
+    const setup = stockSetup({
+      items: [
+        { netsuite_id: '9010', name: 'LDR-10', display_name: 'Ladder rack 10 ft', account: { netsuite_id: '580', number: '5000', name: 'Cost of goods sold', type: 'cost_of_goods_sold' } },
+        { netsuite_id: '9009', name: 'LDR-9', display_name: 'LDR-9', account: { netsuite_id: '610', number: null, name: 'Shop supplies', type: 'expense' } },
+        { netsuite_id: '9011', name: 'BIN-1', display_name: null, account: { netsuite_id: '700', number: null, name: '', type: 'something_new' } },
+      ],
+      usual: { netsuite_id: '190', number: '1200', name: 'Inventory' },
+    });
+    expect(setup).toEqual({
+      items: [
+        { itemId: '9011', item: 'BIN-1', description: null, account: 'NetSuite account 700', accountKind: 'not an asset account' },
+        { itemId: '9009', item: 'LDR-9', description: null, account: 'Shop supplies', accountKind: 'an expense account' },
+        { itemId: '9010', item: 'LDR-10', description: 'Ladder rack 10 ft', account: '5000 Cost of goods sold', accountKind: 'a cost of goods sold account' },
+      ],
+      usual: '1200 Inventory',
+    });
+  });
+
+  it('lists nothing when every stocked item has an asset account, or nothing was read', () => {
+    expect(stockSetup({ items: [], usual: null })).toEqual({ items: [], usual: null });
+    expect(stockSetup(null)).toEqual({ items: [], usual: null });
   });
 });
 
@@ -113,6 +167,45 @@ describe('itemMoves', () => {
     const page = itemMoves(moves({ netsuite_read_at: null }));
     expect(page.by).toBeNull();
     expect(page.netsuite).toBeNull();
+    expect(page.leftover).toEqual([]);
+  });
+
+  it('marks the moves that moved the count one way and the value the other', () => {
+    const page = itemMoves(moves({
+      moves: [
+        // A receipt that put nothing on the inventory account, then a shipment that put value on it: swapped accounts.
+        { ...move('1', 'ItemRcpt', '2026-09-01'), quantity: '2', value: '0' },
+        { ...move('2', 'ItemShip', '2026-09-01'), quantity: '-2', value: '90.60' },
+        // A return of it the same way round.
+        { ...move('3', 'CustCred', '2026-09-01'), quantity: '1', value: '-45.30' },
+        // An ordinary shipment, and a cost NetSuite worked out again with nothing moved.
+        { ...move('4', 'ItemShip', '2026-09-01'), quantity: '-1', value: '-45.30' },
+        { ...move('5', 'InvAdjst', '2026-09-01'), quantity: '0', value: '3.00' },
+      ],
+      count: 5,
+    }));
+    expect(page.moves.map((m) => [m.documentId, m.backwards])).toEqual([['1', false], ['2', true], ['3', true], ['4', false], ['5', false]]);
+  });
+
+  it('names where the item has value left over: none on hand either side and NetSuite valuing it at nothing', () => {
+    const page = itemMoves(moves({
+      opening: [{ company: 'BMG', location_id: '11', quantity: '0', value: '0' }],
+      totals: [
+        { company: 'BMG', location_id: '11', quantity: '0', value: '90.60' },
+        { company: 'BMG', location_id: '12', quantity: '1', value: '45.30' },
+      ],
+      netsuite: [{ location_id: '12', quantity: '1', value: '45.30' }],
+    }));
+    expect(page.by).toBe('location');
+    expect(page.leftover).toEqual([{ locationId: '11', location: 'Wentzville', value: 9060 }]);
+
+    // Counted company-wide, the item everywhere.
+    const everywhere = itemMoves(moves({
+      totals: [{ company: 'BMG', location_id: '11', quantity: '0', value: '90.60' }],
+      netsuite: [{ location_id: null, quantity: '0', value: '0' }],
+    }));
+    expect(everywhere.by).toBe('item');
+    expect(everywhere.leftover).toEqual([{ locationId: null, location: null, value: 9060 }]);
   });
 });
 
