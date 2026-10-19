@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff } from '@/lib/api-auth';
-import { createContact, updateContact, deleteContact } from '@/lib/netsuite';
+import { deleteContact } from '@/lib/netsuite';
+import { pushProspectContactToNetsuite } from '@/lib/prospect-contact-netsuite';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,26 +76,7 @@ export async function POST(req: NextRequest) {
   // ── NetSuite push (best effort, never rolls back the local save) ────────
   let netsuite: { pushed: boolean; error: string | null } = { pushed: false, error: null };
   if (body?.syncNetsuite !== false && prospect.netsuite_id) {
-    const [firstName, ...rest] = name.split(/\s+/);
-    const lastName = rest.join(' ') || undefined;
-    const nsFields = {
-      firstName,
-      lastName,
-      email: fields.email || undefined,
-      phone: fields.phone || undefined,
-      title: fields.title || undefined,
-    };
-    if (contact.netsuite_contact_id) {
-      const r = await updateContact(String(contact.netsuite_contact_id), nsFields);
-      netsuite = { pushed: r.success, error: r.error || null };
-    } else {
-      const r = await createContact({ companyId: String(prospect.netsuite_id), ...nsFields });
-      if (r.success && r.internalId) {
-        await supabase.from('prospect_contacts').update({ netsuite_contact_id: r.internalId }).eq('id', contact.id);
-        contact.netsuite_contact_id = r.internalId;
-      }
-      netsuite = { pushed: r.success, error: r.error || null };
-    }
+    netsuite = await pushProspectContactToNetsuite(supabase, String(prospect.netsuite_id), contact);
   }
 
   return NextResponse.json({ success: true, contact, netsuite });

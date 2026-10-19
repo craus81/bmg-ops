@@ -27,6 +27,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { guessNameFromEmail } from '@/lib/new-recipients';
 
 // BMG staff directory for the Cc row — one load per app session (same
 // rule as MentionTextArea: approved profiles, minus customer-only accounts).
@@ -128,6 +129,13 @@ interface Props {
    * modal keeps its old behavior: state lives and dies with the mount.
    */
   stateKey?: string;
+  /**
+   * After a successful send, offer to save any recipient the customer's
+   * record doesn't have yet ("Add to the customer?" — name prefilled, Save
+   * or Not now). The email has already gone; this never holds up a send.
+   * Pass the record the flow is about; omit to close straight after Send.
+   */
+  offerNewContacts?: { customerId?: string | null; prospectId?: string | null };
 }
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
@@ -229,7 +237,15 @@ const inputStyle: React.CSSProperties = {
   color: 'var(--text-body)', fontSize: '12px', boxSizing: 'border-box',
 };
 
+interface NewContactRow {
+  email: string;
+  name: string;
+  title: string;
+  checked: boolean;
+}
+
 export default function EmailComposeModal({
+  offerNewContacts,
   contacts,
   contactsLabel,
   customerId,
@@ -339,6 +355,11 @@ export default function EmailComposeModal({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const sendingRef = useRef(false);
+  // The "Add to the customer?" step after a send — null until there's
+  // something to offer.
+  const [newContacts, setNewContacts] = useState<NewContactRow[] | null>(null);
+  const [newContactsCustomer, setNewContactsCustomer] = useState<string | null>(null);
+  const [savingContacts, setSavingContacts] = useState(false);
 
   const emails = parseEmailList(toInput);
   const badEntries = invalidEntries(toInput);
@@ -490,6 +511,72 @@ export default function EmailComposeModal({
     }
   };
 
+  // Which of the addresses just sent to aren't on the customer's record?
+  // A lookup failure just skips the question — the email already went.
+  const offerToSaveRecipients = async (sentTo: string[]): Promise<boolean> => {
+    const ids = offerNewContacts;
+    if (!ids || (!ids.customerId && !ids.prospectId) || sentTo.length === 0) return false;
+    try {
+      const qs = new URLSearchParams();
+      if (ids.customerId) qs.set('customerId', ids.customerId);
+      if (ids.prospectId) qs.set('prospectId', ids.prospectId);
+      qs.set('emails', sentTo.join(','));
+      const res = await fetch(`/api/customer-contacts?${qs}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.canSave || !Array.isArray(data.unknown) || data.unknown.length === 0) return false;
+      setNewContactsCustomer(data.customerName || null);
+      setNewContacts(data.unknown.map((email: string) => ({
+        email, name: guessNameFromEmail(email), title: '', checked: true,
+      })));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const saveNewContacts = async () => {
+    if (!newContacts || savingContacts) return;
+    const picked = newContacts.filter(c => c.checked);
+    if (picked.length === 0) { onClose(); return; }
+    const unnamed = picked.filter(c => !c.name.trim());
+    if (unnamed.length > 0) {
+      await dialog.alert(`Add a name for ${unnamed.map(c => c.email).join(', ')} — or untick it.`);
+      return;
+    }
+    setSavingContacts(true);
+    try {
+      const res = await fetch('/api/customer-contacts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: offerNewContacts?.customerId || null,
+          prospectId: offerNewContacts?.prospectId || null,
+          contacts: picked.map(c => ({ name: c.name.trim(), email: c.email, title: c.title.trim() || null })),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        await dialog.alert('Could not save the contacts: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      const results: { email: string; saved: boolean; error?: string; netsuite?: { pushed: boolean; error: string | null } }[] = data.results || [];
+      const failed = results.filter(r => !r.saved);
+      const nsFailed = results.filter(r => r.saved && r.netsuite && !r.netsuite.pushed);
+      if (failed.length > 0 || nsFailed.length > 0) {
+        const lines = [
+          ...failed.map(r => `Not saved — ${r.email}: ${r.error || 'unknown error'}`),
+          ...nsFailed.map(r => `Saved here, but NetSuite said no — ${r.email}: ${r.netsuite?.error || 'unknown error'}`),
+        ];
+        await dialog.alert(lines.join('\n'));
+      }
+      onClose();
+    } catch {
+      await dialog.alert('Network error — the contacts were not saved.');
+    } finally {
+      setSavingContacts(false);
+    }
+  };
+
   const handleSend = async () => {
     // Ref, not state: two fast clicks both run before a setSending re-render.
     if (sendingRef.current) return;
@@ -511,12 +598,90 @@ export default function EmailComposeModal({
         return;
       }
       const result = await onSend(fields);
-      if (result.ok) closeCompose();
+      if (!result.ok) return;
+      if (await offerToSaveRecipients(fields.emails)) {
+        // The send is done — the draft retires now, the screen stays up
+        // only for the contact question.
+        clearComposeState(stateKey);
+        return;
+      }
+      closeCompose();
     } finally {
       sendingRef.current = false;
       setSending(false);
     }
   };
+
+  if (newContacts) {
+    const pickedCount = newContacts.filter(c => c.checked).length;
+    const setRow = (i: number, patch: Partial<NewContactRow>) =>
+      setNewContacts(rows => rows ? rows.map((r, j) => j === i ? { ...r, ...patch } : r) : rows);
+    return (
+      <div
+        style={{ position: 'fixed', inset: 0, background: 'var(--overlay, rgba(0,0,0,0.5))', zIndex: 1500, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}
+        ref={closeOnEscape(() => { if (!savingContacts) onClose(); })}
+      >
+        <div onClick={e => e.stopPropagation()} style={{
+          background: 'var(--card)', borderRadius: '14px', padding: '16px',
+          width: '100%', maxWidth: '520px', maxHeight: 'calc(100vh / var(--ts) - 40px)',
+          display: 'flex', flexDirection: 'column', gap: '10px',
+          boxShadow: '0 8px 30px rgba(0,0,0,0.3)', overflowY: 'auto',
+        }}>
+          <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)' }}>
+            Add to {newContactsCustomer || 'the customer'}?
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            Your email went out. {newContacts.length === 1 ? 'This address isn\u2019t' : 'These addresses aren\u2019t'} on
+            the customer&apos;s record yet — save {newContacts.length === 1 ? 'it' : 'them'} as {newContacts.length === 1 ? 'a contact' : 'contacts'} so
+            {newContacts.length === 1 ? ' it shows' : ' they show'} up next time.
+          </div>
+          {newContacts.map((c, i) => (
+            <div key={c.email} style={{
+              padding: '10px', borderRadius: '10px',
+              border: '1px solid ' + (c.checked ? 'rgba(59,130,246,0.35)' : 'var(--border)'),
+              background: c.checked ? 'rgba(59,130,246,0.06)' : 'transparent',
+              display: 'flex', flexDirection: 'column', gap: '8px',
+            }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 700, color: 'var(--text-body)', cursor: 'pointer', minWidth: 0 }}>
+                <input type="checkbox" checked={c.checked} onChange={e => setRow(i, { checked: e.target.checked })} style={{ accentColor: '#3b82f6' }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.email}</span>
+              </label>
+              {c.checked && (
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 180px' }}>
+                    <div style={labelStyle}>Name</div>
+                    <input value={c.name} onChange={e => setRow(i, { name: e.target.value })} placeholder="First Last" style={inputStyle} />
+                  </div>
+                  <div style={{ flex: '1 1 140px' }}>
+                    <div style={labelStyle}>Title (optional)</div>
+                    <input value={c.title} onChange={e => setRow(i, { title: e.target.value })} placeholder="Fleet Manager" style={inputStyle} />
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+            Saved to the Contacts card on the customer record, and to NetSuite when the customer is linked there.
+          </div>
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => { if (!savingContacts) onClose(); }}
+              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-body)', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}
+            >
+              Not now
+            </button>
+            <button
+              onClick={saveNewContacts}
+              disabled={savingContacts || pickedCount === 0}
+              style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#3b82f6', color: '#fff', fontWeight: 800, fontSize: '12px', cursor: 'pointer', opacity: savingContacts || pickedCount === 0 ? 0.6 : 1 }}
+            >
+              {savingContacts ? 'Saving…' : pickedCount > 1 ? `Save ${pickedCount} to customer` : 'Save to customer'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

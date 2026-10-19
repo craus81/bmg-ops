@@ -61,6 +61,17 @@ out). A staff member who has a reason can still send.
   `bcc: [auth.user.email]` when `bccSelf`, `cc` on the `EmailMeta`
   (the send layer hands it to Resend as cc), and `auth.user.email` as
   Reply-To.
+- **New recipients → contacts:** pass `offerNewContacts={{ customerId,
+  prospectId }}` and, after a successful send, the modal asks "Add to
+  <customer>?" for any To address the record doesn't carry (contacts on
+  either table, the customer's own/billing/AP emails; BMG addresses never
+  count), name prefilled from first.last addresses, Save or Not now. The
+  email has already gone — this never holds a send. Saves go through
+  `/api/customer-contacts` onto the record's Contacts card and on to
+  NetSuite as a Contact like that card's Add does; an existing contact with
+  the same name and a different email is reported, never overwritten. On
+  for the three estimate sends (approval, Email PDF, follow-up) since
+  2026-10-19.
 - **Send layer:** `sendEmail` / `sendEmailDetailed` (`src/lib/resend.ts`)
   take `to: string | string[]`, attachments, `replyTo`, and `bcc`.
   `buildNotificationEmail` renders the personal note
