@@ -36,6 +36,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import ClientFilesSection from '@/components/ClientFilesSection';
+import CollapsibleCard from '@/components/CollapsibleCard';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import PhoneInput from '@/components/PhoneInput';
@@ -293,6 +294,8 @@ const timeAgo = (d: string) => {
   return days < 60 ? `${days}d ago` : fmtDate(d.slice(0, 10));
 };
 
+/** Collapsed sections on this page save as 'customer:<id>' (CollapsibleCard). */
+const PAGE = 'customer';
 const card: React.CSSProperties = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '14px 16px' };
 const eyebrow: React.CSSProperties = { fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px' };
 const btnSm: React.CSSProperties = { padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer', background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', whiteSpace: 'nowrap', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '5px' };
@@ -2218,10 +2221,7 @@ export default function CustomerRecordPage() {
         const limit = nsProfile?.creditLimit || null;
         const used = limit && limit > 0 ? total / limit : null;
         return (
-          <div style={card}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
-              <div style={{ ...eyebrow, marginBottom: 0 }}>Accounts receivable — aging</div>
-              <span style={{ flex: 1 }} />
+          <CollapsibleCard page={PAGE} id="ar-aging" title="Accounts receivable — aging" extra={<>
               {nsProfile?.terms && <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>Terms <strong style={{ color: 'var(--text-primary)' }}>{nsProfile.terms}</strong></span>}
               {limit && (
                 <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
@@ -2233,8 +2233,8 @@ export default function CustomerRecordPage() {
                   )}
                 </span>
               )}
-            </div>
-            <div style={{ display: 'flex', gap: '2px', height: '18px', borderRadius: '6px', overflow: 'hidden', margin: '10px 0 10px' }}>
+            </>}>
+            <div style={{ display: 'flex', gap: '2px', height: '18px', borderRadius: '6px', overflow: 'hidden', margin: '2px 0 10px' }}>
               {AGE_META.filter(b => buckets[b.key] > 0.005).map(b => (
                 <div key={b.key} title={`${b.label} · ${usd2(buckets[b.key])}`} style={{ flex: buckets[b.key], minWidth: '4px', background: b.color }} />
               ))}
@@ -2248,7 +2248,7 @@ export default function CustomerRecordPage() {
                 </span>
               ))}
             </div>
-          </div>
+          </CollapsibleCard>
         );
       })()}
 
@@ -2259,12 +2259,9 @@ export default function CustomerRecordPage() {
         const peakIdx = months.findIndex(mm => mm.total === peak);
         const yearTotal = months.reduce((s, mm) => s + mm.total, 0);
         return (
-          <div style={card}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-              <div style={{ ...eyebrow, marginBottom: 0 }}>Invoiced — last 12 months</div>
-              <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>{fmtMoney(yearTotal)} total</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '88px', marginTop: '10px' }}>
+          <CollapsibleCard page={PAGE} id="invoiced-12m" title="Invoiced — last 12 months"
+            note={<span style={{ fontSize: '11.5px', color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>{fmtMoney(yearTotal)} total</span>}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: '3px', height: '88px', marginTop: '2px' }}>
               {months.map((mm, i) => (
                 <div key={mm.month} title={`${monthLabel(mm.month)} · ${usd2(mm.total)}`} style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%', minWidth: 0 }}>
                   {i === peakIdx && peak > 0 && (
@@ -2279,15 +2276,14 @@ export default function CustomerRecordPage() {
                 <div key={mm.month} style={{ flex: 1, textAlign: 'center', fontSize: '8.5px', fontWeight: 700, color: 'var(--text-muted)', overflow: 'hidden' }}>{monthShort(mm.month)}</div>
               ))}
             </div>
-          </div>
+          </CollapsibleCard>
         );
       })()}
 
       {/* Two-column detail */}
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '14px' }} className="rec-cols">
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <div style={card}>
-            <div style={eyebrow}>Company info</div>
+          <CollapsibleCard page={PAGE} id="company-info" title="Company info">
             {[
               { l: 'Email', v: email },
               { l: 'Phone', v: phone },
@@ -2337,22 +2333,18 @@ export default function CustomerRecordPage() {
               <div style={{ marginTop: '10px', padding: '10px 12px', borderRadius: '9px', background: 'var(--subtle-bg)', fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>{prospect.notes}</div>
             )}
             {!email && !phone && !address && !prospect?.notes && !customer && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nothing on file.</div>}
-          </div>
+          </CollapsibleCard>
 
           {/* Billing (K3) — how invoices reach this customer. Read by the
               Email Invoices modal on every invoice surface. */}
           {customer && (
-            <div style={card}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <div style={{ ...eyebrow, marginBottom: 0 }}>Billing</div>
-                {billDirty && (
+            <CollapsibleCard page={PAGE} id="billing" title="Billing" extra={billDirty && (
                   <button onClick={saveBilling} disabled={billSaving}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#22c55e', padding: 0, opacity: billSaving ? 0.6 : 1 }}>
                     {billSaving ? 'Saving…' : 'Save'}
                   </button>
-                )}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '8px' }}>
+                )}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <select value={billForm.workflow} onChange={e => { setBillForm(f => ({ ...f, workflow: e.target.value })); setBillDirty(true); }} style={cInput}>
                   <option value="">Workflow not set</option>
                   {Object.entries(BILLING_WORKFLOWS).map(([k, label]) => <option key={k} value={k}>{label}</option>)}
@@ -2370,20 +2362,16 @@ export default function CustomerRecordPage() {
                   </div>
                 )}
               </div>
-            </div>
+            </CollapsibleCard>
           )}
 
           {/* PO-status portal (migration 260) — the shared, no-login link
               where this customer sees where each PO they sent us stands. */}
           {customer && !isVendor && (
-            <div style={card}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <div style={{ ...eyebrow, marginBottom: 0 }}>PO status link</div>
-                {customer.portal_last_viewed_at && (
+            <CollapsibleCard page={PAGE} id="po-status-link" title="PO status link" extra={customer.portal_last_viewed_at && (
                   <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>Last opened {new Date(customer.portal_last_viewed_at).toLocaleDateString()}</span>
-                )}
-              </div>
-              <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.45 }}>
+                )}>
+              <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.45 }}>
                 A private page (no login) where {customer.company_name || 'this customer'} can see every purchase order they sent us and where each one stands — received, in production, shipped, installed.
               </div>
               {portalUrl ? (
@@ -2408,14 +2396,13 @@ export default function CustomerRecordPage() {
                     title="Creates the link and emails it through the standard compose screen" style={btnSm}>Send link…</button>
                 </div>
               )}
-            </div>
+            </CollapsibleCard>
           )}
 
           {/* Sub-accounts (K1) — children by manual link or NetSuite hierarchy,
               with consolidated spend and each child's contacts. */}
           {customer && children.length > 0 && (
-            <div style={card}>
-              <div style={eyebrow}>Sub-accounts · {children.length}</div>
+            <CollapsibleCard page={PAGE} id="sub-accounts" title={`Sub-accounts · ${children.length}`}>
               {(() => {
                 const kidYtd = children.reduce((s, k) => s + (k.ytd_spend || 0), 0);
                 const kidTotal = children.reduce((s, k) => s + (k.total_spend || 0), 0);
@@ -2444,18 +2431,16 @@ export default function CustomerRecordPage() {
                   )}
                 </div>
               ))}
-            </div>
+            </CollapsibleCard>
           )}
 
-          <div style={card}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-              <div style={{ ...eyebrow, marginBottom: 0 }}>Contacts {contacts.length > 0 && <span style={{ fontWeight: 600 }}>· {contacts.length}</span>}</div>
-              {prospect && (
+          <CollapsibleCard page={PAGE} id="contacts"
+            title={<>Contacts {contacts.length > 0 && <span style={{ fontWeight: 600 }}>· {contacts.length}</span>}</>}
+            actions={prospect && (
                 <button onClick={() => (cFormOpen && !cEditId ? setCFormOpen(false) : openContactForm())} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>
                   {cFormOpen && !cEditId ? 'Cancel' : '+ Add'}
                 </button>
-              )}
-            </div>
+              )}>
             {customer && (
               <div style={{ margin: '8px 0 2px', padding: '8px 10px', borderRadius: '8px', background: 'var(--subtle-bg)', fontSize: '12px' }}>
                 <div style={{ fontSize: '9.5px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', marginBottom: '3px' }}>Primary contact — notifications</div>
@@ -2564,18 +2549,18 @@ export default function CustomerRecordPage() {
                 )}
               </div>
             ))}
-          </div>
+          </CollapsibleCard>
           {prospect && (
-            <div style={card}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                <div style={{ ...eyebrow, marginBottom: 0 }}>Files {files && files.length > 0 && <span style={{ fontWeight: 600 }}>· {files.length}</span>}</div>
+            <CollapsibleCard page={PAGE} id="files"
+              title={<>Files {files && files.length > 0 && <span style={{ fontWeight: 600 }}>· {files.length}</span>}</>}
+              actions={<>
                 <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
                   style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', padding: 0, opacity: uploading ? 0.6 : 1 }}>
                   {uploading ? 'Uploading…' : '+ Upload'}
                 </button>
                 <input ref={fileInputRef} type="file" style={{ display: 'none' }}
                   onChange={e => { const f = e.target.files?.[0]; if (f) uploadFile(f); e.target.value = ''; }} />
-              </div>
+              </>}>
               {files === null && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>Loading files…</div>}
               {files && files.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>No files yet — quotes, signed approvals, COIs…</div>}
               {(files || []).map(f => (
@@ -2589,33 +2574,18 @@ export default function CustomerRecordPage() {
                   <button onClick={() => deleteFile(f)} title="Delete file" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '12px', padding: '2px 4px', flexShrink: 0 }}>✕</button>
                 </div>
               ))}
-            </div>
+            </CollapsibleCard>
           )}
-          <div style={card}>
-            {customer ? (
-              <>
-                <div style={eyebrow}>Client files — Dropbox</div>
-                <ClientFilesSection customerId={customer.id} customerName={customer.company_name || name} />
-              </>
-            ) : (
-              <>
-                <div style={eyebrow}>Prior artwork — Dropbox</div>
-                <DropboxProofSearch defaultQuery={name} />
-              </>
-            )}
-          </div>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          <div style={card}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-              <div style={{ ...eyebrow, marginBottom: 0 }}>Deals {openDeals.length > 0 && <span style={{ fontWeight: 600 }}>· {openDeals.length} open</span>}</div>
-              {prospect && (
+          <CollapsibleCard page={PAGE} id="deals"
+            title={<>Deals {openDeals.length > 0 && <span style={{ fontWeight: 600 }}>· {openDeals.length} open</span>}</>}
+            actions={prospect && (
                 <button onClick={() => setOppFormOpen(v => !v)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '11px', fontWeight: 700, color: '#60a5fa', padding: 0 }}>
                   {oppFormOpen ? 'Cancel' : '+ Add'}
                 </button>
-              )}
-            </div>
+              )}>
             {oppFormOpen && (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', margin: '10px 0 4px', padding: '10px', background: 'var(--subtle-bg)', borderRadius: '9px' }}>
                 <input style={{ ...cInput, gridColumn: '1 / -1' }} placeholder="Deal title *" value={oppForm.title} onChange={e => setOppForm({ ...oppForm, title: e.target.value })} />
@@ -2685,7 +2655,7 @@ export default function CustomerRecordPage() {
                 )}
               </div>
             ))}
-          </div>
+          </CollapsibleCard>
 
           {/* Lead lifecycle (migration 263): active / nurturing / lost on
               unconverted records. 'Converted' is promotion's to set. */}
@@ -2729,17 +2699,13 @@ export default function CustomerRecordPage() {
           )}
 
           {(prospect || reminders.length > 0) && (
-            <div style={card}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: reminders.length > 0 || remFormOpen ? '6px' : 0 }}>
-                <div style={{ ...eyebrow, marginBottom: 0 }}>Reminders{reminders.length > 0 ? ` · ${reminders.length}` : ''}</div>
-                <span style={{ flex: 1 }} />
-                {prospect && (
+            <CollapsibleCard page={PAGE} id="reminders" title={`Reminders${reminders.length > 0 ? ` · ${reminders.length}` : ''}`}
+              actions={prospect && (
                   <button onClick={() => setRemFormOpen(v => !v)} title="Set a follow-up reminder — it shows here and on the Schedule calendar" style={{
                     padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
                     background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.25)', color: '#f59e0b',
                   }}>{remFormOpen ? 'Cancel' : '+ Reminder'}</button>
-                )}
-              </div>
+                )}>
               {remFormOpen && (
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
                   <input
@@ -2774,11 +2740,10 @@ export default function CustomerRecordPage() {
                   )}
                 </div>
               ))}
-            </div>
+            </CollapsibleCard>
           )}
 
-          <div style={card}>
-            <div style={eyebrow}>Recent activity</div>
+          <CollapsibleCard page={PAGE} id="activity" title="Recent activity">
             {prospect && (
               <div style={{ marginBottom: '10px' }}>
                 <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: '6px' }}>
@@ -2871,7 +2836,7 @@ export default function CustomerRecordPage() {
                 {actsLoadingMore ? 'Loading…' : 'Show older activity ↓'}
               </button>
             )}
-          </div>
+          </CollapsibleCard>
         </div>
       </div>
 
@@ -2881,24 +2846,20 @@ export default function CustomerRecordPage() {
           document, tagged with the FleetSuite record it came from), whose
           number opens that exact record and which offers both PDFs. */}
       {(prospect?.netsuite_id || customer || txns.length > 0) && (
-        <div style={card}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '6px' }}>
-            <div style={{ ...eyebrow, marginBottom: 0 }}>Transactions {txns.length > 0 ? `· ${txns.length}${docsHasMore || qbHasMore ? '+' : ''}` : ''}</div>
-            {openBalance !== null && stInvoices && stInvoices.length > 0 && (
+        <CollapsibleCard page={PAGE} id="transactions" title={`Transactions ${txns.length > 0 ? `· ${txns.length}${docsHasMore || qbHasMore ? '+' : ''}` : ''}`}
+          note={openBalance !== null && stInvoices && stInvoices.length > 0 && (
               <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
                 · open balance <strong style={{ color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{usd2(openBalance)}</strong> ({stInvoices.length} invoice{stInvoices.length === 1 ? '' : 's'})
               </span>
             )}
-            <span style={{ flex: 1 }} />
-            {TXN_FILTERS.map(([f, label]) => (
+          actions={TXN_FILTERS.map(([f, label]) => (
               <button key={f} onClick={() => setDocFilter(f)} style={{
                 padding: '4px 10px', borderRadius: '999px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
                 background: docFilter === f ? 'var(--tab-active-bg)' : 'transparent',
                 border: `1px solid ${docFilter === f ? 'var(--tab-active-border)' : 'var(--border)'}`,
                 color: docFilter === f ? 'var(--text-primary)' : 'var(--text-muted)',
               }}>{label}</button>
-            ))}
-          </div>
+            ))}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
             {([['all', 'Any status', 'var(--text-muted)'], ['open', 'Open', '#60a5fa'], ['pastdue', 'Past due', 'var(--error)'], ['paid', 'Paid', 'var(--success)']] as const).map(([k, label, color]) => (
               <button key={k} onClick={() => setDocStatus(k)} style={{
@@ -3096,7 +3057,19 @@ export default function CustomerRecordPage() {
               {qbLoading ? 'Loading…' : 'Load older QuickBooks history'}
             </button>
           )}
-        </div>
+        </CollapsibleCard>
+      )}
+
+      {/* Client files from Dropbox — last on the page, full width (Craig,
+          2026-10-19: "client files should be at the bottom"). */}
+      {customer ? (
+        <CollapsibleCard page={PAGE} id="client-files" title="Client files — Dropbox">
+          <ClientFilesSection customerId={customer.id} customerName={customer.company_name || name} />
+        </CollapsibleCard>
+      ) : (
+        <CollapsibleCard page={PAGE} id="prior-artwork" title="Prior artwork — Dropbox">
+          <DropboxProofSearch defaultQuery={name} />
+        </CollapsibleCard>
       )}
       {qbOpenId && (
         <QuickBooksRecordModal
