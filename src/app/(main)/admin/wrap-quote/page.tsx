@@ -3459,6 +3459,15 @@ export default function WrapQuotePage() {
       updateMeasurement(id, patch);
     }
   };
+  // ✕ on a line removes the shape (or photo box) it came from, the same as
+  // deleting it on the drawing, so the line, its area and its install go.
+  const removeLine = (id: string) => {
+    if (photoMode) {
+      setPhotoProofs(prev => prev.map(pr => ({ ...pr, boxes: pr.boxes.filter(b => b.id !== id) })));
+    } else {
+      removeMeasurement(id);
+    }
+  };
   const typedNum = (v: string): number | null => (v.trim() === '' || !Number.isFinite(parseFloat(v)) ? null : Math.max(0, parseFloat(v)));
   const editCell = (opts: {
     value: string;
@@ -3506,8 +3515,13 @@ export default function WrapQuotePage() {
       return (
         <tr key={`m-${m.id}`}>
           <td style={tdL}>
-            {m.name}
-            <span style={muted}>{p.sub ? filmLabel(p.sub) : 'No film'}{perKit ? ' · per kit' : ''}</span>
+            <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '4px' }}>
+              <button onClick={() => removeLine(m.id)} title="Delete this line" aria-label={`Delete ${m.name}`} style={{ border: 'none', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px', padding: 0 }}>✕</button>
+              <span>
+                {m.name}
+                <span style={muted}>{p.sub ? filmLabel(p.sub) : 'No film'}{perKit ? ' · per kit' : ''}</span>
+              </span>
+            </span>
           </td>
           <td style={td}>{editCell({
             value: m.sqft_override != null ? String(m.sqft_override) : '',
