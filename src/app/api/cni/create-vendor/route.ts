@@ -46,6 +46,22 @@ const safeVendorUrl = (id: string | null | undefined): string | undefined => {
 };
 
 /**
+ * Put a vendor this route just created or linked into the netsuite_vendors
+ * mirror, so the NetSuite vendor pickers (Create Part) find it now instead
+ * of after the nightly vendor sync. Never overwrites a synced row — that
+ * sync stays the source of truth. Best-effort: the vendor itself is saved.
+ */
+async function mirrorVendor(netsuiteId: string, name: string, email?: string, phone?: string) {
+  if (!/^\d+$/.test(netsuiteId)) return;
+  try {
+    await service.from('netsuite_vendors').upsert(
+      { netsuite_id: netsuiteId, company_name: name, email: email || null, phone: phone || null },
+      { onConflict: 'netsuite_id', ignoreDuplicates: true },
+    );
+  } catch { /* nightly sync will bring it in */ }
+}
+
+/**
  * Add a CNI installer as a payable vendor: find-or-create the local
  * companies row, then create the matching NetSuite vendor and store its
  * numeric Internal ID on the company. If a member of the company already
@@ -124,6 +140,7 @@ export async function POST(req: NextRequest) {
 
     // Already linked to a NetSuite vendor — nothing to create.
     if (company.netsuite_vendor_id) {
+      await mirrorVendor(company.netsuite_vendor_id, company.name);
       return NextResponse.json({
         success: true,
         companyId: company.id,
@@ -146,6 +163,7 @@ export async function POST(req: NextRequest) {
       if (linkErr) {
         return NextResponse.json({ error: `Failed to link vendor: ${linkErr.message}` }, { status: 500 });
       }
+      await mirrorVendor(body.netsuiteVendorId, company.name);
       return NextResponse.json({
         success: true,
         companyId: company.id,
@@ -177,6 +195,7 @@ export async function POST(req: NextRequest) {
           .from('companies')
           .update({ netsuite_vendor_id: personalIds[0] })
           .eq('id', company.id);
+        await mirrorVendor(personalIds[0], company.name);
         return NextResponse.json({
           success: true,
           companyId: company.id,
@@ -204,6 +223,8 @@ export async function POST(req: NextRequest) {
         vendorError: vendor.error || 'NetSuite did not return a vendor id',
       });
     }
+
+    await mirrorVendor(vendor.internalId, company.name, body.email || undefined, body.phone || undefined);
 
     const { error: saveErr } = await service
       .from('companies')
