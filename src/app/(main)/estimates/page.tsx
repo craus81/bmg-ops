@@ -6573,6 +6573,7 @@ export default function EstimatesPage() {
         <EmailComposeModal
           title="Review Approval Email Before Sending"
           customerId={customerId}
+          offerNewContacts={{ customerId, prospectId }}
           initialTo={priceSheetRequest?.contact_email || undefined}
           stateKey={`estimate-approval:${editingId}`}
           sendLabel="Send for Approval"
@@ -6699,6 +6700,7 @@ export default function EstimatesPage() {
         <EmailComposeModal
           title={`Follow Up — Estimate #${estimateHeadlineNumber(followupEmailFor)}`}
           customerId={followupEmailFor.customer_id || customerId}
+          offerNewContacts={{ customerId: followupEmailFor.customer_id, prospectId: followupEmailFor.prospect_id }}
           stateKey={`estimate-followup:${followupEmailFor.id}`}
           sendLabel="Send Follow-Up"
           intro={followupPdfName ? (
@@ -6788,6 +6790,7 @@ export default function EstimatesPage() {
         <EmailComposeModal
           title="Email Estimate PDF"
           customerId={customerId}
+          offerNewContacts={{ customerId, prospectId }}
           stateKey={`estimate-pdf:${editingId}`}
           sendLabel="Send PDF"
           messagePlaceholder="Optional note to the customer — shown in the email above the attached PDF…"
