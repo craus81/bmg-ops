@@ -40,6 +40,8 @@ interface AuthContextType {
   /** Save this user's bottom-bar tabs (null = back to the role default). */
   /** `which` picks the bottom bar (default) or the open iPhone Duo screen's side bar. */
   saveNavTabs: (ids: string[] | null, which?: 'bar' | 'open') => Promise<void>;
+  /** Fold a page section shut (or open) for this user, saved on their profile. */
+  setSectionCollapsed: (key: string, collapsed: boolean) => void;
 }
 
 function sameJson(a: unknown, b: unknown) {
@@ -49,7 +51,7 @@ function sameJson(a: unknown, b: unknown) {
 const AuthContext = createContext<AuthContextType>({
   user: null, profile: null, isAdmin: false, isProduction: false, isGraphicsProduction: false, isSales: false, isCustomer: false, isInstaller: false, isFieldTech: false, isShopTech: false, canSeeMoney: false, hasRole: () => false, hasFeature: () => false, loading: true, signOut: async () => {},
   viewAsRole: null, setViewAsRole: () => {}, isActualAdmin: false,
-  profileError: false, retryProfile: async () => {}, saveNavTabs: async () => {},
+  profileError: false, retryProfile: async () => {}, saveNavTabs: async () => {}, setSectionCollapsed: () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -134,6 +136,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { error } = await supabase.from('profiles').update({ [column]: value }).eq('id', user.id);
     if (error) throw new Error(error.message);
     setProfile(p => (p ? { ...p, [column]: value } : p));
+  };
+
+  // Collapsed sections (migration 408). The screen flips at once; the write
+  // follows. Built from a ref, not the render's profile, so two quick taps
+  // each see the other's change; writes go out one at a time, newest last,
+  // so a slow first write can't land over a later one.
+  const collapsedRef = useRef<string[] | null>(null);
+  collapsedRef.current = profile?.collapsed_sections ?? null;
+  const collapsedWrite = useRef<Promise<unknown>>(Promise.resolve());
+  const setSectionCollapsed = (key: string, collapsed: boolean) => {
+    if (!user) return;
+    const cur = collapsedRef.current || [];
+    if (cur.includes(key) === collapsed) return;
+    const next = collapsed ? [...cur, key] : cur.filter(k => k !== key);
+    const value = next.length > 0 ? next : null;
+    collapsedRef.current = value;
+    setProfile(p => (p ? { ...p, collapsed_sections: value } : p));
+    collapsedWrite.current = collapsedWrite.current.then(async () => {
+      const { error } = await supabase.from('profiles').update({ collapsed_sections: value }).eq('id', user.id);
+      if (error) console.warn('Could not save collapsed sections:', error.message);
+    });
   };
 
   // Self-healing. A shop tablet whose wifi drops usually gets it back in
@@ -280,7 +303,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authResolving = loading || profileError;
 
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile, saveNavTabs }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile, saveNavTabs, setSectionCollapsed }}>
       {profileError && (
         <div role="alert" style={{
           position: 'sticky', top: 0, zIndex: 60, padding: '9px 14px',

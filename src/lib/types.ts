@@ -39,6 +39,9 @@ export interface Profile {
   nav_tabs?: string[] | null;
   /** Side-bar tabs for the open iPhone Duo screen (migration 398). */
   nav_tabs_open?: string[] | null;
+  /** Sections this user has collapsed, '<page>:<section>' (migration 408).
+   *  See src/components/CollapsibleCard.tsx. */
+  collapsed_sections?: string[] | null;
 }
 
 export interface CatalogItem {
