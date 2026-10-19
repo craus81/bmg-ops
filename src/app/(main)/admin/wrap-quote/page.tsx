@@ -322,6 +322,21 @@ const fmt = (n: number) => (n || 0).toLocaleString('en-US', { minimumFractionDig
 // What the customer is charged, split so the parts add up to Price: vinyl
 // and labor already carry any quantity discount / shop minimum, and Price
 // includes sales tax. "Price" (not "cost") — this is what we charge.
+// A line-list box that keeps what's being typed while it has focus, so
+// clearing it to type a new number doesn't snap back to the calculated one.
+function DraftInput({ value, onChange, ...rest }: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange'> & { value: string; onChange: (v: string) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <input
+      {...rest}
+      value={draft ?? value}
+      onFocus={e => { setDraft(value); e.currentTarget.select(); }}
+      onBlur={() => setDraft(null)}
+      onChange={e => { setDraft(e.target.value); onChange(e.target.value); }}
+    />
+  );
+}
+
 function PriceBreakdown({ totals }: { totals: { adjMaterials: number; adjLabor: number; tax: number; total: number; nested: boolean } }) {
   const part = (label: string, value: number, color: string, title?: string) => (
     <div title={title} style={{ fontSize: '12px', fontWeight: 800, color }}>{label}: ${fmt(value)}</div>
@@ -3459,6 +3474,42 @@ export default function WrapQuotePage() {
       updateMeasurement(id, patch);
     }
   };
+  // ✕ on a line removes the shape (or photo box) it came from, the same as
+  // deleting it on the drawing, so the line, its area and its install go.
+  const removeLine = (id: string) => {
+    if (photoMode) {
+      setPhotoProofs(prev => prev.map(pr => ({ ...pr, boxes: pr.boxes.filter(b => b.id !== id) })));
+    } else {
+      removeMeasurement(id);
+    }
+  };
+  // The line's name. On a photo quote the rep edits the box's own label;
+  // the page name in front of it stays.
+  const lineNameInput = (m: Measurement) => {
+    let prefix = '';
+    let value = m.name;
+    if (photoMode) {
+      const box = photoProofs.flatMap(pr => pr.boxes).find(b => b.id === m.id);
+      if (box) {
+        value = box.label || '';
+        prefix = m.name.endsWith(`— ${box.label || 'Area'}`) ? m.name.slice(0, m.name.length - (box.label || 'Area').length) : '';
+      }
+    }
+    const rename = (v: string) => {
+      if (photoMode) setPhotoProofs(prev => prev.map(pr => ({ ...pr, boxes: pr.boxes.map(b => (b.id === m.id ? { ...b, label: v } : b)) })));
+      else updateMeasurement(m.id, { name: v });
+    };
+    return (
+      <>
+        {prefix && <span>{prefix}</span>}
+        <DraftInput
+          value={value} placeholder="Area" title="Line name"
+          onChange={rename}
+          style={{ minWidth: '120px', flex: 1, padding: '3px 5px', borderRadius: '5px', fontSize: '11px', border: `1px solid ${theme.border}`, background: 'var(--input-bg)', color: 'var(--text-primary)' }}
+        />
+      </>
+    );
+  };
   const typedNum = (v: string): number | null => (v.trim() === '' || !Number.isFinite(parseFloat(v)) ? null : Math.max(0, parseFloat(v)));
   const editCell = (opts: {
     value: string;
@@ -3473,10 +3524,12 @@ export default function WrapQuotePage() {
     suffix?: string;
   }) => (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', justifyContent: 'flex-end' }}>
-      <input
-        type="number" min="0" step={opts.step || '0.01'} value={opts.value} placeholder={opts.placeholder}
+      <DraftInput
+        type="number" min="0" step={opts.step || '0.01'} inputMode="decimal"
+        value={opts.value !== '' || opts.disabled ? opts.value : opts.placeholder.replace(/,/g, '')}
+        placeholder={opts.placeholder}
         disabled={opts.disabled} title={opts.title}
-        onChange={e => opts.onChange(e.target.value)}
+        onChange={opts.onChange}
         style={{
           width: opts.width || '76px', padding: '4px 6px', borderRadius: '5px', fontSize: '11px', textAlign: 'right',
           border: `1px solid ${opts.edited ? '#f59e0b' : theme.border}`,
@@ -3506,8 +3559,13 @@ export default function WrapQuotePage() {
       return (
         <tr key={`m-${m.id}`}>
           <td style={tdL}>
-            {m.name}
-            <span style={muted}>{p.sub ? filmLabel(p.sub) : 'No film'}{perKit ? ' · per kit' : ''}</span>
+            <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: '4px' }}>
+              <button onClick={() => removeLine(m.id)} title="Delete this line" aria-label={`Delete ${m.name}`} style={{ border: 'none', background: 'none', color: '#ef4444', cursor: 'pointer', fontSize: '12px', padding: 0 }}>✕</button>
+              <span style={{ display: 'inline-flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '2px' }}>
+                {lineNameInput(m)}
+                <span style={muted}>{p.sub ? filmLabel(p.sub) : 'No film'}{perKit ? ' · per kit' : ''}</span>
+              </span>
+            </span>
           </td>
           <td style={td}>{editCell({
             value: m.sqft_override != null ? String(m.sqft_override) : '',
@@ -3523,7 +3581,7 @@ export default function WrapQuotePage() {
             edited: false,
             step: '1',
             width: '54px',
-            onChange: v => patchLine(m.id, { qty: Math.max(1, Math.round(num(v)) || 1) }),
+            onChange: v => { if (v.trim() !== '') patchLine(m.id, { qty: Math.max(1, Math.round(num(v)) || 1) }); },
           })}</td>
           <td style={td}>{editCell({
             value: m.price_override != null && !totals.nested ? String(m.price_override) : '',
