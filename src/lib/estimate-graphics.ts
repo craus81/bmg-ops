@@ -177,10 +177,14 @@ export async function loadEstimateProofs(
   opts?: { expiresIn?: number },
 ): Promise<EstimateProofBlock[]> {
   try {
+    // A fleet order's one graphics job (migration 411) proofs every
+    // estimate in the order.
+    const { data: est } = await supabase.from('estimates').select('fleet_group_id').eq('id', estimateId).maybeSingle();
+    const groupId = est?.fleet_group_id as string | null | undefined;
     const { data: jobs, error } = await supabase
       .from('graphics_jobs')
       .select('id, job_number, title, estimate_attach')
-      .eq('estimate_id', estimateId)
+      .or(groupId ? `estimate_id.eq.${estimateId},fleet_group_id.eq.${groupId}` : `estimate_id.eq.${estimateId}`)
       .order('created_at', { ascending: true });
     if (error || !jobs || jobs.length === 0) return [];
 

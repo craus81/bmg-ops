@@ -10,6 +10,7 @@ import { r2Get, r2PresignGet, r2Upload } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
 import { closeProofRound } from '@/lib/proof-rounds';
 import { resolveProofResponder } from '@/lib/proof-responder';
+import { fleetMembers } from '@/lib/estimate-fleet';
 
 export const dynamic = 'force-dynamic';
 
@@ -123,10 +124,16 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   })));
 
   const round = await loadOpenRound(job.id);
+  // A fleet order job (migration 411): the one proof covers every vehicle,
+  // so the page lists the unit numbers it goes on.
+  const units = job.fleet_group_id
+    ? (await fleetMembers(supabase, job.fleet_group_id)).map(m => m.unit_number || '').filter(Boolean)
+    : [];
   return NextResponse.json({
     status: 'ready',
     job: publicJob(job),
     files: fileEntries,
+    units,
     // Null for proofs sent before rounds existed — the page just omits
     // the banner rather than inventing a round number.
     round: round ? { number: round.round_number, addressing: round.addressing } : null,

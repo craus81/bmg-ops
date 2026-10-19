@@ -5,6 +5,7 @@ import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { copyEstimate, estimateIsLocked } from '@/lib/estimate-copy';
 import { fleetMembers, unitKey } from '@/lib/estimate-fleet';
+import { noteFleetKitsChanged } from '@/lib/graphics-fleet';
 
 export const dynamic = 'force-dynamic';
 
@@ -101,6 +102,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
       created.push({ id: r.body.id, estimate_number: r.body.estimate_number, unit_number: v.unitNumber });
     }
+
+    // The order's graphics job, if it has one, gets a kit for each new
+    // vehicle; the approved proof covers it.
+    await noteFleetKitsChanged(
+      supabase,
+      groupId,
+      `Added to the fleet order: ${created.map(c => `unit ${c.unit_number} (${c.estimate_number})`).join(', ')}. The approved proof covers ${created.length === 1 ? 'it' : 'them'}.`,
+      auth.user.id,
+    );
 
     return NextResponse.json({ success: true, groupId, created });
   } catch (err: any) {

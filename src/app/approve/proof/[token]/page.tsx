@@ -33,7 +33,7 @@ export default function ProofApprovalPage() {
         acceptedTitle: 'Thanks — proof approved',
         rejectedTitle: 'Thanks — we’ll revise',
       }}
-      parsePayload={json => ({ job: json.job, files: json.files || [], round: json.round || null })}
+      parsePayload={json => ({ job: json.job, files: json.files || [], round: json.round || null, units: Array.isArray(json.units) ? json.units : [] })}
       docLabel={d => d?.job?.job_number ? `Job #${d.job.job_number}` : null}
       acceptedAt={d => d?.job?.customer_approved_at || null}
       canAccept={d => (d?.files || []).length > 0}
@@ -57,14 +57,14 @@ export default function ProofApprovalPage() {
               )}
             </div>
           )}
-          <ProofDocument job={d.job} files={d.files} />
+          <ProofDocument job={d.job} files={d.files} units={d.units || []} />
         </>
       )}
     />
   );
 }
 
-function ProofDocument({ job, files }: { job: any; files: { id: string; file_name: string; url: string; is_pdf: boolean }[] }) {
+function ProofDocument({ job, files, units }: { job: any; files: { id: string; file_name: string; url: string; is_pdf: boolean }[]; units: string[] }) {
   return (
     <>
       <ApprovalHeader title={`Proof: ${job.title || job.part_number || `Job #${job.job_number}`}`}>
@@ -74,6 +74,21 @@ function ProofDocument({ job, files }: { job: any; files: { id: string; file_nam
           {job.part_number ? ` · Part: ${job.part_number}` : ''}
         </div>
       </ApprovalHeader>
+
+      {/* Fleet order (migration 411): one approval covers every vehicle. */}
+      {units.length > 1 && (
+        <div style={{ marginBottom: '14px', padding: '12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a' }}>This design goes on {units.length} vehicles</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '8px' }}>
+            {units.map(u => (
+              <span key={u} style={{ fontSize: '12.5px', fontWeight: 700, padding: '3px 9px', borderRadius: '999px', background: '#e2e8f0', color: '#0f172a' }}>Unit {u}</span>
+            ))}
+          </div>
+          <div style={{ fontSize: '12px', color: '#64748b', marginTop: '8px' }}>
+            Only the unit number changes from one vehicle to the next. Approving this proof approves it for all of them.
+          </div>
+        </div>
+      )}
 
       {files.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '18px' }}>

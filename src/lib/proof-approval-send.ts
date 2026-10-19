@@ -21,6 +21,7 @@ import { deepLinks } from './deep-links';
 import { sendSMS } from './sms-provider';
 import { logSms } from './sms-log';
 import { fetchEmailAttachments, MAX_ATTACHMENT_BYTES } from './email-attachments';
+import { fleetMembers } from './estimate-fleet';
 
 type Service = SupabaseClient<any, any, any>;
 
@@ -95,7 +96,7 @@ export async function sendProofApproval(
 
   const { data: job, error } = await service
     .from('graphics_jobs')
-    .select('id, job_number, title, customer, customer_approved, status, approval_proof_file_id, approval_reminder_count, rep_review_status')
+    .select('id, job_number, title, customer, customer_approved, status, approval_proof_file_id, approval_reminder_count, rep_review_status, fleet_group_id')
     .eq('id', jobId)
     .single();
   if (error || !job) return { ok: false, status: 404, error: 'Job not found' };
@@ -186,9 +187,16 @@ export async function sendProofApproval(
     ? `Reminder: proof awaiting approval${rev} — ${label}`
     : `Proof ready for approval${rev} — ${label}`;
   const attachedName = (name: string) => (roundNumber ? tagFileName(name, roundNumber) : name);
+  // A fleet order job (migration 411): one proof, one approval, every unit.
+  const units = job.fleet_group_id
+    ? (await fleetMembers(service, job.fleet_group_id)).map(m => m.unit_number || '').filter(Boolean)
+    : [];
+  const fleetNote = units.length > 1
+    ? ` This one proof covers ${units.length} vehicles: units ${units.join(', ')}. Only the unit number changes, so one approval covers all of them.`
+    : '';
   const emailBody = reminder
-    ? `Just a reminder — your graphic proof for ${label} is still waiting on your review. Production can't move forward until it's approved. Approve or request changes with the button below (this fresh link expires in ${expiryDays} days).`
-    : `Your graphic proof is ready for review — ${label}. Approve or request changes using the button below. Link expires in ${expiryDays} days.`;
+    ? `Just a reminder — your graphic proof for ${label} is still waiting on your review.${fleetNote} Production can't move forward until it's approved. Approve or request changes with the button below (this fresh link expires in ${expiryDays} days).`
+    : `Your graphic proof is ready for review — ${label}.${fleetNote} Approve or request changes using the button below. Link expires in ${expiryDays} days.`;
   const emailOpts = {
     note: message,
     attachmentNames: attachmentRows.map(r => attachedName(r.file_name)),

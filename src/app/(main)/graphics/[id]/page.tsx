@@ -15,7 +15,7 @@
  * and the activity timeline with @mention notes.
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
@@ -43,6 +43,8 @@ import GraphicsRollPlan from '@/components/GraphicsRollPlan';
 import GraphicsPackChecklist from '@/components/GraphicsPackChecklist';
 import GraphicsJobVehicleFiles from '@/components/GraphicsJobVehicleFiles';
 import GraphicsJobSources from '@/components/GraphicsJobSources';
+import GraphicsJobKits from '@/components/GraphicsJobKits';
+import type { JobKit } from '@/lib/graphics-fleet';
 import GraphicsApprovalHistory from '@/components/GraphicsApprovalHistory';
 import PrintRoomTimer from '@/components/PrintRoomTimer';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
@@ -469,6 +471,11 @@ export default function GraphicsJobRecordPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
   }, [job?.id, job?.work_rank, job?.status]);
 
+  // A fleet order job's kits (GraphicsJobKits): the job stays in Ready
+  // until every vehicle's kit is on (Craig, 2026-10-19).
+  const kitsRef = useRef<JobKit[]>([]);
+  const onKits = useCallback((list: JobKit[]) => { kitsRef.current = list; }, []);
+
   const changeStatus = async (
     newStatus: GraphicsJobStatus,
     note?: string,
@@ -477,6 +484,16 @@ export default function GraphicsJobRecordPage() {
     if (!job) return;
     const oldStatus = job.status;
     if (oldStatus === newStatus) return;
+
+    const kitsOut = kitsRef.current.filter(k => !k.installedAt).length;
+    if (newStatus === 'installed' && kitsOut > 0) {
+      const total = kitsRef.current.length;
+      const ok = await dialog.confirm(
+        `Only ${total - kitsOut} of ${total} kits are marked installed. The job usually stays in Ready until the last vehicle's kit is on (mark each one in Kits). Move it to Installed anyway?`,
+        { confirmLabel: 'Move to Installed' },
+      );
+      if (!ok) return;
+    }
 
     // ── Transition rules (src/lib/graphics-status.ts) ────────────────────
     // Forward skips are free; backward moves must carry a reason; printing
@@ -2035,6 +2052,16 @@ export default function GraphicsJobRecordPage() {
           </div>
         </DropZone>
       </div>
+
+      {/* ── Fleet order: one kit per vehicle (migration 411) ── */}
+      <GraphicsJobKits
+        jobId={job.id}
+        status={job.status}
+        cardStyle={card}
+        labelStyle={labelStyle}
+        onKits={onKits}
+        onAllInstalled={(count) => changeStatus('installed', `All ${count} kits installed`)}
+      />
 
       {/* ── From the estimate / wrap quote: rep, vehicle, PO, quote proofs + files ── */}
       <GraphicsJobSources

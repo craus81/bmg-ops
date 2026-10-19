@@ -7,6 +7,8 @@ import {
   ESTIMATE_LINK_COLUMNS,
   estimateJobPo, estimateVehicleLine, findEstimateWrapQuote, joinBlocks, wrapQuoteJobFields,
 } from '@/lib/graphics-links';
+import { fleetMembers } from '@/lib/estimate-fleet';
+import { fleetContentLine, fleetJobFor, linkFleetCheckins } from '@/lib/graphics-fleet';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +20,9 @@ const Schema = z
     mode: z.enum(['create', 'link', 'prefill', 'created']),
     existingJobId: z.string().uuid().optional().nullable(),
     userId: z.string().uuid().optional().nullable(),
+    // mode='created': the person chose one job for the estimate's whole
+    // fleet order (migration 411), one kit per vehicle.
+    fleet: z.boolean().optional(),
   })
   .refine((d) => (d.mode !== 'link' && d.mode !== 'created') || !!d.existingJobId, {
     message: 'existingJobId required for link/created mode',
@@ -149,7 +154,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { estimateId, mode, existingJobId, userId } = parsed.data;
+  const { estimateId, mode, existingJobId, userId, fleet } = parsed.data;
 
   try {
     const supabase = getSupabase();
@@ -163,8 +168,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
     }
 
+    // The estimate's fleet order (migration 410), when it is in one with
+    // other vehicles: the New Job form offers one job for all of them.
+    const { data: groupRow } = await supabase.from('estimates').select('fleet_group_id').eq('id', estimateId).maybeSingle();
+    const groupId: string | null = groupRow?.fleet_group_id || null;
+    const members = groupId ? await fleetMembers(supabase, groupId) : [];
+
     if (mode === 'prefill') {
       const prefill = await buildEstimateJobPrefill(supabase, estimate);
+      const fleetJob = members.length > 1 && groupId ? await fleetJobFor(supabase, groupId) : null;
       return NextResponse.json({
         success: true,
         prefill: {
@@ -174,6 +186,14 @@ export async function POST(req: NextRequest) {
           notes: prefill.notes || '',
           soNumber: estimate.netsuite_so_number || '',
           estimateNumber: estimate.estimate_number,
+          fleet: members.length > 1
+            ? {
+                count: members.length,
+                units: members.map(m => m.unit_number || m.estimate_number),
+                contentLine: fleetContentLine(members.map(m => m.unit_number)),
+                existingJob: fleetJob ? { id: fleetJob.id, jobNumber: fleetJob.job_number } : null,
+              }
+            : null,
         },
       });
     }
@@ -188,6 +208,25 @@ export async function POST(req: NextRequest) {
         .maybeSingle();
       if (!job || job.estimate_id !== estimateId) {
         return NextResponse.json({ error: 'Graphics job is not linked to this estimate' }, { status: 400 });
+      }
+      if (fleet && groupId && members.length > 1) {
+        // One job, one kit per vehicle: the kits are the order's estimates,
+        // read live, so a vehicle added later gets its kit automatically.
+        const other = await fleetJobFor(supabase, groupId);
+        if (other && other.id !== job.id) {
+          return NextResponse.json({ error: `This fleet order already has graphics job ${other.job_number || ''}.`.replace(' .', '.') }, { status: 409 });
+        }
+        await supabase.from('graphics_jobs').update({ fleet_group_id: groupId, quantity: members.length }).eq('id', job.id);
+        await linkFleetCheckins(supabase, job.id, members.map(m => m.id));
+        await supabase.from('graphics_status_history').insert({
+          job_id: job.id,
+          from_status: 'received',
+          to_status: 'received',
+          changed_by: userId || auth.user.id,
+          note: `Fleet order: ${members.length} kits, one per vehicle (${members.map(m => `unit ${m.unit_number || '?'} ${m.estimate_number}`).join(', ')})`,
+        });
+        for (const m of members) await markEstimateWon(supabase, m.id);
+        return NextResponse.json({ success: true, graphicsJobId: job.id, action: 'created', kits: members.length });
       }
       await markEstimateWon(supabase, estimateId);
       return NextResponse.json({ success: true, graphicsJobId: job.id, action: 'created' });
