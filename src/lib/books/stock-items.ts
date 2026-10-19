@@ -82,6 +82,13 @@ export interface StockLine {
   netsuite: { quantity: number; value: number | null };
   countDiffers: boolean;
   valueDiffers: boolean;
+  /**
+   * Neither side has any of it on hand, and NetSuite values it at nothing,
+   * but FleetSuite's value isn't nothing: NetSuite's ledger still holds that
+   * on the item's lines (owner decision 2026-10-19, "Flag them"). Its value
+   * differs too.
+   */
+  leftover: boolean;
   /** How many documents moved it since its starting count, and the latest one's date. */
   documents: number;
   lastDate: string | null;
@@ -179,6 +186,7 @@ export function compareStock(data: StockItemsData): StockComparison {
       continue;
     }
     const named = items.get(s.itemId);
+    const valueDiffers = netsuite.value !== null && s.fleetsuite.value !== netsuite.value;
     lines.push({
       key,
       itemId: s.itemId,
@@ -192,7 +200,9 @@ export function compareStock(data: StockItemsData): StockComparison {
       netsuite,
       // Before NetSuite's counts are read there's nothing to differ from.
       countDiffers: by !== null && Math.abs(s.fleetsuite.quantity - netsuite.quantity) >= SAME,
-      valueDiffers: netsuite.value !== null && s.fleetsuite.value !== netsuite.value,
+      valueDiffers,
+      leftover: valueDiffers && netsuite.value === 0
+        && Math.abs(s.fleetsuite.quantity) < SAME && Math.abs(netsuite.quantity) < SAME,
       documents: s.documents,
       lastDate: s.lastDate,
     });
@@ -218,6 +228,66 @@ export function compareStock(data: StockItemsData): StockComparison {
     },
     ledger,
   };
+}
+
+// ── Items set up wrong ─────────────────────────────────────────────────────
+
+/** What gl_stock_item_setup (migration 403) returns. */
+export interface StockSetupData {
+  /** The active stocked items whose asset account the chart has as anything but an asset account. */
+  items: Array<{
+    netsuite_id: string;
+    name: string;
+    display_name: string | null;
+    account: { netsuite_id: string; number: string | null; name: string; type: string };
+  }>;
+  /** The asset account most stocked items use; null when none has one. */
+  usual: { netsuite_id: string; number: string | null; name: string } | null;
+}
+
+/** A stocked item NetSuite has set up with an asset account that isn't an asset account. */
+export interface StockSetupItem {
+  itemId: string;
+  /** NetSuite's item name (its number). */
+  item: string;
+  /** Its display name, when NetSuite has one apart from the name. */
+  description: string | null;
+  /** Its asset account as people read it: number and name. */
+  account: string;
+  /** What kind of account the chart has it as, as people say it: 'a cost of goods sold account'. */
+  accountKind: string;
+}
+
+export interface StockSetup {
+  items: StockSetupItem[];
+  /** The asset account most stocked items use, as people read it; null when none has one. */
+  usual: string | null;
+}
+
+/** The chart's kinds of account (migration 359) that an asset account isn't, as people say them. */
+const NOT_ASSET: Readonly<Record<string, string>> = {
+  bank: 'a bank account', accounts_receivable: 'an accounts receivable account', unbilled_receivable: 'an unbilled receivable account',
+  deferred_expense: 'a deferred expense account', accounts_payable: 'an accounts payable account', credit_card: 'a credit card account',
+  other_current_liability: 'a liability account', long_term_liability: 'a long-term liability account',
+  deferred_revenue: 'a deferred revenue account', equity: 'an equity account', income: 'an income account',
+  other_income: 'an other income account', cost_of_goods_sold: 'a cost of goods sold account', expense: 'an expense account',
+  other_expense: 'an other expense account',
+};
+
+const accountText = (a: { netsuite_id: string; number: string | null; name: string }) =>
+  [a.number, a.name].filter(Boolean).join(' ') || `NetSuite account ${a.netsuite_id}`;
+
+/** The stocked items NetSuite has set up with an asset account that isn't an asset account, by item number. */
+export function stockSetup(data: StockSetupData | null): StockSetup {
+  const items = (data?.items ?? []).map((i) => ({
+    itemId: i.netsuite_id,
+    item: i.name,
+    description: i.display_name && i.display_name !== i.name ? i.display_name : null,
+    account: accountText(i.account),
+    accountKind: NOT_ASSET[i.account.type] ?? 'not an asset account',
+  }));
+  items.sort((a, b) => byName.compare(a.item, b.item) || Number(a.itemId) - Number(b.itemId));
+  return { items, usual: data?.usual ? accountText(data.usual) : null };
 }
 
 // ── One item's moves ───────────────────────────────────────────────────────
@@ -267,6 +337,13 @@ export interface StockMove {
   value: number;
   /** The count and value it left at its location: the starting count plus every move through it. */
   after: { quantity: number; value: number };
+  /**
+   * It moved the count one way and the value the other: took stock out and
+   * put value into inventory, or the reverse. NetSuite posts a shipment that
+   * way when the item's cost of goods sold account is an inventory account,
+   * as when it's swapped with its asset account.
+   */
+  backwards: boolean;
   /** Where Invoices vs NetSuite checks the document line by line: its switch (CHECKED_KIND) and the month it lists it under. */
   check: { kind: string; month: string } | null;
 }
@@ -291,6 +368,13 @@ export interface ItemMoves {
   by: CountsBy | null;
   /** NetSuite's count of the item everywhere: its company-wide count, or its counts at each location added up. */
   netsuite: { quantity: number; value: number | null } | null;
+  /**
+   * Where neither side has any of the item on hand and NetSuite values it at
+   * nothing, but FleetSuite's value isn't nothing (StockLine.leftover): each
+   * such location, or the item everywhere (location null) when NetSuite
+   * counts it company-wide.
+   */
+  leftover: Array<{ locationId: string | null; location: string | null; value: number }>;
 }
 
 /**
@@ -334,6 +418,7 @@ export function itemMoves(data: StockItemMovesData): ItemMoves {
       quantity: quantity(m.quantity),
       value: cents(m.value),
       after: { quantity: start.quantity + quantity(m.quantity_since), value: start.value + cents(m.value_since) },
+      backwards: (quantity(m.quantity) <= -SAME && cents(m.value) > 0) || (quantity(m.quantity) >= SAME && cents(m.value) < 0),
       check: CHECKED_KIND[m.type] && m.posting_month ? { kind: CHECKED_KIND[m.type], month: m.posting_month } : null,
     };
   });
@@ -369,12 +454,27 @@ export function itemMoves(data: StockItemMovesData): ItemMoves {
     value: counts.every((c) => c.value !== null) ? counts.reduce((total, c) => total + cents(c.value), 0) : null,
   };
 
+  const sorted = [...places.values()].sort((a, b) => byName.compare(a.location ?? '', b.location ?? ''));
+  const left = (ours: { quantity: number; value: number }, theirs: { quantity: number; value: number | null }) =>
+    theirs.value === 0 && ours.value !== 0 && Math.abs(ours.quantity) < SAME && Math.abs(theirs.quantity) < SAME;
+  let leftover: ItemMoves['leftover'] = [];
+  if (by === 'location' && netsuite) {
+    // A location NetSuite counts none of the item at has nothing there, valued at nothing when NetSuite gives values.
+    leftover = sorted
+      .filter((p) => left(p.fleetsuite, p.netsuite ?? { quantity: 0, value: netsuite.value === null ? null : 0 }))
+      .map((p) => ({ locationId: p.locationId, location: p.location, value: p.fleetsuite.value }));
+  } else if (by === 'item' && netsuite) {
+    const ours = sorted.reduce((sum, p) => ({ quantity: sum.quantity + p.fleetsuite.quantity, value: sum.value + p.fleetsuite.value }), { quantity: 0, value: 0 });
+    if (left(ours, netsuite)) leftover = [{ locationId: null, location: null, value: ours.value }];
+  }
+
   return {
-    places: [...places.values()].sort((a, b) => byName.compare(a.location ?? '', b.location ?? '')),
+    places: sorted,
     moves,
     more: Math.max(0, (Number(data.count) || 0) - moves.length),
     by,
     netsuite,
+    leftover,
   };
 }
 

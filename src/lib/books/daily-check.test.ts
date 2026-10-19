@@ -229,7 +229,7 @@ describe('alertsFor', () => {
 const line = (over: Partial<StockLine> = {}): StockLine => ({
   key: '9001|11', itemId: '9001', item: 'LDR-24', description: 'Ladder rack 24 in', locationId: '11', location: 'Wentzville',
   companies: ['BMG'], start: { quantity: 10, value: 150000 }, fleetsuite: { quantity: 12, value: 180000 },
-  netsuite: { quantity: 10, value: 150000 }, countDiffers: true, valueDiffers: true, documents: 3, lastDate: '2026-10-16',
+  netsuite: { quantity: 10, value: 150000 }, countDiffers: true, valueDiffers: true, leftover: false, documents: 3, lastDate: '2026-10-16',
   ...over,
 });
 const fresh = (l: StockLine): StockNews => ({ line: l, further: false });
