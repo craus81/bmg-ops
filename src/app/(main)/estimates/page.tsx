@@ -49,6 +49,7 @@ import { uploadRecordFile } from '@/lib/record-file-upload';
 import { bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
 import EstimatePartsRequestModal from '@/components/EstimatePartsRequestModal';
 import { closeOnEscape } from '@/lib/modal-escape';
+import EstimateFleetGroup from '@/components/EstimateFleetGroup';
 import CreatedBy from '@/components/CreatedBy';
 import OrderTeamChat from '@/components/OrderTeamChat';
 import { looseMatcher, looseOrFilter, looseSearchRegex } from '@/lib/loose-search';
@@ -3584,6 +3585,27 @@ export default function EstimatesPage() {
     }
   };
 
+  // Fleet orders (migration 410): open another estimate of the order by id,
+  // the same single-row fetch Duplicate uses.
+  const openEstimateById = async (id: string) => {
+    const rowRes = await fetch(`/api/estimates?id=${id}`);
+    const rowData = await rowRes.json().catch(() => ({}));
+    const row = rowData.estimates?.[0];
+    if (row) await openEstimate(row);
+    else await dialog.alert('Could not open that estimate. Find it in the list.');
+  };
+
+  // Save before "Copy for more vehicles" so the copies match the screen,
+  // exactly as Duplicate does. A locked estimate copies as it was signed.
+  const prepareFleetCopy = async (): Promise<boolean> => {
+    if (!editingId) return false;
+    const est = estimates.find(e => e.id === editingId);
+    const locked = !!(est && ((est as any).customer_approved || est.status === 'accepted' || est.netsuite_so_id));
+    if (locked) return true;
+    const savedId = await saveEstimate(est?.status || 'draft', { offerRevision: true });
+    return !!savedId && savedId === editingId;
+  };
+
   const deleteEstimate = async (id: string, hasNsId: boolean = false) => {
     const msg = hasNsId
       ? 'Delete this estimate? This will ALSO delete it from NetSuite. This cannot be undone.'
@@ -6505,6 +6527,30 @@ export default function EstimatesPage() {
                 </button>
               )}
             </div>
+          );
+        })()}
+
+        {/* Fleet order (migration 410): the other vehicles' estimates and
+            "Copy for more vehicles". One estimate per vehicle, one graphics
+            job for the order. */}
+        {editingId && (() => {
+          const est = estimates.find(e => e.id === editingId);
+          const locked = !!(est && ((est as any).customer_approved || est.status === 'accepted' || est.netsuite_so_id));
+          return (
+            <EstimateFleetGroup
+              estimateId={editingId}
+              estimateNumber={est?.estimate_number || 'This estimate'}
+              unitNumber={unitNumber}
+              poNumber={poNumber}
+              locked={locked}
+              busy={saving || duplicating}
+              prepare={prepareFleetCopy}
+              onOpen={openEstimateById}
+              onCopied={async (sourceUnit) => {
+                if (sourceUnit) setUnitNumber(sourceUnit);
+                await loadEstimates(true);
+              }}
+            />
           );
         })()}
 

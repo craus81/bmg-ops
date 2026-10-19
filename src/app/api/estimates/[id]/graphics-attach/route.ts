@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { fleetWorksheetIds, worksheetFilter } from '@/lib/estimate-fleet';
 import { sanitizePhotoProofs } from '@/lib/coverage-proof';
 import { coveragePictures } from '@/lib/estimate-graphics';
 import { sameOriginStorageUrl } from '@/lib/r2';
@@ -92,14 +93,18 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
+  // A fleet group's other estimates share the worksheet (estimate-fleet.ts);
+  // its picture and film choices are set on the estimate it's pinned to.
+  const shared = await fleetWorksheetIds(supabase, params.id);
   const { data, error } = await supabase
     .from('wrap_quotes')
     .select(QUOTE_COLUMNS)
-    .eq('estimate_id', params.id)
+    .or(worksheetFilter(params.id, shared))
     .order('created_at', { ascending: true });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ quotes: (data || []).map(describeQuote) });
+  const sharedSet = new Set(shared);
+  return NextResponse.json({ quotes: (data || []).map((q: any) => ({ ...describeQuote(q), sharedFromFleet: sharedSet.has(q.id) })) });
 }
 
 /**
@@ -137,6 +142,11 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .eq('id', wrapQuoteId)
     .maybeSingle();
   if (!quote || quote.estimate_id !== params.id) {
+    const shared = quote ? await fleetWorksheetIds(supabase, params.id) : [];
+    if (quote && shared.includes(quote.id)) {
+      const { data: home } = await supabase.from('estimates').select('estimate_number').eq('id', quote.estimate_id).maybeSingle();
+      return NextResponse.json({ error: `This worksheet is shared by the fleet order. Change what it shows on ${home?.estimate_number || 'the estimate it was built on'}, and every estimate in the order follows.` }, { status: 409 });
+    }
     return NextResponse.json({ error: 'That wrap quote is not linked to this estimate.' }, { status: 404 });
   }
 
