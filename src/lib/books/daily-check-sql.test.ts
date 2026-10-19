@@ -1,12 +1,14 @@
 // The daily books check (src/lib/books/daily-check.ts) looks at both
 // companies' books the way Differences vs NetSuite does, through migration
-// 377's functions, and at each item's count the way Stock by item does,
-// through migration 401's. This runs the same migrations as
-// differences-sql.test.ts, with 401, in an in-memory Postgres (PGlite) as the
-// app's server login, copies a made-up handful of NetSuite documents for BMG
-// and 1084, posts FleetSuite's entries for some of them, copies a few stock
-// moves and NetSuite's counts, and runs the check's looks against it the way
-// the cron does, holding what it tells the super admins and what it records.
+// 377's functions, at each item's count the way Stock by item does, through
+// migration 401's, and at each customer's and vendor's balance the way
+// Customer and vendor balances does, through migration 406's. This runs the
+// same migrations as differences-sql.test.ts, with 401 and 406, in an
+// in-memory Postgres (PGlite) as the app's server login, copies a made-up
+// handful of NetSuite documents for BMG and 1084, posts FleetSuite's entries
+// for some of them, copies a few stock moves and NetSuite's counts, and runs
+// the check's looks against it the way the cron does, holding what it tells
+// the super admins and what it records.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -15,9 +17,10 @@ import { BOOKS_DAILY_CHECK, runDailyCheck, type CheckAlert, type Look } from './
 import { BOOKS_INVOICE_POSTING } from './invoice-posting';
 import { BOOKS_STOCK_SYNC } from './netsuite-stock';
 
-/** Made-up chart: '120' receivables, '400' sales, '220' sales tax, '110' undeposited funds, '600' rent. */
+/** Made-up chart: '120' receivables, '210' payables, '400' sales, '220' sales tax, '110' undeposited funds, '600' rent. */
 const ACCOUNTS: Array<[string, string, string]> = [
   ['120', 'Receivables', 'accounts_receivable'],
+  ['210', 'Payables', 'accounts_payable'],
   ['400', 'Sales', 'income'],
   ['220', 'Sales Tax', 'other_current_liability'],
   ['110', 'Undeposited Funds', 'other_current_asset'],
@@ -27,6 +30,7 @@ const accountId = (ns: string) => `a0000000-0000-4000-8000-000000000${ns}`;
 const DEC = '2025-12-01';
 const AUG = '2026-08-01';
 const SEP = '2026-09-01';
+const OCT = '2026-10-01';
 
 async function freshDb(): Promise<PGlite> {
   const pg = new PGlite();
@@ -40,7 +44,7 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
     -- What migration 314 points at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
-    CREATE TABLE public.customers (id UUID PRIMARY KEY);
+    CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT);
     CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
   `);
   for (const file of [
@@ -51,7 +55,7 @@ async function freshDb(): Promise<PGlite> {
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
-    '402-books-stock-values.sql',
+    '402-books-stock-values.sql', '406-books-party-balances.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -68,18 +72,18 @@ async function freshDb(): Promise<PGlite> {
 
 const money = (cents: number) => (Math.abs(cents) / 100).toFixed(2);
 
-/** A NetSuite transaction as the GL copy keeps it; lines are [line id, company, account, cents debit positive]. */
-async function copyTxn(pg: PGlite, id: string, type: string, date: string, month: string, lines: Array<[string, string, string, number]>) {
+/** A NetSuite transaction as the GL copy keeps it; lines are [line id, company, account, cents debit positive, NetSuite's id for its name]. */
+async function copyTxn(pg: PGlite, id: string, type: string, date: string, month: string, lines: Array<[string, string, string, number, string?]>) {
   await pg.query(
     `INSERT INTO gl_netsuite_transactions (netsuite_id, tran_type, tranid, trandate, posting_month, content_hash, sweep)
      VALUES ($1, $2, $3, $4, $5, 'x', 's')`,
     [id, type, `${type === 'CustInvc' ? 'INV' : 'JE'}${id}`, date, month],
   );
-  for (const [line, company, account, cents] of lines) {
+  for (const [line, company, account, cents, entity] of lines) {
     await pg.query(
-      `INSERT INTO gl_netsuite_lines (transaction_id, line_id, company_id, netsuite_account_id, posting_month, trandate, debit, credit)
-       SELECT $1, $2, id, $3, $4, $5, $6, $7 FROM gl_companies WHERE code = $8`,
-      [id, line, account, month, date, cents > 0 ? money(cents) : '0', cents < 0 ? money(cents) : '0', company],
+      `INSERT INTO gl_netsuite_lines (transaction_id, line_id, company_id, netsuite_account_id, posting_month, trandate, debit, credit, entity_id)
+       SELECT $1, $2, id, $3, $4, $5, $6, $7, $9 FROM gl_companies WHERE code = $8`,
+      [id, line, account, month, date, cents > 0 ? money(cents) : '0', cents < 0 ? money(cents) : '0', company, entity ?? null],
     );
   }
 }
@@ -101,8 +105,8 @@ async function invoice(pg: PGlite, id: string, date: string, month: string, cent
   await mirrorInvoice(pg, id, date, customer);
 }
 
-/** FleetSuite's entry for a document; lines are [account, cents debit positive]. */
-const post = (pg: PGlite, company: string, kind: string, id: string, date: string, lines: Array<[string, number]>) => pg.query(
+/** FleetSuite's entry for a document; lines are [account, cents debit positive, the customer's FleetSuite id or the vendor's NetSuite id]. */
+const post = (pg: PGlite, company: string, kind: string, id: string, date: string, lines: Array<[string, number, string?]>) => pg.query(
   'SELECT gl_post_entry($1::jsonb)',
   [JSON.stringify({
     company,
@@ -111,7 +115,11 @@ const post = (pg: PGlite, company: string, kind: string, id: string, date: strin
     source_id: id,
     posting_rule: `${kind}@1`,
     idempotency_key: `${company === 'BMG' ? '' : `${company}:`}${kind}:${id}:1`,
-    lines: lines.map(([account, cents]) => ({ account_id: accountId(account), [cents > 0 ? 'debit' : 'credit']: money(cents) })),
+    lines: lines.map(([account, cents, party]) => ({
+      account_id: accountId(account),
+      [cents > 0 ? 'debit' : 'credit']: money(cents),
+      ...(party ? (account === '210' ? { vendor_ref: party } : { customer_id: party }) : {}),
+    })),
   })],
 );
 
@@ -120,7 +128,9 @@ describe('the daily books check', () => {
   const store = new Map<string, { last_result: unknown; updated_at: string }>();
   /** When a function fails, by what it was asked. */
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
+  /** What a look told about months and stock; about balances, apart. */
   let told: CheckAlert[] = [];
+  let toldBalances: CheckAlert[] = [];
 
   // sync_state and cron_runs in memory; every function the real one, called the way supabase-js calls it.
   const service = () => ({
@@ -158,7 +168,13 @@ describe('the daily books check', () => {
 
   const look = async (which: Look) => {
     told = [];
-    return runDailyCheck(service(), { look: which, tell: async (alerts) => { told.push(...alerts); } });
+    toldBalances = [];
+    return runDailyCheck(service(), {
+      look: which,
+      tell: async (alerts) => {
+        for (const alert of alerts) (alert.about === 'balance' ? toldBalances : told).push(alert);
+      },
+    });
   };
   const held = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.companies;
 
@@ -193,11 +209,18 @@ describe('the daily books check', () => {
     expect(told).toEqual([]);
     expect(held().BMG).toEqual({ known: { [DEC]: 1 }, noted: { [SEP]: 1 } });
 
-    expect(await look('second')).toMatchObject({ look: 'second', told: 1 });
+    // The month, and the balance of the customers its invoice names: none the mirror matched, here.
+    expect(await look('second')).toMatchObject({ look: 'second', told: 2 });
     expect(told).toEqual([{
       title: "BMG's books: September 2026 no longer matches NetSuite",
       body: 'INV5004 (Acme Fleet) differs from what NetSuite posted. Differences vs NetSuite shows why.',
       url: '/admin/books/differences?company=BMG&month=2026-09',
+    }]);
+    expect(toldBalances).toEqual([{
+      title: "BMG's books: the balance of customers not matched to FleetSuite no longer matches NetSuite",
+      body: 'INV5004 differs from what NetSuite posted. Customer and vendor balances shows why.',
+      url: '/admin/books/balances/party?company=BMG&kind=customer&party=none',
+      about: 'balance',
     }]);
     expect(held().BMG).toEqual({ known: { [DEC]: 1, [SEP]: 1 }, noted: {} });
 
@@ -227,6 +250,12 @@ describe('the daily books check', () => {
       url: '/admin/books/differences?company=BMG&month=2025-12',
     }]);
     expect(held().BMG.known).toEqual({ [DEC]: 2, [SEP]: 1 });
+    expect(toldBalances).toEqual([{
+      title: "BMG's books: more documents of customers not matched to FleetSuite differ from NetSuite",
+      body: '2 documents differ now, 1 before: INV5004 and INV5006. Customer and vendor balances shows why.',
+      url: '/admin/books/balances/party?company=BMG&kind=customer&party=none',
+      about: 'balance',
+    }]);
   });
 
   it("looks at 1084's books too", async () => {
@@ -276,6 +305,10 @@ describe('the daily books check', () => {
       companies: {
         BMG: { known: { [DEC]: 2, [AUG]: 1, [SEP]: 1 }, noted: {} },
         1084: { known: { [AUG]: 1, [SEP]: 1 }, noted: {} },
+      },
+      balances: {
+        BMG: { known: { 'c:': 3 }, noted: {} },
+        1084: { known: {}, noted: {} },
       },
     });
   });
@@ -439,7 +472,86 @@ describe('the daily books check', () => {
 
   it('records items and how far apart their counts are, never an amount', () => {
     const record = store.get(BOOKS_DAILY_CHECK)!.last_result as Record<string, unknown>;
-    expect(Object.keys(record).sort()).toEqual(['companies', 'look', 'stock', 'told']);
+    expect(Object.keys(record).sort()).toEqual(['balances', 'companies', 'look', 'stock', 'told']);
     expect(record.stock).toEqual({ by: 'item', known: { [LADDER]: 1, [BINS]: 5 }, noted: {} });
+  });
+
+  // ── Customer and vendor balances ───────────────────────────────────────
+
+  const ACME = 'c0000000-0000-4000-8000-00000000000a';
+  const heldBalances = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.balances;
+
+  it("tells when a customer's balance stops matching NetSuite's, naming its documents", async () => {
+    // Acme is NetSuite's customer 9001, which the mirror matched; FleetSuite posted its October invoice for less.
+    await pg.query(`INSERT INTO customers (id, company_name) VALUES ($1, 'Acme Fleet')`, [ACME]);
+    await pg.query(
+      `INSERT INTO ledger_customers (source, external_id, external_ref, display_name, cleaned_name, match_status, customer_id)
+       VALUES ('netsuite', 'customer/9001', '9001', 'Acme Fleet Services', 'acme fleet services', 'exact', $1)`,
+      [ACME],
+    );
+    await copyTxn(pg, '5101', 'CustInvc', '2026-10-05', OCT, [['0', 'BMG', '120', 60000, '9001'], ['1', 'BMG', '400', -60000, '9001']]);
+    await post(pg, 'BMG', 'invoice', '5101', '2026-10-05', [['120', 55000, ACME], ['400', -55000]]);
+    await look('first');
+    expect(heldBalances().BMG.noted).toEqual({ [`c:${ACME}`]: 1 });
+    expect(toldBalances).toEqual([]);
+    await look('second');
+    expect(toldBalances).toEqual([{
+      title: "BMG's books: Acme Fleet's balance no longer matches NetSuite",
+      body: 'INV5101 differs from what NetSuite posted. Customer and vendor balances shows why. '
+        + 'The last posting run failed, so FleetSuite may be behind.',
+      url: `/admin/books/balances/party?company=BMG&kind=customer&party=${ACME}`,
+      about: 'balance',
+    }]);
+    // The month it's in is told about as a month.
+    expect(told.map((a) => a.title)).toEqual(["BMG's books: October 2026 no longer matches NetSuite"]);
+
+    // The next morning, nothing more.
+    await look('first');
+    await look('second');
+    expect(toldBalances).toEqual([]);
+  });
+
+  it("tells when a vendor's balance stops matching, by NetSuite's name for it, and nothing of one caught up by the second look", async () => {
+    await pg.query(`INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active) VALUES ('vendor', '7101', 'Landlord LLC', true)`);
+    await copyTxn(pg, '6101', 'VendBill', '2026-10-01', OCT, [['0', 'BMG', '210', -30000, '7101'], ['1', 'BMG', '600', 30000, '7101']]);
+    await post(pg, 'BMG', 'vendor_bill', '6101', '2026-10-01', [['210', -30000, '7101'], ['600', 30000]]);
+    await copyTxn(pg, '6102', 'VendPymt', '2026-10-10', OCT, [['0', 'BMG', '210', 30000, '7101'], ['1', 'BMG', '110', -30000, '7101']]);
+    await look('first');
+    expect(heldBalances().BMG.noted).toEqual({ 'v:7101': 1 });
+    await look('second');
+    expect(toldBalances).toEqual([{
+      title: "BMG's books: Landlord LLC's balance no longer matches NetSuite",
+      body: 'JE6102 differs from what NetSuite posted. Customer and vendor balances shows why. '
+        + 'The last posting run failed, so FleetSuite may be behind.',
+      url: '/admin/books/balances/party?company=BMG&kind=vendor&party=7101',
+      about: 'balance',
+    }]);
+
+    // A second bill NetSuite has, which the posting run catches up with before the second look.
+    await copyTxn(pg, '6103', 'VendBill', '2026-10-12', OCT, [['0', 'BMG', '210', -5000, '7101'], ['1', 'BMG', '600', 5000, '7101']]);
+    await look('first');
+    expect(heldBalances().BMG.noted).toEqual({ 'v:7101': 2 });
+    await post(pg, 'BMG', 'vendor_bill', '6103', '2026-10-12', [['210', -5000, '7101'], ['600', 5000]]);
+    await look('second');
+    expect(toldBalances).toEqual([]);
+  });
+
+  it("keeps what it held for a company's balances when it couldn't look, and says why", async () => {
+    const before = heldBalances().BMG;
+    failing = (name, args) => name === 'gl_party_balances' && args.p_company === 'BMG' && args.p_kind === 'vendor';
+    try {
+      const result = await look('first');
+      expect(result.error).toBe("BMG's balances: couldn't compare the vendor balances (gl_party_balances failed)");
+      expect(heldBalances().BMG).toEqual(before);
+    } finally {
+      failing = null;
+    }
+  });
+
+  it('records whose balances differ and in how many documents, never an amount', () => {
+    expect(heldBalances()).toEqual({
+      BMG: { known: { 'c:': 4, [`c:${ACME}`]: 1, 'v:7101': 1 }, noted: {} },
+      1084: { known: {}, noted: {} },
+    });
   });
 });

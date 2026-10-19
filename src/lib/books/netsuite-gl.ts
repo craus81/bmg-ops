@@ -24,6 +24,9 @@ import type { BooksCompany } from './journal';
  *      month it was posted to, as on NetSuite's own reports;
  *   2. reads NetSuite's own totals per subsidiary, account and month and
  *      stores them: the starting entry, and what the copy is checked against;
+ *      and, by name, the part of the starting entry on the receivable and
+ *      payable accounts each customer and vendor holds (migration 406, for
+ *      Customer and vendor balances);
  *   3. works out the same totals from the copy, and copies again every month
  *      that differs: its lines are read in pages, a transaction whose content
  *      hasn't changed is only marked seen, and once the month is through,
@@ -244,6 +247,29 @@ export function noAccountQuery(f: PostingFilter, subsidiaries: string[]): string
     `;
 }
 
+/**
+ * The starting entry by name: NetSuite's lines on the receivable and payable
+ * accounts per subsidiary, account, name, period and date month, so
+ * summarizePartyOpening places them as summarizeTotals places the whole of
+ * it. Only the lines that can count before COPY_FROM are read: those dated
+ * before it, and those in a posting period before it.
+ */
+export function partyOpeningQuery(f: PostingFilter, accounts: string[], periods: Map<string, string> | null): string {
+  const ids = [...new Set(accounts.filter((id) => /^\d+$/.test(id)))];
+  if (!ids.length) throw new Error('No receivable or payable account to read');
+  const early = periods ? [...periods].filter(([, month]) => month < COPY_FROM).map(([id]) => id) : [];
+  const before = `t.trandate < ${suiteqlDate(COPY_FROM)}${early.length ? ` OR t.postingperiod IN (${early.join(', ')})` : ''}`;
+  return `
+      SELECT tl.subsidiary AS subsidiary_id, tal.account AS account_id, tl.entity AS line_entity_id, t.entity AS txn_entity_id,
+             t.postingperiod AS period_id, TO_CHAR(t.trandate, 'YYYY-MM') AS date_month,
+             SUM(NVL(tal.debit, 0)) AS debit, SUM(NVL(tal.credit, 0)) AS credit, COUNT(*) AS line_count${GL_FROM}
+      WHERE ${postingWhere(f)}
+        AND tal.account IN (${ids.join(', ')})
+        AND (${before})
+      GROUP BY tl.subsidiary, tal.account, tl.entity, t.entity, t.postingperiod, TO_CHAR(t.trandate, 'YYYY-MM')
+    `;
+}
+
 // ── NetSuite's totals ──────────────────────────────────────────────────────
 
 export interface AmountRow {
@@ -322,6 +348,43 @@ export function summarizeTotals(
     unlinked,
     unplaced,
   };
+}
+
+/** One company's, account's and name's part of the starting entry, as gl_netsuite_store_opening_parties takes it. */
+export interface PartyOpeningRow extends AmountRow {
+  /** NetSuite's id for the lines' name, the line's own else its transaction's as the copy keeps it; '' for none. */
+  entity_id: string;
+}
+
+/**
+ * The rows of partyOpeningQuery → the starting entry by name. A line is
+ * placed in a month as summarizeTotals places it, and only those before
+ * COPY_FROM in a linked subsidiary count, so on each account the names add
+ * up to the starting entry itself.
+ */
+export function summarizePartyOpening(
+  rows: Row[],
+  periods: Map<string, string> | null,
+  links: Map<string, BooksCompany>,
+): PartyOpeningRow[] {
+  const sums = new Map<string, Sums>();
+  for (const row of rows) {
+    const sub = numericId(row.subsidiary_id);
+    const company = sub ? links.get(sub) : undefined;
+    const account = numericId(row.account_id);
+    const dateMonth = /^\d{4}-\d{2}$/.test(text(row.date_month)) ? `${text(row.date_month)}-01` : null;
+    const month = postingMonth(row.period_id, dateMonth, periods);
+    if (!company || !account || !month || month >= COPY_FROM) continue;
+    const entity = numericId(row.line_entity_id) ?? numericId(row.txn_entity_id) ?? '';
+    add(sums, `${company}|${account}|${entity}`, toCents(row.debit), toCents(row.credit), Math.max(0, Math.trunc(Number(row.line_count) || 0)));
+  }
+  return [...sums].map(([key, s]) => {
+    const [company, account, entity] = key.split('|');
+    return {
+      company: company as BooksCompany, netsuite_account_id: account, entity_id: entity,
+      debit: centsToString(s.debit), credit: centsToString(s.credit), line_count: s.lines,
+    };
+  });
 }
 
 /** NetSuite's transaction type codes, named as its screens name them. Any other code shows as it is. */
@@ -533,6 +596,8 @@ export interface GlCopyResult {
   transactionsUnchanged?: number;
   transactionsRemoved?: number;
   linesCopied?: number;
+  /** Rows of the starting entry by name stored this run (customers and vendors with lines before 2025). */
+  openingNames?: number;
   /** Stopped for time with months still to copy; the next run carries on. */
   partial?: boolean;
   /** What the run couldn't do, in plain words. */
@@ -573,6 +638,58 @@ async function firstAccepted<T>(variants: readonly T[], run: (v: T) => Promise<R
 
 const monthLabel = (month: string) =>
   new Date(`${month}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+
+/**
+ * Step 2's second part: the starting entry by name on the receivable and
+ * payable accounts, for Customer and vendor balances. Read only when the
+ * starting entry has lines on them; with none it's emptied. When NetSuite
+ * won't give it, or it can't be stored, the copy carries on and the split
+ * stored last time stays, since Customer and vendor balances says when it
+ * no longer adds up to the starting entry.
+ */
+async function storePartyOpening(
+  service: SupabaseClient,
+  ctx: {
+    totals: NetSuiteTotals;
+    posting: PostingFilter;
+    periods: Map<string, string> | null;
+    links: Map<string, BooksCompany>;
+    notes: string[];
+    query: SuiteqlAll;
+    result: GlCopyResult;
+  },
+): Promise<void> {
+  const keep = "so Customer and vendor balances keeps the split by name it had";
+  const { data: accountRows, error: accountErr } = await service
+    .from('gl_accounts')
+    .select('netsuite_account_id')
+    .in('account_type', ['accounts_receivable', 'accounts_payable'])
+    .not('netsuite_account_id', 'is', null);
+  if (accountErr) {
+    ctx.notes.push(`The chart's receivable and payable accounts couldn't be read (${accountErr.message}), ${keep}.`);
+    return;
+  }
+  const partyAccounts = new Set(((accountRows || []) as Array<{ netsuite_account_id: string | null }>)
+    .map((a) => numericId(a.netsuite_account_id)).filter((id): id is string => !!id));
+  const early = [...new Set(ctx.totals.opening
+    .filter((r) => partyAccounts.has(r.netsuite_account_id) && r.line_count > 0)
+    .map((r) => r.netsuite_account_id))];
+  let parties: PartyOpeningRow[] = [];
+  if (early.length) {
+    try {
+      parties = summarizePartyOpening(await ctx.query(partyOpeningQuery(ctx.posting, early, ctx.periods)), ctx.periods, ctx.links);
+    } catch (err) {
+      ctx.notes.push(`NetSuite wouldn't give the names on its receivable and payable accounts before 2025 (${reason(err)}), ${keep}.`);
+      return;
+    }
+  }
+  const saved = await service.rpc('gl_netsuite_store_opening_parties', { p: { parties } });
+  if (saved.error) {
+    ctx.notes.push(`The starting entry by name couldn't be stored (${saved.error.message}), ${keep}.`);
+    return;
+  }
+  ctx.result.openingNames = Number(saved.data) || 0;
+}
 
 export async function copyNetSuiteGl(
   service: SupabaseClient,
@@ -653,6 +770,7 @@ export async function copyNetSuiteGl(
     const stored = await service.rpc('gl_netsuite_store_totals', { p: { opening: totals.opening, months: totals.months } });
     if (stored.error) throw new Error(stored.error.message);
     result.netsuiteAsOf = new Date(now()).toISOString();
+    await storePartyOpening(service, { totals, posting, periods, links, notes, query, result });
 
     // 3. Copy every month that differs, carrying on from a cut-off month first.
     const copiedTotals = await service.rpc('gl_netsuite_totals', { p_company: null });

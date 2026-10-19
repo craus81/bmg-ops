@@ -200,6 +200,8 @@ export default function BooksDifferencesPage() {
           <Link href="/admin/books/invoices" style={{ color: 'var(--text-secondary)' }}>Invoices vs NetSuite</Link>
           {' · '}
           <Link href="/admin/books/stock" style={{ color: 'var(--text-secondary)' }}>Stock by item</Link>
+          {' · '}
+          <Link href="/admin/books/balances" style={{ color: 'var(--text-secondary)' }}>Customer and vendor balances</Link>
         </div>
       </div>
 

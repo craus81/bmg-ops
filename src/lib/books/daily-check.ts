@@ -7,6 +7,9 @@ import { BOOKS_INVOICE_POSTING, POSTING_COMPANIES, runLimited } from './invoice-
 import { BOOKS_STOCK_SYNC } from './netsuite-stock';
 import { compareStock, quantityText, type CountsBy, type StockItemsData, type StockLine } from './stock-items';
 import {
+  PARTY_KINDS, partyBalances, partyDetail, type PartyBalancesData, type PartyDocumentsData, type PartyKind,
+} from './party-balances';
+import {
   documentNumber, indexMonths, lastMonth, monthStatuses, monthText, NETSUITE_TYPE, postedKinds,
   type DiffData, type DiffDocumentData,
 } from './differences';
@@ -43,12 +46,19 @@ import {
  * moment; after a copy that didn't get that far, stock waits for the next
  * look. Values aren't told about: the page shows them.
  *
- * In-app and push only (books_month_differs, books_stock_differs). The
- * record in sync_state, 'books_daily_check', holds which months differ and
- * how many of their documents, and which items' counts differ and by about
- * how many, never an amount, and is left out of HEALTH_MONITORS like the
- * other books jobs; Differences vs NetSuite says when the check last looked.
- * Nothing is written to NetSuite or to the books.
+ * Each customer's and vendor's balance (owner decision 2026-10-19,
+ * "Balance checks"; src/lib/books/party-balances.ts) is looked at the same
+ * way too: one whose balance in FleetSuite's books stops matching NetSuite's
+ * is noted at the first look and told about at the second if it still
+ * differs, as is one more of whose documents differ than before.
+ *
+ * In-app and push only (books_month_differs, books_stock_differs,
+ * books_balance_differs). The record in sync_state, 'books_daily_check',
+ * holds which months differ and how many of their documents, which items'
+ * counts differ and by about how many, and whose balances differ and in how
+ * many documents, never an amount, and is left out of HEALTH_MONITORS like
+ * the other books jobs; Differences vs NetSuite says when the check last
+ * looked. Nothing is written to NetSuite or to the books.
  */
 
 export const BOOKS_DAILY_CHECK = 'books_daily_check';
@@ -86,11 +96,23 @@ export interface DailyCheckState {
   companies: Partial<Record<BooksCompany, CompanyCheck>>;
   /** Absent until the check has looked at stock. */
   stock?: StockCheck;
+  /**
+   * Each company's customers and vendors whose balance differs from NetSuite's, as for its months: by balanceKey,
+   * each with how many of their documents differ. A company is absent until the check has looked at its balances.
+   */
+  balances?: Partial<Record<BooksCompany, CompanyCheck>>;
 }
 
 const MONTH_RE = /^\d{4}-\d{2}-01$/;
 /** An item at a location, or an item company-wide: StockLine.key. */
 const STOCK_KEY_RE = /^\d+(\|\d*)?$/;
+/** A customer, by FleetSuite's id, or a vendor, by NetSuite's; nothing after the colon for the lines FleetSuite can't name. */
+const BALANCE_KEY_RE = /^(c:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?|v:(\d+)?)$/;
+
+/** How the check keys one customer's ('c:<FleetSuite id>') or vendor's ('v:<NetSuite id>') balance; 'c:' and 'v:' for the lines FleetSuite can't name. */
+export const balanceKey = (kind: PartyKind, party: string) => `${kind === 'customer' ? 'c' : 'v'}:${party}`;
+const partyOfKey = (key: string): { kind: PartyKind; party: string } =>
+  ({ kind: key.startsWith('c:') ? 'customer' : 'vendor', party: key.slice(2) });
 const has = (months: DifferingMonths, month: string) => Object.prototype.hasOwnProperty.call(months, month);
 
 function parseCounts(raw: unknown, key: RegExp): DifferingMonths | null {
@@ -123,7 +145,13 @@ export function parseCheckState(lastResult: unknown): DailyCheckState {
     }
   }
   const stock = parseStock(last.stock);
-  return { companies, ...(stock ? { stock } : {}) };
+  const balances: NonNullable<DailyCheckState['balances']> = {};
+  for (const company of POSTING_COMPANIES) {
+    const known = parseCounts(last.balances?.[company]?.known, BALANCE_KEY_RE);
+    const noted = parseCounts(last.balances?.[company]?.noted, BALANCE_KEY_RE);
+    if (known && noted) balances[company] = { known, noted };
+  }
+  return { companies, ...(stock ? { stock } : {}), ...(Object.keys(balances).length ? { balances } : {}) };
 }
 
 /** A month to tell the super admins about. */
@@ -165,8 +193,11 @@ export interface CheckAlert {
   title: string;
   body: string;
   url: string;
-  /** Set on a notification about stock by item (books_stock_differs); one about months has none (books_month_differs). */
-  about?: 'stock';
+  /**
+   * Set on a notification about stock by item (books_stock_differs) or a customer's or vendor's balance
+   * (books_balance_differs); one about months has none (books_month_differs).
+   */
+  about?: 'stock' | 'balance';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -259,6 +290,72 @@ export function stockAlertsFor(news: StockNews[]): CheckAlert[] {
   }));
 }
 
+/** A customer's or vendor's balance to tell the super admins about. */
+export interface BalanceNews {
+  kind: PartyKind;
+  /** A customer's FleetSuite id, a vendor's NetSuite id; '' for the lines FleetSuite can't name. */
+  party: string;
+  name: string;
+  /** How many of its documents differ now. */
+  documents: number;
+  /** How many differed when they last heard of it; null when its balance matched. */
+  before: number | null;
+  /** The newest of its documents that differ, by number. */
+  named: string[];
+}
+
+/** What the lines FleetSuite can't name are, in a sentence. */
+const UNNAMED_GROUP: Readonly<Record<PartyKind, string>> = {
+  customer: 'customers not matched to FleetSuite',
+  vendor: 'payables naming no vendor',
+};
+
+const balanceOf = (n: BalanceNews) => (n.party ? `${n.name}'s balance` : `the balance of ${UNNAMED_GROUP[n.kind]}`);
+const documentsOf = (n: BalanceNews) => (n.party ? `more of ${n.name}'s documents differ` : `more documents of ${UNNAMED_GROUP[n.kind]} differ`);
+
+/** What one balance's notification says has changed, naming its documents that differ. */
+function whatDiffersIn(n: BalanceNews): string {
+  const docs = n.named.slice(0, NAMED);
+  const all = n.documents <= docs.length;
+  if (n.before !== null) {
+    const which = docs.length ? `${all ? ': ' : ', the newest '}${listed(docs)}` : '';
+    return `${plural(n.documents, 'document differs', 'documents differ')} now, ${n.before || 'none'} before${which}.`;
+  }
+  if (!docs.length) return `${plural(n.documents, 'document differs', 'documents differ')} from what NetSuite posted.`;
+  if (all) return `${listed(docs)} ${n.documents === 1 ? 'differs' : 'differ'} from what NetSuite posted.`;
+  return `${plural(n.documents, 'document differs', 'documents differ')} from what NetSuite posted, the newest ${listed(docs)}.`;
+}
+
+/**
+ * What the super admins are told about one company's customers' and vendors' balances: a notification for each,
+ * linking to its documents, or one for them all, linking to the balances that differ, when there are more than
+ * ONE_BY_ONE. `hint` says when the last posting run or copy of NetSuite's ledger failed, which can be why.
+ */
+export function balanceAlertsFor(company: BooksCompany, news: BalanceNews[], hint = ''): CheckAlert[] {
+  if (!news.length) return [];
+  const books = `${company}'s books`;
+  const why = `Customer and vendor balances shows why.${hint ? ` ${hint}` : ''}`;
+  if (news.length > ONE_BY_ONE) {
+    const kinds = new Set(news.map((n) => n.kind));
+    const which = kinds.size > 1 ? 'customer and vendor balances' : `${news[0].kind} balances`;
+    const names = listed([...news.slice(0, ONE_BY_ONE).map((n) => (n.party ? n.name : `the ${UNNAMED_GROUP[n.kind]}`)), `${news.length - ONE_BY_ONE} more`]);
+    return [{
+      title: `${books}: ${news.length} ${which} differ from NetSuite now`,
+      body: `${names.charAt(0).toUpperCase()}${names.slice(1)}. ${why}`,
+      url: deepLinks.booksBalances(company, news[0].kind, true),
+      about: 'balance',
+    }];
+  }
+  return news.map((n) => ({
+    title: n.before === null
+      ? `${books}: ${balanceOf(n)} no longer matches NetSuite`
+      : `${books}: ${documentsOf(n)} from NetSuite`,
+    body: `${whatDiffersIn(n)} ${why}`,
+    url: deepLinks.booksBalance(company, n.kind, n.party),
+    about: 'balance',
+  }));
+}
+
 // ── Looking ────────────────────────────────────────────────────────────────
 
 /** Months whose documents are looked up at once. */
@@ -312,9 +409,47 @@ async function lookAtStock(service: SupabaseClient): Promise<{ by: CountsBy; now
   return { by: compared.by, now, lines };
 }
 
+/** One company's customers and vendors whose balance differs from NetSuite's now, by balanceKey, with their names. */
+async function lookAtBalances(service: SupabaseClient, company: BooksCompany): Promise<{ now: DifferingMonths; names: Map<string, string> }> {
+  const now: DifferingMonths = {};
+  const names = new Map<string, string>();
+  for (const kind of PARTY_KINDS) {
+    const res = await service.rpc('gl_party_balances', { p_company: company, p_kind: kind });
+    if (res.error) throw new Error(`couldn't compare the ${kind} balances (${res.error.message})`);
+    for (const p of partyBalances(res.data as PartyBalancesData, kind).parties) {
+      if (!p.differs) continue;
+      // A balance that differs has a document that does; at least one, so it's told about.
+      now[balanceKey(kind, p.party)] = Math.max(1, p.differing);
+      names.set(balanceKey(kind, p.party), p.name);
+    }
+  }
+  return { now, names };
+}
+
+/** The newest documents that differ of each balance a notification names one by one. */
+async function balanceNews(
+  service: SupabaseClient,
+  company: BooksCompany,
+  news: MonthNews[],
+  names: Map<string, string>,
+): Promise<BalanceNews[]> {
+  const out = news.map((n): BalanceNews => ({
+    ...partyOfKey(n.month), name: names.get(n.month) ?? '', documents: n.documents, before: n.before, named: [],
+  }));
+  if (out.length > ONE_BY_ONE) return out;
+  await runLimited(out.map((n) => async () => {
+    const res = await service.rpc('gl_party_documents', {
+      p_company: company, p_kind: n.kind, p_party: n.party, p_differs: true, p_limit: NAMED,
+    });
+    // The notification does without them.
+    if (!res.error && res.data) n.named = partyDetail(res.data as PartyDocumentsData, n.kind).rows.map((d) => d.number);
+  }), LOOKUPS);
+  return out;
+}
+
 export interface DailyCheckResult {
   look: Look;
-  /** Months and items told about. */
+  /** Months, items and balances told about. */
   told: number;
   /** What the look couldn't do; a company it couldn't look at keeps what the check held for it. */
   error?: string;
@@ -379,10 +514,25 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     }
   }
 
+  // Each customer's and vendor's balance, after the months, from the same posting run and copy.
+  const balances: NonNullable<DailyCheckState['balances']> = { ...held.balances };
+  for (const company of POSTING_COMPANIES) {
+    try {
+      const { now, names } = await lookAtBalances(service, company);
+      const { check, news } = nextCheck(held.balances?.[company], now, opts.look);
+      balances[company] = check;
+      alerts.push(...balanceAlertsFor(company, await balanceNews(service, company, news, names), hint));
+      told += news.length;
+    } catch (err) {
+      errors.push(`${company}'s balances: ${reason(err)}`);
+    }
+  }
+
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.
   if (alerts.length) await opts.tell(alerts);
   const result: DailyCheckResult = { look: opts.look, told, ...(errors.length ? { error: errors.join(' ') } : {}) };
-  const heartbeat = await recordHeartbeat(service, BOOKS_DAILY_CHECK, { ...result, companies, ...(stock ? { stock } : {}) }, {
+  const record = { ...result, companies, ...(stock ? { stock } : {}), ...(Object.keys(balances).length ? { balances } : {}) };
+  const heartbeat = await recordHeartbeat(service, BOOKS_DAILY_CHECK, record, {
     startedAt,
     records: told,
     touchLastSyncedAt: !errors.length,
