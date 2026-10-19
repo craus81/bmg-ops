@@ -8,6 +8,7 @@ import {
   pairLines,
   parseRate,
   pct,
+  takeApartSpread,
   taxFlips,
   type NetsuiteInvoiceData,
   type NetsuiteLineData,
@@ -228,6 +229,23 @@ describe('an own invoice next to NetSuite\'s', () => {
     expect(unsigned.lines[1].netsuite?.cents).toBe(-2000);
   });
 
+  it('matches a discount NetSuite spread over the line it applies to', () => {
+    const discount = ownLine({ line_no: 3, item_id: '58', item_number: 'DISCOUNT', quantity: null, rate: null, amount: '-20.00', taxable: false, tax: '0.00' });
+    const spreadNs = [SHELF_NS, nsLine('2', 'item', '56', '265.00', '-265.00', '3', '95'), nsLine('3', 'item', '58', '0.00', '0.00', null, '20'), taxNs('21.30')];
+    const c = check({
+      own: own({ lines: [ownLine(), LABOR_LINE, discount], subtotal: '516.00', total: '537.30' }),
+      netsuite: netsuite({ total: '537.30', lines: spreadNs }),
+    });
+    expect(c.status).toBe('matches');
+    expect(c.lines.map((l) => l.netsuite?.cents)).toEqual([25100, 28500, -2000]);
+    expect(c.workedOut).toContain("NetSuite spread DISCOUNT over the lines it applies to, so NetSuite's lines are taken at their quantities times their prices, "
+      + 'and DISCOUNT at the difference.');
+    // Without the discount's line FleetSuite's labor is $20 more than NetSuite's.
+    const noDiscount = check({ own: own({ lines: [ownLine(), LABOR_LINE], total: '557.30' }), netsuite: netsuite({ total: '537.30', lines: spreadNs }) });
+    expect(noDiscount.status).toBe('differs');
+    expect(noDiscount.workedOut.some((w) => w.startsWith('NetSuite spread'))).toBe(true);
+  });
+
   it('is incomplete when what matches can\'t be all of it', () => {
     const c = check({ own: own({ unknowns: ['location'], location_id: null, location_from: null }) });
     expect(c).toMatchObject({
@@ -348,6 +366,48 @@ describe('finding the lines taxed the other way', () => {
     expect(taxFlips(lines, 0.1, 0)).toEqual([lines[0]]);
     expect(taxFlips(lines, 0.1, 333)).toBeNull();
     expect(taxFlips(Array.from({ length: 13 }, () => l(100, true)), 0.1, 0)).toBeNull();
+  });
+});
+
+describe('taking apart a discount NetSuite spread over lines', () => {
+  const TYPES: Record<string, string> = { 55: 'InvtPart', 56: 'Service', 58: 'Discount', 59: 'Markup' };
+  const typeOf = (id: string | null) => (id ? TYPES[id] ?? null : null);
+  const line = (itemId: string | null, cents: number | null, quantity: number | null = null, rate: number | null = null) => ({ itemId, quantity, rate, cents });
+  const shelf = line('55', 25100, 2, 125.5);
+
+  it('takes each line at its quantity times its price, and the discount or markup at the difference', () => {
+    const lines = [shelf, line('56', 26500, 3, 95), line('58', 0, null, 20)];
+    const out = takeApartSpread(lines, typeOf);
+    expect(out.lines.map((l) => l.cents)).toEqual([25100, 28500, -2000]);
+    expect(out.spread).toBe(lines[2]);
+    expect(out.lines[0]).toBe(shelf);
+    const markup = takeApartSpread([shelf, line('56', 29925, 3, 95), line('59', 0)], typeOf);
+    expect(markup.lines.map((l) => l.cents)).toEqual([25100, 28500, 1425]);
+  });
+
+  it('keeps a discount NetSuite didn\'t spread at its own amount', () => {
+    const out = takeApartSpread([shelf, line('56', 26500, 3, 95), line('58', 0), line('58', -1000)], typeOf);
+    expect(out.lines.map((l) => l.cents)).toEqual([25100, 28500, -2000, -1000]);
+  });
+
+  it('leaves the lines at their net amounts when it can\'t tell what each charged', () => {
+    const labor = line('56', 26500, 3, 95);
+    const cases = {
+      noSpread: [shelf, labor, line('58', -2000)],
+      twoSpreads: [shelf, labor, line('58', 0), line('59', 0)],
+      noRate: [shelf, line('56', 26500, 3, null), line('58', 0)],
+      noQuantity: [shelf, line('56', 26500, null, 95), line('58', 0)],
+      unreadable: [shelf, line('56', null, 3, 95), line('58', 0)],
+      credit: [shelf, line('56', -26500, 3, 95), line('58', 0)],
+      nothingOff: [shelf, line('56', 28500, 3, 95), line('58', 0)],
+      nothingOn: [shelf, line('56', 28500, 3, 95), line('59', 0)],
+      discountAddingOn: [shelf, line('56', 30500, 3, 95), line('58', 0)],
+      markupTakingOff: [shelf, labor, line('59', 0)],
+    };
+    for (const [name, lines] of Object.entries(cases)) {
+      const out = takeApartSpread(lines, typeOf);
+      expect({ name, same: out.lines === lines, spread: out.spread }).toEqual({ name, same: true, spread: null });
+    }
   });
 });
 

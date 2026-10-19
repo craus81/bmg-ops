@@ -370,6 +370,52 @@ export function explainTax(t: TaxSides): string | null {
 
 // ── Lines ──────────────────────────────────────────────────────────────────
 
+/** NetSuite's item types for a discount or markup, which it spreads over the lines it applies to. */
+const SPREAD_TYPES = new Set(['Discount', 'Markup']);
+
+/**
+ * NetSuite's lines at what each charges on its own. NetSuite spreads a
+ * discount or markup over the lines it applies to: each one's net amount,
+ * which is what the ledger mirror copies, carries its share, and the
+ * discount's own line reads $0 net (docs/books.md "Invoices"). FleetSuite
+ * bills a discount on a line of its own, so when NetSuite's invoice has one
+ * discount or markup reading $0, its other lines are taken at quantity times
+ * price and the discount at what that leaves, the total staying as it is.
+ * With more than one, a line with no quantity or price, or one that's a
+ * credit, or nothing taken off, the lines keep their net amounts. `spread`
+ * is the discount's line when they were taken apart.
+ */
+export function takeApartSpread<L extends { itemId: string | null; quantity: number | null; rate: number | null; cents: number | null }>(
+  lines: L[],
+  typeOf: (itemId: string | null) => string | null,
+): { lines: L[]; spread: L | null } {
+  const isSpreadType = (l: L) => SPREAD_TYPES.has(typeOf(l.itemId) ?? '');
+  const spreads = lines.filter((l) => isSpreadType(l) && l.cents === 0);
+  if (spreads.length !== 1) return { lines, spread: null };
+  const [spread] = spreads;
+  let net = 0;
+  let own = 0;
+  const out: L[] = [];
+  for (const l of lines) {
+    if (l === spread || (isSpreadType(l) && l.cents !== null)) {
+      // A discount NetSuite didn't spread charges its own amount.
+      net += l.cents ?? 0;
+      own += l.cents ?? 0;
+      out.push(l);
+      continue;
+    }
+    if (l.cents === null || l.cents < 0 || l.quantity === null || l.rate === null) return { lines, spread: null };
+    const cents = Math.round(l.quantity * l.rate * 100);
+    net += l.cents;
+    own += cents;
+    out.push(cents === l.cents ? l : { ...l, cents });
+  }
+  const off = net - own;
+  // A discount takes money off and a markup adds it; anything else isn't a spread.
+  if (off === 0 || (typeOf(spread.itemId) === 'Discount') !== (off < 0)) return { lines, spread: null };
+  return { lines: out.map((l) => (l === spread ? { ...l, cents: off } : l)), spread };
+}
+
 type OwnSide = NonNullable<OwnLinePair['fleetsuite']> & { itemId: string | null; itemNumber: string | null };
 type NetSide = NonNullable<OwnLinePair['netsuite']> & { itemId: string | null; itemNumber: string | null };
 
@@ -454,8 +500,8 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
   const ownTotal = centsOf(own.total) ?? 0;
   const ownRate = num(own.tax_rate) ?? 0;
 
-  // NetSuite's side: its billed lines, its sales tax and its tax codes' rates.
-  const nsLines: NetSide[] = [];
+  // NetSuite's side: its billed lines, each at what it charges on its own, its sales tax and its tax codes' rates.
+  const nsBilled: NetSide[] = [];
   let nsTax = 0;
   let nsTaxReadable = true;
   const nsRates = new Set<number | null>();
@@ -469,13 +515,13 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
     }
     const type = l.item_id ? lists.items.get(l.item_id)?.type ?? null : null;
     if (l.item_id && isLayoutItem(l.item_id, type)) continue;
-    const cents = netsuiteCents(l, type);
-    if (cents === 0) continue;
-    nsLines.push({
+    nsBilled.push({
       lineId: l.line_id, itemId: l.item_id, itemNumber: l.item_number, description: l.description,
-      quantity: num(l.quantity), rate: num(l.rate), cents,
+      quantity: num(l.quantity), rate: num(l.rate), cents: netsuiteCents(l, type),
     });
   }
+  const spread = takeApartSpread(nsBilled, (id) => (id ? lists.items.get(id)?.type ?? null : null));
+  const nsLines = spread.lines.filter((l) => l.cents !== 0);
   const nsTotal = ns ? centsOf(ns.total) : null;
   const [onlyRate] = [...nsRates];
   const nsRate = nsRates.size === 1 && onlyRate !== undefined ? onlyRate : null;
@@ -683,6 +729,11 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
       ? "Its location is FleetSuite's invoice location rule's, from the customer: NetSuite took the sales order's."
       : own.location_from === 'sent' ? 'Its location is the one FleetSuite gave NetSuite.' : "Its location isn't known.",
   ];
+  if (spread.spread) {
+    const discount = itemName(spread.spread.itemId, spread.spread.itemNumber, spread.spread.description);
+    workedOut.push(`NetSuite spread ${discount} over the lines it applies to, so NetSuite's lines are taken at their quantities times their prices, `
+      + `and ${discount} at the difference.`);
+  }
 
   return {
     netsuiteId: own.netsuite_id,

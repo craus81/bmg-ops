@@ -5,7 +5,7 @@ import {
   bankDocumentBooks, bankJournalEntry, bankPostingFor, billBooks, billJournalEntry, billPaymentBooks, billPaymentJournalEntry, billPostingFor, copiedJournalEntry,
   decide, decideBankDocument, decideBill, decideBillPayment, decideDeposit, decideJournalEntry, decidePayment, decideSpending, depositBooks,
   depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, journalEntryBooks,
-  parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, signature, spendingBooks, spendingJournalEntry,
+  parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, replaceMemo, signature, spendingBooks, spendingJournalEntry,
   spendingPostingFor, decideStockDocument, stockDocumentBooks, stockJournalEntry, stockPostingFor, unsaidFacts,
   type BankPosting, type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting,
   type PaymentPosting, type SpendingPosting, type StockPosting,
@@ -18,6 +18,7 @@ import { workOutSpendingMonth, type SpendingMonthData } from './spending-check';
 import { workOutJournalMonth, type JournalMonthData } from './journal-entry-check';
 import { workOutBankMonth, type BankMonthData } from './bank-check';
 import { workOutStockMonth, type StockMonthData } from './stock-check';
+import type { OwnPick } from './own-invoice-posting';
 
 // Made-up books: '120' receivable, '400' income, '220' sales tax payable.
 const CHART: ChartAccount[] = [
@@ -214,6 +215,124 @@ describe('invoiceJournalEntry', () => {
       division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null,
     }));
     expect(decide(worked(), posting({}, lines))).toEqual({ kind: 'keep' });
+  });
+});
+
+describe('invoices posted from FleetSuite\'s own copy', () => {
+  const ids = new Map([['120', 'a-120'], ['400', 'a-400'], ['220', 'a-220']]);
+  // FleetSuite's own copy of INV101, making the entry NetSuite's makes, line by line its own.
+  const ownEntry: NonNullable<OwnPick['entry']> = {
+    lines: [
+      { account: '120', cents: 16200, lineId: '0', itemNumber: null, division: null },
+      { account: '400', cents: -10000, lineId: 'own:1', itemNumber: 'PART-A', division: 'upfit' },
+      { account: '400', cents: -5000, lineId: 'own:2', itemNumber: 'INSTALL LABOR', division: 'upfit' },
+      { account: '220', cents: -1200, lineId: 'own:tax', itemNumber: null, division: null },
+    ],
+    date: '2026-09-15',
+    customerId: CUSTOMER,
+  };
+  const posts: OwnPick = { entry: ownEntry, why: null };
+  const doesnt: OwnPick = {
+    entry: null, why: "FleetSuite's own copy differs from NetSuite's invoice, so the books post NetSuite's, since that's what the customer was billed.",
+  };
+  const money = (cents: number) => (Math.abs(cents) / 100).toFixed(2);
+  /** What the journal holds when INV101 posted from its copy as entry 9, NetSuite's entry 7 reversed by 8. */
+  const fromOwn = (entry = ownEntry) => posting({
+    entries: 2,
+    unreversed: ['e9'],
+    history: [{ entry_no: 7, entry_date: '2026-09-15', reversed_by: 8 }, { entry_no: 9, entry_date: entry.date, reversed_by: null }],
+    current: {
+      id: 'e9', entry_no: 9, entry_date: entry.date, posting_rule: 'own_invoice@1',
+      lines: entry.lines.map((l) => ({
+        account: l.account, debit: l.cents > 0 ? money(l.cents) : '0.00', credit: l.cents < 0 ? money(l.cents) : '0.00',
+        division: l.division, source_line_ref: l.lineId, customer_id: l.lineId === '0' ? entry.customerId : null,
+      })),
+    },
+  });
+  /** And from NetSuite's, as entry 7, with the rule migration 409 says made it. */
+  const fromNetsuite = posting({ current: { ...posting().current!, posting_rule: 'invoice@1' } });
+
+  it('replaces NetSuite\'s entry with the copy\'s when the copy posts, and keeps that', () => {
+    expect(decide(worked(), fromNetsuite, posts)).toEqual({ kind: 'replace' });
+    // Read without the rule, the lines alone tell them apart.
+    expect(decide(worked(), posting(), posts)).toEqual({ kind: 'replace' });
+    expect(decide(worked(), fromOwn(), posts)).toEqual({ kind: 'keep' });
+    expect(decide(worked(), undefined, posts)).toEqual({ kind: 'post' });
+  });
+
+  it('goes back to NetSuite\'s when the copy no longer posts, and keeps NetSuite\'s while it doesn\'t', () => {
+    expect(decide(worked(), fromOwn(), doesnt)).toEqual({ kind: 'replace' });
+    expect(decide(worked(), fromOwn(), null)).toEqual({ kind: 'replace' });
+    expect(decide(worked(), fromOwn(), undefined)).toEqual({ kind: 'replace' });
+    expect(decide(worked(), fromNetsuite, doesnt)).toEqual({ kind: 'keep' });
+    expect(decide(worked(), fromNetsuite, null)).toEqual({ kind: 'keep' });
+  });
+
+  it('replaces an entry the other copy\'s rule made, even one whose lines read the same', () => {
+    const sameLines = posting({ current: { ...posting().current!, posting_rule: 'own_invoice@1' } });
+    expect(decide(worked(), sameLines, null)).toEqual({ kind: 'replace' });
+    expect(decide(worked(), sameLines, doesnt)).toEqual({ kind: 'replace' });
+  });
+
+  it('replaces the copy\'s entry when the copy\'s entry changes', () => {
+    expect(decide(worked(), fromOwn(), { entry: { ...ownEntry, date: '2026-09-16' }, why: null })).toEqual({ kind: 'replace' });
+    expect(decide(worked(), fromOwn(), { entry: { ...ownEntry, customerId: null }, why: null })).toEqual({ kind: 'replace' });
+  });
+
+  it('reverses and leaves an entry made from the copy as one made from NetSuite\'s', () => {
+    expect(decide(worked(invoice({ voided: true })), fromOwn(), posts)).toEqual({ kind: 'reverse', why: 'voided' });
+    expect(decide(worked(invoice({ lines_copied: false })), fromOwn(), posts)).toEqual({ kind: 'leave', why: 'waiting' });
+    expect(decide(worked(invoice({ total: '170.00' })), fromOwn(), posts)).toEqual({ kind: 'leave', why: 'total' });
+  });
+
+  it('says which copy the entry was made from, and whether the copy posts or why not', () => {
+    expect(invoiceBooks(worked(), fromNetsuite, true, posts))
+      .toEqual({ entryNo: 7, next: 'replace', earlier: [], from: 'netsuite', own: { posts: true } });
+    const earlier = [{ entryNo: 7, reversedBy: 8 }];
+    expect(invoiceBooks(worked(), fromOwn(), true, posts)).toEqual({ entryNo: 9, next: null, earlier, from: 'fleetsuite', own: { posts: true } });
+    expect(invoiceBooks(worked(), fromOwn(), true, doesnt))
+      .toEqual({ entryNo: 9, next: 'replace', earlier, from: 'fleetsuite', own: { posts: false, why: doesnt.why } });
+    expect(invoiceBooks(worked(), undefined, true, { entry: null, why: null })).toEqual({ entryNo: null, next: 'post', earlier: [], own: { posts: false } });
+    // An invoice with no copy says nothing of one, and one read without the rule nothing of which copy made it.
+    expect(invoiceBooks(worked(), fromNetsuite)).toEqual({ entryNo: 7, next: null, earlier: [], from: 'netsuite' });
+    expect(invoiceBooks(worked(), posting())).toEqual({ entryNo: 7, next: null, earlier: [] });
+  });
+
+  it('posts the copy\'s lines under its own rule, with NetSuite\'s key and memo, the copy\'s date and its customer', () => {
+    const other = '0b6d3c1e-5f2a-4c7d-8e9f-1a2b3c4d5e6f';
+    const { entry } = invoiceJournalEntry(worked(), 'BMG', 2, ids, { ...ownEntry, date: '2026-09-16', customerId: other });
+    expect(entry).toMatchObject({
+      company: 'BMG', entryDate: '2026-09-16', sourceType: 'invoice', sourceId: '101', postingRule: 'own_invoice@1',
+      idempotencyKey: 'invoice:101:2', memo: 'INV101, A Customer', postedBy: null,
+    });
+    expect(entry!.lines).toEqual([
+      { accountId: 'a-120', debit: '162.00', credit: null, division: null, itemNumber: null, sourceLineRef: '0', customerId: other },
+      { accountId: 'a-400', debit: null, credit: '100.00', division: 'upfit', itemNumber: 'PART-A', sourceLineRef: 'own:1', customerId: null },
+      { accountId: 'a-400', debit: null, credit: '50.00', division: 'upfit', itemNumber: 'INSTALL LABOR', sourceLineRef: 'own:2', customerId: null },
+      { accountId: 'a-220', debit: null, credit: '12.00', division: null, itemNumber: null, sourceLineRef: 'own:tax', customerId: null },
+    ]);
+    expect(invoiceJournalEntry(worked(), 'BMG', 2, new Map([['120', 'a-120']]), ownEntry)).toEqual({ entry: null, missing: ['400', '220'] });
+  });
+
+  it('says in the reversal\'s memo when an invoice changes copies, and otherwise that NetSuite changed it', () => {
+    expect(replaceMemo('INV101', fromNetsuite.current, posts)).toBe("INV101 now posts from FleetSuite's own copy");
+    expect(replaceMemo('INV101', fromOwn().current, doesnt)).toBe("INV101 now posts from NetSuite's invoice");
+    expect(replaceMemo('INV101', fromOwn().current, null)).toBe("INV101 now posts from NetSuite's invoice");
+    expect(replaceMemo('INV101', fromOwn().current, posts)).toBe('INV101 changed in NetSuite');
+    expect(replaceMemo('INV101', fromNetsuite.current, doesnt)).toBe('INV101 changed in NetSuite');
+    expect(replaceMemo('INV101', posting().current, posts)).toBe('INV101 changed in NetSuite');
+    expect(replaceMemo('INV101', null, posts)).toBe('INV101 changed in NetSuite');
+  });
+
+  it('builds an entry from the copy that fits what it is compared against once posted', () => {
+    const { entry } = invoiceJournalEntry(worked(), 'BMG', 1, ids, ownEntry);
+    const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+    const lines = entry!.lines.map((l) => ({
+      account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+      division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null,
+    }));
+    const held = posting({ current: { id: 'e9', entry_no: 9, entry_date: entry!.entryDate, posting_rule: entry!.postingRule, lines } });
+    expect(decide(worked(), held, posts)).toEqual({ kind: 'keep' });
   });
 });
 

@@ -647,6 +647,17 @@ describe('booksCounts', () => {
     expect(booksCounts(views)).toEqual({ posted: 2, pending: 2, nothingToPost: { voided: 1, zero: 2 } });
     expect(booksCounts([])).toEqual({ posted: 0, pending: 0, nothingToPost: { voided: 0, zero: 0 } });
   });
+
+  it('counts the invoices whose entry was made from FleetSuite\'s own copy, when any was', () => {
+    const views: Array<{ books?: InvoiceBooks }> = [
+      { books: { entryNo: 4, next: null, earlier: [], from: 'fleetsuite' } },
+      { books: { entryNo: 5, next: 'replace', earlier: [], from: 'fleetsuite', own: { posts: false, why: 'It differs.' } } },
+      { books: { entryNo: 6, next: 'replace', earlier: [], from: 'netsuite', own: { posts: true } } },
+      // Counted only while an entry stands.
+      { books: { entryNo: null, next: null, earlier: [{ entryNo: 2, reversedBy: 3 }], from: 'fleetsuite', nothingToPost: 'voided' } },
+    ];
+    expect(booksCounts(views)).toEqual({ posted: 3, pending: 2, nothingToPost: { voided: 1, zero: 0 }, fromOwn: 2 });
+  });
 });
 
 describe('entryDate', () => {

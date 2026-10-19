@@ -7,6 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { OwnCheckStatus, OwnInvoiceCheck, OwnLinePair } from '@/lib/books/own-invoice-check';
+import type { OwnBooks } from '@/lib/books/own-invoice-posting';
 
 /**
  * Books → Own invoices → one of FleetSuite's own invoices, next to
@@ -15,10 +16,14 @@ import type { OwnCheckStatus, OwnInvoiceCheck, OwnLinePair } from '@/lib/books/o
  *
  * What's compared, each with FleetSuite's and NetSuite's side and why they
  * differ; each line FleetSuite billed paired with NetSuite's; what FleetSuite
- * couldn't work out; and how it worked its copy out. Super admins only, as
- * the books are; opened from Own invoices, or from the daily check's
+ * couldn't work out; how it worked its copy out; and which copy the books
+ * posted the invoice from (migration 409,
+ * src/lib/books/own-invoice-posting.ts). Super admins only, as the books
+ * are; opened from Own invoices, Invoices vs NetSuite, or the daily check's
  * notification (?id=, NetSuite's id for the invoice).
  */
+
+type Invoice = OwnInvoiceCheck & { books: OwnBooks | null };
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' });
 const fmt = (cents: number) => money.format(cents / 100);
@@ -96,10 +101,22 @@ function LineSide({ side, own }: { side: OwnLinePair['fleetsuite'] | OwnLinePair
   );
 }
 
+/** What the books hold for the invoice, in a sentence. */
+function booksText(invoice: Invoice): string {
+  const b = invoice.books;
+  if (!b) return invoice.status === 'voided' ? "Not in FleetSuite's books: NetSuite voided it." : "Not in FleetSuite's books yet.";
+  const entry = `In FleetSuite's books as entry ${b.entryNo}`;
+  if (invoice.status === 'voided') return `${entry}. NetSuite voided or deleted the invoice, so the next posting run reverses it.`;
+  if (b.from === 'fleetsuite') return `${entry}, made from this copy.`;
+  if (invoice.status === 'differs') return `${entry}, made from NetSuite's invoice, since this copy differs from it and NetSuite's is what the customer was billed.`;
+  if (invoice.status === 'incomplete') return `${entry}, made from NetSuite's invoice, since this copy is incomplete.`;
+  return `${entry}, made from NetSuite's invoice.`;
+}
+
 export default function BooksOwnInvoicePage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
-  const [invoice, setInvoice] = useState<OwnInvoiceCheck | null>(null);
+  const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -144,9 +161,13 @@ export default function BooksOwnInvoicePage() {
             </div>
             <div style={{ fontSize: '12px', color: invoice.status === 'differs' ? RED : 'var(--text-muted)', marginTop: '4px' }}>{invoice.summary}</div>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              FleetSuite&apos;s own copy, made from {invoice.madeFromText}.{' '}
-              <Link href={deepLinks.booksDocument('BMG', 'invoice', invoice.date, invoice.netsuiteId)} style={{ color: 'var(--text-secondary)' }}>
-                How NetSuite&apos;s invoice posts
+              FleetSuite&apos;s own copy, made from {invoice.madeFromText}.
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+              {booksText(invoice)}{' '}
+              {/* The entry is dated in the month NetSuite booked the invoice into, which Invoices vs NetSuite lists it under. */}
+              <Link href={deepLinks.booksDocument('BMG', 'invoice', invoice.books?.date ?? invoice.date, invoice.netsuiteId)} style={{ color: 'var(--text-secondary)' }}>
+                {invoice.status === 'matches' && invoice.books?.from === 'netsuite' ? 'Why, on Invoices vs NetSuite' : 'How it posts, on Invoices vs NetSuite'}
               </Link>
             </div>
           </div>

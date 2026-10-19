@@ -34,6 +34,8 @@ import { BANK_RULE, BANK_SOURCE_TYPE, type BankSourceType } from './bank-rule';
 import { workOutBankMonth, type BankMonthData, type WorkedBankDocument } from './bank-check';
 import { STOCK_RULE, STOCK_SOURCE_TYPE, type StockSourceType } from './stock-rule';
 import { workOutStockMonth, type StockMonthData, type WorkedStockDocument } from './stock-check';
+import { OWN_COMPANY } from './own-invoices';
+import { OWN_INVOICE_RULE, ownCopyDays, ownPick, readOwnCopies, salesTaxAccount, type OwnCopies, type OwnPick } from './own-invoice-posting';
 
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
@@ -85,6 +87,13 @@ import { workOutStockMonth, type StockMonthData, type WorkedStockDocument } from
  * out different without those answers. The
  * run takes the NetSuite GL copy's lock: it reads that copy, so it never runs
  * while the copy is changing it, and two runs never overlap.
+ *
+ * An invoice FleetSuite made posts from FleetSuite's own copy of it instead
+ * (own_invoice@1, src/lib/books/own-invoice-posting.ts; migration 409; owner
+ * decision 2026-10-19, "Post own invoices") when the copy matches NetSuite's
+ * invoice and makes the same entry: the run reads the copies along with the
+ * month's invoices, and an invoice that changes copies has its entry
+ * replaced, as when NetSuite changes it.
  *
  * Until a company's books go live, the journal can be emptied and posted
  * again (gl_reset_journal). Nothing is written to NetSuite.
@@ -144,7 +153,7 @@ export interface PostedLine {
   vendor_ref?: string | null;
 }
 
-/** What the journal holds for one invoice or credit memo (gl_invoice_postings, migrations 367 and 370). */
+/** What the journal holds for one invoice or credit memo (gl_invoice_postings, migrations 367, 370 and 409). */
 export interface InvoicePosting {
   source_type: SalesDocKind;
   source_id: string;
@@ -152,7 +161,8 @@ export interface InvoicePosting {
   entries: number;
   /** Its entries nothing reversed, newest first: normally just the one that stands. */
   unreversed: string[];
-  current: { id: string; entry_no: number; entry_date: string; lines?: PostedLine[] | null } | null;
+  /** `posting_rule` is the rule that made it (migration 409): invoice@1 or credit_memo@1 from NetSuite's copy, own_invoice@1 from FleetSuite's. */
+  current: { id: string; entry_no: number; entry_date: string; posting_rule?: string; lines?: PostedLine[] | null } | null;
   history: Array<{ entry_no: number; entry_date: string; reversed_by: number | null }>;
   /** What the copy of NetSuite's invoices says of it; null when the copy has none. */
   invoice: { number: string | null; deleted: boolean; voided: boolean } | null;
@@ -244,8 +254,24 @@ export type Decision =
    */
   | { kind: 'leave'; why: 'unworkable' | 'waiting' | 'total' };
 
-/** What to do about one invoice the rule has worked out, given what the journal holds for it. */
-export function decide(worked: WorkedInvoice, posting: InvoicePosting | undefined): Decision {
+/** The receivable's customer and the lines of FleetSuite's own copy's entry, as signature compares them. */
+const ownSignature = (entry: NonNullable<OwnPick['entry']>) => signature(
+  entry.date,
+  entry.lines.map((l) => ({
+    account: l.account,
+    cents: l.cents,
+    division: l.division,
+    lineRef: l.lineId,
+    customerId: l.lineId === MAIN_LINE ? entry.customerId : null,
+  })),
+);
+
+/**
+ * What to do about one invoice the rule has worked out, given what the journal holds for it and, when FleetSuite has
+ * its own copy of it, what the books post for that (ownPick): the copy's entry when it posts, otherwise NetSuite's. An
+ * entry made by the other copy's rule is replaced.
+ */
+export function decide(worked: WorkedInvoice, posting: InvoicePosting | undefined, own?: OwnPick | null): Decision {
   const current = posting?.current ?? null;
   if (worked.invoice.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
   const { status } = worked.checked;
@@ -262,7 +288,21 @@ export function decide(worked: WorkedInvoice, posting: InvoicePosting | undefine
 
   if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep', why: 'nothing' };
   if (!current) return { kind: 'post' };
-  return postedSignature(current) === workedSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
+  const entry = own?.entry ?? null;
+  if (current.posting_rule && current.posting_rule !== (entry ? OWN_INVOICE_RULE : RULES[kindOf(worked)])) return { kind: 'replace' };
+  return postedSignature(current) === (entry ? ownSignature(entry) : workedSignature(worked)) ? { kind: 'keep' } : { kind: 'replace' };
+}
+
+/**
+ * Why an invoice's entry is replaced, for the memo of the entry reversing it: it changes copies (decide), or NetSuite
+ * changed it.
+ */
+export function replaceMemo(number: string, current: { posting_rule?: string } | null, own?: OwnPick | null): string {
+  const toOwn = !!own?.entry;
+  if (current?.posting_rule && (current.posting_rule === OWN_INVOICE_RULE) !== toOwn) {
+    return `${number} now posts from ${toOwn ? "FleetSuite's own copy" : "NetSuite's invoice"}`;
+  }
+  return `${number} changed in NetSuite`;
 }
 
 /** What NetSuite wouldn't say about a month's invoice lines that the entries depend on; a run leaves such a month alone. */
@@ -274,10 +314,16 @@ export function unsaidFacts(facts: LineFactsRead): Array<(typeof NEEDED_FACTS)[n
  * What the journal holds for an invoice and what the next run does about
  * it, for the invoices page. `decides` is false when NetSuite couldn't say
  * enough about the month's lines: the run would leave the month alone, so
- * nothing is shown as next.
+ * nothing is shown as next. `own` is what the books post for FleetSuite's
+ * own copy of it, when there's one (ownPick).
  */
-export function invoiceBooks(worked: WorkedInvoice, posting: InvoicePosting | undefined, decides = true): InvoiceBooks {
-  return booksOf(decide(worked, posting), posting, decides);
+export function invoiceBooks(worked: WorkedInvoice, posting: InvoicePosting | undefined, decides = true, own?: OwnPick | null): InvoiceBooks {
+  const rule = posting?.current?.posting_rule;
+  return {
+    ...booksOf(decide(worked, posting, own), posting, decides),
+    ...(rule ? { from: rule === OWN_INVOICE_RULE ? 'fleetsuite' as const : 'netsuite' as const } : {}),
+    ...(own ? { own: { posts: !!own.entry, ...(own.why ? { why: own.why } : {}) } } : {}),
+  };
 }
 
 /**
@@ -299,27 +345,31 @@ function booksOf(d: Decision, posting: Pick<InvoicePosting, 'current' | 'history
 /**
  * The journal entry for an invoice or credit memo, its `generation`th: the
  * rule's lines on the chart's accounts, the receivable carrying the customer,
- * keyed by its kind (`invoice:…`, `credit_memo:…`). Null with the NetSuite
- * accounts the chart doesn't have when it can't be built.
+ * keyed by its kind (`invoice:…`, `credit_memo:…`). With `own`, the entry of
+ * FleetSuite's own copy of the invoice instead (own_invoice@1), under the
+ * same key. Null with the NetSuite accounts the chart doesn't have when it
+ * can't be built.
  */
 export function invoiceJournalEntry(
   worked: WorkedInvoice,
   company: BooksCompany,
   generation: number,
   accountIds: Map<string, string>,
+  own?: OwnPick['entry'],
 ): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
-  const lines = entryLines(worked);
+  const lines = own ? own.lines : entryLines(worked);
   const missing = [...new Set(lines.map((l) => l.account).filter((a) => !accountIds.has(a)))];
   if (missing.length) return { entry: null, missing };
   const inv = worked.invoice;
   const kind = kindOf(worked);
+  const customerId = own ? own.customerId : inv.customer_id ?? null;
   return {
     entry: {
       company,
-      entryDate: entryDate(inv),
+      entryDate: own ? own.date : entryDate(inv),
       sourceType: kind,
       sourceId: inv.netsuite_id,
-      postingRule: RULES[kind],
+      postingRule: own ? OWN_INVOICE_RULE : RULES[kind],
       idempotencyKey: entryKey(company, kind, inv.netsuite_id, generation),
       memo: inv.customer ? `${worked.number}, ${inv.customer}` : worked.number,
       postedBy: null,
@@ -330,7 +380,7 @@ export function invoiceJournalEntry(
         division: l.division,
         itemNumber: l.itemNumber,
         sourceLineRef: l.lineId,
-        customerId: l.lineId === MAIN_LINE ? inv.customer_id ?? null : null,
+        customerId: l.lineId === MAIN_LINE ? customerId : null,
       })),
     },
     missing: [],
@@ -1227,6 +1277,15 @@ export async function postInvoices(
     const itemAccounts = Array.isArray(lastLists?.itemAccounts) ? lastLists.itemAccounts : null;
     if (!taxAccounts) notes.push("Where sales tax posts hasn't been read yet, so invoices and credit memos with sales tax weren't posted. Sync now on the NetSuite lists page reads it.");
 
+    // FleetSuite's own copies of the invoices it made, from the first month it made any, post in place of NetSuite's when they match.
+    let ownSince: string | null = null;
+    if (postingCompanies.includes(OWN_COMPANY)) {
+      const made = await service.rpc('gl_own_invoice_months');
+      if (made.error) throw readFailed("the months of FleetSuite's own invoices", made.error);
+      ownSince = ((made.data ?? []) as Array<{ month: string }>).map((m) => m.month).sort()[0] ?? null;
+    }
+    const salesTax = salesTaxAccount(taxAccounts, chartAccounts, OWN_COMPANY);
+
     /** Reverses an entry; should that fail, `shown` is how the run's record names its document. */
     const reverse = async (shown: string, entryId: string, memo: string) => {
       try {
@@ -1309,7 +1368,10 @@ export async function postInvoices(
     const missingAccounts = new Set<string>();
     const queue = postingQueue(postingCompanies, months, state.resume);
 
-    /** Queues the writes a decision about one of a company's documents calls for, or counts it when it calls for none. */
+    /**
+     * Queues the writes a decision about one of a company's documents calls for, or counts it when it calls for none.
+     * `memo` is why a replaced entry is reversed, when it's not that NetSuite changed the document.
+     */
     const enqueue = (
       tasks: Array<() => Promise<void>>,
       company: BooksCompany,
@@ -1317,6 +1379,7 @@ export async function postInvoices(
       d: Decision,
       current: { id: string } | null,
       build: () => { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] },
+      memo?: string,
     ) => {
       const shown = named(company, number);
       if (d.kind === 'keep') {
@@ -1350,7 +1413,7 @@ export async function postInvoices(
             if (posted.alreadyPosted) result.unchanged! += 1;
             else result.posted! += 1;
           } else {
-            await repostEntry(service, { entryId: current!.id, memo: `${number} changed in NetSuite`, entry });
+            await repostEntry(service, { entryId: current!.id, memo: memo ?? `${number} changed in NetSuite`, entry });
             result.replaced! += 1;
           }
         } catch (err) {
@@ -1391,10 +1454,18 @@ export async function postInvoices(
         }
 
         if (facts) {
-          const worked = workOutMonth(
+          const workedMonth = workOutMonth(
             { invoices, items: data.items ?? [] },
             { company, chart: chartAccounts, taxAccounts, itemAccounts, facts },
-          ).invoices.filter((w) => w.invoice.companies.includes(company));
+          );
+          const worked = workedMonth.invoices.filter((w) => w.invoice.companies.includes(company));
+
+          // FleetSuite's own copies of the month's invoices, made on the days they're dated.
+          const days = company === OWN_COMPANY && ownSince ? ownCopyDays(mine, ownSince) : null;
+          const copies: OwnCopies = days
+            ? await readOwnCopies(service, days.from, days.to).catch((err) => { throw readFailed(`FleetSuite's own copies of ${company}'s invoices for ${monthLabel(month)}`, err); })
+            : new Map();
+          const ownMonth = { company, accounts: workedMonth.accounts, names: workedMonth.names, salesTax };
 
           const held = await service.rpc('gl_invoice_postings', {
             p_company: company, p_source_ids: mine.map((inv) => inv.netsuite_id), p_lines: true,
@@ -1405,9 +1476,12 @@ export async function postInvoices(
           const tasks: Array<() => Promise<void>> = [];
           for (const w of worked) {
             const posting = postingFor(postings, w);
-            const d = decide(w, posting);
+            const own = ownPick(w, entryLines(w), copies.get(w.invoice.netsuite_id), ownMonth);
+            const d = decide(w, posting, own);
             if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: named(company, w.number), kind: kindOf(w) });
-            enqueue(tasks, company, w.number, d, posting?.current ?? null, () => invoiceJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+            enqueue(tasks, company, w.number, d, posting?.current ?? null,
+              () => invoiceJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds, own?.entry),
+              replaceMemo(w.number, posting?.current ?? null, own));
           }
           await runLimited(tasks, WRITERS);
           if (result.partial) break;

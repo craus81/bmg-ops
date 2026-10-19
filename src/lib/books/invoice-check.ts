@@ -297,6 +297,8 @@ export interface MonthSummary {
   pending?: number;
   /** And how many have nothing to post, because NetSuite voided them or they come to $0. */
   nothingToPost?: { voided: number; zero: number };
+  /** Invoices only: how many of those with an entry have it made from FleetSuite's own copy (src/lib/books/own-invoice-posting.ts); left out when none do. */
+  fromOwn?: number;
 }
 
 export interface MonthReason extends Reason {
@@ -518,6 +520,13 @@ export interface InvoiceBooks {
   earlier: Array<{ entryNo: number; reversedBy: number | null }>;
   /** Set when no entry stands for it and none should, because NetSuite voided it or it comes to $0. */
   nothingToPost?: 'voided' | 'zero';
+  /**
+   * Invoices only: which copy of the invoice the entry that stands was made from, NetSuite's with the invoice rule or
+   * FleetSuite's own (own_invoice@1, src/lib/books/own-invoice-posting.ts).
+   */
+  from?: 'netsuite' | 'fleetsuite';
+  /** When FleetSuite has its own copy of the invoice: whether the books post that copy, and when they don't why. */
+  own?: { posts: boolean; why?: string };
 }
 
 /**
@@ -525,8 +534,11 @@ export interface InvoiceBooks {
  * company's documents post: how many have an entry, how many the next
  * posting run changes, and how many have nothing to post.
  */
-export function booksCounts(views: ReadonlyArray<{ books?: InvoiceBooks }>): Required<Pick<MonthSummary, 'posted' | 'pending' | 'nothingToPost'>> {
+export function booksCounts(
+  views: ReadonlyArray<{ books?: InvoiceBooks }>,
+): Required<Pick<MonthSummary, 'posted' | 'pending' | 'nothingToPost'>> & Pick<MonthSummary, 'fromOwn'> {
   const books = views.flatMap((v) => (v.books ? [v.books] : []));
+  const fromOwn = books.filter((b) => b.entryNo !== null && b.from === 'fleetsuite').length;
   return {
     posted: books.filter((b) => b.entryNo !== null).length,
     pending: books.filter((b) => b.next).length,
@@ -534,6 +546,7 @@ export function booksCounts(views: ReadonlyArray<{ books?: InvoiceBooks }>): Req
       voided: books.filter((b) => b.nothingToPost === 'voided').length,
       zero: books.filter((b) => b.nothingToPost === 'zero').length,
     },
+    ...(fromOwn ? { fromOwn } : {}),
   };
 }
 
@@ -655,6 +668,12 @@ export interface WorkedInvoice {
   lineFacts: Array<LineFacts | undefined>;
 }
 
+/** What a month's invoices were worked out with: the items, tax accounts and receivable, and the names its reasons use. */
+export interface WorkedMonth {
+  accounts: CheckContext;
+  names: ReasonNames;
+}
+
 /**
  * Every invoice of the month worked out with the invoice rule and checked:
  * what checkMonth shows, and what the posting job posts
@@ -663,7 +682,7 @@ export interface WorkedInvoice {
 export function workOutMonth(
   data: InvoiceMonthData,
   opts: MonthOptions,
-): { invoices: WorkedInvoice[]; names: ReasonNames; receivableNote: string | null } {
+): WorkedMonth & { invoices: WorkedInvoice[]; receivableNote: string | null } {
   const facts = opts.facts && 'lines' in opts.facts ? opts.facts : null;
 
   // An item with no income account goes to the account NetSuite posted its invoice lines to most.
@@ -725,20 +744,21 @@ export function workOutMonth(
     const checked = checkInvoice({ lines, linesCopied: inv.lines_copied, netsuite: postings(inv), cogs }, ctx);
     return { invoice: inv, number, checked, amounts, netLines, lineFacts };
   });
-  return { invoices, names, receivableNote: receivable.note };
+  return { invoices, names, accounts: ctx, receivableNote: receivable.note };
 }
 
 /**
  * One month's documents of one kind (`opts.kind`, invoices when left out),
  * each checked against NetSuite. `books`, when the company's documents post,
- * says what FleetSuite's books hold for each.
+ * says what FleetSuite's books hold for each, given what the month was
+ * worked out with.
  */
 export function checkMonth(
   data: InvoiceMonthData,
   opts: MonthOptions,
-  books?: (worked: WorkedInvoice) => InvoiceBooks,
+  books?: (worked: WorkedInvoice, month: WorkedMonth) => InvoiceBooks,
 ): MonthCheck {
-  const { invoices: worked, names, receivableNote } = workOutMonth(data, opts);
+  const { invoices: worked, names, accounts, receivableNote } = workOutMonth(data, opts);
   const facts = opts.facts && 'lines' in opts.facts ? opts.facts : null;
   const kind = opts.kind ?? 'invoice';
   const words = DOC_WORDS[kind];
@@ -807,7 +827,7 @@ export function checkMonth(
       ...(amounts !== 'net' ? { amounts } : {}),
       reasons: invoiceReasons(c, names).map((r) => r.text),
       rows,
-      ...(books ? { books: books(w) } : {}),
+      ...(books ? { books: books(w, { accounts, names }) } : {}),
     });
   }
 

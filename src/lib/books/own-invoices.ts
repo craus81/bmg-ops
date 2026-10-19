@@ -4,6 +4,7 @@ import { KNOWN_LOCATION_IDS, pickInvoiceLocation } from '@/lib/invoice-location'
 import { isPartTaxable } from '@/lib/line-taxability';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { isLayoutItem } from './invoice-rule';
+import type { BooksCompany } from './journal';
 
 /**
  * FleetSuite's own copy of each invoice it makes (migration 407; owner
@@ -36,14 +37,17 @@ import { isLayoutItem } from './invoice-rule';
  * lists copy doesn't have, a line NetSuite priced, which Masterack plant a
  * vehicle's sales order books to. The check
  * (src/lib/books/own-invoice-check.ts) puts each copy next to NetSuite's
- * invoice. Nothing here is posted to the books, and nothing is written to
- * NetSuite.
+ * invoice, and the books post a copy that matches it in place of NetSuite's
+ * (src/lib/books/own-invoice-posting.ts). Nothing is written to NetSuite.
  *
  * Saving never stops an invoice: the invoice already exists in NetSuite when
  * the copy is made, so a copy that can't be saved is logged and left.
  */
 
 export const OWN_TAX_RULE = 'tax@1';
+
+/** The company FleetSuite makes its invoices for, so the one its own copies are of. */
+export const OWN_COMPANY: BooksCompany = 'BMG';
 
 export type MadeFrom = 'vehicle' | 'sales_order' | 'po' | 'scans' | 'graphics';
 export type TaxBasis = 'rate' | 'exempt_customer' | 'georgia';
@@ -276,7 +280,7 @@ export function savePayload(own: OwnInvoice): Record<string, unknown> {
   return {
     netsuite_id: own.netsuiteId,
     netsuite_number: own.netsuiteNumber,
-    company: 'BMG',
+    company: OWN_COMPANY,
     made_from: own.madeFrom,
     made_from_id: own.madeFromId,
     sales_order_id: own.salesOrderId,

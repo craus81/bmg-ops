@@ -64,9 +64,9 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migration 314 points at in the app's own schema.
+    -- What migrations 314 and 407 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
-    CREATE TABLE public.customers (id UUID PRIMARY KEY);
+    CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT, netsuite_id TEXT, tax_exempt BOOLEAN);
     CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
   `);
   for (const file of [
@@ -78,6 +78,8 @@ async function freshDb(): Promise<PGlite> {
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
     '397-books-stock-postings-once.sql', '399-books-customer-refunds.sql',
+    // FleetSuite's own invoices, which the job reads with BMG's invoices.
+    '407-books-own-invoices.sql', '409-books-own-invoice-posting.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -414,7 +416,7 @@ describe('the posting job, for journal entries', () => {
       }
       throw new Error(`unexpected table ${table}`);
     },
-    rpc: async (fn: string, args: Record<string, unknown>) => {
+    rpc: async (fn: string, args: Record<string, unknown> = {}) => {
       clock += takes.get(fn) ?? 0;
       if (failing.get(fn)?.(args)) return { data: null, error: { message: `${fn} failed` } };
       const names = Object.keys(args);
