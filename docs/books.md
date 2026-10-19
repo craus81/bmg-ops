@@ -100,7 +100,7 @@ the accounts page; the others are linked from there.
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
-| NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `migrations/403-books-stock-item-setup.sql` (items set up wrong), `migrations/404-books-stock-ledger-parts.sql` (the ledger account by account), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
+| NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `migrations/403-books-stock-item-setup.sql` (items set up wrong), `migrations/404-books-stock-ledger-parts.sql` (the ledger account by account), `migrations/405-books-stock-account-items.sql` (the items behind each account), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
 | Stock by item and an item's moves, and their APIs | `src/app/(main)/admin/books/stock/page.tsx`, `src/app/(main)/admin/books/stock/item/page.tsx`, `src/app/api/admin/books/stock/route.ts`, `src/app/api/admin/books/stock/item/route.ts` |
 | Stock by item tests | `src/lib/books/netsuite-stock.test.ts`, `src/lib/books/stock-items.test.ts`, `src/lib/books/stock-items-sql.test.ts`; the daily check's are in its test files |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
@@ -1936,6 +1936,18 @@ January 2025. A fixed asset account's documents show on a tap, and its
 difference isn't amber: most of what's on it is the company's own
 equipment or vehicles. A document NetSuite deleted that the GL copy still
 has shows here until the next GL copy drops it.
+
+What puts an account on the page is a stocked item naming it, so every
+account but the usual one (the inventory account most stocked items name)
+also names the stocked items behind it, the first 20 by name with how many
+more, active or not, each linked to its moves, with what to set them to in
+NetSuite (migration 405; owner decision 2026-10-19, "Name it"). On the real
+books, once the one stocked item on an equipment account was set right in
+NetSuite, that account left the page, but a vehicles account with no stock
+on it stayed, and no active item named it. An item gone
+from NetSuite no longer makes its asset account an inventory account
+(`gl_stock_inventory_accounts`): NetSuite won't delete an item anything was
+received or shipped on, so it held no stock.
 
 Not yet seen in NetSuite's data, so the page is what will show it:
 

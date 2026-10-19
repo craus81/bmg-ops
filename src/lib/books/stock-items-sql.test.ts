@@ -1,8 +1,9 @@
 // Migration 401 keeps FleetSuite's own count of each item at each location,
 // 402 values only what NetSuite keeps in stock, 403 names the stocked items
-// whose asset account isn't an asset account, and 404 breaks down where the
-// ledger and the items part on each inventory account. This runs migrations
-// 359–363 with 401 to 404 in an in-memory Postgres (PGlite) as the app's
+// whose asset account isn't an asset account, 404 breaks down where the
+// ledger and the items part on each inventory account, and 405 names the
+// stocked items behind each account but the usual one. This runs migrations
+// 359–363 with 401 to 405 in an in-memory Postgres (PGlite) as the app's
 // server login, copies a made-up handful of NetSuite stock documents the way
 // netsuite-stock.ts hands them over, with their GL lines in the copy of
 // NetSuite's general ledger, and holds what gl_stock_items,
@@ -47,6 +48,7 @@ async function freshDb(): Promise<PGlite> {
     '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '401-books-stock-by-item.sql',
     '402-books-stock-values.sql', '403-books-stock-item-setup.sql', '404-books-stock-ledger-parts.sql',
+    '405-books-stock-account-items.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -569,5 +571,81 @@ describe("migration 404's ledger and items, account by account", () => {
     const inventory = (await parts(db)).parts[0];
     expect(inventory.rows.map((r) => [r.doc, r.amount])).toEqual([['5901', '-400.00'], ['5007', '301.00'], ['5900', '25.00']]);
     expect(inventory).toMatchObject({ items_moves: '430.00', entries: 3, entries_total: '-74.00' });
+  });
+});
+
+describe("migration 405's stocked items behind each inventory account", () => {
+  const LIFT = '9403';
+  const VAN = '9500';
+  const VEHICLES = '196';
+  const TRAILERS = '197';
+  let db: PGlite;
+  beforeAll(async () => {
+    db = await freshDb();
+    await db.exec(`
+      RESET ROLE;
+      INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details, gone_at) VALUES
+        -- A lift NetSuite keeps in stock on the equipment account; an inactive
+        -- van on the vehicles account; and a trailer on the trailers account
+        -- that NetSuite no longer has.
+        ('item', '${LIFT}', 'LIFT-1', true, '{"item_type": "InvtPart", "asset_account": "${EQUIPMENT}"}', NULL),
+        ('item', '${VAN}', 'VAN-6', false, '{"display_name": "Cargo van, unit 6", "item_type": "InvtPart", "asset_account": "${VEHICLES}"}', NULL),
+        ('item', '9501', 'TRL-2', true, '{"item_type": "Assembly", "asset_account": "${TRAILERS}"}', now());
+      INSERT INTO gl_accounts (number, name, account_type, netsuite_account_id) VALUES
+        ('1510', 'Vehicles', 'fixed_asset', '${VEHICLES}'),
+        ('1520', 'Trailers', 'fixed_asset', '${TRAILERS}');
+      SET ROLE service_role;
+    `);
+    await call(db, 'gl_netsuite_stock_apply', { documents: [RECEIPT, BIN_RECEIPT] });
+    await gl(db, '5001', 'ItemRcpt', '2025-03-04', [['0', RECEIVED, -96000], ['1', INVENTORY, 96000]]);
+    await gl(db, '5005', 'ItemRcpt', '2025-06-01', [['0', RECEIVED, -10000], ['1', INVENTORY, 10000]]);
+    // The company's own van, trailer and lift, put on their accounts by journal entries.
+    await gl(db, '5970', 'Journal', '2025-02-28', [['1', VEHICLES, 3500000], ['2', ADJUSTMENT, -3500000]]);
+    await gl(db, '5971', 'Journal', '2025-02-28', [['1', TRAILERS, 800000], ['2', ADJUSTMENT, -800000]]);
+    await gl(db, '5972', 'Journal', '2025-02-28', [['1', EQUIPMENT, 450000], ['2', ADJUSTMENT, -450000]]);
+  }, 60_000);
+  afterAll(async () => { await db?.close(); });
+
+  it('names the stocked items behind each account but the usual one, and leaves out an item NetSuite no longer has', async () => {
+    // The trailers account is named only by the trailer NetSuite no longer has, so it isn't an inventory account.
+    expect(await one(db, 'SELECT gl_stock_inventory_accounts() AS r')).toEqual([INVENTORY, EQUIPMENT, VEHICLES]);
+    const data = await parts(db);
+    expect(data.usual).toEqual({ netsuite_id: INVENTORY, number: '1200', name: 'Inventory' });
+    expect(data.parts.map((p) => [p.account_id, p.usual, p.named, p.named_items])).toEqual([
+      // The ladders, bins and vinyl name the usual account; they aren't listed.
+      [INVENTORY, true, 3, []],
+      [EQUIPMENT, false, 1, [{ netsuite_id: LIFT, name: 'LIFT-1', display_name: null, active: true }]],
+      [VEHICLES, false, 1, [{ netsuite_id: VAN, name: 'VAN-6', display_name: 'Cargo van, unit 6', active: false }]],
+    ]);
+    const split = ledgerParts(data);
+    expect(split.map((p) => [p.account, p.namedBy])).toEqual([
+      ['1200 Inventory', null],
+      ['1500 Equipment', { count: 1, items: [{ itemId: LIFT, item: 'LIFT-1', description: null, active: true }], more: 0, usual: '1200 Inventory' }],
+      ['1510 Vehicles', { count: 1, items: [{ itemId: VAN, item: 'VAN-6', description: 'Cargo van, unit 6', active: false }], more: 0, usual: '1200 Inventory' }],
+    ]);
+    // The accounts still add up to the ledger line, which no longer takes in the trailer.
+    const whole = compareStock(await items(db));
+    expect(whole.ledger).toEqual([{ company: 'BMG', balance: 106000 + 3500000 + 450000, items: 106000 }]);
+    expect(whole.ledger[0].balance).toBe(split.reduce((sum, p) => sum + p.ledger.now, 0));
+  });
+
+  it('lists the first 20 by name, with how many more there are', async () => {
+    // 21 more vans, and 30 more parts on the inventory account so it's still the one most stocked items name.
+    await db.exec(`
+      RESET ROLE;
+      INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details)
+      SELECT 'item', (9600 + n)::text, 'VAN-' || lpad(n::text, 2, '0'), true,
+             jsonb_build_object('item_type', 'InvtPart', 'asset_account', '${VEHICLES}')
+      FROM generate_series(1, 21) AS n
+      UNION ALL
+      SELECT 'item', (9700 + n)::text, 'PART-' || n, true, jsonb_build_object('item_type', 'InvtPart', 'asset_account', '${INVENTORY}')
+      FROM generate_series(1, 30) AS n;
+      SET ROLE service_role;
+    `);
+    const data = await parts(db);
+    expect(data.parts.map((p) => [p.account_id, p.usual, p.named])).toEqual([[INVENTORY, true, 33], [EQUIPMENT, false, 1], [VEHICLES, false, 22]]);
+    const vehicles = data.parts[2];
+    expect(vehicles.named_items.map((i) => i.name)).toEqual(Array.from({ length: 20 }, (_, i) => `VAN-${String(i + 1).padStart(2, '0')}`));
+    expect(ledgerParts({ parts: [vehicles] })[0].namedBy).toMatchObject({ count: 22, more: 2, usual: null });
   });
 });

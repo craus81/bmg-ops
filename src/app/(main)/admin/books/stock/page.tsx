@@ -27,7 +27,9 @@ import type { CountsBy, LedgerEntry, LedgerPart, StockLine, StockSetup } from '@
  * them"). Each inventory account on NetSuite's ledger is put next to the
  * stocked items on it, with where they stood on December 31, 2024 and the
  * documents since that posted to it without a stocked item (migration 404;
- * owner decision 2026-10-19, "Break it down"). Super admins only, as the
+ * owner decision 2026-10-19, "Break it down"), and, on any but the account
+ * most stocked items name, the stocked items that put it there (migration
+ * 405; owner decision 2026-10-19, "Name it"). Super admins only, as the
  * books are.
  */
 
@@ -242,13 +244,42 @@ function EntryRow({ entry, company }: { entry: LedgerEntry; company: string }) {
   );
 }
 
+/** On an account other than the one most stocked items name: the stocked items that put it on the page, and what to set them to. */
+function NamedBy({ named }: { named: NonNullable<LedgerPart['namedBy']> }) {
+  const one = named.count === 1;
+  return (
+    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px' }}>
+      <div>
+        On this page because {count(named.count, 'stocked item names', 'stocked items name')} it as {one ? 'its' : 'their'} asset account:
+      </div>
+      <ul style={{ margin: '2px 0', paddingLeft: '18px' }}>
+        {named.items.map((i) => (
+          <li key={i.itemId} style={{ overflowWrap: 'anywhere' }}>
+            <Link href={deepLinks.booksStockItem(i.itemId)} className="rep-link" style={{ fontWeight: 700 }}>{i.item}</Link>
+            {i.description ? ` · ${i.description}` : ''}
+            {i.active ? '' : ' · inactive'}
+          </li>
+        ))}
+        {named.more > 0 && <li>and {count(named.more, 'more', 'more')}</li>}
+      </ul>
+      <div>
+        If {one ? 'it' : 'they'} shouldn&apos;t, set {one ? 'its' : 'each one\'s'} Asset Account to {named.usual ?? 'your inventory asset account'} on
+        the Accounting tab in NetSuite. Once {one ? 'it\'s' : 'they\'re'} right and{' '}
+        <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied again, every two hours or on Sync now, the
+        account leaves this page.
+      </div>
+    </div>
+  );
+}
+
 /**
  * One company's inventory account: what the stocked items and NetSuite's
  * ledger held on it on December 31, 2024, the items' moves since (on both
  * sides alike), and the documents since that posted to it without a stocked
  * item, which with the starting difference make up the rest (migration 404;
  * owner decision 2026-10-19, "Break it down"). Its documents show at first
- * on a stock account, and on a tap on a fixed asset account.
+ * on a stock account, and on a tap on a fixed asset account. On any account
+ * but the usual one, the stocked items that name it (migration 405).
  */
 function LedgerBreakdown({ part, named }: { part: LedgerPart; named: boolean }) {
   const [open, setOpen] = useState(!part.fixedAsset);
@@ -276,6 +307,7 @@ function LedgerBreakdown({ part, named }: { part: LedgerPart; named: boolean }) 
             Every document on it since 2025
           </Link>
         </div>
+        {part.namedBy && <NamedBy named={part.namedBy} />}
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table className="rep-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
