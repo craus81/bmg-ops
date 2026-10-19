@@ -8,6 +8,7 @@ import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
 import type { OwnCheckStatus, OwnInvoiceCheck } from '@/lib/books/own-invoice-check';
+import type { OwnBooks } from '@/lib/books/own-invoice-posting';
 
 /**
  * Books → Own invoices (migration 407, src/lib/books/own-invoices.ts and
@@ -16,12 +17,14 @@ import type { OwnCheckStatus, OwnInvoiceCheck } from '@/lib/books/own-invoice-ch
  *
  * FleetSuite's own copy of each invoice it makes, worked out by its own
  * rules, next to NetSuite's invoice, a month at a time: the ones that differ
- * first, with why in a sentence. Tap one for its line by line check. The
- * daily check tells the super admins when one differs and links here
- * (?only=differs) or to the invoice. Super admins only, as the books are.
+ * first, with why in a sentence, and which copy the books posted it from
+ * (migration 409, src/lib/books/own-invoice-posting.ts). Tap one for its
+ * line by line check. The daily check tells the super admins when one
+ * differs and links here (?only=differs) or to the invoice. Super admins
+ * only, as the books are.
  */
 
-type Row = Omit<OwnInvoiceCheck, 'fields' | 'lines' | 'workedOut'>;
+type Row = Omit<OwnInvoiceCheck, 'fields' | 'lines' | 'workedOut'> & { books: OwnBooks | null };
 
 interface SyncState { at: string; error: string | null }
 
@@ -109,9 +112,16 @@ function TableRow({ label, style, children }: { label: React.ReactNode; style?: 
   );
 }
 
-/** An invoice: its number (opening its check), status, customer, how it was made and the sentence saying how it compares. */
+/** Which copy of an invoice the books posted it from, as a chip. */
+function booksChip(books: OwnBooks | null): { label: string; color: string } {
+  if (!books) return { label: 'Not posted yet', color: GRAY };
+  return books.from === 'fleetsuite' ? { label: `Entry ${books.entryNo} · own copy`, color: GREEN } : { label: `Entry ${books.entryNo} · NetSuite's`, color: GRAY };
+}
+
+/** An invoice: its number (opening its check), status, customer, what the books hold, how it was made and the sentence saying how it compares. */
 function InvoiceLabel({ r }: { r: Row }) {
   const s = STATUS[r.status];
+  const books = booksChip(r.books);
   return (
     <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
@@ -119,6 +129,7 @@ function InvoiceLabel({ r }: { r: Row }) {
         <Link href={deepLinks.booksOwnInvoice(r.netsuiteId)} className="rep-link" style={{ fontWeight: 700 }}>{r.number}</Link>
         {r.customer && <span>· {r.customer}</span>}
         <span style={chip(s.color)}>{s.chip}</span>
+        {r.status !== 'voided' && <span style={chip(books.color)}>{books.label}</span>}
       </div>
       <div style={{ fontSize: '11px', color: r.status === 'differs' ? RED : 'var(--text-muted)', overflowWrap: 'anywhere' }}>
         {r.summary}
@@ -181,6 +192,8 @@ export default function BooksOwnInvoicesPage() {
 
   const counts = data?.counts;
   const total = data?.invoices.length ?? 0;
+  const fromOwn = data?.invoices.filter((r) => r.books?.from === 'fleetsuite').length ?? 0;
+  const fromNetsuite = data?.invoices.filter((r) => r.books?.from === 'netsuite').length ?? 0;
 
   return (
     <div>
@@ -190,8 +203,9 @@ export default function BooksOwnInvoicesPage() {
           FleetSuite&apos;s own copy of each invoice it makes, worked out by its own rules: the lines it billed, sales tax at the rate
           in Settings → Sales Tax on the lines it taxes (not service items, tax-exempt customers or work at Social Circle, Georgia),
           and the due date from the customer&apos;s terms. Each is put next to NetSuite&apos;s invoice; tap one for its line by line
-          check. Each morning the daily check tells super admins when one differs. Nothing here posts to the books yet. Visible only
-          to super admins.{' '}
+          check. The books post a copy that matches NetSuite&apos;s invoice, and makes the same entry, in place of NetSuite&apos;s; one
+          that doesn&apos;t keeps posting NetSuite&apos;s, since that&apos;s what the customer was billed. Each morning the daily check
+          tells super admins when one differs. Visible only to super admins.{' '}
           <Link href="/admin/books/invoices" style={{ color: 'var(--text-secondary)' }}>Invoices vs NetSuite</Link>
           {' · '}
           <Link href="/admin/books/differences" style={{ color: 'var(--text-secondary)' }}>Differences vs NetSuite</Link>
@@ -252,6 +266,13 @@ export default function BooksOwnInvoicesPage() {
                 placeholder="Search invoices or customers"
                 style={{ padding: '7px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', flex: '1 1 180px', minWidth: 0, maxWidth: '280px' }}
               />
+            </div>
+          )}
+
+          {fromOwn + fromNetsuite > 0 && (
+            <div style={note}>
+              In FleetSuite&apos;s books: {count(fromOwn, 'invoice', 'invoices')} from FleetSuite&apos;s own copy
+              {fromNetsuite ? `, ${count(fromNetsuite, 'invoice', 'invoices')} from NetSuite's` : ''}.
             </div>
           )}
 

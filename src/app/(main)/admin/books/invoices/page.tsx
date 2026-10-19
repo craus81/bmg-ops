@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
+import { deepLinks } from '@/lib/deep-links';
 
 /**
  * Books → Invoices vs NetSuite (migrations 364, 367, 370, 374, 376, 382, 383,
@@ -31,8 +32,10 @@ import { apiFetch } from '@/lib/api-client';
  * the same run too, and so do its bank deposits, transfers and customer
  * refunds, and the
  * documents that move its stock and book their cost, with the cost lines of
- * its invoices and credit memos. Super admins only while the books are
- * built, linked from the other books pages.
+ * its invoices and credit memos. An invoice FleetSuite made posts from
+ * FleetSuite's own copy of it when that matches (migration 409,
+ * src/lib/books/own-invoice-posting.ts), and its Books chip says so. Super
+ * admins only while the books are built, linked from the other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
@@ -103,6 +106,8 @@ interface Summary {
   posted?: number;
   pending?: number;
   nothingToPost?: NothingToPost;
+  /** Invoices only: how many of those in the books posted from FleetSuite's own copy. */
+  fromOwn?: number;
 }
 
 /** How many documents have nothing to post: NetSuite voided them, or they come to $0. */
@@ -118,6 +123,10 @@ interface Books {
   earlier: Array<{ entryNo: number; reversedBy: number | null }>;
   /** No entry stands and none should, because NetSuite voided it or it comes to $0. */
   nothingToPost?: 'voided' | 'zero';
+  /** An invoice's: which copy the entry that stands was made from. */
+  from?: 'netsuite' | 'fleetsuite';
+  /** When FleetSuite has its own copy of the invoice: whether the books post it, and when they don't why. */
+  own?: { posts: boolean; why?: string };
 }
 
 /** How the last posting run went (src/lib/books/invoice-posting.ts); counts only. */
@@ -301,7 +310,7 @@ function booksChip(books: Books): { label: string; color: string } {
   if (books.entryNo !== null) {
     if (books.next === 'replace') return { label: `Entry ${books.entryNo} · to replace`, color: AMBER };
     if (books.next === 'reverse') return { label: `Entry ${books.entryNo} · to reverse`, color: AMBER };
-    return { label: `Entry ${books.entryNo}`, color: GREEN };
+    return { label: `Entry ${books.entryNo}${books.from === 'fleetsuite' ? ' · own copy' : ''}`, color: GREEN };
   }
   if (books.nothingToPost) return { label: 'Nothing to post', color: GREY };
   return books.next === 'post' ? { label: 'To post', color: GREY } : { label: 'Not posted', color: GREY };
@@ -309,17 +318,26 @@ function booksChip(books: Books): { label: string; color: string } {
 
 /** What the books hold for a document of any kind on this page, in a sentence or two. */
 function booksText(books: Books): string {
-  const now = books.entryNo !== null ? `In FleetSuite's books as entry ${books.entryNo}.`
+  const { own } = books;
+  // Which copy made the entry is worth saying only of an invoice FleetSuite has its own copy of, or one posted from it.
+  const made = books.from === 'fleetsuite' ? ", made from FleetSuite's own copy of the invoice"
+    : books.from === 'netsuite' && own ? ", made from NetSuite's invoice" : '';
+  const now = books.entryNo !== null ? `In FleetSuite's books as entry ${books.entryNo}${made}.`
     : books.nothingToPost ? `Nothing to post: ${books.nothingToPost === 'voided' ? 'NetSuite voided it' : 'it comes to $0'}.`
       : "Not in FleetSuite's books.";
-  const next = books.next === 'post' ? ' The next posting run posts it.'
-    : books.next === 'replace' ? ' It no longer fits what the rule works out, so the next posting run reverses it and posts the new entry.'
-      : books.next === 'reverse' ? ' NetSuite voided it or it comes to nothing now, so the next posting run reverses it.'
-        : '';
+  const switching = books.next === 'replace' && (books.from === 'fleetsuite') !== !!own?.posts;
+  const next = books.next === 'post' ? (own?.posts ? " The next posting run posts it from FleetSuite's own copy." : ' The next posting run posts it.')
+    : switching ? (own?.posts
+      ? " FleetSuite's own copy matches NetSuite's invoice, so the next posting run reverses it and posts one made from FleetSuite's copy."
+      : " The next posting run reverses it and posts one made from NetSuite's invoice.")
+      : books.next === 'replace' ? ' It no longer fits what the rule works out, so the next posting run reverses it and posts the new entry.'
+        : books.next === 'reverse' ? ' NetSuite voided it or it comes to nothing now, so the next posting run reverses it.'
+          : '';
+  const why = own && !own.posts && own.why ? ` ${own.why}` : '';
   const earlier = books.earlier.length
     ? ` Earlier: ${books.earlier.map((e) => (e.reversedBy ? `entry ${e.entryNo}, reversed by ${e.reversedBy}` : `entry ${e.entryNo}`)).join('; ')}.`
     : '';
-  return `${now}${next}${earlier}`;
+  return `${now}${next}${why}${earlier}`;
 }
 
 const nothingCount = (n: NothingToPost | undefined) => (n?.voided ?? 0) + (n?.zero ?? 0);
@@ -418,6 +436,13 @@ function InvoiceDetail({ invoice, accounts, one }: { invoice: Invoice; accounts:
       )}
       {invoice.books && (
         <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>{booksText(invoice.books)}</div>
+      )}
+      {(invoice.books?.own || invoice.books?.from === 'fleetsuite') && (
+        <div style={{ fontSize: '12px', marginBottom: '4px' }}>
+          <Link href={deepLinks.booksOwnInvoice(invoice.netsuiteId)} style={{ color: 'var(--text-secondary)' }}>
+            FleetSuite&apos;s own copy of this invoice, next to NetSuite&apos;s
+          </Link>
+        </div>
       )}
       {invoice.reasons.map((r) => (
         <div key={r} style={{ fontSize: '12px', color: invoice.status === 'unworkable' ? AMBER : RED, marginBottom: '4px' }}>{r}</div>
@@ -931,6 +956,7 @@ export default function BooksInvoicesPage() {
             {s.unworkable > 0 && <span style={chip(AMBER)}>{s.unworkable.toLocaleString('en-US')} can&apos;t be worked out</span>}
             {s.waiting > 0 && <span style={chip(GREY)}>{s.waiting.toLocaleString('en-US')} waiting on a copy</span>}
             {s.posted !== undefined && <span style={chip(GREEN)}>{s.posted.toLocaleString('en-US')} in FleetSuite&apos;s books</span>}
+            {!!s.fromOwn && <span style={chip(GREEN)}>{s.fromOwn.toLocaleString('en-US')} from FleetSuite&apos;s own copies</span>}
             {!!s.pending && <span style={chip(AMBER)}>{s.pending.toLocaleString('en-US')} for the next posting run</span>}
             {!!s.nothingToPost && nothingCount(s.nothingToPost) > 0 && (
               <span style={chip(GREY)} title={`Nothing to post: ${nothingWhy(s.nothingToPost)}`}>

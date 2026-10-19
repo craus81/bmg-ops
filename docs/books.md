@@ -38,7 +38,9 @@ location, counted from a copy of every NetSuite document that moves it and
 checked against NetSuite's own count, part 22, what each customer owes
 and each vendor is owed, next to NetSuite's and checked each morning, and
 part 23, FleetSuite's own copy of each invoice it makes, worked out by its
-own rules and checked against NetSuite's invoice each morning.
+own rules and checked against NetSuite's invoice each morning, and part 24,
+those copies posted to the books in place of NetSuite's invoices when they
+match them.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -115,6 +117,8 @@ the accounts page; the others are linked from there.
 | FleetSuite's own invoices, saved as each is made and checked against NetSuite's, and NetSuite's customers in the lists | `migrations/407-books-own-invoices.sql`, `src/lib/books/own-invoices.ts`, `src/lib/books/own-invoice-check.ts`; saved by `src/app/api/vehicle-tracking/invoice/route.ts`, `src/app/api/netsuite/create-invoice/route.ts`, `src/app/api/pos/invoice-open/route.ts`, `src/app/api/netsuite/invoice-vehicles/route.ts` and `src/app/api/graphics/create-invoice/route.ts`, from what `createDirectInvoice` and `createInvoiceFromSO` in `src/lib/netsuite.ts` say they billed |
 | Own invoices and one invoice's check, and their API | `src/app/(main)/admin/books/own-invoices/page.tsx`, `src/app/(main)/admin/books/own-invoices/invoice/page.tsx`, `src/app/api/admin/books/own-invoices/route.ts` |
 | Own invoice tests | `src/lib/books/own-invoices.test.ts`, `src/lib/books/own-invoice-check.test.ts`, `src/lib/books/own-invoices-sql.test.ts`; the customers list's are in the lists test files, the daily check's in its own |
+| FleetSuite's own invoices posted in place of NetSuite's when they match | `migrations/409-books-own-invoice-posting.sql`, `src/lib/books/own-invoice-posting.ts`, `src/lib/books/invoice-posting.ts` |
+| Own invoice posting tests | `src/lib/books/own-invoice-posting.test.ts`; the posting decisions are in `invoice-posting.test.ts`, end to end in `invoice-posting-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -517,6 +521,10 @@ when NetSuite booked it into an earlier month (`entryDate` in
 `src/lib/books/invoice-check.ts`). Invoices vs NetSuite lists such an
 invoice under NetSuite's month, marked with it. 1084's post the same way,
 in the same run (Both companies, below). Nothing is written to NetSuite.
+
+An invoice FleetSuite made posts from FleetSuite's own copy of it instead
+when that copy matches NetSuite's invoice and makes the same entry
+("Posting FleetSuite's own invoices", under "FleetSuite's own invoices").
 
 Credit memos post in the same run, the same way (owner decision
 2026-10-14), with the rule `credit_memo@1` and keys of their own
@@ -2105,8 +2113,10 @@ rather than read back from NetSuite (owner decision 2026-10-19, "Own
 invoices"). Until then FleetSuite's books held only what NetSuite booked;
 for the side-by-side run in 2027, and alone from 2028, FleetSuite has to be
 able to say what each invoice is on its own. The copies are
-`gl_own_invoices` and `gl_own_invoice_lines` (migration 407). Nothing is
-posted to the books from them yet, and nothing is written to NetSuite.
+`gl_own_invoices` and `gl_own_invoice_lines` (migration 407). Since part
+24 the books post a copy that matches NetSuite's invoice in place of it
+("Posting FleetSuite's own invoices", below). Nothing is written to
+NetSuite.
 
 There are five ways FleetSuite invoices, and each saves a copy right after
 NetSuite makes the invoice (`saveOwnInvoice` in
@@ -2173,6 +2183,16 @@ it comes to before tax, its sales tax and its total. A copy:
   something, which then isn't compared;
 - **matches** otherwise.
 
+NetSuite spreads a discount or markup over the lines it applies to: each
+line's net amount, which the ledger mirror copies, carries its share, and
+the discount's own line reads $0 ("Invoices"). FleetSuite bills a discount
+on a line of its own, so when NetSuite's invoice has one discount or markup
+reading $0, its other lines are taken at their quantities times their prices
+and the discount at what that leaves, the total staying as it is
+(`takeApartSpread`). With more than one such line, a line with no quantity
+or price, a credit, or nothing taken off, NetSuite's lines keep their net
+amounts. The copy's "How FleetSuite worked it out" says when this was done.
+
 A sales tax that differs is explained where it can be: work at Social Circle
 or a tax-exempt customer NetSuite charged, a customer NetSuite has as not
 taxable, NetSuite's rate against the one in Settings, and the fewest lines
@@ -2193,15 +2213,64 @@ ledger, lists copy and daily check went, and a search. Each opens
 `/admin/books/own-invoices/invoice?id=` (`deepLinks.booksOwnInvoice`, by
 NetSuite's id for the invoice): what's compared, side by side with why it
 differs, each line, what FleetSuite didn't know and how it worked the copy
-out, and a link to how NetSuite's invoice posts on Invoices vs NetSuite. The
-daily check tells the super admins when one stops matching ("Daily check").
+out, and a link to how the invoice posts on Invoices vs NetSuite. Both say
+which copy the books posted the invoice from: the list with a chip ("Entry
+901 · own copy", "Entry 812 · NetSuite's" or "Not posted yet") and how many
+of the month's posted each way, the invoice's page in a sentence. The daily
+check tells the super admins when one stops matching ("Daily check").
+
+### Posting FleetSuite's own invoices
+
+From part 24 (owner decision 2026-10-19, "Post own invoices") the books post
+FleetSuite's own copy of an invoice in place of NetSuite's when:
+
+- the copy **matches** NetSuite's invoice, as the check above says; and
+- the entry the copy makes is the one NetSuite's makes with the invoice
+  rule: the same amount to each account and division, the receivable for
+  the same customer, on the same date.
+
+Otherwise NetSuite's invoice posts, as it always has, since that's what the
+customer was billed: when the copy differs, is incomplete or is waiting,
+and when its entry can't be worked out or comes out different. Invoices vs
+NetSuite says which, in a sentence. The second test means switching copies
+never moves anything in the books, so Differences, the reports, the
+balances and the daily check read the same whichever copy posted. A copy
+that posts and then stops matching (NetSuite's invoice was changed, say)
+goes back to NetSuite's at the next run, and the other way round.
+
+The copy's entry, `own_invoice@1` (`ownEntry` in
+`src/lib/books/own-invoice-posting.ts`), is the invoice rule's working on
+FleetSuite's own lines: the receivable takes the copy's total and its
+FleetSuite customer, each line goes to its item's income account and
+division as NetSuite's line would, and the copy's sales tax goes to the
+sales tax account. That's the one NetSuite's sales tax has posted to most
+since January 2025, as the lists copy counted them (`salesTaxAccount`),
+since FleetSuite works its tax out at one rate, with no tax code to look an
+account up by. The entry is dated as NetSuite's is, in the month NetSuite
+booked the invoice into, keyed as NetSuite's is (`invoice:<NetSuite
+id>:<n>`) with the same memo, and its lines name FleetSuite's own
+(`own:<line>`, `own:tax`). Only BMG's invoices have copies; credit memos
+and 1084's invoices post as before.
+
+The posting run reads the copies of each BMG month's invoices, from the
+first month FleetSuite made any (`readOwnCopies`), and checks each as Own
+invoices does. Migration 409 has `gl_invoice_postings` say which rule made
+the entry that stands (`posting_rule`): an invoice whose entry was made by
+the other copy's rule has it replaced, reversed and posted again in one
+transaction, as when NetSuite changes an invoice. So the first run after
+part 24 shipped replaced the entry of each invoice whose copy matched, and
+each lists NetSuite's as an earlier entry. A read of the copies that fails
+stops the run, saying what it was reading.
+
+On Invoices vs NetSuite an invoice posted from FleetSuite's copy reads
+"Entry 901 · own copy" and each month counts how many did. Opening one says
+which copy made its entry, what the next run does about it, why NetSuite's
+posts when it does, and links to FleetSuite's copy.
 
 ### What isn't done yet
 
-- The copies aren't posted. NetSuite's invoices still post to FleetSuite's
-  books from the copy of them; posting FleetSuite's own documents from its
-  own records, invoices first, then fulfillments, receipts and bills, is
-  next.
+- Only invoices post from FleetSuite's own records. Its fulfillments,
+  receipts and bills come next; until then they post from NetSuite's.
 - There's no history: copies start the day part 23 shipped.
 - FleetSuite's sales tax is one rate for everything but Social Circle, while
   NetSuite picks a tax code for each invoice. Where that differs, the check

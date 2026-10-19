@@ -29,11 +29,13 @@ import { STOCK_RULE } from '@/lib/books/stock-rule';
 import { checkStockMonth, type StockMonthData } from '@/lib/books/stock-check';
 import {
   BOOKS_INVOICE_POSTING, POSTING_COMPANIES, bankDocumentBooks, bankPostingFor, billBooks, billPaymentBooks, billPostingFor, depositBooks,
-  depositPostingFor, invoiceBooks, journalEntryBooks, paymentBooks, postInvoices, postingFor, postingKey, readBillMonth, spendingBooks,
+  depositPostingFor, entryLines, invoiceBooks, journalEntryBooks, paymentBooks, postInvoices, postingFor, postingKey, readBillMonth, spendingBooks,
   spendingPostingFor, stockDocumentBooks, stockPostingFor, unsaidFacts,
   type BankPosting, type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting,
   type PaymentPosting, type SpendingPosting, type StockPosting,
 } from '@/lib/books/invoice-posting';
+import { OWN_COMPANY } from '@/lib/books/own-invoices';
+import { ownCopyDays, ownPick, readOwnCopies, salesTaxAccount, type OwnCopies } from '@/lib/books/own-invoice-posting';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
 
@@ -79,7 +81,10 @@ const POSTING_BUDGET_MS = 240_000;
  * deposit, transfer, customer refund or stock document also says what
  * FleetSuite's books hold for it (migrations 367, 376, 383, 386, 390, 392,
  * 393, 394, 395 and 399) and what the next posting run does about it, or
- * that it has nothing to post, and `lastRun` is how the last one went.
+ * that it has nothing to post, and `lastRun` is how the last one went. An
+ * invoice FleetSuite made also says which copy its entry was made from and
+ * whether the books post FleetSuite's own copy of it, or why not (migration
+ * 409, src/lib/books/own-invoice-posting.ts).
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.
@@ -389,17 +394,34 @@ export async function GET(req: NextRequest) {
   }
 
   const lastLists = (lists.data?.last_result ?? null) as { taxAccounts?: TaxAccountCount[]; itemAccounts?: ItemAccountCount[] } | null;
+  const taxAccounts = Array.isArray(lastLists?.taxAccounts) ? lastLists.taxAccounts : null;
+
+  // FleetSuite's own copies of the month's invoices, as the posting run reads them, so what this shows is what it posts.
+  let copies: OwnCopies = new Map();
+  const days = postings && kind === 'invoice' && company === OWN_COMPANY ? ownCopyDays(invoices) : null;
+  if (days) {
+    try {
+      copies = await readOwnCopies(service, days.from, days.to);
+    } catch (err) {
+      return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+    }
+  }
+  const salesTax = salesTaxAccount(taxAccounts, chart, company);
+
   const check = checkMonth(
     { invoices, items: data.items ?? [] },
     {
       company,
       kind,
       chart,
-      taxAccounts: Array.isArray(lastLists?.taxAccounts) ? lastLists.taxAccounts : null,
+      taxAccounts,
       itemAccounts: Array.isArray(lastLists?.itemAccounts) ? lastLists.itemAccounts : null,
       facts,
     },
-    postings ? (w) => invoiceBooks(w, postingFor(postings!, w), decides) : undefined,
+    postings
+      ? (w, month) => invoiceBooks(w, postingFor(postings!, w), decides,
+        ownPick(w, entryLines(w), copies.get(w.invoice.netsuite_id), { company, accounts: month.accounts, names: month.names, salesTax }))
+      : undefined,
   );
 
   if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });

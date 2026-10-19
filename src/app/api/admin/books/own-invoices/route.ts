@@ -6,6 +6,8 @@ import { BOOKS_GL_SYNC } from '@/lib/books/netsuite-gl';
 import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
 import { BOOKS_DAILY_CHECK } from '@/lib/books/daily-check';
 import { checkOwnInvoices, type OwnPairsData } from '@/lib/books/own-invoice-check';
+import { OWN_COMPANY } from '@/lib/books/own-invoices';
+import { ownBooks, type OwnBooks } from '@/lib/books/own-invoice-posting';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,7 +26,10 @@ const monthEnd = (month: string) => {
  * src/lib/books/own-invoice-check.ts), with every month that has any and
  * how the copies the check reads from last went.
  * GET /api/admin/books/own-invoices?id=<NetSuite id> — one of them, line by
- * line. Amounts are whole cents.
+ * line. Each says what the books hold for the invoice (`books`, migration
+ * 409): the entry that stands and whether it was made from FleetSuite's own
+ * copy or NetSuite's invoice (src/lib/books/own-invoice-posting.ts), null
+ * when none stands. Amounts are whole cents.
  *
  * Super admin only, as the rest of the books (docs/books.md "FleetSuite's
  * own invoices").
@@ -37,6 +42,13 @@ export async function GET(req: NextRequest) {
   const service = createServiceClient();
   const read = (syncType: string) =>
     service.from('sync_state').select('last_result, updated_at').eq('sync_type', syncType).maybeSingle();
+  /** What the books hold for these invoices, by NetSuite's id. */
+  const booksFor = async (ids: string[]): Promise<Map<string, OwnBooks> | { error: string }> => {
+    if (!ids.length) return new Map();
+    const res = await service.rpc('gl_invoice_postings', { p_company: OWN_COMPANY, p_source_ids: ids, p_lines: false });
+    if (res.error) return { error: res.error.message };
+    return ownBooks(((res.data ?? {}) as { invoices?: Parameters<typeof ownBooks>[0] }).invoices ?? []);
+  };
 
   const id = params.get('id');
   if (id !== null) {
@@ -45,7 +57,9 @@ export async function GET(req: NextRequest) {
     if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
     const [invoice] = checkOwnInvoices(res.data as OwnPairsData).invoices;
     if (!invoice) return NextResponse.json({ error: 'FleetSuite has no copy of that invoice' }, { status: 404 });
-    return NextResponse.json({ invoice });
+    const books = await booksFor([invoice.netsuiteId]);
+    if ('error' in books) return NextResponse.json({ error: books.error }, { status: 500 });
+    return NextResponse.json({ invoice: { ...invoice, books: books.get(invoice.netsuiteId) ?? null } });
   }
 
   const [months, mirror, copy, lists, check] = await Promise.all([
@@ -65,6 +79,8 @@ export async function GET(req: NextRequest) {
     if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
     checked = checkOwnInvoices(res.data as OwnPairsData);
   }
+  const books = await booksFor((checked?.invoices ?? []).map((i) => i.netsuiteId));
+  if ('error' in books) return NextResponse.json({ error: books.error }, { status: 500 });
 
   const state = (row: typeof mirror) =>
     row.data ? { at: row.data.updated_at as string, error: ((row.data.last_result ?? null) as { error?: string } | null)?.error ?? null } : null;
@@ -73,7 +89,9 @@ export async function GET(req: NextRequest) {
     months: monthList,
     month: month ? `${month}-01` : null,
     // The list leaves the line by line check to the invoice's own page.
-    invoices: (checked?.invoices ?? []).map(({ fields: _fields, lines: _lines, workedOut: _workedOut, ...row }) => row),
+    invoices: (checked?.invoices ?? []).map(({ fields: _fields, lines: _lines, workedOut: _workedOut, ...row }) => ({
+      ...row, books: books.get(row.netsuiteId) ?? null,
+    })),
     counts: checked?.counts ?? null,
     lastMirror: state(mirror),
     lastCopy: state(copy),
