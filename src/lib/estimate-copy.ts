@@ -3,6 +3,8 @@ import { logAudit } from '@/lib/audit';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { kitLineColumns } from '@/lib/estimate-kits';
 import { clearedReviewColumns } from '@/lib/estimate-review';
+import { copyWorksheets } from '@/lib/estimate-copy-worksheets';
+import { planCopiedProofs, type CopiedProof } from '@/lib/estimate-copied-proofs';
 
 // Header fields that must never survive a duplicate: identity, lifecycle,
 // and audit columns. Everything else on the row is descriptive content
@@ -72,12 +74,17 @@ export function estimateIsLocked(e: { customer_approved?: boolean | null; status
  *
  * What never survives the copy: approval/rejection state, the magic-link
  * token, signed-document pointers, NetSuite ids, push/send timestamps,
- * follow-up state, and the expiration date. wrap_quote_id on lines is
- * deliberately KEPT: it is what add-wrap-quote dedupes on and what marks a
- * line as graphics for the convert-time gate — stripping it would let the
- * same wrap quote be added twice and orphan the design linkage. It is also
- * how a Graphics Builder save finds the same worksheet's lines on the
- * other estimates of a fleet group.
+ * follow-up state, and the expiration date.
+ *
+ * Graphics Builder worksheets: a fleet copy shares the source's worksheet
+ * (its lines keep wrap_quote_id, which is how a builder save finds the same
+ * worksheet's lines on the other estimates of the group). Any other copy
+ * gets its own copy of each worksheet, coverage proof included, and its
+ * lines point at that copy (src/lib/estimate-copy-worksheets.ts).
+ *
+ * Graphics jobs' art proof (src/lib/estimate-copied-proofs.ts): a plain copy
+ * shows the proof chosen on the original's job, and the job stays put; a
+ * revision takes the job over, unless the original is on a Sales Order.
  */
 export async function copyEstimate(
   supabase: SupabaseClient,
@@ -166,6 +173,17 @@ export async function copyEstimate(
     copy.internal_review_copied_from = source.internal_review_copied_from || source.estimate_number;
   }
 
+  // The designer's art proof. A fleet copy is covered by the order's one
+  // job and keeps whatever the source showed (copied with the header).
+  let moveJobIds: string[] = [];
+  let copiedProofs: CopiedProof[] = [];
+  if (!fleet) {
+    const plan = await planCopiedProofs(supabase, source, { copyInGroup: !!copy.fleet_group_id, revision: isRevision });
+    moveJobIds = plan.moveJobIds;
+    copiedProofs = plan.copied;
+    copy.copied_graphics_proofs = copiedProofs.length > 0 ? copiedProofs : null;
+  }
+
   // Same 23505 retry as the create path: the number is UNIQUE and the
   // RPC-failure fallback format can collide within a month.
   let created: { id: string; estimate_number: string } | null = null;
@@ -183,6 +201,23 @@ export async function copyEstimate(
   }
   if (insertErr || !created) {
     return { status: 500, body: { error: insertErr?.message || 'Could not create the copy' } };
+  }
+
+  // Its own Graphics Builder worksheets, so the copy shows the coverage
+  // proof and editing its graphics never rewrites the original's.
+  let worksheetMap = new Map<string, string>();
+  let worksheetCopies: { id: string; quote_number: string; from: string }[] = [];
+  if (!fleet) {
+    const lineWorksheetIds = (sourceLines || []).map((l: any) => l.wrap_quote_id).filter(Boolean) as string[];
+    try {
+      const res = await copyWorksheets(supabase, source.id, created.id, lineWorksheetIds, !!copy.fleet_group_id, userId);
+      worksheetMap = res.map;
+      worksheetCopies = res.created;
+    } catch (err: any) {
+      await removeWorksheetCopies(supabase, created.id);
+      await supabase.from('estimates').delete().eq('id', created.id);
+      return { status: 500, body: { error: `${err.message}. Nothing was created — try again.` } };
+    }
   }
 
   if ((sourceLines || []).length > 0) {
@@ -205,7 +240,7 @@ export async function copyEstimate(
       // each line was quoted with (migration 336); a Save re-resolves it.
       taxable: l.taxable ?? null,
       notes: l.notes ?? null,
-      wrap_quote_id: l.wrap_quote_id ?? null,
+      wrap_quote_id: l.wrap_quote_id ? (worksheetMap.get(l.wrap_quote_id) ?? l.wrap_quote_id) : null,
       discount_type: l.discount_type ?? null,
       discount_value: l.discount_value ?? null,
       discount_amount: l.discount_amount ?? 0,
@@ -217,9 +252,25 @@ export async function copyEstimate(
       // Unlike the builder's create path (where the user's work is in the
       // header), a header-only copy is worthless — remove it so a retry
       // starts clean instead of littering the list.
+      await removeWorksheetCopies(supabase, created.id);
       await supabase.from('estimates').delete().eq('id', created.id);
       return { status: 500, body: { error: `Could not copy the line items (${lineErr.message}). Nothing was created — try again.` } };
     }
+  }
+
+  // A revision is the same job: its graphics jobs follow it. Best-effort,
+  // after everything else landed — a failure leaves the job on the
+  // original, which still shows nothing wrong to anyone.
+  let jobsMoved = 0;
+  if (moveJobIds.length > 0) {
+    const { data: moved, error: moveErr } = await supabase
+      .from('graphics_jobs')
+      .update({ estimate_id: created.id, updated_at: new Date().toISOString() })
+      .in('id', moveJobIds)
+      .eq('estimate_id', source.id)
+      .select('id');
+    if (moveErr) console.error('revision: moving graphics jobs failed:', moveErr.message);
+    jobsMoved = (moved || []).length;
   }
 
   await logAudit(supabase, {
@@ -233,6 +284,9 @@ export async function copyEstimate(
       revision: isRevision,
       line_count: (sourceLines || []).length,
       grand_total: source.grand_total,
+      ...(worksheetCopies.length > 0 ? { worksheets_copied: worksheetCopies.map(w => ({ from: w.from, to: w.quote_number })) } : {}),
+      ...(copiedProofs.length > 0 ? { art_proofs_shown: copiedProofs.map(p => p.job_id) } : {}),
+      ...(jobsMoved > 0 ? { graphics_jobs_moved: moveJobIds } : {}),
       ...(fleet ? { fleet_group_id: fleet.groupId, unit_number: fleet.unitNumber } : {}),
     },
   });
@@ -248,6 +302,13 @@ export async function copyEstimate(
       // The client re-saves over the copy in the locked-save escape hatch;
       // returning the note lets it keep the provenance line intact.
       provenance_note: provenanceNote,
+      // Old worksheet id → the copy's own, for the same re-save.
+      worksheet_map: Object.fromEntries(worksheetMap),
     },
   };
+}
+
+/** Undo a half-made copy's worksheets (the estimate delete only unpins them). */
+async function removeWorksheetCopies(supabase: SupabaseClient, estimateId: string): Promise<void> {
+  await supabase.from('wrap_quotes').delete().eq('estimate_id', estimateId);
 }

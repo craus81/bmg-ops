@@ -14,6 +14,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { r2GetBytes, r2PresignGet, r2PublicUrl } from './r2';
 import { sanitizePhotoProofs, proofLabel } from './coverage-proof';
 import { fleetWorksheetIds, worksheetFilter } from './estimate-fleet';
+import { sanitizeCopiedProofs } from './estimate-copied-proofs';
 
 export interface EstimateGraphicsSummary {
   quoteNumber: string;
@@ -179,22 +180,40 @@ export async function loadEstimateProofs(
   try {
     // A fleet order's one graphics job (migration 411) proofs every
     // estimate in the order.
-    const { data: est } = await supabase.from('estimates').select('fleet_group_id').eq('id', estimateId).maybeSingle();
+    const { data: est } = await supabase.from('estimates').select('fleet_group_id, copied_graphics_proofs').eq('id', estimateId).maybeSingle();
     const groupId = est?.fleet_group_id as string | null | undefined;
-    const { data: jobs, error } = await supabase
+    const { data: ownJobs, error } = await supabase
       .from('graphics_jobs')
       .select('id, job_number, title, estimate_attach')
       .or(groupId ? `estimate_id.eq.${estimateId},fleet_group_id.eq.${groupId}` : `estimate_id.eq.${estimateId}`)
       .order('created_at', { ascending: true });
-    if (error || !jobs || jobs.length === 0) return [];
+    if (error) return [];
+
+    // A duplicate shows the art proof chosen on the original's job
+    // (estimate-copied-proofs.ts): those files always ride as copied, and
+    // the compose picker's override never changes them.
+    const ownIds = new Set((ownJobs || []).map(j => j.id));
+    const copied = sanitizeCopiedProofs(est?.copied_graphics_proofs).filter(p => !ownIds.has(p.job_id));
+    let copiedJobs: any[] = [];
+    if (copied.length > 0) {
+      const { data } = await supabase
+        .from('graphics_jobs')
+        .select('id, job_number, title')
+        .in('id', copied.map(p => p.job_id));
+      const byId = new Map((data || []).map(j => [j.id, j]));
+      copiedJobs = copied.map(p => byId.get(p.job_id)).filter(Boolean);
+    }
+    const jobs = [...(ownJobs || []), ...copiedJobs];
+    if (jobs.length === 0) return [];
 
     const wantedByJob = new Map<string, string[]>();
-    for (const j of jobs) {
+    for (const j of ownJobs || []) {
       const ids = override
         ? (override.find(o => o.jobId === j.id)?.fileIds || [])
         : (Array.isArray(j.estimate_attach?.file_ids) ? j.estimate_attach.file_ids : []);
       if (ids.length > 0) wantedByJob.set(j.id, ids.filter(Boolean));
     }
+    for (const p of copied) wantedByJob.set(p.job_id, p.file_ids);
     if (wantedByJob.size === 0) return [];
 
     const allIds = [...new Set([...wantedByJob.values()].flat())];
