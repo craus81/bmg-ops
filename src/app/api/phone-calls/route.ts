@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireFeature, outsideStaff } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 
@@ -31,8 +31,10 @@ const ListSchema = z.object({
  * covers authenticated browser reads, not this server route.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'after_hours_calls');
   if (auth.error) return auth.error;
+  const outside = outsideStaff(auth);
+  if (outside) return outside;
   const parsed = validateSearchParams(req, ListSchema);
   if (parsed.error) return parsed.error;
   const { id, show = 'open' } = parsed.data;
@@ -100,8 +102,10 @@ const PatchSchema = z.object({
 
 /** PATCH /api/phone-calls — tick "Called back", link the caller's record, or mark spam. */
 export async function PATCH(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'after_hours_calls');
   if (auth.error) return auth.error;
+  const outside = outsideStaff(auth);
+  if (outside) return outside;
   const parsed = await validateBody(req, PatchSchema);
   if (parsed.error) return parsed.error;
   const { id, calledBack, prospectId, spam } = parsed.data;

@@ -528,13 +528,13 @@ const imageUrl = (path: string | null) => {
 };
 
 export default function WrapQuotePage() {
-  const { user, isAdmin, isSales, isGraphicsProduction, hasRole, loading: authLoading } = useAuth();
+  const { user, isAdmin, hasRole, loading: authLoading, hasFeature } = useAuth();
   // Only a super admin may change the company sales tax rate (Settings →
   // Sales Tax is the other place it can be edited).
   const isSuperAdmin = hasRole('super_admin');
   const dialog = useDialog();
   const supabase = createClient();
-  const hasAccess = isAdmin || isSales || isGraphicsProduction;
+  const hasAccess = hasFeature('graphics_builder');
 
   const [tab, setTab] = useState<Tab>('estimator');
   const searchParams = useSearchParams();

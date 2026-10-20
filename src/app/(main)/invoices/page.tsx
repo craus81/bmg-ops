@@ -95,6 +95,7 @@ export default function InvoicingHubPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, profile, isAdmin, isSales, hasRole, hasFeature, canSeeMoney } = useAuth();
+  const canOpen = hasFeature('invoicing');
   const dialog = useDialog();
   const supabase = createClient();
 
@@ -108,8 +109,8 @@ export default function InvoicingHubPage() {
     // don't author invoices); the gate just stops rejecting the audience
     // the alerts target.
     if (!user || !profile) return;
-    if (!isAdmin && !isSales && !hasRole('finance')) router.push('/home');
-  }, [user, profile, isAdmin, isSales, hasRole, router]);
+    if (!canOpen) router.push('/home');
+  }, [user, profile, canOpen, router]);
 
   const [tab, setTab] = useState<HubTab>('graphics');
   const [loading, setLoading] = useState(true);

@@ -8,11 +8,10 @@ import TextSizeToggle from '@/components/TextSizeToggle';
 import DuoScreenNote from '@/components/DuoScreenNote';
 import { apiFetch } from '@/lib/api-client';
 import { useNavTabs } from '@/components/useNavTabs';
-import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 
 export default function MorePage() {
   const router = useRouter();
-  const { isAdmin, isSales, isGraphicsProduction, hasRole, hasFeature, profile, signOut } = useAuth();
+  const { isAdmin, hasRole, hasFeature, profile, signOut } = useAuth();
   const { mode, setMode, resolvedTheme } = useTheme();
   const { customerOnly } = useNavTabs();
   // R3-20 gave the Purchasing/Receiving rows count badges; R6-13 moved
@@ -60,18 +59,18 @@ export default function MorePage() {
       header: 'Sales & Quoting',
       items: [
         { title: 'Customers', sub: 'Customers & sales pipeline', path: '/admin/prospects', show: F('prospects') },
-        { title: 'After-hours Calls', sub: 'Calls the virtual assistant answered while we were closed · summary, recording, call back', path: '/after-hours-calls', show: INTERNAL_STAFF_ROLES.some(r => hasRole(r)) },
-        { title: 'QC Fixes', sub: 'Issues Masterack\'s QC team reports through their link · fix-by date, mark fixed', path: '/qc-fixes', show: INTERNAL_STAFF_ROLES.some(r => hasRole(r)) },
+        { title: 'After-hours Calls', sub: 'Calls the virtual assistant answered while we were closed · summary, recording, call back', path: '/after-hours-calls', show: F('after_hours_calls') },
+        { title: 'QC Fixes', sub: 'Issues Masterack\'s QC team reports through their link · fix-by date, mark fixed', path: '/qc-fixes', show: F('qc_fixes') },
         { title: 'Credit Applications', sub: 'Review net-terms applications from the public form', path: '/admin/credit-applications', show: F('credit_applications') },
         { title: 'Estimates', sub: 'Build estimates & push to NetSuite', path: '/estimates', show: F('estimates') },
         { title: 'Pricing Requests', sub: 'Masterack pricing requests: pictures, notes, the price you sent, and the PO it became', path: '/pricing-requests', show: F('estimates') },
         { title: 'Upfit Designer', sub: 'Design a van upfit in 3D & turn it into an estimate', path: '/upfit-designer', show: F('upfit_configurator') },
-        { title: 'Graphics Builder', sub: 'Measure a vehicle, draw the coverage proof and price the graphics — then open it as an estimate', path: '/admin/wrap-quote', show: isAdmin || isSales || isGraphicsProduction },
-        { title: 'Quotes', sub: 'Every estimate in one list — search, chase, mark won or lost', path: '/quotes', show: isAdmin || isSales },
-        { title: 'Unmatched Sales Orders', sub: 'Orders raised in NetSuite that never found their estimate — scored guesses to accept or reject', path: '/admin/so-matches', show: isAdmin || isSales },
+        { title: 'Graphics Builder', sub: 'Measure a vehicle, draw the coverage proof and price the graphics — then open it as an estimate', path: '/admin/wrap-quote', show: F('graphics_builder') },
+        { title: 'Quotes', sub: 'Every estimate in one list — search, chase, mark won or lost', path: '/quotes', show: F('quotes') },
+        { title: 'Unmatched Sales Orders', sub: 'Orders raised in NetSuite that never found their estimate — scored guesses to accept or reject', path: '/admin/so-matches', show: F('quotes') },
         { title: 'Help', sub: 'Guides for every part of the app — yours first, the rest of the library under it', path: '/help', show: true },
         { title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
-        { title: 'Invoicing', sub: 'Create & email NetSuite invoices from graphics production jobs and scans', path: '/invoices', show: isAdmin || isSales },
+        { title: 'Invoicing', sub: 'Create & email NetSuite invoices from graphics production jobs and scans', path: '/invoices', show: F('invoicing') },
       ],
     },
     {
@@ -80,8 +79,8 @@ export default function MorePage() {
         { title: 'Schedule', sub: 'Installs, upfits & events — two-way synced with Google Calendar', path: '/admin/schedule', show: F('schedule') },
         { title: 'Upfit Projects', sub: 'Track upfit jobs from estimate to completion', path: '/upfit', show: F('upfit_projects') },
         { title: 'Scan & Log', sub: 'Scan VINs and log work', path: '/scan', show: F('scan') },
-        { title: 'Client Files', sub: 'Every file in Dropbox › OFFICE › Clients · search by client, folder or file name, open or download', path: '/client-files', show: INTERNAL_STAFF_ROLES.some(r => hasRole(r)) },
-        { title: 'Completion Photos', sub: 'Finished-work photos from every job · find by customer, job or VIN, then download or send a link', path: '/completion-photos', show: INTERNAL_STAFF_ROLES.some(r => hasRole(r)) },
+        { title: 'Client Files', sub: 'Every file in Dropbox › OFFICE › Clients · search by client, folder or file name, open or download', path: '/client-files', show: F('client_files') },
+        { title: 'Completion Photos', sub: 'Finished-work photos from every job · find by customer, job or VIN, then download or send a link', path: '/completion-photos', show: F('completion_photos') },
         { title: 'Camera Installs', sub: 'Scan VIN, camera IMEI & GO9B IMEI for T-Mobile camera installs · CSV & PDF', path: '/camera-installs', show: F('in_shop') },
         { title: 'Proof Search', sub: 'Find proof artwork in Dropbox by customer or part', path: '/admin/proof-search', show: F('proof_search') },
       ],
@@ -97,7 +96,7 @@ export default function MorePage() {
         { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
         { title: 'Rack Kits', sub: 'How many of each rack kit we can build from the parts on the shelf', path: '/admin/inventory/rack-kits', show: F('parts_catalog') },
         { title: 'Part Tagging Rules', sub: 'Auto-categorize parts by vendor & name instead of one dropdown at a time', path: '/admin/part-category-rules', show: F('part_admin') },
-        { title: 'Vendor Costs', sub: 'Upload vendor cost & target margin for outsourced parts (FleetSuite only)', path: '/admin/vendor-costs', show: isAdmin },
+        { title: 'Vendor Costs', sub: 'Upload vendor cost & target margin for outsourced parts (FleetSuite only)', path: '/admin/vendor-costs', show: F('part_admin') },
         { title: 'Part Dimensions', sub: 'Record W×D×H per part so the 3D Upfit Designer can place it', path: '/admin/part-dimensions', show: F('part_admin') },
         { title: 'Vehicle Interiors', sub: 'Cargo geometry per wheelbase/roof — what the 3D designer draws', path: '/admin/vehicle-interiors', show: F('part_admin') },
         { title: 'Parts Mail', sub: 'Incoming parts & ETAs vs. stock and job allocations', path: '/admin/parts-mail', show: F('upfit_projects') },
@@ -108,12 +107,12 @@ export default function MorePage() {
       header: 'CNI Network',
       items: [
         { title: 'Certified Network Installers', sub: 'Jobs, companies, installers & vendor payments', path: '/admin/cni', show: F('cni_admin') },
-        { title: 'Install Guides', sub: 'Dimension a 1:20 template & export a placement guide PDF for installers', path: '/graphics/install-guides', show: isAdmin || isSales || isGraphicsProduction },
+        { title: 'Install Guides', sub: 'Dimension a 1:20 template & export a placement guide PDF for installers', path: '/graphics/install-guides', show: F('install_guides') },
         { title: 'Installer Portal', sub: 'The CNI installer view — available jobs, bids & invoices', path: '/installer', show: F('cni_portal') },
         { title: 'Import Installs', sub: 'Bulk-import installs from a spreadsheet, credited to a CNI installer', path: '/admin/import-installs', show: F('data_import') },
         { title: 'Import Vendor Assets', sub: 'Pull product photos & descriptions from a vendor’s website onto matching parts', path: '/admin/import-vendor-assets', show: F('data_import') },
         { title: 'Proof Sweep', sub: 'Search Gmail for proofs by part number and attach them to part records', path: '/admin/proof-sweep', show: F('proof_admin') },
-        { title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: isAdmin || hasRole('finance') },
+        { title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: F('vendor_payments') },
       ],
     },
     {

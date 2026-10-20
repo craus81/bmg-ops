@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireFeature, outsideStaff } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { storageDownloadUrl } from '@/lib/storage';
 import { looseOrFilter } from '@/lib/loose-search';
@@ -39,8 +39,10 @@ const Schema = z.object({
  * tiebreaker) so "Load more" can't skip or repeat a row as photos arrive.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'completion_photos');
   if (auth.error) return auth.error;
+  const outside = outsideStaff(auth);
+  if (outside) return outside;
 
   const parsed = validateSearchParams(req, Schema);
   if (parsed.error) return parsed.error;

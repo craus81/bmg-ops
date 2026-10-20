@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireAdmin } from '@/lib/api-auth';
+import { requireFeature, outsideStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { fetchAllRows } from '@/lib/fetch-all';
 import type { VendorCostResult } from '@/lib/vendor-cost-import';
@@ -45,8 +45,10 @@ const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
  * to see what matches and what changes, then apply:true writes it.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireAdmin(req);
+  const auth = await requireFeature(req, 'part_admin');
   if (auth.error) return auth.error;
+  const outside = outsideStaff(auth);
+  if (outside) return outside;
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;

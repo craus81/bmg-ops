@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireRole } from '@/lib/api-auth';
+import { requireFeature, outsideStaff } from '@/lib/api-auth';
 import { loadQuoteListItems, type QuoteListStatus } from '@/lib/quote-list';
 
 export const dynamic = 'force-dynamic';
@@ -19,8 +19,10 @@ const STATUSES: QuoteListStatus[] = ['working', 'sent', 'won', 'lost', 'all'];
  * on POST /api/quotes/follow-up.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireRole(req, ['admin', 'sales']);
+  const auth = await requireFeature(req, 'quotes');
   if (auth.error) return auth.error;
+  const outside = outsideStaff(auth);
+  if (outside) return outside;
 
   const raw = req.nextUrl.searchParams.get('status') || 'all';
   const status = (STATUSES as string[]).includes(raw) ? (raw as QuoteListStatus) : 'all';

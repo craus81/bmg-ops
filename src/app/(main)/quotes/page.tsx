@@ -115,7 +115,8 @@ const EXPIRY_CHIP: Partial<Record<ExpiryState, { color: string; title: string }>
 export default function QuotesPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales, loading: authLoading } = useAuth();
+  const { user, isAdmin, isSales, loading: authLoading, hasFeature } = useAuth();
+  const canOpen = hasFeature('quotes');
   const dialog = useDialog();
 
   const [items, setItems] = useState<QuoteItem[]>([]);
@@ -169,9 +170,9 @@ export default function QuotesPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!isAdmin && !isSales) { router.push('/home'); return; }
+    if (!canOpen) { router.push('/home'); return; }
     load();
-  }, [authLoading, isAdmin, isSales, router, load]);
+  }, [authLoading, canOpen, router, load]);
 
   // Deep link: ?item=<type>-<id> (follow-up nudges and reminders) switches
   // to the group holding that quote, then scrolls to and flashes its row.
