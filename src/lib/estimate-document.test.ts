@@ -303,3 +303,37 @@ describe('Attached section', () => {
     expect(html).toContain('Click a name to download a full-size copy');
   });
 });
+
+// A fleet order in one email (migration 412): titled for the order, every
+// vehicle listed with its own estimate and Review link, items shown once.
+describe('renderEstimateDocument fleet order', () => {
+  const est = { estimate_number: 'EST-1450', customer_name: 'Gateway Plumbing', subtotal: 100, grand_total: 100, unit_number: '101', vin: 'VIN101' };
+  const vehicles = [
+    { estimateNumber: 'EST-1450', unitNumber: '101', vin: 'VIN101', grandTotal: 100, reviewUrl: 'https://x/approve/estimate/t1', pdfUrl: 'https://x/p1' },
+    { estimateNumber: 'EST-1451', unitNumber: '102', vin: null, grandTotal: 100, reviewUrl: 'https://x/approve/estimate/t2', pdfUrl: 'https://x/p2' },
+  ];
+
+  it('titles the order, lists each vehicle with its link and the order total', () => {
+    const html = renderEstimateDocument(est, [], { fleet: { vehicles } });
+    expect(html).toContain('Estimates for 2 vehicles');
+    expect(html).toContain('#EST-1450, #EST-1451');
+    expect(html).toContain('https://x/approve/estimate/t2');
+    expect(html).toContain('Order total (2 vehicles)');
+    expect(html).toContain('$200.00');
+    expect(html).toContain('Total for each vehicle');
+    expect(html).toContain('The items below are for each vehicle');
+    // The unit/VIN header line moves into the vehicle table.
+    expect(html).not.toContain('Unit 101');
+  });
+
+  it('says whose items they are when a vehicle is priced differently', () => {
+    const html = renderEstimateDocument(est, [], { fleet: { vehicles: [vehicles[0], { ...vehicles[1], grandTotal: 140 }] } });
+    expect(html).toContain("the items below are unit 101's");
+  });
+
+  it('a one-vehicle "order" renders as an ordinary estimate', () => {
+    const html = renderEstimateDocument(est, [], { fleet: { vehicles: [vehicles[0]] } });
+    expect(html).toContain('Estimate #EST-1450');
+    expect(html).toContain('Unit 101');
+  });
+});

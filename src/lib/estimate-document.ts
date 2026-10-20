@@ -90,6 +90,18 @@ export interface EstimateDocumentCompany {
   email?: string | null;
 }
 
+/** One vehicle of a fleet order email (one estimate per vehicle). */
+export interface FleetDocVehicle {
+  estimateNumber: string | number | null;
+  unitNumber: string | null;
+  vin: string | null;
+  grandTotal: number | string | null;
+  /** That vehicle's own approval page; absent on the compose preview. */
+  reviewUrl?: string | null;
+  /** That vehicle's estimate PDF behind its own token. */
+  pdfUrl?: string | null;
+}
+
 export interface EstimateDocumentOptions {
   company?: EstimateDocumentCompany | null;
   logoUrl?: string | null;
@@ -126,6 +138,11 @@ export interface EstimateDocumentOptions {
    *  stripped or forwarded-without-attachments email still delivers the
    *  files; the compose preview passes bare names since no token exists yet. */
   attachmentNames?: Array<string | { name: string; url?: string | null }> | null;
+  /** A fleet order sent in one email (Craig, 2026-10-19): the document is
+   *  titled for the whole order, lists every vehicle with its own estimate,
+   *  total and Review link, and shows the items once as "each vehicle".
+   *  `est` and `lines` are the vehicle the items are shown from. */
+  fleet?: { vehicles: FleetDocVehicle[] } | null;
 }
 
 /**
@@ -208,11 +225,15 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
   }
   totals.push({ labelHtml: 'Total', valueHtml: money(est.grand_total), bold: true });
 
+  const fleet = opts.fleet && opts.fleet.vehicles.length > 1 ? opts.fleet : null;
+  if (fleet) totals[totals.length - 1] = { labelHtml: 'Total for each vehicle', valueHtml: money(est.grand_total), bold: true };
+
   const identityLinesHtml: string[] = [];
+  // A fleet order's VINs and unit numbers are in its vehicle table.
   const vehicleLine = [
     escHtml(vehicleDescription(est)),
-    est.vin ? `VIN ${escHtml(est.vin)}` : '',
-    est.unit_number ? `Unit ${escHtml(est.unit_number)}` : '',
+    !fleet && est.vin ? `VIN ${escHtml(est.vin)}` : '',
+    !fleet && est.unit_number ? `Unit ${escHtml(est.unit_number)}` : '',
   ].filter(Boolean).join(' &middot; ');
   if (vehicleLine) identityLinesHtml.push(vehicleLine);
   const refLine = [
@@ -244,8 +265,11 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
 
   return renderQuoteDocument(
     {
-      docTitle: `Estimate #${est.estimate_number ?? ''}`,
-      subtitleHtml: est.title ? escHtml(est.title) : null,
+      docTitle: fleet ? `Estimates for ${fleet.vehicles.length} vehicles` : `Estimate #${est.estimate_number ?? ''}`,
+      subtitleHtml: fleet
+        ? [est.title ? escHtml(est.title) : '', fleet.vehicles.map(v => `#${escHtml(v.estimateNumber ?? '')}`).join(', ')].filter(Boolean).join(' &middot; ')
+        : (est.title ? escHtml(est.title) : null),
+      noteHtml: fleet ? fleetVehiclesHtml(fleet.vehicles, est) : null,
       preparedForHtml: `Prepared for ${escHtml(est.customer_name || 'you')}`,
       identityLinesHtml,
       columns: { qty: 'Qty', rate: 'Rate' },
@@ -266,4 +290,39 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
       signature: opts.signature,
     },
   );
+}
+
+/**
+ * The fleet order's vehicle table: one row per vehicle with its estimate,
+ * unit number, VIN, total and its own Review link, then the order total.
+ * Under it, what the item list below means: the same work on each vehicle,
+ * or (when someone changed one vehicle's estimate) whose items they are.
+ */
+function fleetVehiclesHtml(vehicles: FleetDocVehicle[], shown: any): string {
+  const td = 'padding:7px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;vertical-align:top;';
+  const th = 'text-align:left;padding:0 8px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#6b7280;';
+  const orderTotal = vehicles.reduce((sum, v) => sum + (Number(v.grandTotal) || 0), 0);
+  const same = vehicles.every(v => Math.abs((Number(v.grandTotal) || 0) - (Number(shown.grand_total) || 0)) < 0.005);
+  const rows = vehicles.map(v => {
+    const links = [
+      v.reviewUrl ? `<a href="${escHtml(v.reviewUrl)}" style="color:#1d4ed8;font-weight:700;text-decoration:underline;">Review</a>` : '',
+      v.pdfUrl ? `<a href="${escHtml(v.pdfUrl)}" style="color:#1d4ed8;text-decoration:underline;">PDF</a>` : '',
+    ].filter(Boolean).join(' &middot; ');
+    return `<tr>
+      <td style="${td}font-weight:700;">${escHtml(v.unitNumber || '—')}</td>
+      <td style="${td}">#${escHtml(v.estimateNumber ?? '')}${v.vin ? `<div style="font-size:11px;color:#6b7280;font-family:ui-monospace,monospace;word-break:break-all;">VIN ${escHtml(v.vin)}</div>` : ''}${links ? `<div style="font-size:12px;margin-top:3px;">${links}</div>` : ''}</td>
+      <td style="${td}text-align:right;white-space:nowrap;">${money(v.grandTotal)}</td>
+    </tr>`;
+  }).join('');
+  const note = same
+    ? 'Every vehicle gets the same work. The items below are for each vehicle. Each vehicle has its own estimate, so you can approve them all at once or one at a time.'
+    : `Not every vehicle is priced the same, so the items below are unit ${escHtml(shown.unit_number || '')}'s (#${escHtml(shown.estimate_number ?? '')}). Use Review to see each vehicle's own items.`;
+  return `<div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Vehicles in this order</div>
+  <table style="width:100%;border-collapse:collapse;">
+    <thead><tr><th style="${th}">Unit</th><th style="${th}">Estimate</th><th style="${th}text-align:right;">Total</th></tr></thead>
+    <tbody>${rows}
+      <tr><td colspan="2" style="padding:8px;font-size:14px;font-weight:800;color:#111827;border-top:2px solid #d1d5db;">Order total (${vehicles.length} vehicles)</td><td style="padding:8px;font-size:14px;font-weight:800;color:#111827;border-top:2px solid #d1d5db;text-align:right;white-space:nowrap;">${money(orderTotal)}</td></tr>
+    </tbody>
+  </table>
+  <div style="font-size:12px;color:#374151;margin-top:8px;">${note}</div>`;
 }

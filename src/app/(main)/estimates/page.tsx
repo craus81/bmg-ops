@@ -864,6 +864,11 @@ export default function EstimatesPage() {
   // wrap quotes with estimate_attach) — from the preview response; null =
   // no attachment.
   const [approvalPdfName, setApprovalPdfName] = useState<string | null>(null);
+  // A fleet order's other vehicles still open for approval, and whether
+  // this send takes them all in one email (migration 412; on by default).
+  const [approvalFleetSiblings, setApprovalFleetSiblings] = useState<{ id: string; estimateNumber: string; unitNumber: string | null }[]>([]);
+  const [approvalFleetAll, setApprovalFleetAll] = useState(true);
+  const approvalFleetOn = approvalFleetSiblings.length > 0 && approvalFleetAll;
   // The follow-up send auto-attaches the estimate PDF; the preview names it.
   const [followupPdfName, setFollowupPdfName] = useState<string | null>(null);
   // Proof picker for the approval compose (linked graphics jobs): each
@@ -2686,13 +2691,15 @@ export default function EstimatesPage() {
           message: fields.message || undefined,
           proofSelections: approvalProofSelectionPayload(),
           attachmentFileIds: fields.attachmentIds,
+          fleet: approvalFleetOn,
         }),
       });
       const data = await res.json();
       if (res.ok && data.preview) {
         // Linked wrap quotes → the send auto-attaches the merged estimate
-        // PDF; the server names it so the compose screen can say so.
-        setApprovalPdfName((Array.isArray(data.attachments) && data.attachments[0]) || null);
+        // PDF; the server names it so the compose screen can say so. A
+        // fleet send names one PDF per vehicle.
+        setApprovalPdfName((Array.isArray(data.attachments) && data.attachments.join(', ')) || null);
         return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
       }
       return { error: data.error || 'Unknown error' };
@@ -2736,6 +2743,19 @@ export default function EstimatesPage() {
     setApprovalProofFiles(files);
     setApprovalProofSelections(selections);
 
+    // The fleet order's other vehicles that can go in the same email: not
+    // approved and not on a sales order yet.
+    let fleetSiblings: { id: string; estimateNumber: string; unitNumber: string | null }[] = [];
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/fleet-group`);
+      const data = res.ok ? await res.json() : null;
+      fleetSiblings = ((data?.members || []) as any[])
+        .filter(m => m.id !== editingId && !m.customer_approved && !m.netsuite_so_id && m.status !== 'accepted')
+        .map(m => ({ id: m.id, estimateNumber: m.estimate_number, unitNumber: m.unit_number || null }));
+    } catch { /* no order, or it can't load: an ordinary send */ }
+    setApprovalFleetSiblings(fleetSiblings);
+    setApprovalFleetAll(true);
+
     await loadEstimateFiles(editingId);
     setSendingForApproval(false);
     setApprovalPdfName(null);
@@ -2762,6 +2782,7 @@ export default function EstimatesPage() {
             message: fields.message || undefined,
             proofSelections: approvalProofSelectionPayload(),
             attachmentFileIds: fields.attachmentIds,
+            fleet: approvalFleetOn,
             ...(floorReason ? { floorReason } : {}),
           }),
         }, fetch, holdCtx);
@@ -2770,7 +2791,7 @@ export default function EstimatesPage() {
         if (res.ok) break;
         if (res.status === 409 && data.belowFloor && attempt === 0) {
           const reason = await dialog.prompt(
-            `This quote's parts margin is ${data.marginPct}% — below the ${data.floorPct}% floor.\n\nType the reason to send anyway. It goes on the estimate and the owner is notified.`,
+            `${data.error || `This quote's parts margin is ${data.marginPct}% — below the ${data.floorPct}% floor.`}\n\nType the reason to send anyway. It goes on the estimate and the owner is notified.`,
             '',
             { title: 'Below margin floor', confirmLabel: 'Send anyway', placeholder: 'Reason (required)' },
           );
@@ -2801,7 +2822,7 @@ export default function EstimatesPage() {
             ? `SMS sent to ${data.dispatch.sms.target}`
             : `SMS failed: ${data.dispatch.sms.error || 'unknown'}`)
       : null;
-    await dialog.alert(`Approval link sent.\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n') || 'Delivery is on its way to the customer.'}`);
+    await dialog.alert(`${data.fleet?.count ? `Approval links for all ${data.fleet.count} vehicles sent in one email.` : 'Approval link sent.'}\n\n${[emailInfo, smsInfo].filter(Boolean).join('\n') || 'Delivery is on its way to the customer.'}`);
     loadEstimates(true);
     // The send persisted the proof selection onto the linked jobs
     // (estimate_attach) — refresh so the panel reflects it.
@@ -6630,9 +6651,27 @@ export default function EstimatesPage() {
           messagePlaceholder="Optional note to the customer — added above the estimate…"
           allowSendWithoutTo
           emptyToNote="No email on file — add a contact, or it sends by SMS only if a phone is on file."
-          previewKey={JSON.stringify(approvalProofSelections)}
-          intro={(approvalPdfName || Object.keys(approvalProofFiles).length > 0) ? (
+          previewKey={JSON.stringify([approvalProofSelections, approvalFleetOn])}
+          intro={(approvalPdfName || Object.keys(approvalProofFiles).length > 0 || approvalFleetSiblings.length > 0) ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* Fleet order (migration 412): the other open vehicles go in
+                  the same email, each with its own estimate and approval. */}
+              {approvalFleetSiblings.length > 0 && (
+                <label style={{
+                  display: 'flex', alignItems: 'flex-start', gap: '8px', padding: '10px', borderRadius: '8px', cursor: 'pointer',
+                  background: approvalFleetAll ? 'rgba(52,211,153,0.08)' : 'var(--bg)',
+                  border: '1px solid ' + (approvalFleetAll ? 'rgba(52,211,153,0.35)' : 'var(--border)'),
+                }}>
+                  <input type="checkbox" checked={approvalFleetAll} onChange={e => setApprovalFleetAll(e.target.checked)} style={{ marginTop: '2px', accentColor: '#34d399' }} />
+                  <span style={{ fontSize: '12px', color: 'var(--text-body)', lineHeight: 1.5 }}>
+                    <b>Send all {approvalFleetSiblings.length + 1} vehicles in one email</b>
+                    <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Adds {approvalFleetSiblings.map(f => `${f.estimateNumber}${f.unitNumber ? ` (unit ${f.unitNumber})` : ''}`).join(', ')}.
+                      {' '}The customer gets one email listing every vehicle and can approve them all at once or one at a time. Each estimate keeps its own approval.
+                    </span>
+                  </span>
+                </label>
+              )}
               {/* Proof picker: which linked graphics-job files ride on this
                   send. Approving the estimate then also approves those
                   jobs' proofs — one customer click for design + price. */}
@@ -6689,7 +6728,9 @@ export default function EstimatesPage() {
               )}
               {approvalPdfName && (
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  📎 <b style={{ color: 'var(--text-secondary)' }}>{approvalPdfName}</b> is attached automatically — a PDF copy of this estimate the customer can save or forward, with any linked coverage pictures, proofs, and vinyl details merged in.
+                  📎 <b style={{ color: 'var(--text-secondary)' }}>{approvalPdfName}</b> {approvalFleetOn
+                    ? 'are attached automatically — one PDF per vehicle the customer can save or forward, with any linked coverage pictures, proofs, and vinyl details merged in.'
+                    : 'is attached automatically — a PDF copy of this estimate the customer can save or forward, with any linked coverage pictures, proofs, and vinyl details merged in.'}
                 </div>
               )}
             </div>

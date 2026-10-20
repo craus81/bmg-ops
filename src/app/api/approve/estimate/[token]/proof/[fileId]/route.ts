@@ -4,6 +4,7 @@ import { validateExpiry } from '@/lib/magic-link-approval';
 import { r2GetBytes } from '@/lib/r2';
 import { isShrinkableImage, shrinkImageForEmail } from '@/lib/email-image';
 import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
+import { jobCoversEstimate } from '@/lib/graphics-fleet';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   // expired link gets nothing.
   const { data: estimate } = await supabase
     .from('estimates')
-    .select('id, approval_token_expires_at')
+    .select('id, fleet_group_id, approval_token_expires_at')
     .eq('approval_token', params.token)
     .maybeSingle();
   if (!estimate) return new NextResponse(null, { status: 404 });
@@ -50,11 +51,11 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
 
   const { data: job } = await supabase
     .from('graphics_jobs')
-    .select('id, estimate_id, estimate_attach')
+    .select('id, estimate_id, fleet_group_id, estimate_attach')
     .eq('id', file.job_id)
     .maybeSingle();
   const attached = Array.isArray(job?.estimate_attach?.file_ids) && job!.estimate_attach.file_ids.includes(file.id);
-  if (!job || job.estimate_id !== estimate.id || !attached) return new NextResponse(null, { status: 404 });
+  if (!job || !jobCoversEstimate(job, estimate) || !attached) return new NextResponse(null, { status: 404 });
 
   const asset = await r2GetBytes('graphics-proofs', file.storage_path, MAX_PROOF_BYTES);
   if (!asset) return new NextResponse(null, { status: 404 });

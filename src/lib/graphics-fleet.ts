@@ -150,3 +150,16 @@ export async function noteFleetKitsChanged(
     note: `${note} Now ${members.length} kit${members.length === 1 ? '' : 's'}.`,
   });
 }
+
+/**
+ * Whether a graphics job's proofs belong on an estimate's customer
+ * surfaces: its own job, or the one job of the estimate's fleet order
+ * (loadEstimateProofs includes both, so every check on the approval side
+ * must agree with it).
+ */
+export function jobCoversEstimate(
+  job: { estimate_id?: string | null; fleet_group_id?: string | null },
+  estimate: { id: string; fleet_group_id?: string | null },
+): boolean {
+  return job.estimate_id === estimate.id || (!!estimate.fleet_group_id && job.fleet_group_id === estimate.fleet_group_id);
+}
