@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { theme } from '@/lib/theme';
+import PhotoLightbox, { type LightboxPhoto } from './PhotoLightbox';
 
 interface InstalledPhoto {
   id: string;
@@ -27,7 +28,7 @@ export default function InstalledPhotosGrid({ partNumber }: { partNumber: string
   const [scansSearched, setScansSearched] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lightbox, setLightbox] = useState<InstalledPhoto | null>(null);
+  const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -52,6 +53,18 @@ export default function InstalledPhotosGrid({ partNumber }: { partNumber: string
   // Nothing to show and nothing to explain — stay out of the way.
   if (photos.length === 0 && scansSearched === 0) return null;
 
+  // Arrows, zoom and Print / Print all come from the shared viewer
+  // (Craig, 2026-10-20: "arrow through the photos … zoom in and print").
+  const shots: LightboxPhoto[] = photos.map(p => ({
+    id: p.id,
+    url: p.url,
+    title: [p.vehicle || 'Vehicle', p.vin ? `VIN ${p.vin}` : null].filter(Boolean).join(' · '),
+    subtitle: [
+      p.installedAt ? new Date(p.installedAt).toLocaleDateString() : null,
+      p.takenBy,
+    ].filter(Boolean).join(' · ') || null,
+  }));
+
   return (
     <div style={{ marginTop: '10px' }}>
       <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '6px' }}>
@@ -66,11 +79,11 @@ export default function InstalledPhotosGrid({ partNumber }: { partNumber: string
         </div>
       ) : (
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          {photos.map(p => (
+          {photos.map((p, i) => (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               key={p.id} src={p.url} alt={p.vehicle || 'Installed'}
-              onClick={() => setLightbox(p)}
+              onClick={() => setLightboxIdx(i)}
               style={{
                 width: '82px', height: '82px', objectFit: 'cover', borderRadius: '8px',
                 border: `1px solid ${theme.border}`, cursor: 'pointer', background: 'var(--subtle-bg)',
@@ -80,29 +93,13 @@ export default function InstalledPhotosGrid({ partNumber }: { partNumber: string
         </div>
       )}
 
-      {lightbox && (
-        <div
-          onClick={() => setLightbox(null)}
-          style={{
-            position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 500,
-            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px',
-          }}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={lightbox.url} alt={lightbox.vehicle || 'Installed'}
-            style={{ maxWidth: '100%', maxHeight: 'calc(74vh / var(--ts))', objectFit: 'contain', borderRadius: '10px' }}
-          />
-          <div style={{ marginTop: '10px', textAlign: 'center', color: '#fff', fontSize: '12px', lineHeight: 1.5 }}>
-            <div style={{ fontWeight: 700 }}>{lightbox.vehicle || 'Vehicle'}</div>
-            <div style={{ opacity: 0.8 }}>
-              {lightbox.vin ? `VIN ${lightbox.vin}` : ''}
-              {lightbox.installedAt ? ` · ${new Date(lightbox.installedAt).toLocaleDateString()}` : ''}
-              {lightbox.takenBy ? ` · ${lightbox.takenBy}` : ''}
-            </div>
-          </div>
-        </div>
-      )}
+      <PhotoLightbox
+        photos={shots}
+        index={lightboxIdx}
+        onClose={() => setLightboxIdx(null)}
+        onIndex={setLightboxIdx}
+        printHeading={`Part ${partNumber} · installed photos`}
+      />
     </div>
   );
 }
