@@ -3471,7 +3471,7 @@ export async function getCollectionsFromRestlet(from: string, to: string): Promi
  * request that can genuinely sit for tens of seconds.
  */
 export async function getNetSuitePdf(
-  type: 'salesOrder' | 'invoice' | 'estimate' | 'creditMemo',
+  type: 'salesOrder' | 'invoice' | 'estimate' | 'creditMemo' | 'purchaseOrder',
   recordId: string,
   opts?: { timeoutMs?: number }
 ): Promise<{
@@ -3486,13 +3486,17 @@ export async function getNetSuitePdf(
   }
 
   try {
+    // The deployed RESTlet has no purchaseOrderId parameter, but its
+    // render.transaction() prints whatever transaction the id names, so a PO
+    // goes through salesOrderId. Its filename comes back as SalesOrder_<id>
+    // (the record.load inside is typed as a sales order), so ours wins below.
     const paramKey = type === 'invoice'
       ? 'invoiceId'
       : type === 'estimate'
         ? 'estimateId'
         : type === 'creditMemo'
           ? 'creditMemoId'
-          : 'salesOrderId';
+          : 'salesOrderId'; // salesOrder and purchaseOrder
     const result = await callRestlet(restletUrl, 'GET', { [paramKey]: recordId }, undefined, opts);
 
     if (result?.success && result?.pdfBase64) {
@@ -3511,11 +3515,13 @@ export async function getNetSuitePdf(
           ? 'Quote'
           : type === 'creditMemo'
             ? 'CreditMemo'
-            : 'SalesOrder';
+            : type === 'purchaseOrder'
+              ? 'PurchaseOrder'
+              : 'SalesOrder';
       return {
         success: true,
         pdfBase64: pdf64,
-        filename: result.filename || `${prefix}_${recordId}.pdf`,
+        filename: (type !== 'purchaseOrder' && result.filename) || `${prefix}_${recordId}.pdf`,
       };
     }
 

@@ -5,25 +5,25 @@ import { requireStaff } from '@/lib/api-auth';
 export const maxDuration = 60;
 
 /**
- * GET /api/netsuite/pdf?type=salesOrder|invoice|estimate&id=123
+ * GET /api/netsuite/pdf?type=salesOrder|invoice|estimate|purchaseOrder&id=123
  * Generic PDF endpoint for any supported NetSuite transaction type.
  *
  * Answers JSON ({ success, pdfBase64 }) by default. `&format=pdf` answers
  * the PDF itself, inline, so the in-app viewer (deepLinks.netsuitePdf →
  * deepLinks.pdfViewer) can show it — the top bar opens a NetSuite estimate
- * that way.
+ * that way, and the Purchasing page a PO.
  */
 export async function GET(request: NextRequest) {
   const auth = await requireStaff(request);
   if (auth.error) return auth.error;
 
   const { searchParams } = new URL(request.url);
-  const type = searchParams.get('type') as 'salesOrder' | 'invoice' | 'estimate' | null;
+  const type = searchParams.get('type') as 'salesOrder' | 'invoice' | 'estimate' | 'purchaseOrder' | null;
   const id = searchParams.get('id');
 
-  if (!type || !['salesOrder', 'invoice', 'estimate'].includes(type)) {
+  if (!type || !['salesOrder', 'invoice', 'estimate', 'purchaseOrder'].includes(type)) {
     return NextResponse.json(
-      { success: false, error: 'Missing or invalid type parameter (salesOrder, invoice, or estimate)' },
+      { success: false, error: 'Missing or invalid type parameter (salesOrder, invoice, estimate, or purchaseOrder)' },
       { status: 400 }
     );
   }

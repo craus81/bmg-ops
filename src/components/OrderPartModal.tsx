@@ -336,6 +336,15 @@ export default function OrderPartModal({ part, canCreatePo, onClose }: Props) {
                   Open in NetSuite ↗
                 </a>
               )}
+              {step.po.netsuiteId && (
+                <>
+                  {' '}
+                  <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', step.po.netsuiteId), { name: `PO ${step.po.number}.pdf` })}
+                    target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', fontWeight: 700, marginLeft: '6px' }}>
+                    📄 View PDF
+                  </a>
+                </>
+              )}
               {!step.po.stamped && (
                 <div style={{ fontSize: '11px', color: '#f59e0b', marginTop: '6px' }}>
                   The PO was created, but the request wasn’t marked ordered. Check it in Purchasing.

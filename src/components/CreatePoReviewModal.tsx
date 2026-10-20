@@ -36,6 +36,8 @@ export interface ReviewRequest {
 export interface CreatePoResult {
   number: string;
   url: string | null;
+  /** NetSuite's internal id of the new PO — what its PDF is fetched by. */
+  netsuiteId: string | null;
   mirrored: boolean;
   stamped: boolean;
 }
@@ -107,6 +109,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
       onDone({
         number: body.poNumber || (body.poId ? `#${body.poId}` : '(number pending)'),
         url: body.netsuiteUrl || null,
+        netsuiteId: body.poId ? String(body.poId) : null,
         mirrored: !!body.mirrored,
         stamped: !!body.stamped,
       });
