@@ -192,6 +192,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/auth/quickbooks/route.ts': admin(),
   'src/app/api/auth/quickbooks/callback/route.ts': admin(),
   'src/app/api/auth/google/route.ts': staff(),
+  'src/app/api/auth/request-access/route.ts': pub('the login page Request Access form: the person has no account; it only notifies super admins and writes nothing'),
   'src/app/api/auth/signup/route.ts': pub('account creation; new profiles land status=pending and every guard rejects them until an admin approves'),
   'src/app/api/calendar/sync-event/route.ts': staff(),
   'src/app/api/calendar/sync-graphics/route.ts': staff(),
