@@ -9,7 +9,7 @@ import { useNavTabs } from '@/components/useNavTabs';
 import {
   Home, Palette, ClipboardCheck, Warehouse, Users,
   CalendarDays, ScanLine, Clock, FileText, Briefcase,
-  LayoutGrid, Settings, MoreHorizontal, Wrench, Receipt, Bot,
+  LayoutGrid, Settings, MoreHorizontal, Truck, Receipt, Bot,
 } from 'lucide-react';
 
 export const TAB_ICONS: Record<string, React.ElementType> = {
@@ -23,7 +23,7 @@ export const TAB_ICONS: Record<string, React.ElementType> = {
   time: Clock,
   estimates: FileText,
   'installer-portal': Briefcase,
-  upfit: Wrench,
+  'vendor-pos': Truck,
   pos: Receipt,
   scans: ScanLine,
   [AI_TAB_ID]: Bot,
@@ -66,7 +66,7 @@ export default function BottomNav() {
     if (tab.path === '/installer') return pathname.startsWith('/installer');
     if (tab.path === '/graphics') return pathname.startsWith('/graphics');
     if (tab.path === '/estimates') return pathname.startsWith('/estimates');
-    if (tab.path === '/upfit') return pathname.startsWith('/upfit');
+    if (tab.id === 'vendor-pos') return pathname.startsWith('/admin/purchasing');
     if (tab.path === '/customer/dashboard') return pathname.startsWith('/customer');
     return pathname.startsWith(tab.path);
   };

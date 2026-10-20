@@ -38,7 +38,7 @@ export const FEATURES = {
   install_admin: 'Install Checklist Templates',
   prospects: 'Customers (Sales CRM)',
   credit_applications: 'Credit Applications',
-  upfit_projects: 'Upfit Projects',
+  upfit_projects: 'Jobs',
   upfit_configurator: 'Upfit Designer (3D)',
   audit_log: 'Audit Log',
   system_health: 'System Health',
