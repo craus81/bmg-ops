@@ -1214,7 +1214,7 @@ export default function PartsPage() {
                 {/* Expanded detail */}
                 {isExpanded && (
                   <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--border)' }}>
-                    {(isRealNsPart(part) || canOrderParts) && (
+                    {((isRealNsPart(part) && canSeeMoney) || canOrderParts) && (
                       <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                         {canOrderParts && (
                           <button
@@ -1227,7 +1227,9 @@ export default function PartsPage() {
                             🛒 Order this part
                           </button>
                         )}
-                        {isRealNsPart(part) && (
+                        {/* The invoices and orders behind this button show prices, so
+                            it is for the people who may see money. */}
+                        {isRealNsPart(part) && canSeeMoney && (
                         <button
                           onClick={() => setTxPart(part)}
                           title="Every invoice, sales order, and estimate this part appears on — open the PDF or print a packing list for any of them"

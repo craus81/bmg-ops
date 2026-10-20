@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireAuth, isInternalStaffRole, profileHasFeature } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { storageDownloadUrl } from '@/lib/storage';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
@@ -34,10 +34,14 @@ const MAX_SCANS = 500;
  * would go stale and quietly file the photo under the wrong part forever.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireStaff(req);
+  // Internal staff, or anyone holding Installer Parts — the price-free parts
+  // page shows these too (Craig, 2026-10-20), and outside installers hold it.
+  // An outside installer sees the photo and the vehicle, not the full VIN or
+  // who took it: that is another company's customer and our staff.
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
-  const roles: string[] = auth.profile?.roles?.length ? auth.profile.roles : [auth.profile?.role];
-  if (roles.includes('customer') && roles.length === 1) {
+  const isStaff = isInternalStaffRole(auth.profile);
+  if (!isStaff && !(await profileHasFeature(auth.user.id, auth.profile, 'installer_parts'))) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
@@ -87,11 +91,11 @@ export async function GET(req: NextRequest) {
         id: p.id,
         // Credentialed download route, never a public URL (R3-22).
         url: storageDownloadUrl('photos', p.storage_path, 'installed.jpg'),
-        vin: scan.vin || null,
+        vin: scan.vin ? (isStaff ? scan.vin : `…${String(scan.vin).slice(-6)}`) : null,
         vehicle: [scan.vehicle_year, scan.vehicle_make, scan.vehicle_model].filter(Boolean).join(' ') || null,
         partNumber: scan.part_number || null,
         installedAt: scan.scanned_at || p.created_at,
-        takenBy: p.taken_by ? (takers.get(p.taken_by) || null) : null,
+        takenBy: isStaff && p.taken_by ? (takers.get(p.taken_by) || null) : null,
       };
     });
 

@@ -94,6 +94,7 @@ export default function MorePage() {
         { title: 'Purchasing', sub: badgeFor('purchase_requests') ? `${badgeFor('purchase_requests')} request${badgeFor('purchase_requests') !== 1 ? 's' : ''} waiting to be ordered` : 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering'), badge: badgeFor('purchase_requests') },
         { title: 'Receiving', sub: badgeFor('manual_receipts') ? `${badgeFor('manual_receipts')} receipt${badgeFor('manual_receipts') !== 1 ? 's' : ''} still need NetSuite entry by hand` : 'Check arriving parts in against vendor POs', path: '/admin/receiving', show: F('parts_ordering'), badge: badgeFor('manual_receipts') },
         { title: 'Parts Catalog', sub: 'Upfit & graphic parts from NetSuite', path: '/parts', show: F('parts_catalog') },
+        { title: 'Parts', sub: 'Part photos, install files, labor hours and installed photos', path: '/installer-parts', show: F('installer_parts') && !F('parts_catalog') },
         { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
         { title: 'Rack Kits', sub: 'How many of each rack kit we can build from the parts on the shelf', path: '/admin/inventory/rack-kits', show: F('parts_catalog') },
         { title: 'Part Tagging Rules', sub: 'Auto-categorize parts by vendor & name instead of one dropdown at a time', path: '/admin/part-category-rules', show: F('part_admin') },
