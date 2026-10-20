@@ -3,7 +3,8 @@ import { sendSMS } from '@/lib/twilio';
 import { sendEmail, buildNotificationEmail } from '@/lib/resend';
 import { apnsConfigured, sendApnsNotification } from '@/lib/apns';
 import webpush from 'web-push';
-import { channelsForType, isRegistered, emailsImmediately } from './notification-registry';
+import { channelsForType, isRegistered, emailsImmediately, parseOverrides } from './notification-registry';
+import { fetchAllRows } from './fetch-all';
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -87,6 +88,9 @@ export const ALWAYS_ALL_CHANNELS: ReadonlySet<string> = new Set([
   'assignment',
   'graphics_ready_for_install',
   'estimate_rejected',
+  'estimate_accepted',
+  'quote_accepted',
+  'quote_rejected',
 ]);
 
 /**
@@ -163,6 +167,44 @@ export async function notifyMany(
   await Promise.allSettled(
     userIds.map((userId) => notify({ ...payload, userId }))
   );
+}
+
+/**
+ * Copy a customer's decision (an estimate or proof approved, or changes
+ * asked for) to every staff member who ticked a channel on the
+ * "Every customer approval or change request" row in Settings — the opt-in
+ * audience Craig chose on 2026-10-20 on top of the people on the record.
+ * Skips anyone the caller already notified, so nobody gets it twice.
+ */
+export async function notifyDecisionWatchers(
+  alreadyNotified: Iterable<string>,
+  payload: Omit<NotifyPayload, 'userId' | 'type' | 'channels' | 'forceChannels'>,
+): Promise<void> {
+  try {
+    const skip = new Set(alreadyNotified);
+    const { data: prefs } = await fetchAllRows<{ user_id: string; type_channels: unknown }>((from, to) =>
+      supabase
+        .from('notification_preferences')
+        .select('user_id, type_channels')
+        .not('type_channels', 'is', null)
+        .order('user_id')
+        .range(from, to),
+    );
+    const optedIn = prefs
+      .filter(p => !skip.has(p.user_id) && (parseOverrides(p.type_channels).customer_decision_watch || []).length > 0)
+      .map(p => p.user_id);
+    if (optedIn.length === 0) return;
+    const { data: approved } = await supabase
+      .from('profiles')
+      .select('id')
+      .in('id', optedIn)
+      .eq('status', 'approved');
+    const ids = (approved || []).map((p: any) => p.id as string);
+    if (ids.length === 0) return;
+    await notifyMany(ids, { ...payload, type: 'customer_decision_watch' });
+  } catch (err) {
+    console.error('notifyDecisionWatchers failed:', err);
+  }
 }
 
 /**

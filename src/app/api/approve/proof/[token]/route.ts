@@ -4,7 +4,7 @@ import {
   validateExpiry, captureMetadata, checkRateLimit, uploadSignedDocument,
   getRequestIp, AGREEMENT_TEXT,
 } from '@/lib/magic-link-approval';
-import { notifyMany } from '@/lib/notify';
+import { notifyProofDecision } from '@/lib/proof-decision-notify';
 import { deepLinks } from '@/lib/deep-links';
 import { r2Get, r2PresignGet, r2Upload } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
@@ -307,7 +307,7 @@ async function notifyGraphicsTeam(job: any, verdict: 'approved' | 'revision', re
     ? `${who} approved the proof. You can move to production.`
     : `${who} requested changes: ${reason || '(no reason)'}`;
 
-  await notifyMany(Array.from(targetIds), {
+  await notifyProofDecision(job, targetIds, {
     type: verdict === 'approved' ? 'proof_approved' : 'proof_revision_requested',
     title,
     body,

@@ -31,16 +31,24 @@ function dispatchedTypes(): Map<string, string[]> {
   const found = new Map<string, string[]>();
   for (const file of walk('src')) {
     const src = readFileSync(file, 'utf8');
-    const call = /\bnotify(?:Many)?\s*\(/g;
+    const call = /\bnotify(?:Many|ProofDecision)?\s*\(/g;
     let m: RegExpExecArray | null;
     while ((m = call.exec(src))) {
       // The payload's `type:` is within a few lines of the call opening.
       const window = src.slice(m.index, m.index + 600);
-      const t = /type:\s*'([a-z0-9_]+)'/.exec(window);
+      // Every literal in the `type:` expression, so a ternary
+      // (`type: ok ? 'a_accepted' : 'a_rejected'`) registers both — the
+      // first-literal-only match let estimate_accepted, estimate_rejected
+      // and proof_revision_requested ship unregistered, and unregistered
+      // types never emailed anyone. Only literals that open the expression
+      // or a ternary branch count; `verdict === 'accepted'` is a condition.
+      const t = /type:\s*([^,\n]+)/.exec(window);
       if (!t) continue;
-      const list = found.get(t[1]) || [];
-      if (!list.includes(file)) list.push(file);
-      found.set(t[1], list);
+      for (const lit of Array.from(t[1].matchAll(/(?:^|[?:]\s*)'([a-z0-9_]+)'/g))) {
+        const list = found.get(lit[1]) || [];
+        if (!list.includes(file)) list.push(file);
+        found.set(lit[1], list);
+      }
     }
   }
   return found;
@@ -80,7 +88,8 @@ describe('registry shape', () => {
     for (const t of NOTIFICATION_TYPES) {
       expect(t.label.length, t.type).toBeGreaterThan(0);
       expect(t.description.length, t.type).toBeGreaterThan(0);
-      expect(t.defaultChannels.length, t.type).toBeGreaterThan(0);
+      // An opt-in row starts empty on purpose: ticking it is the subscription.
+      if (!t.optIn) expect(t.defaultChannels.length, t.type).toBeGreaterThan(0);
     }
   });
 
@@ -185,5 +194,28 @@ describe('parseOverrides', () => {
     expect(parseOverrides('nope')).toEqual({});
     expect(parseOverrides(['nope'])).toEqual({});
     expect(parseOverrides({ a: 'in_app' })).toEqual({});
+  });
+});
+
+describe('customer decisions (Craig, 2026-10-20)', () => {
+  it('emails the people on the record for every estimate answer, ignoring opt-outs', () => {
+    for (const type of ['estimate_accepted', 'estimate_rejected', 'quote_accepted', 'quote_rejected']) {
+      const def = getNotificationType(type)!;
+      expect(def.alwaysOn, type).toBeTruthy();
+      expect(def.emailNow, type).toBe(true);
+      expect(channelsForType(type, { notify_email: false, type_channels: { [type]: [] } })).toContain('email');
+    }
+  });
+
+  it('sends the watch row to nobody until they tick a box', () => {
+    expect(channelsForType('customer_decision_watch', null)).toEqual([]);
+    expect(channelsForType('customer_decision_watch', { notify_email: true, notify_in_app: true })).toEqual([]);
+    expect(channelsForType('customer_decision_watch', { type_channels: { customer_decision_watch: ['email'] } })).toEqual(['email']);
+    expect(getNotificationType('customer_decision_watch')!.emailNow).toBe(true);
+  });
+
+  it('registers both proof answers', () => {
+    expect(isRegistered('proof_approved')).toBe(true);
+    expect(isRegistered('proof_revision_requested')).toBe(true);
   });
 });

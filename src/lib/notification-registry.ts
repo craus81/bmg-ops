@@ -83,6 +83,13 @@ export interface NotificationTypeDef {
    */
   fixedChannels?: Partial<Record<NotifyChannelKey, { reason: string; on: (prefs: ChannelPrefsRow | null | undefined) => boolean }>>;
   /**
+   * Set on a row nobody gets until they tick a box for it: ticking IS the
+   * subscription (the caller looks up who opted in). defaultChannels is
+   * empty, an untouched row resolves to nothing, and the matrix shows
+   * this text in place of "Following your account defaults".
+   */
+  optIn?: string;
+  /**
    * Email this type the moment it happens. Every other type's EMAIL copy
    * waits for the afternoon staff digest (src/lib/staff-email-digest.ts) —
    * in-app and push are never delayed. Kept for things someone is waiting
@@ -99,6 +106,17 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'deal_overdue', label: 'Deal past its close date', description: 'An opportunity is still open past when it was expected to close.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'pipeline_movement', label: 'Deal changed stage', description: 'An opportunity moved forward or back in the pipeline.', area: 'sales', defaultChannels: ['in_app'] },
   { type: 'at_risk_account', label: 'Account at risk', description: 'A customer that used to order regularly has gone quiet.', area: 'sales', defaultChannels: ['in_app', 'push'] },
+  // A customer's answer on an estimate or wrap quote (Craig, 2026-10-20:
+  // staff asked where approvals go and nothing arrived by email). These
+  // were dispatched but never registered, so they fell back to in-app +
+  // push and never emailed, not even the change request whose email is the
+  // reply path to the customer. Always on for the people on the record;
+  // anyone else opts in with customer_decision_watch below.
+  { type: 'estimate_accepted', label: 'Customer approved an estimate', description: 'A customer approved an estimate you created, sent or own the account for. Review it, then push it to NetSuite.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'], emailNow: true, alwaysOn: 'Always sent on every channel: it is a customer\'s yes on your estimate.', audience: 'Whoever created the estimate, whoever sent it, and the customer\'s account owner.' },
+  { type: 'estimate_rejected', label: 'Customer asked for changes on an estimate', description: 'A customer asked for changes on an estimate you created, sent or own the account for. Replying to the email goes to the customer.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'], emailNow: true, alwaysOn: 'Always sent on every channel: the customer is waiting on your answer.', audience: 'Whoever created the estimate, whoever sent it, and the customer\'s account owner.' },
+  { type: 'quote_accepted', label: 'Customer accepted a wrap quote', description: 'A customer accepted a wrap quote you created or sent.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'], emailNow: true, alwaysOn: 'Always sent on every channel: it is a customer\'s yes on your quote.' },
+  { type: 'quote_rejected', label: 'Customer asked for changes on a wrap quote', description: 'A customer asked for changes on a wrap quote you created or sent.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'], emailNow: true, alwaysOn: 'Always sent on every channel: the customer is waiting on your answer.' },
+  { type: 'customer_decision_watch', label: 'Every customer approval or change request', description: 'A customer approved or asked for changes on any estimate or graphics proof, not only your own.', area: 'sales', defaultChannels: [], emailNow: true, optIn: 'Off until you tick a box. Tick Email to get every one.' },
   { type: 'estimate_converted', label: 'Estimate became an order', description: 'A customer-approved estimate turned into a sales order.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'below_floor_send', label: 'Quote sent below the margin floor', description: 'An estimate went out under the floor, with the reason given.', area: 'sales', defaultChannels: ['in_app', 'push'], audience: 'Owners only — super admins are the targeted audience for floor breaches.' },
   { type: 'discount_approval_request', label: 'Discount needs your approval', description: 'A rep put more discount on an estimate than the limit allows. It can\'t be sent or pushed until an admin approves it.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'], emailNow: true, audience: 'All admins.' },
@@ -123,7 +141,8 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'graphics_reminder', label: 'Your graphics jobs need attention', description: 'A daily digest of the jobs assigned to you that are overdue, due in the next couple of days, or sitting too long in one stage.', area: 'graphics', defaultChannels: ['in_app', 'push'], audience: 'Whoever the job is assigned to — directly or through the assignment picker.' },
   { type: 'graphics_reminder_escalation', label: 'A graphics job is still stuck', description: 'A job stayed past its reminder threshold, or has nobody assigned at all. Goes to whoever entered the job and to the owners.', area: 'graphics', defaultChannels: ['in_app', 'push', 'email'], audience: 'The person who created the job, plus super admins.' },
   { type: 'proof_sent', label: 'Proof sent to the customer', description: 'An artwork proof went out for approval.', area: 'graphics', defaultChannels: ['in_app'] },
-  { type: 'proof_approved', label: 'Proof approved', description: 'The customer signed off on the artwork.', area: 'graphics', defaultChannels: ['in_app', 'push'] },
+  { type: 'proof_approved', label: 'Proof approved', description: 'The customer signed off on the artwork.', area: 'graphics', defaultChannels: ['in_app', 'push'], emailNow: true, audience: 'Admins and production. The job\'s creator, assignee and sender always get it on every channel, email included.' },
+  { type: 'proof_revision_requested', label: 'Customer asked for proof changes', description: 'The customer asked for changes to the artwork.', area: 'graphics', defaultChannels: ['in_app', 'push'], emailNow: true, audience: 'Admins and production. The job\'s creator, assignee and sender always get it on every channel, email included.' },
   { type: 'proof_rep_review_requested', label: 'Proof sent to you for review', description: 'The art team sent you a proof to check before it goes to the customer. Nothing has gone out yet.', area: 'graphics', defaultChannels: ['in_app', 'push', 'email'], emailNow: true },
   { type: 'proof_rep_review_update', label: 'Rep sent your proof back', description: 'The rep reviewing a proof you sent wants changes before it goes to the customer.', area: 'graphics', defaultChannels: ['in_app', 'push'] },
   { type: 'proof_stale', label: 'Proof waiting too long', description: 'A proof has sat unanswered long enough to block production. Nothing goes to the customer automatically — this is the prompt to resend it.', area: 'graphics', defaultChannels: ['in_app', 'push', 'email'] },
@@ -298,6 +317,7 @@ export function channelsForType(
   const def = BY_TYPE.get(type);
   if (!def) return fallback;
   if (def.alwaysOn) return def.defaultChannels;
+  if (def.optIn) return parseOverrides(prefs?.type_channels)[def.type] || [];
   const editable = editableChannels(def, prefs);
   if (!def.fixedChannels) return editable;
 
