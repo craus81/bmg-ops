@@ -1,4 +1,4 @@
--- Migration 414: NetSuite sales orders in the top bar search.
+-- Migration 416: NetSuite sales orders in the top bar search.
 --
 -- Owner ask 2026-10-20: sales orders made in NetSuite should be findable by
 -- number in the top bar, like NetSuite estimates (migration 372), so one can

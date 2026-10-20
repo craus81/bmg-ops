@@ -1,4 +1,4 @@
-import { matchRequest, type CatalogPart, type DraftLine, type DraftRequestLine } from '@/lib/paste-to-estimate';
+import { matchItemNumberOnly, type CatalogPart, type DraftLine, type DraftRequestLine } from '@/lib/paste-to-estimate';
 import type { HistoryDetail } from '@/lib/ledger/history';
 
 /**
@@ -12,8 +12,8 @@ import type { HistoryDetail } from '@/lib/ledger/history';
  * chose. The old quantity and price ride along in the line's text so the rep
  * can see them.
  *
- * QuickBooks item names are not NetSuite item numbers, so each line tries the
- * item name as a part number first and falls back to its words.
+ * Each line matches by its QuickBooks item name read as a catalog part
+ * number, never by its description.
  */
 
 export interface QuickbooksDraftRequest {
@@ -58,28 +58,15 @@ export function quickbooksDraftRequests(detail: Pick<HistoryDetail, 'lines' | 'n
 }
 
 /**
- * Match one QuickBooks line: its item name as a part number, then its words.
- * An item name the catalog doesn't carry is expected here (QuickBooks named
- * items its own way), so unlike a customer's stated part number it is not a
- * reason to stop looking.
+ * Match one QuickBooks line by its item name as a part number, and nothing
+ * else (owner rule 2026-10-20: "only focus on the item number"). A line
+ * whose item isn't a catalog number stays a custom line at $0, unticked,
+ * with the old description; it is never swapped for a part whose words
+ * read alike.
  */
 export function matchQuickbooksLine(q: QuickbooksDraftRequest, candidates: CatalogPart[]): DraftLine {
-  if (q.qboItem) {
-    const byNumber = matchRequest({ ...q.request, itemNumber: q.qboItem }, candidates);
-    if (byNumber.part) {
-      return { ...byNumber, request: q.request, signal: `QuickBooks item ${q.qboItem} is ${byNumber.part.item_number} in the catalog` };
-    }
-  }
-  return matchRequest(q.request, candidates);
-}
-
-/** Words worth a catalog search, the same filter the RFQ drafter uses. */
-export function catalogSearchTerms(q: QuickbooksDraftRequest): string[] {
-  const words = String(q.request.description || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .split(' ')
-    .filter(t => t.length > 2)
-    .slice(0, 4);
-  return [...new Set([...(q.qboItem ? [q.qboItem.replace(/[,()*%"\\]/g, ' ').trim()] : []), ...words])].filter(Boolean);
+  const m = matchItemNumberOnly(q.request, q.qboItem, candidates, 'QuickBooks');
+  return m.confidence === 'exact' && m.part
+    ? { ...m, signal: `QuickBooks item ${q.qboItem} is ${m.part.item_number} in the catalog` }
+    : m;
 }
