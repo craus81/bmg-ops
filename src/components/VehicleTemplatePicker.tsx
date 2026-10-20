@@ -12,7 +12,7 @@
 // choices out (vehicle_template_filter_options, migration 345); retired
 // templates are left out.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { theme } from '@/lib/theme';
 import { ROOF_ORDER } from '@/lib/template-facets';
 import {
@@ -74,7 +74,25 @@ export default function VehicleTemplatePicker({
     setPinned(prev => prev.filter(k => next[k] && next[k] === filterValues[k]));
     onFiltersChange?.(next);
   };
-  const setFilter = (key: TemplateFilterKey, value: string) => setFilters({ ...filterValues, [key]: value });
+  // The narrower filters describe one make's models, so a new make clears
+  // them, and a new model clears its body details. Leaving them set made the
+  // first pick of a new make fall back to the old one (Craig 2026-10-20:
+  // "When I selected Ford for the make it would open Jeep"): the make
+  // dropdown was asked for makes that have the old model, so Ford wasn't
+  // among them and got dropped.
+  const NARROWER: Partial<Record<TemplateFilterKey, TemplateFilterKey[]>> = {
+    make: ['model', 'body', 'wheelbase', 'roof', 'bed', 'cab'],
+    model: ['body', 'wheelbase', 'roof', 'bed', 'cab'],
+  };
+  // The dropdown the person just changed: if the others leave it stranded,
+  // they give way, never the pick itself.
+  const lastChanged = useRef<TemplateFilterKey | null>(null);
+  const setFilter = (key: TemplateFilterKey, value: string) => {
+    const next = { ...filterValues, [key]: value };
+    (NARROWER[key] || []).forEach(k => { next[k] = ''; });
+    lastChanged.current = value ? key : null;
+    setFilters(next);
+  };
 
   // Re-seed when the caller loads another record.
   useEffect(() => {
@@ -120,9 +138,23 @@ export default function VehicleTemplatePicker({
   useEffect(() => {
     let stale = false;
     (async () => {
-      const { data, error } = await supabase.rpc('vehicle_template_filter_options', { p_filters: filterValues });
-      if (stale || error || !data) return;
-      setRawFilterOptions({ key: filterKey, options: { ...EMPTY_FILTER_OPTIONS, ...data } });
+      // Make and model read top-down: the makes for the year, the models for
+      // the year and make, so picking a model never hides the other makes
+      // (Craig 2026-10-20: with a Wrangler picked, Ford wasn't in the Make
+      // list and the pick fell back to Jeep). The body details below them
+      // narrow by everything.
+      const ask = (filters: Partial<TemplateFilters>) => supabase.rpc('vehicle_template_filter_options', { p_filters: filters });
+      const { year, make } = filterValues;
+      const [all, makes, models] = await Promise.all([
+        ask(filterValues),
+        ask({ year }),
+        ask({ year, make }),
+      ]);
+      if (stale || all.error || !all.data || makes.error || models.error) return;
+      setRawFilterOptions({
+        key: filterKey,
+        options: { ...EMPTY_FILTER_OPTIONS, ...all.data, make: makes.data?.make || [], model: models.data?.model || [] },
+      });
     })();
     return () => { stale = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- filterKey stands for filterValues
@@ -154,8 +186,20 @@ export default function VehicleTemplatePicker({
   useEffect(() => {
     if (!rawFilterOptions || rawFilterOptions.key !== filterKey) return;
     const raw = rawFilterOptions.options;
+    const offered = (key: TemplateFilterKey) => (raw[key] || []).some(o => normText(o) === normText(filterValues[key]));
+    const picked = lastChanged.current;
+    lastChanged.current = null;
     let changed = false;
     const next = { ...filterValues };
+    if (picked && next[picked] && !offered(picked)) {
+      // Nothing matches the new pick together with the other filters
+      // (a year Ford has no templates for): keep the pick, drop the rest.
+      FILTER_KEYS.forEach(key => {
+        if (key !== picked && next[key] && !pinned.includes(key)) { next[key] = ''; changed = true; }
+      });
+      if (changed) setFilters(next);
+      return;
+    }
     FILTER_KEYS.forEach(key => {
       if (pinned.includes(key)) return;
       if (next[key] && !(raw[key] || []).some(o => normText(o) === normText(next[key]))) { next[key] = ''; changed = true; }
