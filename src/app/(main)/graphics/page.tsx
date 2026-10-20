@@ -40,6 +40,9 @@ import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInv
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import MentionsInbox from '@/components/MentionsInbox';
 import { DropZone } from '@/components/DropZone';
+import ClientFilePicker from '@/components/ClientFilePicker';
+import { linkClientFilesToJob, clientFilesButtonStyle } from '@/components/GraphicsJobClientFiles';
+import type { ClientFile } from '@/components/ClientFileRow';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob, buildGfxJobTitle } from '@/lib/graphics-job-from-po';
 import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
@@ -343,6 +346,9 @@ export default function GraphicsPage() {
 
   // Files attached in the create wizard, uploaded after the job row exists
   const [createFiles, setCreateFiles] = useState<File[]>([]);
+  // Dropbox client files picked in the wizard, linked once the job exists (migration 417).
+  const [createClientFiles, setCreateClientFiles] = useState<ClientFile[]>([]);
+  const [clientPickerOpen, setClientPickerOpen] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const createFileInputRef = useRef<HTMLInputElement>(null);
@@ -1087,6 +1093,13 @@ export default function GraphicsPage() {
       if (createFiles.length > 0) {
         await uploadFilesToJob(data.id, createFiles);
       }
+      if (createClientFiles.length > 0) {
+        try {
+          await linkClientFilesToJob(data.id, createClientFiles.map(f => f.id));
+        } catch (e: any) {
+          await dialog.alert(`The job was created, but its Client Files could not be added: ${e?.message || 'unknown error'}`);
+        }
+      }
 
       // Duplicate: link the chosen files from the original job. The rows
       // share the stored object; the job page only deletes an object once
@@ -1178,6 +1191,7 @@ export default function GraphicsPage() {
       setCreateProofRoute('customer');
       setCreateProofRep(null);
       setCreateFiles([]);
+      setCreateClientFiles([]);
       setPrefillPoLink(null);
       setPrefillEstimateLink(null);
       setPrefillCopy(null);
@@ -2426,7 +2440,37 @@ export default function GraphicsPage() {
                   >
                     + Add Files (proofs, logos, photos, PDFs)
                   </button>
+                  {createClientFiles.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px' }}>
+                      {createClientFiles.map(f => (
+                        <span key={f.id} title={[f.client?.name, f.folderPath].filter(Boolean).join(' › ')} style={{
+                          display: 'flex', alignItems: 'center', gap: '4px',
+                          padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 600,
+                          background: 'rgba(251,146,60,0.1)', border: '1px solid rgba(251,146,60,0.3)', color: 'var(--orange, #fb923c)',
+                        }}>
+                          📁 {f.name}
+                          <span onClick={() => setCreateClientFiles(prev => prev.filter(x => x.id !== f.id))} style={{ cursor: 'pointer', fontSize: '9px', opacity: 0.7 }}>✕</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setClientPickerOpen(true)}
+                    style={{ ...clientFilesButtonStyle, padding: '10px', marginTop: '6px' }}
+                  >
+                    📁 From Client Files (Dropbox)
+                  </button>
                 </DropZone>
+                {clientPickerOpen && (
+                  <ClientFilePicker
+                    customerName={createForm.customer.trim() || null}
+                    customerNetsuiteId={prefillPoLink?.customerNetsuiteId || prefillEstimateLink?.customerNetsuiteId || prefillCopy?.customerNetsuiteId || null}
+                    alreadyIds={new Set(createClientFiles.map(f => f.id))}
+                    onAdd={picked => setCreateClientFiles(prev => [...prev, ...picked.filter(f => !prev.some(x => x.id === f.id))])}
+                    onClose={() => setClientPickerOpen(false)}
+                  />
+                )}
 
                 {/* Duplicate: files from the original, and where the copy starts */}
                 {prefillCopy && (
