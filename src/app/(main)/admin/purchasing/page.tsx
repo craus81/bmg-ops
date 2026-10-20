@@ -38,6 +38,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { trackingUrl } from '@/lib/tracking-url';
 import CreatedBy from '@/components/CreatedBy';
 import VendorPosTab, { confirmPoUndo, runPoUndo } from '@/components/VendorPosTab';
+import PurchasingJobsTab from '@/components/PurchasingJobsTab';
 
 interface RequestRow {
   id: string;
@@ -84,8 +85,9 @@ export default function PurchasingQueuePage() {
   const searchParams = useSearchParams();
   const dialog = useDialog();
 
-  const [tab, setTab] = useState<'requests' | 'demand' | 'vendor_pos' | 'metrics'>(
-    searchParams.get('tab') === 'demand' ? 'demand'
+  const [tab, setTab] = useState<'requests' | 'jobs' | 'demand' | 'vendor_pos' | 'metrics'>(
+    searchParams.get('tab') === 'jobs' ? 'jobs'
+      : searchParams.get('tab') === 'demand' ? 'demand'
       : searchParams.get('tab') === 'vendor-pos' ? 'vendor_pos'
       : 'requests',
   );
@@ -384,9 +386,10 @@ export default function PurchasingQueuePage() {
           <span style={{ fontSize: '12px', fontWeight: 700, color: '#f59e0b' }}>{requests.length} pending</span>
         )}
       </div>
-      <div style={{ display: 'flex', gap: '6px', margin: '12px 0 14px', borderBottom: `1px solid ${theme.border}` }}>
+      <div style={{ display: 'flex', gap: '6px', margin: '12px 0 14px', borderBottom: `1px solid ${theme.border}`, overflowX: 'auto' }}>
         {([
           ['requests', 'Request queue'],
+          ['jobs', 'Jobs waiting on parts'],
           ['demand', 'Open-job demand'],
           ['vendor_pos', 'Vendor POs'],
           ['metrics', 'Cycle time & cost'],
@@ -396,7 +399,7 @@ export default function PurchasingQueuePage() {
             onClick={() => setTab(key)}
             style={{
               padding: '7px 14px', background: 'none', border: 'none', cursor: 'pointer',
-              fontSize: '12px', fontWeight: 800,
+              fontSize: '12px', fontWeight: 800, whiteSpace: 'nowrap', flexShrink: 0,
               color: tab === key ? 'var(--text-primary)' : theme.textMuted,
               borderBottom: `2px solid ${tab === key ? '#60a5fa' : 'transparent'}`,
               marginBottom: '-1px',
@@ -482,6 +485,8 @@ export default function PurchasingQueuePage() {
           )}
         </div>
       )}
+
+      {tab === 'jobs' && <PurchasingJobsTab />}
 
       {tab === 'vendor_pos' && <VendorPosTab isAdmin={isAdmin} onChanged={load} />}
 
