@@ -230,6 +230,23 @@ export async function promoteProspect(
     }
   }
 
+  // Estimates quoted while this was a prospect carry no NetSuite customer,
+  // and Convert to Sales Order / invoicing read that id off the estimate.
+  // Link them now, so an estimate approved before the promotion converts
+  // without re-picking the customer (EST-2610-024, Craig 2026-10-20).
+  // Only unlinked rows: an estimate someone re-pointed is left alone.
+  {
+    const { error: estErr } = await supabase
+      .from('estimates')
+      .update({
+        customer_netsuite_id: String(result.customerId),
+        ...(local ? { customer_id: local.id } : {}),
+      })
+      .eq('prospect_id', prospect.id)
+      .is('customer_netsuite_id', null);
+    if (estErr) console.error('promoteProspect estimate link failed:', estErr.message);
+  }
+
   // R3-16a: promotion used to send only the header fields — contacts added
   // while the record was a lead never reached NetSuite as Contacts (the
   // contacts route only pushes once the record is ALREADY linked, and
