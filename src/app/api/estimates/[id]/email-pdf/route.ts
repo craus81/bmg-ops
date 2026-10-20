@@ -24,6 +24,8 @@ const Schema = z.object({
   // with the PDF — pictures, spec sheets.
   attachmentFileIds: z.array(z.string().uuid()).max(20).optional(),
   preview: z.boolean().optional(),
+  // Send the Pro Forma Invoice version instead of the estimate.
+  proForma: z.boolean().optional(),
 });
 
 function getSupabase() {
@@ -82,16 +84,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const picked = await loadEstimateAttachmentRows(supabase, params.id, body.attachmentFileIds);
   if (!picked.ok) return NextResponse.json({ error: picked.error }, { status: picked.status });
 
-  const filename = estimatePdfFilename(estimate);
-  const subject = `[BMG Fleet] Estimate #${estimate.estimate_number}${estimate.title ? ` — ${estimate.title}` : ''}`;
+  const proForma = !!body.proForma;
+  const filename = estimatePdfFilename(estimate, { proForma });
+  const docName = proForma
+    ? `Pro Forma Invoice for Estimate #${estimate.estimate_number}`
+    : `Estimate #${estimate.estimate_number}`;
+  const subject = `[BMG Fleet] ${docName}${estimate.title ? ` — ${estimate.title}` : ''}`;
   const total = Number(estimate.grand_total || 0);
-  const bodyText = `Attached is Estimate #${estimate.estimate_number}`
+  const bodyText = `Attached is ${proForma ? 'a pro forma invoice' : `Estimate #${estimate.estimate_number}`}`
     + `${estimate.title ? ` (${estimate.title})` : ''} from ${companyName}`
     + `${estimate.customer_name ? ` for ${estimate.customer_name}` : ''}`
-    + `${total > 0 ? ` — total $${total.toFixed(2)}` : ''}.`;
+    + `${total > 0 ? ` — total $${total.toFixed(2)}` : ''}.`
+    + (proForma ? ' It is for submitting for financing and is not a bill. We will send the final invoice when the work is complete.' : '');
   const signature = await getEmailSignature(supabase, auth.user?.id);
   const html = buildNotificationEmail(
-    `Estimate #${estimate.estimate_number}`,
+    docName,
     bodyText,
     undefined,
     undefined,
@@ -131,7 +138,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'No email on file for this customer. Add a recipient first.' }, { status: 400 });
   }
 
-  const pdf = await generateEstimatePdf(supabase, params.id);
+  const pdf = await generateEstimatePdf(supabase, params.id, { proForma });
   if (!pdf.ok) {
     return NextResponse.json({ error: pdf.error }, { status: pdf.status });
   }

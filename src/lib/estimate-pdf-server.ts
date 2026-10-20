@@ -17,7 +17,7 @@ import { enrichLinesWithPartAssets } from './estimate-line-parts';
 import { coveragePictures, loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from './estimate-graphics';
 import { r2GetBytes } from './r2';
 import { shrinkImageForEmail } from './email-image';
-import { buildEstimatePdf, estimatePdfFilename, type EstimatePdfGraphics, type EstimatePdfImage, type EstimatePdfLine } from './estimate-pdf';
+import { buildEstimatePdf, estimatePdfFilename, proFormaIssuedDate, type EstimatePdfGraphics, type EstimatePdfImage, type EstimatePdfLine } from './estimate-pdf';
 
 // Keep the PDF (and the serverless memory bill) bounded: skip any single
 // image over 3MB and stop inlining once 12MB of image data is embedded —
@@ -94,7 +94,7 @@ export type EstimatePdfResult =
 export async function generateEstimatePdf(
   supabase: SupabaseClient,
   estimateId: string,
-  opts: { print?: boolean } = {},
+  opts: { print?: boolean; proForma?: boolean } = {},
 ): Promise<EstimatePdfResult> {
   const { data: estimate, error: estErr } = await supabase
     .from('estimates')
@@ -154,7 +154,11 @@ export async function generateEstimatePdf(
     .filter(s => s.films.length > 0)
     .map(s => ({ quoteNumber: s.quoteNumber, vehicle: s.vehicle, totalSqft: s.totalSqft, films: s.films }));
 
-  const doc = buildEstimatePdf({ estimate, lines, company, logo, ...(graphics.length > 0 ? { graphics } : {}) });
+  const doc = buildEstimatePdf({
+    estimate, lines, company, logo,
+    ...(graphics.length > 0 ? { graphics } : {}),
+    ...(opts.proForma ? { proForma: { issuedDate: proFormaIssuedDate() } } : {}),
+  });
   if (opts.print) doc.autoPrint();
   let buffer: Buffer = Buffer.from(doc.output('arraybuffer'));
 
@@ -179,7 +183,7 @@ export async function generateEstimatePdf(
   return {
     ok: true,
     buffer,
-    filename: estimatePdfFilename(estimate),
+    filename: estimatePdfFilename(estimate, { proForma: opts.proForma }),
     estimate,
   };
 }
