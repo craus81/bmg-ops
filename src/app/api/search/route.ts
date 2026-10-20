@@ -69,6 +69,20 @@ export async function GET(req: NextRequest) {
         .then(r => r, err => ({ data: null, count: null, error: err }))
     : null;
 
+  // Sales orders made in NetSuite (copied every two hours, migration 196),
+  // so "SO4410" finds one and it can be copied into a new estimate. Unlike
+  // estimates, an SO FleetSuite created stays in: no other group finds it by
+  // its own number. Started now, awaited below.
+  const nsSalesOrdersPromise = features.has('estimates')
+    ? supabase
+        .from('netsuite_sales_orders')
+        .select('id, netsuite_id, tranid, trandate, customer_name, customer_netsuite_id, status_label, memo, otherrefnum, total', { count: 'exact' })
+        .or(anyOf(['tranid', 'otherrefnum', 'memo', 'customer_name']))
+        .order('trandate', { ascending: false, nullsFirst: false })
+        .limit(full ? FULL_PER_GROUP : MAX_PER_GROUP)
+        .then(r => r, err => ({ data: null, count: null, error: err }))
+    : null;
+
   // Caller-ID search (audit Stage 1: no phone search existed anywhere).
   // A phone-shaped query — digits with phone punctuation only — searches
   // the digit-stripped phone_digits columns (migrations 238/239) so
@@ -395,6 +409,12 @@ export async function GET(req: NextRequest) {
   if (nsEstimates?.data?.length) {
     results.ns_estimates = nsEstimates.data;
     totals.ns_estimates = nsEstimates.count ?? nsEstimates.data.length;
+  }
+  const nsSalesOrders = nsSalesOrdersPromise ? await nsSalesOrdersPromise : null;
+  if (nsSalesOrders?.error) console.error('search: NetSuite sales orders failed:', nsSalesOrders.error);
+  if (nsSalesOrders?.data?.length) {
+    results.ns_sales_orders = nsSalesOrders.data;
+    totals.ns_sales_orders = nsSalesOrders.count ?? nsSalesOrders.data.length;
   }
   if (parts.data?.length) {
     // Count is raw matching rows (pre-dedupe) — close enough for "of N".
