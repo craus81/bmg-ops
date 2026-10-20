@@ -142,3 +142,39 @@ export function looseOrFilter(columns: string[], query: string | null | undefine
   if (!re) return null;
   return [...columns.map(c => `${c}.imatch."${re}"`), ...extra].join(',');
 }
+
+/**
+ * Record numbers typed without their dashes (owner ask 2026-10-20: the top
+ * bar didn't find FleetSuite estimate numbers). "EST2610014", "est 2610 014"
+ * and "2610014" should all find EST-2610-014, but the word rule above keeps
+ * a typed word whole, so "est2610014" never matched across the dashes.
+ *
+ * For a query that holds a digit, every letter and digit may be separated
+ * by punctuation or spacing in the stored number. Null for a query with no
+ * digit — a name isn't a record number. Meant for number columns only
+ * (estimate, job, quote, transaction numbers): on long text it would match
+ * scattered characters.
+ */
+export function looseNumberRegex(query: string | null | undefined): string | null {
+  const chars = searchWords(query).join('');
+  if (!/[0-9]/.test(chars)) return null;
+  return chars.split('').join('[^[:alnum:]]*');
+}
+
+/** The JS twin of looseNumberRegex: does `value` hold the typed number? */
+export function looseNumberIncludes(value: unknown, query: string | null | undefined): boolean {
+  const chars = searchWords(query).join('');
+  if (!/[0-9]/.test(chars)) return false;
+  return searchWords(String(value ?? '')).join('').includes(chars);
+}
+
+/**
+ * looseOrFilter for a search over number columns and text columns at once:
+ * the text columns get the word rule, the number columns get it too plus
+ * looseNumberRegex. Null when the query has no words.
+ */
+export function looseOrFilterWithNumbers(numberColumns: string[], textColumns: string[], query: string | null | undefined): string | null {
+  const numRe = looseNumberRegex(query);
+  const extra = numRe ? numberColumns.map(c => `${c}.imatch."${numRe}"`) : [];
+  return looseOrFilter([...numberColumns, ...textColumns], query, extra);
+}

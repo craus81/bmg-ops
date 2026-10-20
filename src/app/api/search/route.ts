@@ -3,7 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import { requireStaff, profileFeatures, getProfileRoles } from '@/lib/api-auth';
 import { isLedgerReader } from '@/lib/ledger/history';
 import { deepSearch, type DeepSearchResult } from '@/lib/deep-search';
-import { looseOrFilter, looseSearchRegex } from '@/lib/loose-search';
+import { looseOrFilter, looseOrFilterWithNumbers, looseSearchRegex } from '@/lib/loose-search';
+import { orderSearchResults } from '@/lib/search-groups';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,6 +14,7 @@ const supabase = createClient(
 );
 
 const MAX_PER_GROUP = 5;
+const ESTIMATE_COLS = 'id, estimate_number, netsuite_estimate_number, customer_id, prospect_id, customer_name, title, vin, unit_number, status, total, created_at';
 /** Rows per text group (memos, notes) on the full results page (?full=1). */
 const FULL_PER_GROUP = 25;
 
@@ -35,6 +37,10 @@ export async function GET(req: NextRequest) {
   const re = looseSearchRegex(q);
   if (!re) return NextResponse.json({ results: {} });
   const anyOf = (cols: string[]) => looseOrFilter(cols, q)!;
+  // Same, plus record numbers typed without their dashes: "EST2610014"
+  // finds EST-2610-014 in the number columns (looseNumberRegex).
+  const anyOfWithNumbers = (numberCols: string[], textCols: string[]) =>
+    looseOrFilterWithNumbers(numberCols, textCols, q)!;
   // ?full=1 is the "See all results" page: more rows per text group, plus
   // QuickBooks bills, which stay off the top bar to keep it quick.
   const full = req.nextUrl.searchParams.get('full') === '1';
@@ -62,7 +68,7 @@ export async function GET(req: NextRequest) {
         .from('netsuite_estimates')
         .select('id, netsuite_id, tranid, trandate, customer_name, customer_netsuite_id, status_label, memo, otherrefnum, total', { count: 'exact' })
         .is('estimate_id', null)
-        .or(anyOf(['tranid', 'otherrefnum', 'memo', 'customer_name']))
+        .or(anyOfWithNumbers(['tranid'], ['otherrefnum', 'memo', 'customer_name']))
         .order('trandate', { ascending: false, nullsFirst: false })
         .limit(full ? FULL_PER_GROUP : MAX_PER_GROUP)
         .then(r => r, err => ({ data: null, count: null, error: err }))
@@ -76,7 +82,7 @@ export async function GET(req: NextRequest) {
     ? supabase
         .from('netsuite_sales_orders')
         .select('id, netsuite_id, tranid, trandate, customer_name, customer_netsuite_id, status_label, memo, otherrefnum, total', { count: 'exact' })
-        .or(anyOf(['tranid', 'otherrefnum', 'memo', 'customer_name']))
+        .or(anyOfWithNumbers(['tranid'], ['otherrefnum', 'memo', 'customer_name']))
         .order('trandate', { ascending: false, nullsFirst: false })
         .limit(full ? FULL_PER_GROUP : MAX_PER_GROUP)
         .then(r => r, err => ({ data: null, count: null, error: err }))
@@ -126,16 +132,21 @@ export async function GET(req: NextRequest) {
     supabase
       .from('graphics_jobs')
       .select('id, job_number, title, part_number, customer, status, priority, due_date, created_at', { count: 'exact' })
-      .or(anyOf(['job_number', 'title', 'part_number', 'customer']))
+      .or(anyOfWithNumbers(['job_number'], ['title', 'part_number', 'customer']))
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
     // Estimates — search by either estimate number (FleetSuite's own and
-    // NetSuite's, since staff may have written down either), customer, title
+    // NetSuite's, since staff may have written down either, with or without
+    // the dashes), the SO number it became, customer name, title, the
+    // customer's PO, VIN and unit number
     supabase
       .from('estimates')
-      .select('id, estimate_number, netsuite_estimate_number, customer_id, title, status, total, created_at', { count: 'exact' })
-      .or(anyOf(['estimate_number', 'netsuite_estimate_number', 'title']))
+      .select(ESTIMATE_COLS, { count: 'exact' })
+      .or(anyOfWithNumbers(
+        ['estimate_number', 'netsuite_estimate_number', 'netsuite_so_number'],
+        ['customer_name', 'title', 'po_number', 'vin', 'unit_number'],
+      ))
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
@@ -176,7 +187,7 @@ export async function GET(req: NextRequest) {
     supabase
       .from('wrap_quotes')
       .select('id, quote_number, customer, vehicle_description, status, total, created_at', { count: 'exact' })
-      .or(anyOf(['quote_number', 'customer->>name', 'vehicle_description']))
+      .or(anyOfWithNumbers(['quote_number'], ['customer->>name', 'vehicle_description']))
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
@@ -313,26 +324,31 @@ export async function GET(req: NextRequest) {
     customerCount = Math.max(customerCount, customerRows.length);
   }
 
-  // Also search estimates by customer name through the prospects/customers table
+  // Also find estimates through the customers the search matched: by the
+  // customer record itself (estimates.prospect_id — customers made in
+  // FleetSuite have no NetSuite id) and, for NetSuite customers, through the
+  // old customers table (customers.netsuite_id → estimates.customer_id).
   let estimatesByCustomer: any[] = [];
   if (customerRows.length > 0) {
-    // Prospects that came from NetSuite have netsuite_id which maps to customers.netsuite_id → estimates.customer_id
+    const prospectIds = customerRows.map((c: any) => c.id).filter((id: any) => typeof id === 'string' && !id.startsWith('ns-'));
     const nsIds = customerRows.filter((c: any) => c.netsuite_id).map((c: any) => c.netsuite_id);
-    if (nsIds.length > 0) {
-      // Look up the old customer IDs by netsuite_id
-      const { data: oldCustomers } = await supabase.from('customers').select('id').in('netsuite_id', nsIds);
-      const customerIds = (oldCustomers || []).map((c: any) => c.id);
-      if (customerIds.length > 0) {
-        const { data: custEstimates } = await supabase
-          .from('estimates')
-          .select('id, estimate_number, netsuite_estimate_number, customer_id, title, status, total, created_at')
-          .in('customer_id', customerIds)
-          .order('created_at', { ascending: false })
-          .limit(MAX_PER_GROUP);
-
-        const existingEstIds = new Set((estimates.data || []).map((e: any) => e.id));
-        estimatesByCustomer = (custEstimates || []).filter((e: any) => !existingEstIds.has(e.id));
-      }
+    const { data: oldCustomers } = nsIds.length > 0
+      ? await supabase.from('customers').select('id').in('netsuite_id', nsIds)
+      : { data: [] as any[] };
+    const customerIds = (oldCustomers || []).map((c: any) => c.id);
+    const links = [
+      prospectIds.length ? `prospect_id.in.(${prospectIds.join(',')})` : null,
+      customerIds.length ? `customer_id.in.(${customerIds.join(',')})` : null,
+    ].filter(Boolean);
+    if (links.length > 0) {
+      const { data: custEstimates } = await supabase
+        .from('estimates')
+        .select(ESTIMATE_COLS)
+        .or(links.join(','))
+        .order('created_at', { ascending: false })
+        .limit(MAX_PER_GROUP);
+      const existingEstIds = new Set((estimates.data || []).map((e: any) => e.id));
+      estimatesByCustomer = (custEstimates || []).filter((e: any) => !existingEstIds.has(e.id));
     }
   }
 
@@ -470,5 +486,7 @@ export async function GET(req: NextRequest) {
   Object.assign(results, deep.results);
   Object.assign(totals, deep.totals);
 
-  return NextResponse.json({ results, totals, more: deep.more, query: q });
+  // FleetSuite's own records first, then NetSuite's, then QuickBooks'
+  // (owner ask 2026-10-20). JSON keeps this key order for the clients.
+  return NextResponse.json({ results: orderSearchResults(results), totals, more: deep.more, query: q });
 }

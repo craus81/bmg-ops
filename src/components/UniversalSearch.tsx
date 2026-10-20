@@ -15,6 +15,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { closeOnEscape } from '@/lib/modal-escape';
 import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
 import { DEEP_MIN_QUERY } from '@/lib/deep-search';
+import { orderSearchGroups } from '@/lib/search-groups';
 import { OnHoldBadge } from '@/components/CustomerHold';
 
 interface UniversalSearchProps {
@@ -31,7 +32,9 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 export const GROUP_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
-  invoices: { label: 'Invoices', icon: '', color: '#34d399' },
+  // NetSuite invoice numbers, found through the POs, graphics jobs and scans
+  // that point at them.
+  invoices: { label: 'NetSuite Invoices', icon: '', color: '#34d399' },
   purchase_orders: { label: 'Purchase Orders', icon: '', color: '#60a5fa' },
   vehicles: { label: 'Vehicles', icon: '', color: '#34d399' },
   graphics_jobs: { label: 'Graphics Production Jobs', icon: '', color: '#a78bfa' },
@@ -180,7 +183,7 @@ export function renderResult(group: string, item: any, onSelect: (group: string,
             </div>
           </div>
           <div style={subtitleStyle}>
-            {[item.title || '', estimateAltNumber(item), item.created_at ? formatDate(item.created_at) : ''].filter(Boolean).join(' · ')}
+            {[item.customer_name || '', item.title || '', estimateAltNumber(item), item.vin ? `VIN ${item.vin}` : '', item.created_at ? formatDate(item.created_at) : ''].filter(Boolean).join(' · ')}
           </div>
         </button>
       );
@@ -617,7 +620,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
 
   if (!open) return null;
 
-  const groupKeys = Object.keys(results);
+  const groupKeys = orderSearchGroups(Object.keys(results));
   const totalResults = groupKeys.reduce((sum, k) => sum + (results[k]?.length || 0), 0);
 
   return (

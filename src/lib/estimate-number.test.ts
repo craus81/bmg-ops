@@ -42,6 +42,8 @@ describe('estimateNumberMatches', () => {
     expect(estimateNumberMatches(pushed, 'est-2608')).toBe(true);
     expect(estimateNumberMatches(pushed, '1234')).toBe(true);
     expect(estimateNumberMatches(pushed, 'nope')).toBe(false);
+    expect(estimateNumberMatches(fsOnly, 'EST2608041')).toBe(true);
+    expect(estimateNumberMatches(fsOnly, '2608 041')).toBe(true);
   });
 
   it('treats an empty query as a match so callers can filter unconditionally', () => {
