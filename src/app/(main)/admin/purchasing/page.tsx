@@ -21,6 +21,9 @@
  * someone ask for" but "what does ALL the open work need" — every part
  * across every open sales order and every approved-but-unconverted
  * estimate, inventory deliberately not netted out (PartsDemandTab).
+ *
+ * The Vendor POs tab (?tab=vendor-pos) lists every vendor PO, with an Undo
+ * on any part ordered here with Create PO (VendorPosTab).
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -34,6 +37,7 @@ import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { trackingUrl } from '@/lib/tracking-url';
 import CreatedBy from '@/components/CreatedBy';
+import VendorPosTab, { confirmPoUndo, runPoUndo } from '@/components/VendorPosTab';
 
 interface RequestRow {
   id: string;
@@ -80,8 +84,10 @@ export default function PurchasingQueuePage() {
   const searchParams = useSearchParams();
   const dialog = useDialog();
 
-  const [tab, setTab] = useState<'requests' | 'demand' | 'metrics'>(
-    searchParams.get('tab') === 'demand' ? 'demand' : 'requests',
+  const [tab, setTab] = useState<'requests' | 'demand' | 'vendor_pos' | 'metrics'>(
+    searchParams.get('tab') === 'demand' ? 'demand'
+      : searchParams.get('tab') === 'vendor-pos' ? 'vendor_pos'
+      : 'requests',
   );
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -191,6 +197,20 @@ export default function PurchasingQueuePage() {
     } finally {
       setBusyId(null);
     }
+  };
+
+  // A part ordered with Create PO: take it off the NetSuite PO and re-queue it.
+  const undoCreatedPo = async (r: RequestRow) => {
+    const ok = await confirmPoUndo(dialog, {
+      quantity: Number(r.quantity), itemNumber: r.item_number, poNumber: r.ordered_po?.tranid || null,
+    });
+    if (!ok) return;
+    setBusyId(r.id);
+    const res = await runPoUndo([r.id]);
+    setBusyId(null);
+    if (!res.ok) { await dialog.alert(`Undo failed: ${res.error}`); return; }
+    setMatchNotice(res.message);
+    await load();
   };
 
   useEffect(() => { load(); }, [load]);
@@ -368,6 +388,7 @@ export default function PurchasingQueuePage() {
         {([
           ['requests', 'Request queue'],
           ['demand', 'Open-job demand'],
+          ['vendor_pos', 'Vendor POs'],
           ['metrics', 'Cycle time & cost'],
         ] as const).map(([key, label]) => (
           <button
@@ -461,6 +482,8 @@ export default function PurchasingQueuePage() {
           )}
         </div>
       )}
+
+      {tab === 'vendor_pos' && <VendorPosTab isAdmin={isAdmin} onChanged={load} />}
 
       {tab === 'demand' && (
         <>
@@ -805,6 +828,12 @@ export default function PurchasingQueuePage() {
                         {isAdmin && (r.ordered_match === 'auto' || r.ordered_match === 'manual') && (
                           <button onClick={() => unmatch(r)} disabled={busyId === r.id} title="Wrong PO — put this request back in the queue"
                             style={{ padding: '4px 9px', borderRadius: '6px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
+                            Undo
+                          </button>
+                        )}
+                        {isAdmin && !r.ordered_match && po?.id && (
+                          <button onClick={() => undoCreatedPo(r)} disabled={busyId === r.id} title="Wrong part or wrong vendor: take it off this PO in NetSuite and put it back in the queue"
+                            style={{ padding: '4px 9px', borderRadius: '6px', background: 'transparent', border: '1px solid rgba(248,113,113,0.5)', color: '#f87171', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
                             Undo
                           </button>
                         )}

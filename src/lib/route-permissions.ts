@@ -510,6 +510,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/purchase-requests/mark-ordered/route.ts': feature('parts_ordering', 'requireAdmin('),
   'src/app/api/purchase-requests/route.ts': feature('parts_ordering'),
   'src/app/api/purchase-requests/unmatch/route.ts': feature('parts_ordering', 'requireAdmin('),
+  'src/app/api/purchase-requests/undo-po/route.ts': feature('parts_ordering', 'requireAdmin('),
+  'src/app/api/purchase-requests/vendor-pos/route.ts': feature('parts_ordering'),
   'src/app/api/push/register-native/route.ts': authScoped('self-scoped push-token registration'),
   'src/app/api/push/subscribe/route.ts': authScoped('self-scoped web-push subscription'),
   'src/app/api/push/test/route.ts': authScoped('sends a test push to the caller only'),

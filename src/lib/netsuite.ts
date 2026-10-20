@@ -2028,6 +2028,109 @@ export async function createPurchaseOrder(payload: {
   }
 }
 
+/** One item line of a NetSuite purchase order, as REST returns it. */
+export interface PoItemLine {
+  /** The sublist key: the line's id on this PO. */
+  line: number;
+  itemId: string;
+  quantity: number;
+  quantityReceived: number;
+  quantityBilled: number;
+  isClosed: boolean;
+  rate: number | null;
+  description: string | null;
+}
+
+/** GET/PATCH a purchaseOrder record — the same envelope as customerRecordCall. */
+async function purchaseOrderRecordCall(
+  path: string,
+  method: 'GET' | 'PATCH',
+  body?: unknown,
+): Promise<{ ok: true; data: any } | { ok: false; error: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/purchaseOrder/${path}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { ok: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+    const text = await response.text();
+    return { ok: true, data: text ? JSON.parse(text) : {} };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+const poNum = (v: unknown) => Math.abs(parseFloat(String(v ?? '0'))) || 0;
+
+/** A PO's item lines, read live (the mirror can be two hours old). */
+export async function getPurchaseOrderItemLines(
+  purchaseOrderId: string | number,
+): Promise<{ success: true; lines: PoItemLine[] } | { success: false; error: string }> {
+  const res = await purchaseOrderRecordCall(`${purchaseOrderId}?expandSubResources=true`, 'GET');
+  if (!res.ok) return { success: false, error: res.error };
+  const items: any[] = res.data?.item?.items || [];
+  return {
+    success: true,
+    lines: items
+      .filter(it => it?.item?.id != null && it?.line != null)
+      .map(it => ({
+        line: Number(it.line),
+        itemId: String(it.item.id),
+        quantity: poNum(it.quantity),
+        quantityReceived: poNum(it.quantityReceived ?? it.quantityreceived),
+        quantityBilled: poNum(it.quantityBilled ?? it.quantitybilled),
+        isClosed: it.isClosed === true || it.isclosed === true,
+        rate: it.rate != null ? poNum(it.rate) : null,
+        description: it.description || null,
+      })),
+  };
+}
+
+/**
+ * Change a PO's item lines — the purchasing Undo (po-undo.ts plans what to
+ * send). `replace` rebuilds the whole item sublist from `lines`: lines that
+ * carry their `line` key are kept as they are, any line left out is
+ * removed. Without it, only the lines sent are updated in place (a
+ * quantity drop, or closing the last line).
+ */
+export async function updatePurchaseOrderItemLines(
+  purchaseOrderId: string | number,
+  lines: Record<string, unknown>[],
+  opts: { replace: boolean },
+): Promise<{ success: boolean; error?: string }> {
+  const res = await purchaseOrderRecordCall(
+    `${purchaseOrderId}${opts.replace ? '?replace=item' : ''}`,
+    'PATCH',
+    { item: { items: lines } },
+  );
+  return res.ok ? { success: true } : { success: false, error: res.error };
+}
+
 /**
  * Look up a NetSuite customer by name (partial match)
  */
