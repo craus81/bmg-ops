@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
@@ -15,9 +15,9 @@ import { flashNote } from '@/lib/focus-note';
 import { fetchAllRows } from '@/lib/fetch-all';
 import RecordChanges from '@/components/RecordChanges';
 import CreatedBy from '@/components/CreatedBy';
-import { looseMatcher } from '@/lib/loose-search';
 import { apiFetch } from '@/lib/api-client';
 import { DeliveryPicker, DeliverySummary } from '@/components/DeliveryPicker';
+import { jobStanding, type JobStanding } from '@/lib/job-standing';
 import { deliveryFromRow, deliveryProblem, deliveryToRow, type Delivery } from '@/lib/delivery';
 
 interface UpfitNote {
@@ -146,20 +146,9 @@ interface ProjectPoLink {
   } | null;
 }
 
-const STATUSES = [
-  { key: 'opportunity', label: 'Opportunity', color: '#a78bfa' },
-  { key: 'estimate', label: 'Estimate', color: '#fbbf24' },
-  { key: 'sold', label: 'Sold', color: '#34d399' },
-  { key: 'parts_ordered', label: 'Parts Ordered', color: '#60a5fa' },
-  { key: 'parts_arrived', label: 'Parts Arrived', color: '#3b82f6' },
-  { key: 'parts_in_stock', label: 'Parts In Stock', color: '#2563eb' },
-  { key: 'scheduled_dropoff', label: 'Scheduled Drop-off', color: '#38bdf8' },
-  { key: 'scheduled_build', label: 'Scheduled Build', color: '#0ea5e9' },
-  { key: 'in_progress', label: 'In Progress', color: '#f97316' },
-  { key: 'scheduled_pickup', label: 'Scheduled Pickup', color: '#eab308' },
-  { key: 'completed', label: 'Completed', color: '#22c55e' },
-  { key: 'cancelled', label: 'Cancelled', color: '#6b7280' },
-];
+const STANDING_COLORS: Record<JobStanding['tone'], string> = {
+  bad: '#ef4444', warn: '#f59e0b', good: '#22c55e', info: '#60a5fa', muted: '#94a3b8',
+};
 
 export default function UpfitProjectsPage() {
   const { user, isAdmin, hasFeature } = useAuth();
@@ -167,6 +156,7 @@ export default function UpfitProjectsPage() {
   const supabase = createClient();
   const dialog = useDialog();
   const searchParams = useSearchParams();
+  const router = useRouter();
 
   const [projects, setProjects] = useState<UpfitProject[]>([]);
   // Per-project parts verdicts for the card chips (R3-12), keyed by id.
@@ -175,8 +165,6 @@ export default function UpfitProjectsPage() {
     covered: number; onOrder: number; short: number; lastEta: string | null;
   }>>({});
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState('active');
-  const [search, setSearch] = useState('');
   const [profiles, setProfiles] = useState<Record<string, string>>({});
 
   // Project views — who has opened each project (read receipts). Loaded
@@ -233,13 +221,6 @@ export default function UpfitProjectsPage() {
   const [poLinkInput, setPoLinkInput] = useState('');
   const [poLinkBusy, setPoLinkBusy] = useState(false);
 
-  // New project form
-  const [showCreate, setShowCreate] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newCustomer, setNewCustomer] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [createFiles, setCreateFiles] = useState<File[]>([]);
-  const createFileInputRef = useRef<HTMLInputElement>(null);
 
   const load = async () => {
     setLoading(true);
@@ -752,6 +733,17 @@ export default function UpfitProjectsPage() {
     loadLinkedCheckin(p.fleet_checkin_id);
     loadLinkedGraphics(p.id);
     loadReadiness(p.id, !!p.netsuite_so_id);
+    // The header chip's verdict: the list load only covers the newest 100
+    // open jobs, so fetch this one's when it wasn't among them.
+    if (p.netsuite_so_id && !boardReadiness[p.id]) {
+      fetch('/api/upfit-projects/readiness-board', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [p.id] }),
+      }).then(r => (r.ok ? r.json() : null)).then(d => {
+        if (d?.readiness) setBoardReadiness(prev => ({ ...prev, ...d.readiness }));
+      }).catch(() => { /* chip falls back to Sold */ });
+    }
     loadProjectPos(p.id);
     recordProjectView(p.id);
   };
@@ -837,118 +829,66 @@ export default function UpfitProjectsPage() {
     setDeliverySaving(false);
   };
 
-  const createProject = async () => {
-    if (!newName.trim()) return;
-    setCreating(true);
-    const res = await fetch('/api/upfit-projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        project_name: newName.trim(),
-        customer_name: newCustomer.trim() || null,
-      }),
-    });
-    if (res.ok) {
-      const json = await res.json();
-      const newProjectId = json?.project?.id;
-      if (newProjectId && createFiles.length > 0) {
-        await uploadFiles(newProjectId, createFiles);
-      }
-      setNewName('');
-      setNewCustomer('');
-      setCreateFiles([]);
-      setShowCreate(false);
-      load();
-    }
-    setCreating(false);
-  };
-
-  // Filter logic
-  const activeStatuses = ['opportunity', 'estimate', 'sold', 'parts_ordered', 'parts_arrived', 'parts_in_stock', 'scheduled_dropoff', 'scheduled_build', 'in_progress', 'scheduled_pickup'];
-  const matchSearch = looseMatcher(search);
-  const filtered = projects.filter(p => {
-    if (filter === 'active' && !activeStatuses.includes(p.status)) return false;
-    if (filter === 'completed' && p.status !== 'completed') return false;
-    if (filter === 'cancelled' && p.status !== 'cancelled') return false;
-    if (search && !matchSearch(p.project_name, p.customer_name)) return false;
-    return true;
-  });
-
-  const getStatus = (key: string) => STATUSES.find(s => s.key === key) || STATUSES[0];
   const fmt = (d: string) => new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const fmtTime = (d: string) => new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
   // Detail view
   if (selected) {
-    const st = getStatus(selected.status);
+    // What the job is waiting on, worked out from parts and the vehicle
+    // (src/lib/job-standing.ts) — replaces the hand-moved status bar.
+    const standing = jobStanding(selected, boardReadiness[selected.id]);
+    const stColor = STANDING_COLORS[standing.tone];
+    const closed = selected.status === 'completed' || selected.status === 'cancelled';
     return (
       <div style={{ padding: '16px', maxWidth: '800px', margin: '0 auto' }}>
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-          <button onClick={() => setSelected(null)} style={{ background: 'none', border: 'none', color: theme.textMuted, fontSize: '18px', cursor: 'pointer', padding: '4px' }}>&larr;</button>
+          <button onClick={() => (window.history.length > 1 ? router.back() : router.push('/home'))} title="Back" style={{ background: 'none', border: 'none', color: theme.textMuted, fontSize: '18px', cursor: 'pointer', padding: '4px' }}>&larr;</button>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: '16px', fontWeight: 700, color: theme.textPrimary }}>{selected.project_name}</div>
             {selected.customer_name && <div style={{ fontSize: '12px', color: theme.textSecondary }}>{selected.customer_name}</div>}
             <CreatedBy userId={selected.created_by} at={selected.created_at} style={{ display: 'block', fontSize: '11px' }} />
           </div>
-          <span style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: `${st.color}20`, color: st.color, border: `1px solid ${st.color}40` }}>{st.label}</span>
+          <span title={standing.detail || undefined} style={{ fontSize: '11px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', background: `${stColor}20`, color: stColor, border: `1px solid ${stColor}40` }}>{standing.label}</span>
           {/* R6-13: who changed what on this project. */}
           <HistoryButton table="upfit_projects" recordId={selected.id} compact />
         </div>
 
-        {/* Status pipeline */}
-        <div style={{ display: 'flex', gap: '4px', marginBottom: '16px', overflowX: 'auto', paddingBottom: '4px' }}>
-          {STATUSES.filter(s => s.key !== 'cancelled').map(s => {
-            const isCurrent = s.key === selected.status;
-            const idx = STATUSES.findIndex(x => x.key === s.key);
-            const currentIdx = STATUSES.findIndex(x => x.key === selected.status);
-            const isPast = idx < currentIdx && selected.status !== 'cancelled';
-            return (
+        {/* Done / Cancel / Reopen (2026-10-20): the 12-step status bar is
+            gone; where the job stands is worked out (header chip). A job
+            closes on its own when its vehicle ships (migration 085); a job
+            with no vehicle (graphics-only, parts-only) is marked done here.
+            Cancelling releases reserved parts (migration 228). */}
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' }}>
+          {standing.detail && <span style={{ fontSize: '12px', color: theme.textSecondary, marginRight: 'auto' }}>{standing.detail}</span>}
+          {!closed ? (
+            <>
               <button
-                key={s.key}
-                onClick={() => updateStatus(selected.id, s.key)}
-                style={{
-                  flex: 1,
-                  minWidth: '70px',
-                  padding: '6px 4px',
-                  borderRadius: '6px',
-                  fontSize: '9px',
-                  fontWeight: 700,
-                  border: isCurrent ? `2px solid ${s.color}` : '1px solid var(--border)',
-                  background: isCurrent ? `${s.color}20` : isPast ? `${s.color}10` : 'var(--card)',
-                  color: isCurrent ? s.color : isPast ? s.color : theme.textMuted,
-                  cursor: 'pointer',
-                  opacity: isPast ? 0.7 : 1,
-                  textAlign: 'center',
-                  whiteSpace: 'nowrap',
+                onClick={async () => {
+                  if (!(await dialog.confirm(`Mark "${selected.project_name}" done?`, { confirmLabel: 'Mark done' }))) return;
+                  updateStatus(selected.id, 'completed');
                 }}
-              >
-                {s.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Cancel (audit Stage 10: "No UI can cancel a project" — the
-            pipeline row deliberately hides the cancelled chip, and nothing
-            else offered it, so reservations could only ever release via
-            completion. The migration-228 trigger releases them on
-            cancellation; clicking any pipeline stage revives a cancelled
-            project.) */}
-        {selected.status !== 'cancelled' && selected.status !== 'completed' && (
-          <div style={{ marginTop: '-8px', marginBottom: '16px', textAlign: 'right' }}>
+                style={{ padding: '5px 12px', borderRadius: '7px', border: '1px solid rgba(34,197,94,0.5)', background: 'rgba(34,197,94,0.12)', color: '#22c55e', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+              >✓ Mark done</button>
+              <button
+                onClick={async () => {
+                  if (!(await dialog.confirm(
+                    `Cancel "${selected.project_name}"? Its reserved parts release back to free stock; the job stays in history and can be reopened.`,
+                    { destructive: true, confirmLabel: 'Cancel job' },
+                  ))) return;
+                  updateStatus(selected.id, 'cancelled');
+                }}
+                style={{ background: 'none', border: 'none', color: theme.textMuted, fontSize: '11px', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', padding: '2px 4px' }}
+              >✕ Cancel job</button>
+            </>
+          ) : (
             <button
-              onClick={async () => {
-                if (!(await dialog.confirm(
-                  `Cancel "${selected.project_name}"? Its reserved parts release back to free stock; the project stays in history and can be revived from any pipeline stage.`,
-                  { destructive: true, confirmLabel: 'Cancel project' },
-                ))) return;
-                updateStatus(selected.id, 'cancelled');
-              }}
-              style={{ background: 'none', border: 'none', color: theme.textMuted, fontSize: '11px', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', padding: '2px 4px' }}
-            >✕ Cancel project</button>
-          </div>
-        )}
+              onClick={() => updateStatus(selected.id, 'sold')}
+              title="Reopen this job"
+              style={{ padding: '5px 12px', borderRadius: '7px', border: `1px solid ${theme.border}`, background: 'var(--card)', color: theme.textPrimary, fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+            >↺ Reopen job</button>
+          )}
+        </div>
 
         {/* Linked records */}
         <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
@@ -1630,201 +1570,26 @@ export default function UpfitProjectsPage() {
     );
   }
 
-  // List view
+  // No job open: the list was retired with the Upfit tab (2026-10-20,
+  // Craig chose Option C). Jobs open from the customer page, the estimate,
+  // Purchasing → Jobs waiting on parts and the vehicle on In-Shop.
   return (
-    <div style={{ padding: '16px', maxWidth: '800px', margin: '0 auto' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-        <div style={{ fontSize: '18px', fontWeight: 800, color: theme.textPrimary }}>Upfit Projects</div>
-        <button
-          onClick={() => setShowCreate(!showCreate)}
-          style={{ padding: '6px 14px', borderRadius: '8px', background: theme.accent, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-        >
-          + New Project
-        </button>
-      </div>
-
-      {/* Create form */}
-      {showCreate && (
-        <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
-          <div style={{ fontSize: '13px', fontWeight: 700, color: theme.textPrimary, marginBottom: '10px' }}>New Upfit Project</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <input
-              value={newName}
-              onChange={e => setNewName(e.target.value)}
-              placeholder="Project name (e.g. Acme Corp — Shelf Package)"
-              style={{ padding: '8px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '13px', outline: 'none' }}
-            />
-            <input
-              value={newCustomer}
-              onChange={e => setNewCustomer(e.target.value)}
-              placeholder="Customer name"
-              style={{ padding: '8px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '13px', outline: 'none' }}
-            />
-            <DropZone onFiles={fs => setCreateFiles(prev => [...prev, ...fs])} multiple>
-              {createFiles.length > 0 && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '6px' }}>
-                  {createFiles.map((f, i) => (
-                    <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 600, background: theme.inputBg, border: `1px solid ${theme.border}`, color: theme.textPrimary }}>
-                      {f.name}
-                      <span onClick={() => setCreateFiles(prev => prev.filter((_, idx) => idx !== i))} style={{ cursor: 'pointer', fontSize: '10px', opacity: 0.7 }}>✕</span>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <input
-                ref={createFileInputRef}
-                type="file"
-                multiple
-                onChange={e => {
-                  const fs = Array.from(e.target.files || []);
-                  if (fs.length > 0) setCreateFiles(prev => [...prev, ...fs]);
-                  if (createFileInputRef.current) createFileInputRef.current.value = '';
-                }}
-                style={{ display: 'none' }}
-              />
-              <button
-                type="button"
-                onClick={() => createFileInputRef.current?.click()}
-                style={{ width: '100%', padding: '8px', borderRadius: '8px', background: 'transparent', border: `1px dashed ${theme.border}`, color: theme.textMuted, fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-              >
-                + Add Files (PO PDFs, photos, specs)
-              </button>
-            </DropZone>
-            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-              <button onClick={() => { setShowCreate(false); setCreateFiles([]); }} style={{ padding: '6px 12px', borderRadius: '6px', background: 'none', border: `1px solid ${theme.border}`, color: theme.textMuted, fontSize: '12px', cursor: 'pointer' }}>Cancel</button>
-              <button onClick={createProject} disabled={creating || !newName.trim()} style={{ padding: '6px 14px', borderRadius: '6px', background: theme.accent, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: creating || !newName.trim() ? 0.5 : 1 }}>{creating ? 'Creating...' : 'Create'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Filters */}
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
-        {[
-          { key: 'active', label: 'Active' },
-          { key: 'completed', label: 'Completed' },
-          { key: 'cancelled', label: 'Cancelled' },
-          { key: 'all', label: 'All' },
-        ].map(f => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            style={{
-              padding: '5px 12px',
-              borderRadius: '6px',
-              fontSize: '11px',
-              fontWeight: 700,
-              border: filter === f.key ? `1px solid ${theme.tabActiveBorder}` : `1px solid ${theme.border}`,
-              background: filter === f.key ? theme.tabActiveBg : 'transparent',
-              color: filter === f.key ? theme.tabActiveColor : theme.textMuted,
-              cursor: 'pointer',
-            }}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      {/* Search */}
-      <input
-        value={search}
-        onChange={e => setSearch(e.target.value)}
-        placeholder="Search projects..."
-        style={{ width: '100%', padding: '8px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: theme.inputBg, color: theme.textPrimary, fontSize: '13px', outline: 'none', marginBottom: '12px', boxSizing: 'border-box' }}
-      />
-
-      {/* Project list */}
-      {loading ? (
-        <div style={{ textAlign: 'center', color: theme.textMuted, padding: '40px', fontSize: '13px' }}>Loading projects...</div>
-      ) : filtered.length === 0 ? (
-        <div style={{ textAlign: 'center', color: theme.textMuted, padding: '40px', fontSize: '13px' }}>No projects found</div>
+    <div style={{ padding: '16px', maxWidth: '560px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ fontSize: '18px', fontWeight: 800, color: theme.textPrimary }}>Jobs</div>
+      {loading || searchParams.get('id') ? (
+        <div style={{ fontSize: '13px', color: theme.textMuted }}>Loading…</div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {filtered.map(p => {
-            const st = getStatus(p.status);
-            const noteCount = p.upfit_project_notes?.length || 0;
-            const openTasks = (p.upfit_project_tasks || []).filter(t => !t.completed_at).length;
-            const totalTasks = (p.upfit_project_tasks || []).length;
-            // Unread: project changed since this viewer last opened it. No
-            // view row = never opened = unread. Cleared when openProject
-            // stamps a view.
-            const myView = (projectViews[p.id] || []).find(v => v.user_id === user?.id);
-            const hasNew = !myView || new Date(p.updated_at).getTime() > new Date(myView.last_viewed_at).getTime();
-            const seenByOthers = (projectViews[p.id] || []).filter(v => v.user_id !== user?.id);
-            const seenTooltip = seenByOthers
-              .map(v => `${profiles[v.user_id] || 'Unknown'} — ${relativeTime(v.last_viewed_at)}`)
-              .join('\n');
-            return (
-              <div
-                key={p.id}
-                onClick={() => openProject(p)}
-                style={{
-                  background: theme.card,
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '10px',
-                  padding: '12px 14px',
-                  cursor: 'pointer',
-                  transition: 'border-color 0.15s',
-                }}
-                onMouseOver={e => (e.currentTarget.style.borderColor = st.color)}
-                onMouseOut={e => (e.currentTarget.style.borderColor = theme.border)}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
-                  <div>
-                    <div style={{ fontSize: '14px', fontWeight: 700, color: theme.textPrimary }}>
-                      {hasNew && (
-                        <span title="New activity since you last opened this project" style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444', flexShrink: 0, marginRight: '6px', verticalAlign: '1px' }} />
-                      )}
-                      {p.project_name}
-                    </div>
-                    {p.customer_name && <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>{p.customer_name}</div>}
-                  </div>
-                  <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${st.color}20`, color: st.color, border: `1px solid ${st.color}40`, whiteSpace: 'nowrap', flexShrink: 0 }}>{st.label}</span>
-                </div>
-                <div style={{ display: 'flex', gap: '12px', fontSize: '10px', color: theme.textMuted, flexWrap: 'wrap' }}>
-                  {p.estimate_number && <span>Est: {p.estimate_number}</span>}
-                  {p.netsuite_so_number && <span>SO: {p.netsuite_so_number}</span>}
-                  {p.scheduled_date && <span>Sched: {fmt(p.scheduled_date)}</span>}
-                  <CreatedBy compact userId={p.created_by} at={p.created_at} style={{ fontSize: '10px' }} />
-                  {(() => {
-                    const r = boardReadiness[p.id];
-                    if (!r) return null;
-                    const chip = r.verdict === 'short'
-                      ? { c: '#ef4444', t: `✗ ${r.short} part${r.short !== 1 ? 's' : ''} short` }
-                      : r.verdict === 'waiting'
-                        ? { c: '#60a5fa', t: `⏳ parts on order${r.lastEta ? ` · ETA ${fmt(r.lastEta)}` : ''}` }
-                        : r.verdict === 'reserved'
-                          ? { c: '#22c55e', t: '✓ parts reserved' }
-                          : { c: '#22c55e', t: '✓ parts ready' };
-                    return (
-                      <span
-                        title="Parts readiness from the last sync — open the project for the live picture"
-                        style={{ fontWeight: 700, padding: '0 6px', borderRadius: '4px', background: `${chip.c}18`, color: chip.c }}
-                      >{chip.t}</span>
-                    );
-                  })()}
-                  {p.parts_eta && <span style={{ color: '#60a5fa' }}>Parts ETA: {fmt(p.parts_eta)}</span>}
-                  {p.customer_dropoff_date && <span style={{ color: '#38bdf8' }}>Drop-off: {fmt(p.customer_dropoff_date)}</span>}
-                  {p.need_back_date && <span style={{ color: '#fbbf24' }}>Back by: {fmt(p.need_back_date)}</span>}
-                  {totalTasks > 0 && (
-                    <span style={{ color: openTasks > 0 ? '#fbbf24' : '#22c55e' }}>
-                      {openTasks > 0 ? `${openTasks}/${totalTasks} tasks open` : `${totalTasks} task${totalTasks !== 1 ? 's' : ''} done`}
-                    </span>
-                  )}
-                  {noteCount > 0 && <span>{noteCount} note{noteCount !== 1 ? 's' : ''}</span>}
-                  {seenByOthers.length > 0 && (
-                    <span
-                      title={`Seen by:\n${seenTooltip}`}
-                      style={{ padding: '0 4px', borderRadius: '3px', background: 'rgba(148,163,184,0.12)', fontWeight: 700 }}
-                    >👁 {seenByOthers.length}</span>
-                  )}
-                  <span style={{ marginLeft: 'auto' }}>{fmt(p.updated_at)}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <>
+          <div style={{ fontSize: '13px', color: theme.textSecondary, lineHeight: 1.5 }}>
+            The Upfit list has moved. Open a job from the customer&rsquo;s page (Jobs card), from its estimate (Open job), from Purchasing &rarr; Jobs waiting on parts, or from the vehicle on In-Shop.
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            {hasFeature('parts_ordering') && (
+              <a href="/admin/purchasing?tab=jobs" style={{ padding: '8px 14px', borderRadius: '8px', background: theme.accent, color: '#fff', fontSize: '12px', fontWeight: 700, textDecoration: 'none' }}>Jobs waiting on parts</a>
+            )}
+            <a href="/tracking" style={{ padding: '8px 14px', borderRadius: '8px', border: `1px solid ${theme.border}`, color: theme.textPrimary, fontSize: '12px', fontWeight: 700, textDecoration: 'none' }}>In-Shop</a>
+          </div>
+        </>
       )}
     </div>
   );

@@ -38,7 +38,9 @@ export const MAX_OPEN_TABS = 12;
 // Every tab a staff user can put in the bar, in default priority order.
 export const allTabs: Tab[] = [
   { id: 'home', path: '/home', label: 'Home', feature: 'home', priority: 0 },
-  { id: 'upfit', path: '/upfit', label: 'Upfit', feature: 'upfit_projects', priority: 0.5 },
+  // The Upfit tab was retired 2026-10-20 (jobs open from the customer,
+  // estimate, Purchasing and In-Shop); Vendor POs took its slot for admins.
+  { id: 'vendor-pos', path: '/admin/purchasing?tab=vendor-pos', label: 'Vendor POs', shortLabel: 'Vend. POs', feature: 'purchase_orders', priority: 0.5 },
   { id: 'graphics', path: '/graphics', label: 'Graphics Production', shortLabel: 'Graphics', feature: 'graphics', priority: 1 },
   { id: 'tracking', path: '/tracking', label: 'In-Shop', feature: 'in_shop', priority: 3 },
   // POs and Scans go after In-Shop so they slot in on the right of the

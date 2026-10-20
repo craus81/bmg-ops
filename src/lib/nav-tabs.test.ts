@@ -8,7 +8,7 @@ describe('defaultNavTabs', () => {
     const tabs = defaultNavTabs(allTabs);
     expect(tabs).toHaveLength(MAX_TABS);
     expect(tabs[MAX_TABS - 1].id).toBe(AI_TAB_ID);
-    expect(ids(tabs).slice(0, 3)).toEqual(['home', 'upfit', 'graphics']);
+    expect(ids(tabs).slice(0, 3)).toEqual(['home', 'vendor-pos', 'graphics']);
   });
 
   it('gives the last slot back to a normal tab when AI is not available', () => {
@@ -44,7 +44,7 @@ describe('resolveOpenNavTabs', () => {
 
   it('defaults to the bottom bar, then the other tabs by priority', () => {
     const tabs = defaultOpenNavTabs(allTabs, bar);
-    expect(ids(tabs).slice(0, 4)).toEqual(['scan', 'home', 'ai', 'upfit']);
+    expect(ids(tabs).slice(0, 4)).toEqual(['scan', 'home', 'ai', 'vendor-pos']);
     expect(new Set(ids(tabs)).size).toBe(tabs.length);
     expect(tabs.length).toBeLessThanOrEqual(MAX_OPEN_TABS);
     expect(resolveOpenNavTabs(allTabs, null, bar)).toEqual(tabs);
@@ -59,5 +59,16 @@ describe('resolveOpenNavTabs', () => {
 
   it('falls back to the default when nothing saved is usable', () => {
     expect(resolveOpenNavTabs(allTabs, ['bogus'], bar)).toEqual(defaultOpenNavTabs(allTabs, bar));
+  });
+});
+
+describe('Upfit tab retired (2026-10-20)', () => {
+  it('is gone, and a saved bar that still lists it just drops it', () => {
+    expect(ids(allTabs)).not.toContain('upfit');
+    expect(ids(resolveNavTabs(allTabs, ['upfit', 'home']))).toEqual(['home']);
+  });
+
+  it('gives its slot to Vendor POs only where purchase orders are allowed', () => {
+    expect(allTabs.find(t => t.id === 'vendor-pos')?.feature).toBe('purchase_orders');
   });
 });

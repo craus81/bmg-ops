@@ -77,7 +77,6 @@ export default function MorePage() {
       header: 'Shop & Production',
       items: [
         { title: 'Schedule', sub: 'Installs, upfits & events — two-way synced with Google Calendar', path: '/admin/schedule', show: F('schedule') },
-        { title: 'Upfit Projects', sub: 'Track upfit jobs from estimate to completion', path: '/upfit', show: F('upfit_projects') },
         { title: 'Scan & Log', sub: 'Scan VINs and log work', path: '/scan', show: F('scan') },
         { title: 'Client Files', sub: 'Every file in Dropbox › OFFICE › Clients · search by client, folder or file name, open or download', path: '/client-files', show: F('client_files') },
         { title: 'Completion Photos', sub: 'Finished-work photos from every job · find by customer, job or VIN, then download or send a link', path: '/completion-photos', show: F('completion_photos') },
