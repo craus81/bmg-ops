@@ -10,6 +10,7 @@ import HistoryButton from '@/components/HistoryButton';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import PartCatalogBrowser, { type BrowsePart } from '@/components/PartCatalogBrowser';
+import { RackKitBrowserModal } from '@/components/RackKitBrowser';
 import { kitEstimateLines, loadKits, normItem, type KitLineFields, type KitWithMembers } from '@/lib/part-kits';
 import { gatherKitGroups } from '@/lib/estimate-kits';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
@@ -835,6 +836,7 @@ export default function EstimatesPage() {
   const [unitNumber, setUnitNumber] = useState('');
   // N4-A: the visual faceted catalog browser (Ranger-style pick-from-list).
   const [showCatalogBrowser, setShowCatalogBrowser] = useState(false);
+  const [showRackKits, setShowRackKits] = useState(false);
   // T1.6 install context
   const [installInstructions, setInstallInstructions] = useState('');
   const [onSiteContactName, setOnSiteContactName] = useState('');
@@ -4800,6 +4802,14 @@ export default function EstimatesPage() {
             </button>
             <button
               type="button"
+              onClick={() => setShowRackKits(true)}
+              title="Browse every ladder rack kit by vehicle, line, finish and style"
+              className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(96,165,250,0.08)', color: '#60a5fa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span className="est-lbl-full">Rack Kits</span><span className="est-lbl-short">Racks</span>
+            </button>
+            <button
+              type="button"
               onClick={() => { setDraftError(null); setDraftResult(null); setDraftFromOld(null); setDraftOpen(true); }}
               title="Paste an RFQ email and get a reviewable grid of candidate lines. Nothing is added until you accept it."
               className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.08)', color: '#a78bfa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
@@ -7083,6 +7093,9 @@ export default function EstimatesPage() {
           onClose={() => setPdfEmailModal(false)}
         />
       )}
+
+      {/* Rack kit browser — Add rack drops the kit in with its components */}
+      <RackKitBrowserModal open={showRackKits} onClose={() => setShowRackKits(false)} onAdd={addKitLines} showPrice />
 
       {/* N4-A: Ranger-style visual catalog — add straight into the estimate */}
       <PartCatalogBrowser

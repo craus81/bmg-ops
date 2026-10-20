@@ -9,25 +9,22 @@
  * received. A rack is limited by its scarcest component (kitBuildable).
  * Racks share parts, so every count reads "if you built only this rack".
  *
+ * Each rack has a photo slot (Craig 2026-10-20) for the rack kit browser on
+ * estimates; one photo can go on the silver and black versions together.
+ *
  * Also lists the components not in the catalog yet — the items still to be
  * created in NetSuite before their racks can be stocked or priced.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
-import { fetchAllRows } from '@/lib/fetch-all';
-import { kitBuildable, loadKits, normItem, type KitBuildable, type KitStock, type KitWithMembers } from '@/lib/part-kits';
-
-// NetSuite sub-items are "PARENT : CHILD" on PO lines — compare on the last
-// segment (same rule as /admin/inventory).
-const normPart = (s: string | null | undefined) => {
-  const segs = String(s || '').split(':');
-  return normItem(segs[segs.length - 1]);
-};
-
-const CLOSED_PO_STATUSES = ['F', 'G', 'H'];
+import { storage } from '@/lib/storage';
+import { toJpegIfHeic } from '@/lib/heic';
+import { useImageDrop } from '@/lib/use-image-drop';
+import { rackBaseNumber } from '@/lib/rack-kit-facets';
+import { kitBuildableFor, loadKits, loadKitStock, normItem, type KitBuildable, type KitWithMembers } from '@/lib/part-kits';
 
 interface RackRow {
   kit: KitWithMembers;
@@ -39,8 +36,9 @@ const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDi
 export default function RackKitsPage() {
   useRequireFeature('parts_catalog');
   // Same rule as the parts catalog: prices for money roles and purchasers.
-  const { canSeeMoney, hasFeature } = useAuth();
+  const { canSeeMoney, hasFeature, isAdmin } = useAuth();
   const showPrice = canSeeMoney || hasFeature('parts_ordering');
+  const canEditPhotos = isAdmin || hasFeature('parts_ordering');
   const supabase = createClient();
   const [rows, setRows] = useState<RackRow[]>([]);
   const [missingParts, setMissingParts] = useState<{ item_number: string; description: string | null; racks: number }[]>([]);
@@ -58,45 +56,7 @@ export default function RackKitsPage() {
   const load = useCallback(async () => {
     try {
       const kits = (await loadKits(supabase)).filter(k => k.item_number);
-      const [allocRes, poRes] = await Promise.all([
-        fetchAllRows<any>((from, to) =>
-          supabase.from('part_allocations')
-            .select('item_number, quantity')
-            .eq('status', 'reserved')
-            .order('id')
-            .range(from, to)),
-        fetchAllRows<any>((from, to) =>
-          supabase.from('netsuite_vendor_po_lines')
-            .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(status)')
-            .order('id')
-            .range(from, to)),
-      ]);
-
-      const available = new Map<string, number>();
-      for (const k of kits) {
-        for (const m of k.members) available.set(normItem(m.part.item_number), Number(m.part.quantity_available) || 0);
-      }
-      const allocated = new Map<string, number>();
-      for (const a of allocRes.data) {
-        const key = normPart(a.item_number);
-        allocated.set(key, (allocated.get(key) || 0) + (Number(a.quantity) || 0));
-      }
-      const onOrder = new Map<string, number>();
-      for (const l of poRes.data) {
-        if (CLOSED_PO_STATUSES.includes(String(l.netsuite_vendor_pos?.status || '').toUpperCase())) continue;
-        const remaining = Math.max(0, (Number(l.quantity) || 0) - (Number(l.quantity_received) || 0));
-        if (remaining <= 0) continue;
-        const key = normPart(l.item_number);
-        onOrder.set(key, (onOrder.get(key) || 0) + remaining);
-      }
-      const stock = new Map<string, KitStock>();
-      const keys = new Set([...available.keys(), ...onOrder.keys()]);
-      for (const key of keys) {
-        stock.set(key, {
-          free: Math.max(0, (available.get(key) || 0) - (allocated.get(key) || 0)),
-          on_order: onOrder.get(key) || 0,
-        });
-      }
+      const stock = await loadKitStock(supabase, kits);
 
       const missing = new Map<string, { item_number: string; description: string | null; racks: number }>();
       const built: RackRow[] = kits.map(kit => {
@@ -106,13 +66,7 @@ export default function RackKitsPage() {
           row.racks += 1;
           missing.set(key, row);
         }
-        return {
-          kit,
-          build: kitBuildable([
-            ...kit.members.map(m => ({ item_number: m.part.item_number, quantity: m.quantity, in_catalog: true })),
-            ...kit.missing.map(m => ({ item_number: m.item_number, quantity: m.quantity, in_catalog: false })),
-          ], stock),
-        };
+        return { kit, build: kitBuildableFor(kit, stock) };
       });
       built.sort((a, b) => (b.build.now - a.build.now) || (b.build.withOnOrder - a.build.withOnOrder)
         || String(a.kit.item_number).localeCompare(String(b.kit.item_number)));
@@ -133,6 +87,24 @@ export default function RackKitsPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // A new photo for one rack, and its silver/black twin when asked.
+  const setKitPhoto = async (kit: KitWithMembers, picked: File, alsoTwin: boolean) => {
+    const file = await toJpegIfHeic(picked);
+    const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+    const path = `rack-kits/${kit.id}/photo-${Date.now()}.${ext}`;
+    const { error: upErr } = await storage.from('photos').upload(path, file, { contentType: file.type });
+    if (upErr) throw new Error(`Photo upload failed: ${upErr.message}`);
+    const base = rackBaseNumber(kit.item_number || '');
+    const ids = alsoTwin
+      ? rows.filter(r => rackBaseNumber(r.kit.item_number || '') === base).map(r => r.kit.id)
+      : [kit.id];
+    const { error: rowErr } = await supabase.from('part_kits')
+      .update({ image_path: path, updated_at: new Date().toISOString() })
+      .in('id', ids);
+    if (rowErr) throw new Error(`Could not save the photo on the rack: ${rowErr.message}`);
+    setRows(prev => prev.map(r => ids.includes(r.kit.id) ? { ...r, kit: { ...r.kit, image_path: path } } : r));
+  };
 
   const q = normItem(search);
   const visible = useMemo(() => rows.filter(r => {
@@ -261,6 +233,12 @@ export default function RackKitsPage() {
                       {open === id && (
                         <tr>
                           <td colSpan={showPrice ? 5 : 4} style={{ padding: '0 10px 10px 28px' }}>
+                            <RackPhotoSlot
+                              kit={r.kit}
+                              hasTwin={rows.some(o => o.kit.id !== id && rackBaseNumber(o.kit.item_number || '') === rackBaseNumber(r.kit.item_number || ''))}
+                              canEdit={canEditPhotos}
+                              onPhoto={(f, twin) => setKitPhoto(r.kit, f, twin)}
+                            />
                             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
                               <thead>
                                 <tr style={{ color: 'var(--text-muted)', textAlign: 'left' }}>
@@ -302,6 +280,62 @@ export default function RackKitsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function RackPhotoSlot({ kit, hasTwin, canEdit, onPhoto }: {
+  kit: KitWithMembers;
+  hasTwin: boolean;
+  canEdit: boolean;
+  onPhoto: (file: File, alsoTwin: boolean) => Promise<void>;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [alsoTwin, setAlsoTwin] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const take = async (f: File) => {
+    setBusy(true);
+    setErr('');
+    try { await onPhoto(f, hasTwin && alsoTwin); } catch (e: any) { setErr(e?.message || 'Photo upload failed'); }
+    setBusy(false);
+  };
+  const { dragging, dropProps } = useImageDrop(f => { void take(f); }, { disabled: !canEdit || busy });
+  const src = kit.image_path ? storage.from('photos').getPublicUrl(kit.image_path).data.publicUrl : null;
+  return (
+    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', flexWrap: 'wrap', padding: '8px 0' }}>
+      <div
+        {...dropProps}
+        onClick={() => canEdit && !busy && inputRef.current?.click()}
+        style={{
+          width: '160px', height: '110px', borderRadius: '10px', overflow: 'hidden', flexShrink: 0,
+          border: `2px dashed ${dragging ? '#60a5fa' : 'var(--border)'}`, background: 'var(--input-bg)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+          cursor: canEdit ? 'pointer' : 'default', fontSize: '10px', color: 'var(--text-muted)', padding: src ? 0 : '6px',
+        }}
+      >
+        {busy ? 'Uploading…' : src
+          // eslint-disable-next-line @next/next/no-img-element
+          ? <img src={src} alt={kit.item_number || kit.name} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          : canEdit ? 'Drop a photo here, paste one, or click to choose' : 'No photo yet'}
+      </div>
+      {canEdit && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px' }}>
+          <button type="button" disabled={busy} onClick={() => inputRef.current?.click()} style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '11px', fontWeight: 700, cursor: 'pointer', alignSelf: 'flex-start' }}>
+            {src ? 'Replace photo' : 'Add photo'}
+          </button>
+          {hasTwin && (
+            <label style={{ display: 'flex', gap: '6px', alignItems: 'center', color: 'var(--text-secondary)' }}>
+              <input type="checkbox" checked={alsoTwin} onChange={e => setAlsoTwin(e.target.checked)} />
+              Use it for the silver and black versions too
+            </label>
+          )}
+          <span style={{ color: 'var(--text-muted)' }}>Shows on the rack kit cards when building an estimate.</span>
+          {err && <span style={{ color: '#f87171', fontWeight: 700 }}>{err}</span>}
+        </div>
+      )}
+      <input ref={inputRef} type="file" accept="image/*,.heic,.heif" style={{ display: 'none' }}
+        onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void take(f); }} />
     </div>
   );
 }
