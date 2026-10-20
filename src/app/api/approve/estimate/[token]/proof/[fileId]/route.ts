@@ -5,6 +5,7 @@ import { r2GetBytes } from '@/lib/r2';
 import { isShrinkableImage, shrinkImageForEmail } from '@/lib/email-image';
 import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
 import { jobCoversEstimate } from '@/lib/graphics-fleet';
+import { sanitizeCopiedProofs } from '@/lib/estimate-copied-proofs';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +24,8 @@ const MAX_PROOF_BYTES = 10 * 1024 * 1024;
  * <account>.r2.cloudflarestorage.com — long signed URLs to a domain that
  * isn't ours, which spam filters score like phishing. Gated exactly like
  * the approval page: the live approval token, and only a file the estimate
- * actually attaches (graphics_jobs.estimate_attach).
+ * actually attaches (graphics_jobs.estimate_attach, or the art proof a
+ * duplicate shows from the original's job: estimates.copied_graphics_proofs).
  *
  * Inline (the email's picture): image types only, shrunk to email size.
  * `?download=1` (the approval page's Downloads list): the original file,
@@ -36,7 +38,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   // expired link gets nothing.
   const { data: estimate } = await supabase
     .from('estimates')
-    .select('id, fleet_group_id, approval_token_expires_at')
+    .select('id, fleet_group_id, approval_token_expires_at, copied_graphics_proofs')
     .eq('approval_token', params.token)
     .maybeSingle();
   if (!estimate) return new NextResponse(null, { status: 404 });
@@ -55,7 +57,9 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     .eq('id', file.job_id)
     .maybeSingle();
   const attached = Array.isArray(job?.estimate_attach?.file_ids) && job!.estimate_attach.file_ids.includes(file.id);
-  if (!job || !jobCoversEstimate(job, estimate) || !attached) return new NextResponse(null, { status: 404 });
+  const copied = sanitizeCopiedProofs(estimate.copied_graphics_proofs)
+    .some(p => p.job_id === file.job_id && p.file_ids.includes(file.id));
+  if (!job || !((jobCoversEstimate(job, estimate) && attached) || copied)) return new NextResponse(null, { status: 404 });
 
   const asset = await r2GetBytes('graphics-proofs', file.storage_path, MAX_PROOF_BYTES);
   if (!asset) return new NextResponse(null, { status: 404 });

@@ -60,6 +60,7 @@ import { DeliveryPicker } from '@/components/DeliveryPicker';
 import { EMPTY_DELIVERY, deliveryColumns, deliveryFromRow, deliveryText, sameDelivery, type Delivery } from '@/lib/delivery';
 import VehicleTemplatePicker from '@/components/VehicleTemplatePicker';
 import { remapWorksheetIds } from '@/lib/estimate-copy-worksheets';
+import { sanitizeCopiedProofs } from '@/lib/estimate-copied-proofs';
 import {
   EMPTY_FILTERS, TEMPLATE_COLUMNS, estimateVehicleFields, searchTemplates, templateLabel,
   type TemplateFilters, type VehicleTemplate,
@@ -1002,6 +1003,9 @@ export default function EstimatesPage() {
 
   // Graphics-job linkage (for spawning / linking a graphics job to this estimate)
   const [linkedGraphicsJobs, setLinkedGraphicsJobs] = useState<LinkedGraphicsJob[]>([]);
+  // Art proofs a duplicate shows from the original's graphics job
+  // (src/lib/estimate-copied-proofs.ts).
+  const [copiedProofJobs, setCopiedProofJobs] = useState<{ id: string; job_number: string | null; title: string; fileCount: number; from: string | null }[]>([]);
   const [graphicsLinking, setGraphicsLinking] = useState(false);
   const [showGraphicsPicker, setShowGraphicsPicker] = useState(false);
   const [graphicsPickerSearch, setGraphicsPickerSearch] = useState('');
@@ -3564,14 +3568,22 @@ export default function EstimatesPage() {
   const loadLinkedGraphicsJobs = useCallback(async (estimateId: string) => {
     // A fleet order's one graphics job (migration 411) belongs to every
     // estimate in the order, not just the one it was made from.
-    const { data: est } = await supabase.from('estimates').select('fleet_group_id').eq('id', estimateId).maybeSingle();
+    const { data: est } = await supabase.from('estimates').select('fleet_group_id, copied_graphics_proofs').eq('id', estimateId).maybeSingle();
     const groupId = (est as any)?.fleet_group_id as string | null | undefined;
     const { data } = await supabase
       .from('graphics_jobs')
       .select('id, job_number, title, status, assigned_to, estimate_attach, approval_proof_file_id')
       .or(groupId ? `estimate_id.eq.${estimateId},fleet_group_id.eq.${groupId}` : `estimate_id.eq.${estimateId}`)
       .order('created_at', { ascending: true });
-    setLinkedGraphicsJobs((data as LinkedGraphicsJob[]) || []);
+    const own = (data as LinkedGraphicsJob[]) || [];
+    setLinkedGraphicsJobs(own);
+    const copied = sanitizeCopiedProofs((est as any)?.copied_graphics_proofs).filter(p => !own.some(j => j.id === p.job_id));
+    if (copied.length === 0) { setCopiedProofJobs([]); return; }
+    const { data: cj } = await supabase.from('graphics_jobs').select('id, job_number, title').in('id', copied.map(p => p.job_id));
+    setCopiedProofJobs(copied.flatMap(p => {
+      const j = (cj || []).find((r: any) => r.id === p.job_id) as any;
+      return j ? [{ id: j.id, job_number: j.job_number, title: j.title, fileCount: p.file_ids.length, from: p.from_estimate }] : [];
+    }));
   }, [supabase]);
 
   // ── Coverage proofs from linked wrap quotes ──
@@ -3604,6 +3616,21 @@ export default function EstimatesPage() {
       await dialog.alert('Network error — please try again.');
     } finally {
       setWrapAttachSaving(null);
+    }
+  };
+
+  const removeCopiedProof = async (jobId: string) => {
+    if (!editingId) return;
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/copied-proofs?jobId=${jobId}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        await dialog.alert(apiErrorMessage(data, 'Could not remove the art proof from this estimate.'));
+        return;
+      }
+      setCopiedProofJobs(prev => prev.filter(j => j.id !== jobId));
+    } catch {
+      await dialog.alert('Network error — please try again.');
     }
   };
 
@@ -3714,6 +3741,7 @@ export default function EstimatesPage() {
     savedInternalNotesRef.current = '';
     setCustomerDefaults(null);
     setLinkedGraphicsJobs([]);
+    setCopiedProofJobs([]);
     setWrapAttachQuotes([]);
     setShowGraphicsPicker(false);
     setGraphicsPickerSearch('');
@@ -5554,7 +5582,7 @@ export default function EstimatesPage() {
         </div>
       )}
 
-      {editingId && (lines.some(isGraphicsLine) || linkedGraphicsJobs.length > 0) && (
+      {editingId && (lines.some(isGraphicsLine) || linkedGraphicsJobs.length > 0 || copiedProofJobs.length > 0) && (
         <div style={{
           background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px',
           padding: '12px', marginBottom: '12px',
@@ -5624,6 +5652,51 @@ export default function EstimatesPage() {
                       color: 'var(--text-body)', cursor: 'pointer', flexShrink: 0,
                     }}
                   >Open</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Art proof a duplicate shows from the original's job */}
+          {copiedProofJobs.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: linkedGraphicsJobs.length > 0 ? '8px' : '0' }}>
+              {copiedProofJobs.map(j => (
+                <div
+                  key={j.id}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+                    padding: '6px 8px', borderRadius: '6px', background: 'var(--card)',
+                    border: '1px dashed var(--border)', fontSize: '12px',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <div>
+                      <span style={{ fontWeight: 700, fontSize: '11px' }}>Art proof from {j.job_number || j.id.slice(0, 8)}</span>
+                      <span style={{ color: 'var(--text-muted)' }}> · {j.fileCount} file{j.fileCount === 1 ? '' : 's'} · {j.title}</span>
+                    </div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                      Copied{j.from ? ` from ${j.from}` : ''}. Shows on this estimate's PDF and approval page. The job stays with the original, so approving this estimate doesn't approve it.
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                    <button
+                      onClick={() => openPopout('graphics_jobs', j.id)}
+                      style={{
+                        padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700,
+                        background: 'transparent', border: '1px solid var(--border)',
+                        color: 'var(--text-body)', cursor: 'pointer',
+                      }}
+                    >Open</button>
+                    <button
+                      onClick={() => removeCopiedProof(j.id)}
+                      title="Stop showing this art proof on this estimate"
+                      style={{
+                        padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 700,
+                        background: 'transparent', border: '1px solid var(--border)',
+                        color: '#ef4444', cursor: 'pointer',
+                      }}
+                    >Remove</button>
+                  </div>
                 </div>
               ))}
             </div>

@@ -47,23 +47,32 @@ describe('remapWorksheetIds', () => {
  * and its lines move to it; fleet copies, locked estimates and the original
  * are untouched; a re-run does nothing.
  */
-it('migration 419 copies worksheets onto old duplicates, once', async () => {
+it('migration 419 copies worksheets and art proofs onto old duplicates, once', async () => {
   const db = new PGlite();
   await db.exec(`
-    CREATE TABLE estimates (id uuid primary key, fleet_group_id uuid, customer_approved boolean, status text, netsuite_so_id text);
+    CREATE TABLE estimates (id uuid primary key, estimate_number text, fleet_group_id uuid, customer_approved boolean, status text, netsuite_so_id text, supersedes_estimate_id uuid);
     CREATE TABLE wrap_quotes (id uuid primary key default gen_random_uuid(), quote_number text not null unique,
       estimate_id uuid, status text not null default 'draft', photo_proofs jsonb not null default '[]', diagram_path text,
       total numeric, approval_token uuid, approval_relink_count int not null default 0, netsuite_estimate_id text,
       created_by uuid, created_at timestamptz default now(), updated_at timestamptz default now());
     CREATE TABLE estimate_line_items (id serial primary key, estimate_id uuid, wrap_quote_id uuid);
+    CREATE TABLE graphics_jobs (id uuid primary key, estimate_id uuid, fleet_group_id uuid, estimate_attach jsonb, created_at timestamptz default now());
+    CREATE TABLE audit_log (id serial primary key, table_name text, record_id text, action text, detail jsonb);
     CREATE SEQUENCE wq_seq;
     CREATE FUNCTION public.next_job_number(p text) RETURNS text LANGUAGE sql AS $$ select p || '-NEW-' || nextval('wq_seq') $$;
-    INSERT INTO estimates VALUES
-      ('00000000-0000-0000-0000-000000000001', null, false, 'sent', null),
-      ('00000000-0000-0000-0000-000000000002', null, false, 'draft', null),
-      ('00000000-0000-0000-0000-000000000003', null, true, 'accepted', null),
-      ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-0000000000f1', false, 'draft', null),
-      ('00000000-0000-0000-0000-00000000000b', '00000000-0000-0000-0000-0000000000f1', false, 'draft', null);
+    INSERT INTO estimates (id, estimate_number, fleet_group_id, customer_approved, status, netsuite_so_id, supersedes_estimate_id) VALUES
+      ('00000000-0000-0000-0000-000000000001', 'EST-1', null, false, 'sent', null, null),
+      ('00000000-0000-0000-0000-000000000002', 'EST-2', null, false, 'draft', null, null),
+      ('00000000-0000-0000-0000-000000000003', 'EST-3', null, true, 'accepted', null, null),
+      ('00000000-0000-0000-0000-000000000004', 'EST-4', null, false, 'draft', null, '00000000-0000-0000-0000-000000000001'),
+      ('00000000-0000-0000-0000-00000000000a', 'EST-A', '00000000-0000-0000-0000-0000000000f1', false, 'draft', null, null),
+      ('00000000-0000-0000-0000-00000000000b', 'EST-B', '00000000-0000-0000-0000-0000000000f1', false, 'draft', null, null);
+    INSERT INTO graphics_jobs (id, estimate_id, estimate_attach) VALUES
+      ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-000000000001', '{"file_ids":["f1","f2"]}'),
+      ('00000000-0000-0000-0000-0000000000c2', '00000000-0000-0000-0000-000000000001', '{"file_ids":[]}');
+    INSERT INTO audit_log (table_name, record_id, action, detail) VALUES
+      ('estimates', '00000000-0000-0000-0000-000000000002', 'estimate_duplicated', '{"source_estimate_id":"00000000-0000-0000-0000-000000000001"}'),
+      ('estimates', '00000000-0000-0000-0000-000000000003', 'estimate_duplicated', '{"source_estimate_id":"00000000-0000-0000-0000-000000000001"}');
     INSERT INTO wrap_quotes (id, quote_number, estimate_id, status, photo_proofs, diagram_path, total, approval_token, approval_relink_count, netsuite_estimate_id) VALUES
       ('00000000-0000-0000-0000-0000000000a1', 'WQ-1', '00000000-0000-0000-0000-000000000001', 'sent', '[{"diagram_path":"quote-diagrams/WQ-1-1.jpg"}]', 'quote-diagrams/WQ-1-1.jpg', 150, gen_random_uuid(), 3, '77'),
       ('00000000-0000-0000-0000-0000000000a2', 'WQ-2', '00000000-0000-0000-0000-00000000000a', 'draft', '[]', null, 10, null, 0, null);
@@ -74,7 +83,7 @@ it('migration 419 copies worksheets onto old duplicates, once', async () => {
       ('00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-0000000000a1'),
       ('00000000-0000-0000-0000-00000000000b', '00000000-0000-0000-0000-0000000000a2');
   `);
-  const sql = readFileSync(join(__dirname, '../../migrations/419-duplicate-estimate-worksheets.sql'), 'utf8');
+  const sql = readFileSync(join(__dirname, '../../migrations/419-duplicate-estimate-proofs.sql'), 'utf8');
   await db.exec(sql);
   await db.exec(sql);
 
@@ -87,4 +96,19 @@ it('migration 419 copies worksheets onto old duplicates, once', async () => {
   ]);
   const lines = await db.query<any>(`select li.estimate_id, w.quote_number from estimate_line_items li join wrap_quotes w on w.id = li.wrap_quote_id order by li.id`);
   expect(lines.rows.map((r: any) => r.quote_number)).toEqual(['WQ-1', 'WQ-NEW-1', 'WQ-NEW-1', 'WQ-1', 'WQ-2']);
+
+  // Art proof: the open duplicate and the old revision show the original
+  // job's chosen files; the accepted copy, the original and fleet copies don't.
+  const proofs = await db.query<any>(`select estimate_number, copied_graphics_proofs from estimates order by estimate_number`);
+  const shown = [{ job_id: '00000000-0000-0000-0000-0000000000c1', file_ids: ['f1', 'f2'], from_estimate: 'EST-1' }];
+  expect(proofs.rows).toEqual([
+    { estimate_number: 'EST-1', copied_graphics_proofs: null },
+    { estimate_number: 'EST-2', copied_graphics_proofs: shown },
+    { estimate_number: 'EST-3', copied_graphics_proofs: null },
+    { estimate_number: 'EST-4', copied_graphics_proofs: shown },
+    { estimate_number: 'EST-A', copied_graphics_proofs: null },
+    { estimate_number: 'EST-B', copied_graphics_proofs: null },
+  ]);
+  const jobs = await db.query<any>(`select estimate_id from graphics_jobs order by id`);
+  expect(jobs.rows.every((j: any) => j.estimate_id === '00000000-0000-0000-0000-000000000001')).toBe(true);
 });

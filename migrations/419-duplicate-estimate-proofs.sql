@@ -1,3 +1,13 @@
+-- Duplicated estimates keep their proofs (Craig, 2026-10-20).
+--
+-- 1. estimates.copied_graphics_proofs: the art proof a duplicate shows from
+--    the original's graphics job, [{job_id, file_ids, from_estimate}]
+--    (src/lib/estimate-copied-proofs.ts). The job stays with the original.
+-- 2. Old duplicates get their own Graphics Builder worksheet.
+-- 3. Old duplicates show the original job's chosen art proof.
+
+ALTER TABLE estimates ADD COLUMN IF NOT EXISTS copied_graphics_proofs JSONB;
+
 -- Duplicated estimates get their own Graphics Builder worksheet (Craig,
 -- 2026-10-20). Before this, Duplicate copied the graphics lines (with their
 -- wrap_quote_id) but left the worksheet pinned to the original, so the copy
@@ -68,3 +78,49 @@ BEGIN
       AND wrap_quote_id = r.worksheet_id;
   END LOOP;
 END $$;
+
+-- 3. Open copies made before this (plain duplicates from the audit log,
+-- revisions from supersedes_estimate_id) with no art proof of their own:
+-- show what was chosen on the original's job, or its fleet order's job when
+-- the copy left the order. Old revisions only show it; the job stays put.
+-- Re-running finds nothing left to fix.
+WITH sources AS (
+  SELECT e.id AS estimate_id, e.supersedes_estimate_id AS source_id
+  FROM estimates e
+  WHERE e.supersedes_estimate_id IS NOT NULL
+  UNION
+  SELECT e.id, (a.detail->>'source_estimate_id')::uuid
+  FROM audit_log a
+  JOIN estimates e ON e.id::text = a.record_id
+  WHERE a.table_name = 'estimates'
+    AND a.action = 'estimate_duplicated'
+    AND a.detail->>'source_estimate_id' ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+),
+proofs AS (
+  SELECT s.estimate_id,
+         jsonb_agg(jsonb_build_object('job_id', j.id, 'file_ids', j.estimate_attach->'file_ids', 'from_estimate', src.estimate_number)
+                   ORDER BY j.created_at) AS copied
+  FROM sources s
+  JOIN estimates e ON e.id = s.estimate_id
+  JOIN estimates src ON src.id = s.source_id
+  JOIN graphics_jobs j
+    ON j.estimate_id = src.id
+    OR (src.fleet_group_id IS NOT NULL AND j.fleet_group_id = src.fleet_group_id
+        AND e.fleet_group_id IS DISTINCT FROM src.fleet_group_id)
+  WHERE e.copied_graphics_proofs IS NULL
+    AND NOT COALESCE(e.customer_approved, false)
+    AND COALESCE(e.status, '') <> 'accepted'
+    AND e.netsuite_so_id IS NULL
+    AND jsonb_typeof(j.estimate_attach->'file_ids') = 'array'
+    AND jsonb_array_length(j.estimate_attach->'file_ids') > 0
+    AND NOT EXISTS (
+      SELECT 1 FROM graphics_jobs own
+      WHERE own.estimate_id = e.id
+         OR (e.fleet_group_id IS NOT NULL AND own.fleet_group_id = e.fleet_group_id)
+    )
+  GROUP BY s.estimate_id
+)
+UPDATE estimates e
+SET copied_graphics_proofs = p.copied
+FROM proofs p
+WHERE e.id = p.estimate_id;

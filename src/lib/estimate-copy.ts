@@ -4,6 +4,7 @@ import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { kitLineColumns } from '@/lib/estimate-kits';
 import { clearedReviewColumns } from '@/lib/estimate-review';
 import { copyWorksheets } from '@/lib/estimate-copy-worksheets';
+import { planCopiedProofs, type CopiedProof } from '@/lib/estimate-copied-proofs';
 
 // Header fields that must never survive a duplicate: identity, lifecycle,
 // and audit columns. Everything else on the row is descriptive content
@@ -80,6 +81,10 @@ export function estimateIsLocked(e: { customer_approved?: boolean | null; status
  * worksheet's lines on the other estimates of the group). Any other copy
  * gets its own copy of each worksheet, coverage proof included, and its
  * lines point at that copy (src/lib/estimate-copy-worksheets.ts).
+ *
+ * Graphics jobs' art proof (src/lib/estimate-copied-proofs.ts): a plain copy
+ * shows the proof chosen on the original's job, and the job stays put; a
+ * revision takes the job over, unless the original is on a Sales Order.
  */
 export async function copyEstimate(
   supabase: SupabaseClient,
@@ -168,6 +173,17 @@ export async function copyEstimate(
     copy.internal_review_copied_from = source.internal_review_copied_from || source.estimate_number;
   }
 
+  // The designer's art proof. A fleet copy is covered by the order's one
+  // job and keeps whatever the source showed (copied with the header).
+  let moveJobIds: string[] = [];
+  let copiedProofs: CopiedProof[] = [];
+  if (!fleet) {
+    const plan = await planCopiedProofs(supabase, source, { copyInGroup: !!copy.fleet_group_id, revision: isRevision });
+    moveJobIds = plan.moveJobIds;
+    copiedProofs = plan.copied;
+    copy.copied_graphics_proofs = copiedProofs.length > 0 ? copiedProofs : null;
+  }
+
   // Same 23505 retry as the create path: the number is UNIQUE and the
   // RPC-failure fallback format can collide within a month.
   let created: { id: string; estimate_number: string } | null = null;
@@ -242,6 +258,21 @@ export async function copyEstimate(
     }
   }
 
+  // A revision is the same job: its graphics jobs follow it. Best-effort,
+  // after everything else landed — a failure leaves the job on the
+  // original, which still shows nothing wrong to anyone.
+  let jobsMoved = 0;
+  if (moveJobIds.length > 0) {
+    const { data: moved, error: moveErr } = await supabase
+      .from('graphics_jobs')
+      .update({ estimate_id: created.id, updated_at: new Date().toISOString() })
+      .in('id', moveJobIds)
+      .eq('estimate_id', source.id)
+      .select('id');
+    if (moveErr) console.error('revision: moving graphics jobs failed:', moveErr.message);
+    jobsMoved = (moved || []).length;
+  }
+
   await logAudit(supabase, {
     actorId: userId,
     table: 'estimates',
@@ -254,6 +285,8 @@ export async function copyEstimate(
       line_count: (sourceLines || []).length,
       grand_total: source.grand_total,
       ...(worksheetCopies.length > 0 ? { worksheets_copied: worksheetCopies.map(w => ({ from: w.from, to: w.quote_number })) } : {}),
+      ...(copiedProofs.length > 0 ? { art_proofs_shown: copiedProofs.map(p => p.job_id) } : {}),
+      ...(jobsMoved > 0 ? { graphics_jobs_moved: moveJobIds } : {}),
       ...(fleet ? { fleet_group_id: fleet.groupId, unit_number: fleet.unitNumber } : {}),
     },
   });
