@@ -141,7 +141,7 @@ interface ProjectPoLink {
   po_number: string | null;
   source: string;
   po: {
-    id: string; tranid: string | null; vendor_name: string | null;
+    id: string; netsuite_id: string | null; tranid: string | null; vendor_name: string | null;
     status_label: string | null; eta_date: string | null; tracking_number: string | null;
   } | null;
 }
@@ -667,7 +667,7 @@ export default function UpfitProjectsPage() {
     try {
       const { data } = await supabase
         .from('upfit_project_pos')
-        .select('id, po_id, po_number, source, po:netsuite_vendor_pos(id, tranid, vendor_name, status_label, eta_date, tracking_number)')
+        .select('id, po_id, po_number, source, po:netsuite_vendor_pos(id, netsuite_id, tranid, vendor_name, status_label, eta_date, tracking_number)')
         .eq('project_id', projectId)
         .order('created_at');
       setProjectPos((data as unknown as ProjectPoLink[]) || []);
@@ -920,6 +920,11 @@ export default function UpfitProjectsPage() {
                     </span>
                   )}
                   {l.po?.eta_date && <span style={{ color: theme.textSecondary }}>ETA {fmt(l.po.eta_date)}</span>}
+                  {l.po?.netsuite_id && (
+                    <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', l.po.netsuite_id), { name: `PO ${l.po.tranid || l.po.netsuite_id}.pdf`, back: deepLinks.upfitProject(selected.id), backLabel: selected.project_name || 'Upfit project' })}
+                      target="_blank" rel="noreferrer" title="NetSuite's printed PO"
+                      style={{ padding: '1px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, border: `1px solid ${theme.border}`, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}>📄 PDF</a>
+                  )}
                   <button
                     onClick={() => unlinkPo(l)}
                     disabled={poLinkBusy}
