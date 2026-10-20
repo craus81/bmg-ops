@@ -79,11 +79,18 @@ describe('override parsing', () => {
 
   it('round-trips saved overrides and tolerates older rows', () => {
     expect(readPricingOverrides(null)).toBeNull();
-    const empty = { labor_sqft: {}, labor_line_totals: {}, roll_material_totals: {}, sections: {}, custom_lines: [] };
+    const empty = { labor_sqft: {}, labor_line_totals: {}, roll_material_totals: {}, sections: {}, custom_lines: [], tax_exempt: null };
     expect(readPricingOverrides({ final_price: 1200, vinyl_rates: { f1: 9 }, labor_rates: { f1: '4' }, discount_pct: '5' })).toEqual({
       final_price: 1200, vinyl_rates: { f1: 9 }, labor_rates: { f1: 4 }, discount_pct: '5', ...empty,
     });
     expect(readPricingOverrides({ final_price: null })).toEqual({ final_price: null, vinyl_rates: {}, labor_rates: {}, discount_pct: '', ...empty });
+  });
+
+  it('reads the Tax exempt switch, ignoring anything but true/false', () => {
+    expect(readPricingOverrides({ tax_exempt: true })!.tax_exempt).toBe(true);
+    expect(readPricingOverrides({ tax_exempt: false })!.tax_exempt).toBe(false);
+    expect(readPricingOverrides({ tax_exempt: 'yes' })!.tax_exempt).toBeNull();
+    expect(readPricingOverrides({})!.tax_exempt).toBeNull();
   });
 
   it('reads line edits, section hours and custom lines', () => {

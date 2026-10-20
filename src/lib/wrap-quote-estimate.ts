@@ -8,6 +8,7 @@ import { WRAP_VINYL_ITEM, WRAP_LABOR_ITEM } from '@/lib/graphics-invoice';
 import { diffWrapEstimateLines, plannedWrapEstimateLines, type WrapLineEdit } from '@/lib/wrap-quote-estimate-lines';
 import { linkQuoteJobsToEstimate } from '@/lib/graphics-links';
 import { getSalesTaxRate } from '@/lib/sales-tax';
+import { readPricingOverrides } from '@/lib/wrap-quote-price-override';
 import { getDefaultLaborRate } from '@/lib/labor-rate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { snapshotReviewedContent, clearReviewIfContentChanged } from '@/lib/estimate-review-content';
@@ -180,6 +181,36 @@ export async function addWrapQuoteToEstimate(
     }).eq('id', wrapQuoteId);
   }
 
+  // The builder's Tax exempt switch decides the estimate's (a worksheet
+  // saved before the switch existed leaves the estimate's checkbox alone).
+  await refreshEstimateTotals(supabase, estimate, worksheetTaxExempt(quote) ?? !!estimate.tax_exempt);
+
+  // A graphics job already made from this quote now belongs to this
+  // estimate too, so invoicing and the estimate approval reach it (a job
+  // only ever had the link it was created from).
+  if (!sibling) await linkQuoteJobsToEstimate(supabase, wrapQuoteId, estimateId);
+
+  const reviewCleared = await clearReviewIfContentChanged(supabase, estimateId, reviewedBefore, null);
+
+  return result({
+    success: true,
+    reviewCleared,
+    linesAdded: lineRows.length,
+    matched: !!(vinylId || materials <= 0) && !!(laborId || labor <= 0),
+  });
+}
+
+/** The worksheet's Tax exempt switch, or null when it was never set. */
+function worksheetTaxExempt(quote: { pricing_overrides?: unknown }): boolean | null {
+  return readPricingOverrides(quote.pricing_overrides)?.tax_exempt ?? null;
+}
+
+/**
+ * Recompute an estimate's stored totals from its lines, saving `taxExempt`
+ * on it at the same time so the checkbox and the tax line always agree.
+ */
+async function refreshEstimateTotals(supabase: SupabaseClient, estimate: any, taxExempt: boolean): Promise<void> {
+  const estimateId = estimate.id;
   const { data: allLines } = await supabase
     .from('estimate_line_items')
     .select('quantity, unit_price, labor_hours, taxable, discount_type, discount_value')
@@ -189,7 +220,7 @@ export async function addWrapQuoteToEstimate(
     // Keep the estimate's own quoted rate; the company setting only fills
     // in for a row saved before tax_rate existed.
     parseFloat(String(estimate.tax_rate ?? FALLBACK_SALES_TAX_RATE)),
-    !!estimate.tax_exempt,
+    taxExempt,
     parseFloat(String(estimate.labor_rate ?? FALLBACK_LABOR_RATE)),
     estimate.labor_hours_override !== null && estimate.labor_hours_override !== undefined
       ? parseFloat(String(estimate.labor_hours_override))
@@ -205,24 +236,11 @@ export async function addWrapQuoteToEstimate(
     subtotal: totals.subtotal,
     labor_total: totals.labor_total,
     discount_amount: totals.discount_amount,
+    tax_exempt: taxExempt,
     tax_amount: totals.tax_amount,
     grand_total: totals.grand_total,
     updated_at: new Date().toISOString(),
   }).eq('id', estimateId);
-
-  // A graphics job already made from this quote now belongs to this
-  // estimate too, so invoicing and the estimate approval reach it (a job
-  // only ever had the link it was created from).
-  if (!sibling) await linkQuoteJobsToEstimate(supabase, wrapQuoteId, estimateId);
-
-  const reviewCleared = await clearReviewIfContentChanged(supabase, estimateId, reviewedBefore, null);
-
-  return result({
-    success: true,
-    reviewCleared,
-    linesAdded: lineRows.length,
-    matched: !!(vinylId || materials <= 0) && !!(laborId || labor <= 0),
-  });
 }
 
 /**
@@ -279,6 +297,16 @@ export async function openEstimateForWrapQuote(
         // "Keep the estimate's numbers": the lines stay as they were edited
         // on the estimate; only the picture/files choices follow the save.
         await supabase.from('wrap_quotes').update({ estimate_attach: attach, updated_at: new Date().toISOString() }).eq('id', wrapQuoteId);
+      }
+      if (priced && keepEstimateLines) {
+        // The lines stay, but the Tax exempt switch still follows the save.
+        const exempt = worksheetTaxExempt(quote);
+        if (exempt != null) {
+          const { data: full } = await supabase.from('estimates').select('id, tax_rate, tax_exempt, labor_rate, labor_hours_override, customer_approved, status, netsuite_so_id, vehicle_count, discount_type, discount_value').eq('id', est.id).maybeSingle();
+          if (full && exempt !== !!full.tax_exempt && !full.netsuite_so_id && !full.customer_approved && full.status !== 'accepted') {
+            await refreshEstimateTotals(supabase, full, exempt);
+          }
+        }
       } else if (!quote.estimate_id) {
         // Unpriced but arriving from an estimate: link now, lines later.
         await supabase.from('wrap_quotes').update({
@@ -297,13 +325,15 @@ export async function openEstimateForWrapQuote(
   // No estimate yet: create a draft for the quote's customer + vehicle.
   let customerNsId: string | null = null;
   let customerName: string = String(quote.customer?.name || '').trim();
+  let customerTaxExempt = false;
   if (quote.customer_id) {
     const { data: cust } = await supabase
       .from('customers')
-      .select('company_name, netsuite_id')
+      .select('company_name, netsuite_id, tax_exempt')
       .eq('id', quote.customer_id)
       .maybeSingle();
     if (cust) {
+      customerTaxExempt = !!cust.tax_exempt;
       customerNsId = cust.netsuite_id || null;
       customerName = customerName || cust.company_name || '';
     }
@@ -341,7 +371,9 @@ export async function openEstimateForWrapQuote(
       notes: quote.project_notes || null,
       status: 'draft',
       tax_rate: taxRate,
-      tax_exempt: false,
+      // The worksheet's switch; an older worksheet without one follows the
+      // customer's Tax exempt default, as a new estimate does.
+      tax_exempt: worksheetTaxExempt(quote) ?? customerTaxExempt,
       labor_rate: laborRate,
       labor_hours: 0,
       subtotal: 0,
