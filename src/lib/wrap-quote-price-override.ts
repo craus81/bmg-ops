@@ -25,6 +25,9 @@ export interface WrapPricingOverrides {
   /** The rep's own lines (removal, rush fee…). They sit on top of the
    *  graphics price and land on the estimate as their own lines. */
   custom_lines: CustomLine[];
+  /** The Tax exempt switch. null = never set (rows saved before it existed):
+   *  the estimate's own Tax Exempt checkbox stands. */
+  tax_exempt: boolean | null;
 }
 
 export type LaborSectionKey = 'design' | 'preparation' | 'installation';
@@ -123,6 +126,7 @@ export function readPricingOverrides(raw: any): WrapPricingOverrides | null {
     roll_material_totals: rates(raw.roll_material_totals),
     sections: cleanSections(raw.sections),
     custom_lines: cleanCustomLines(raw.custom_lines),
+    tax_exempt: typeof raw.tax_exempt === 'boolean' ? raw.tax_exempt : null,
   };
 }
 

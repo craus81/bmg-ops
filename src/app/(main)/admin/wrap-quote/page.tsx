@@ -315,6 +315,56 @@ function DraftInput({ value, onChange, ...rest }: Omit<React.InputHTMLAttributes
   );
 }
 
+// The Tax exempt switch on Price & Estimate. The note says where the answer
+// came from, and flags an expired or expiring certificate like the
+// estimate's checkbox does.
+function TaxExemptSwitch({ on, onChange, customer, estimateNumber }: {
+  on: boolean;
+  onChange: (v: boolean) => void;
+  customer: { exempt: boolean; cert: string | null; expires: string | null } | null;
+  estimateNumber: string | null;
+}) {
+  const notes: string[] = [];
+  let tone = 'var(--text-muted)';
+  if (customer?.exempt) {
+    const parts = ['Customer is tax exempt'];
+    if (customer.cert) parts.push(`cert #${customer.cert}`);
+    if (customer.expires) {
+      const d = new Date(customer.expires + 'T00:00:00');
+      const days = Math.floor((d.getTime() - Date.now()) / 86400000);
+      const mmYYYY = `${d.getMonth() + 1}/${d.getFullYear()}`;
+      if (days < 0) { tone = '#f59e0b'; parts.push(`cert EXPIRED ${mmYYYY}`); }
+      else if (days <= 60) { tone = '#f59e0b'; parts.push(`cert expires ${mmYYYY}`); }
+      else parts.push(`exp ${mmYYYY}`);
+    }
+    notes.push(parts.join(' · '));
+  }
+  if (estimateNumber) notes.push(`Saving sets Tax Exempt on Estimate ${estimateNumber} too.`);
+  return (
+    <div style={{ marginBottom: '8px' }}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        onClick={() => onChange(!on)}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '5px 10px 5px 6px',
+          borderRadius: '999px', cursor: 'pointer', fontSize: '12px', fontWeight: 700,
+          border: `1px solid ${on ? '#22c55e' : 'var(--border)'}`,
+          background: on ? 'rgba(34,197,94,0.12)' : 'transparent',
+          color: on ? '#22c55e' : 'var(--text-label)',
+        }}
+      >
+        <span aria-hidden style={{ position: 'relative', width: '28px', height: '16px', borderRadius: '999px', background: on ? '#22c55e' : 'var(--text-muted)', transition: 'background 120ms' }}>
+          <span style={{ position: 'absolute', top: '2px', left: on ? '14px' : '2px', width: '12px', height: '12px', borderRadius: '50%', background: '#fff', transition: 'left 120ms' }} />
+        </span>
+        Tax exempt
+      </button>
+      {notes.map(n => <div key={n} style={{ fontSize: '10px', color: n.startsWith('Customer') ? tone : 'var(--text-muted)', marginTop: '3px' }}>{n}</div>)}
+    </div>
+  );
+}
+
 function PriceBreakdown({ totals }: { totals: { adjMaterials: number; adjLabor: number; tax: number; total: number; nested: boolean } }) {
   const part = (label: string, value: number, color: string, title?: string) => (
     <div title={title} style={{ fontSize: '12px', fontWeight: 800, color }}>{label}: ${fmt(value)}</div>
@@ -599,7 +649,7 @@ export default function WrapQuotePage() {
     (async () => {
       const { data: est } = await supabase
         .from('estimates')
-        .select(`id, estimate_number, netsuite_estimate_number, customer_id, customer_name, ${ESTIMATE_VEHICLE_COLUMNS}`)
+        .select(`id, estimate_number, netsuite_estimate_number, customer_id, customer_name, tax_exempt, ${ESTIMATE_VEHICLE_COLUMNS}`)
         .eq('id', estId)
         .maybeSingle();
       if (!est) return;
@@ -625,6 +675,7 @@ export default function WrapQuotePage() {
       }
       // Prefill on a fresh quote only — never clobber a loaded one.
       if (!savedQuoteId) {
+        setTaxExempt(!!(est as any).tax_exempt);
         // Customer: same fields the customer picker fills, so the quote tab
         // doesn't ask her to re-type what the estimate already knows.
         if (est.customer_id) {
@@ -1033,6 +1084,19 @@ export default function WrapQuotePage() {
   const [rollMaterialTotals, setRollMaterialTotals] = useState<Record<string, string>>({});
   const [sectionEdits, setSectionEdits] = useState<Partial<Record<LaborSectionKey, { hours?: string; hourly?: string }>>>({});
   const [customLines, setCustomLines] = useState<{ id: string; description: string; qty: string; unit_price: string }[]>([]);
+  // Tax exempt switch (saved in pricing_overrides). It starts from the
+  // customer's Tax exempt default, a worksheet on an estimate shows the
+  // estimate's checkbox, and every save carries it to the estimate.
+  const [taxExempt, setTaxExempt] = useState(false);
+  // The picked customer's own exemption, for the note under the switch.
+  const [customerTax, setCustomerTax] = useState<{ exempt: boolean; cert: string | null; expires: string | null } | null>(null);
+  useEffect(() => {
+    if (!customerId) { setCustomerTax(null); return; }
+    let live = true;
+    supabase.from('customers').select('tax_exempt, tax_exempt_cert_number, tax_exempt_expires_at').eq('id', customerId).maybeSingle()
+      .then(({ data }: { data: any }) => { if (live) setCustomerTax(data ? { exempt: !!data.tax_exempt, cert: data.tax_exempt_cert_number || null, expires: data.tax_exempt_expires_at || null } : null); });
+    return () => { live = false; };
+  }, [customerId, supabase]);
   const typed = (map: Record<string, string>, key: string) => {
     const v = map[key];
     return v !== undefined && v.trim() !== '' && Number.isFinite(parseFloat(v)) ? Math.max(0, parseFloat(v)) : null;
@@ -1249,7 +1313,7 @@ export default function WrapQuotePage() {
     const customTotal = customLinesTotal(extraLines);
     const subtotal = graphicsSubtotal + customTotal;
 
-    const tax = subtotal * num(settings.tax_rate) / 100;
+    const tax = taxExempt ? 0 : subtotal * num(settings.tax_rate) / 100;
     // Internal margin readout: what the billed film actually costs us
     // (whole job), against what we charge for it AFTER the discount. Films
     // with no cost on the Pricing tab are listed so the gap is visible.
@@ -1280,7 +1344,7 @@ export default function WrapQuotePage() {
       nested, nestedRollSqft,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- substrates feed measurementPricing
-  }, [measurements, settings, substrates, laborRates, vinylRates, finalPriceText, packageQty, discountPctOverride, useRollPricing, nestPieces, nestFilmBilling, laborSqft, laborLineTotals, rollMaterialTotals, sectionEdits, customLines]);
+  }, [measurements, settings, substrates, laborRates, vinylRates, finalPriceText, packageQty, discountPctOverride, useRollPricing, nestPieces, nestFilmBilling, laborSqft, laborLineTotals, rollMaterialTotals, sectionEdits, customLines, taxExempt]);
 
   // ----- Canvas drawing -----
   const svgPoint = (e: { clientX: number; clientY: number }): { x: number; y: number } | null => {
@@ -1680,6 +1744,7 @@ export default function WrapQuotePage() {
     setRollMaterialTotals({});
     setSectionEdits({});
     setCustomLines([]);
+    setTaxExempt(false);
     setCheckedIds(new Set());
     setPlacements({});
     setUseRollPricing(false);
@@ -1830,6 +1895,7 @@ export default function WrapQuotePage() {
         roll_material_totals: parseRateMap(rollMaterialTotals),
         sections: parseSections(sectionEdits),
         custom_lines: totals.extraLines,
+        tax_exempt: taxExempt,
       },
     };
     // A typed final price: scale every customer-visible line to it so the
@@ -2388,6 +2454,8 @@ export default function WrapQuotePage() {
       ...(v?.hourly != null ? { hourly: String(v.hourly) } : {}),
     }])) : {});
     setCustomLines(po ? po.custom_lines.map(l => ({ id: l.id, description: l.description, qty: String(l.qty), unit_price: String(l.unit_price) })) : []);
+    // An estimate's own checkbox wins below (pinEstimate).
+    setTaxExempt(!!po?.tax_exempt);
     setPackageQty(String(Math.max(1, num(q.package_qty) || 1)));
     // Pin the saved discount % (clearing the field re-derives from the
     // settings tiers); older quotes have no adjustments and stay on auto.
@@ -2442,10 +2510,12 @@ export default function WrapQuotePage() {
   const pinEstimate = async (estId: string) => {
     const { data: est } = await supabase
       .from('estimates')
-      .select(`id, estimate_number, netsuite_estimate_number, customer_name, ${ESTIMATE_VEHICLE_COLUMNS}`)
+      .select(`id, estimate_number, netsuite_estimate_number, customer_name, tax_exempt, ${ESTIMATE_VEHICLE_COLUMNS}`)
       .eq('id', estId)
       .maybeSingle();
     if (!est) { setForEstimate(null); return; }
+    // Ticked or unticked on the estimate since the last save: show that.
+    setTaxExempt(!!(est as any).tax_exempt);
     const { banner: vehicle } = estimateVehicleText(est);
     setForEstimate({ id: est.id, number: estimateHeadlineNumber(est), customerName: est.customer_name, vehicle, templateId: est.vehicle_template_id || null });
   };
@@ -3762,7 +3832,9 @@ export default function WrapQuotePage() {
           <div style={{ color: '#fbbf24' }}>Shop minimum <b style={{ marginLeft: '14px' }}>+${fmt(num(q.adjustments.min_bump))}</b></div>
         )}
         <div>Subtotal <b style={{ marginLeft: '14px' }}>${fmt(q.subtotal)}</b></div>
-        <div>Tax ({fmt(q.tax_rate)}%) <b style={{ marginLeft: '14px' }}>${fmt(q.tax_amount)}</b></div>
+        {(q as any).pricing_overrides?.tax_exempt === true
+          ? <div style={{ color: '#22c55e' }}>Tax exempt <b style={{ marginLeft: '14px' }}>$0.00</b></div>
+          : <div>Tax ({fmt(q.tax_rate)}%) <b style={{ marginLeft: '14px' }}>${fmt(q.tax_amount)}</b></div>}
         <div style={{ fontSize: '15px', fontWeight: 800 }}>Total <span style={{ marginLeft: '14px', color: '#22c55e' }}>${fmt(q.total)}</span></div>
       </div>
       {q.project_notes && <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--text-secondary)' }}><b>Project Notes:</b> {q.project_notes}</div>}
@@ -4667,6 +4739,11 @@ export default function WrapQuotePage() {
                       setCustomerId(c.id);
                       setCustomer((prev: any) => ({ ...prev, name: c.company_name, email: c.email || prev.email, phone: c.phone || prev.phone, address: c.address || prev.address }));
                       setCustSearch('');
+                      // A worksheet on an estimate keeps the estimate's answer.
+                      if (!forEstimate) {
+                        supabase.from('customers').select('tax_exempt').eq('id', c.id).maybeSingle()
+                          .then(({ data }: { data: any }) => setTaxExempt(!!data?.tax_exempt));
+                      }
                     }} style={{ display: 'block', width: '100%', padding: '8px 10px', textAlign: 'left', border: 'none', borderBottom: `1px solid ${theme.border}`, background: 'transparent', cursor: 'pointer', fontSize: '12px', color: 'var(--text-primary)' }}>
                       <span style={{ fontWeight: 700 }}>{c.company_name}</span>
                       {c.entity_id && <span style={{ color: 'var(--text-muted)', marginLeft: '6px', fontSize: '10px' }}>{c.entity_id}</span>}
@@ -4766,6 +4843,12 @@ export default function WrapQuotePage() {
                 placeholder={`calculated ${fmt(totals.calcSubtotal)}`}
                 style={{ ...inputStyle, width: '140px' }} />
             </div>
+            <TaxExemptSwitch
+              on={taxExempt}
+              onChange={setTaxExempt}
+              customer={customerTax}
+              estimateNumber={forEstimate?.number || null}
+            />
             {totals.priceOverride && (
               <div style={{ fontSize: '10px', fontWeight: 700, color: '#f59e0b', marginBottom: '4px' }}>
                 Manual price — calculated was ${fmt(totals.calcSubtotal)}. Every line on the quote scales to match, so the customer sees a normal quote; the discount and shop minimum don&apos;t apply. Clear it to go back.
