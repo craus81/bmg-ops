@@ -36,6 +36,7 @@ interface PoLine {
 
 interface VendorPo {
   id: string;
+  netsuite_id: string | null;
   tranid: string | null;
   vendor_name: string | null;
   trandate: string | null;
@@ -211,6 +212,11 @@ export default function VendorPosTab({ isAdmin, onChanged }: { isAdmin: boolean;
                     PO {po.tranid || '—'}
                     {po.url && (
                       <a href={po.url} target="_blank" rel="noreferrer" style={{ marginLeft: '8px', fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>NetSuite ↗</a>
+                    )}
+                    {po.netsuite_id && (
+                      <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', po.netsuite_id), { name: `PO ${po.tranid || po.netsuite_id}.pdf`, back: '/admin/purchasing?tab=vendor-pos', backLabel: 'Vendor POs' })}
+                        target="_blank" rel="noreferrer" title="NetSuite's printed PO"
+                        style={{ marginLeft: '8px', fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>📄 PDF</a>
                     )}
                   </div>
                   <div style={{ fontSize: '11px', color: theme.textSecondary }}>
