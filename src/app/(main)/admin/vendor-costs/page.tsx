@@ -28,7 +28,7 @@ const fmtPct = (n: number | null | undefined) => (n == null ? '—' : `${n}%`);
 
 export default function VendorCostsPage() {
   const router = useRouter();
-  const { isAdmin, loading: authLoading } = useAuth();
+  const { isAdmin, loading: authLoading, hasFeature } = useAuth();
   const [fileName, setFileName] = useState('');
   const [parsed, setParsed] = useState<VendorCostRow[]>([]);
   const [results, setResults] = useState<VendorCostResult[] | null>(null);
@@ -37,9 +37,10 @@ export default function VendorCostsPage() {
   const [error, setError] = useState('');
   const [done, setDone] = useState('');
 
+  const canOpen = hasFeature('part_admin');
   useEffect(() => {
-    if (!authLoading && !isAdmin) router.push('/home');
-  }, [authLoading, isAdmin, router]);
+    if (!authLoading && !canOpen) router.push('/home');
+  }, [authLoading, canOpen, router]);
 
   const problems = useMemo(() => parsed.filter(r => r.problem), [parsed]);
   const good = useMemo(() => parsed.filter(r => !r.problem), [parsed]);

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireStaff, profileFeatures, getProfileRoles } from '@/lib/api-auth';
-import { canSeeMoney } from '@/lib/money-visibility';
 import { isLedgerReader } from '@/lib/ledger/history';
 import { deepSearch, type DeepSearchResult } from '@/lib/deep-search';
 import { looseOrFilter, looseSearchRegex } from '@/lib/loose-search';
@@ -45,7 +44,7 @@ export async function GET(req: NextRequest) {
   const features = await profileFeatures(auth.user.id, auth.profile);
   const roles = getProfileRoles(auth.profile);
   const deepPromise: Promise<DeepSearchResult> = deepSearch(supabase, q, {
-    money: canSeeMoney(roles),
+    money: features.has('see_prices'),
     ledgerReader: isLedgerReader(roles),
     features,
   }, { limit: full ? FULL_PER_GROUP : MAX_PER_GROUP, includeBills: full })

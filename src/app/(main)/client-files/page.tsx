@@ -18,7 +18,6 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
-import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import { CLIENT_FILE_KINDS, KIND_LABELS, formatBytes, type ClientFileKind } from '@/lib/client-files';
 import ClientFileRow, { FileTile, CopiedBadge, clientFileUrl, fmtFileDate, type ClientFile } from '@/components/ClientFileRow';
 import ClientFolderMatches from '@/components/ClientFolderMatches';
@@ -74,8 +73,8 @@ interface FolderOption { id: string; name: string }
 function ClientFilesInner() {
   const router = useRouter();
   const params = useSearchParams();
-  const { hasRole, isAdmin, loading: authLoading } = useAuth();
-  const isStaff = INTERNAL_STAFF_ROLES.some(r => hasRole(r));
+  const { isAdmin, loading: authLoading, hasFeature } = useAuth();
+  const isStaff = hasFeature('client_files');
   const wide = useWide();
 
   const [view, setView] = useState<'files' | 'matches'>(params.get('matches') ? 'matches' : 'files');

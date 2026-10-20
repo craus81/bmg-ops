@@ -80,10 +80,10 @@ const ageColor = (days: number) => days >= 14 ? '#ef4444' : days >= 7 ? '#fbbf24
 export default function ApQueuePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { isAdmin, hasRole, hasFeature, loading: authLoading } = useAuth();
+  const { isAdmin, hasFeature, loading: authLoading } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
-  const canAct = isAdmin || hasRole('finance');
+  const canAct = hasFeature('vendor_payments');
   // The company page is a CNI admin page — finance would bounce off it, so
   // their vendor names stay plain text.
   const canOpenCompany = hasFeature('cni_admin');

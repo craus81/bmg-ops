@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient } from '@/lib/supabase-service';
-import { getProfileRoles, requireFeature } from '@/lib/api-auth';
-import { canSeeMoney } from '@/lib/money-visibility';
+import { profileCanSeeMoney, requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { looseItemRegex, summarize, type DraftLine } from '@/lib/paste-to-estimate';
 import {
@@ -93,7 +92,7 @@ async function loadDoc(service: SupabaseClient, type: NetsuiteCopyType, nsId: st
 export async function POST(req: NextRequest) {
   const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
-  if (!canSeeMoney(getProfileRoles(auth.profile))) {
+  if (!(await profileCanSeeMoney(auth.user.id, auth.profile))) {
     return NextResponse.json({ error: 'Forbidden: this account cannot see billing' }, { status: 403 });
   }
 

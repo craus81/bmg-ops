@@ -18,7 +18,6 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
-import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import { deepLinks } from '@/lib/deep-links';
 import { prettyPhone, reasonLabel, telHref, transcriptTurns } from '@/lib/after-hours-calls';
 
@@ -74,8 +73,8 @@ function AfterHoursCalls() {
   const router = useRouter();
   const params = useSearchParams();
   const openId = params.get('id');
-  const { hasRole, loading: authLoading } = useAuth();
-  const isStaff = INTERNAL_STAFF_ROLES.some(r => hasRole(r));
+  const { loading: authLoading, hasFeature } = useAuth();
+  const isStaff = hasFeature('after_hours_calls');
 
   const [show, setShow] = useState<'open' | 'all' | 'spam'>('open');
   const [calls, setCalls] = useState<Call[]>([]);

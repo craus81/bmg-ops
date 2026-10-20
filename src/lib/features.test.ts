@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { isAdminRole, resolveFeatures, canGrantToRole, FEATURES, SUPER_ADMIN_FEATURES } from './features';
+import { isAdminRole, resolveFeatures, canGrantToRole, FEATURES, SUPER_ADMIN_FEATURES, INTERNAL_STAFF_ROLES } from './features';
+import { canSeeMoney } from './money-visibility';
 
 describe('isAdminRole — super_admin is a strict superset of admin', () => {
   it('accepts admin, super_admin, and both', () => {
@@ -100,5 +101,39 @@ describe('role settings (Permissions screen)', () => {
   it('applies a person’s own override after the role setting', () => {
     const f = resolveFeatures(['sales'], [{ feature: 'estimates', granted: true }], [{ role: 'sales', feature: 'estimates', granted: false }]);
     expect(f.has('estimates')).toBe(true);
+  });
+});
+
+describe('keys added for pages that were gated by role in code', () => {
+  const ALL = ['admin', 'super_admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech', 'finance', 'executive', 'installer', 'customer'];
+  const has = (role: string, key: string) => resolveFeatures([role], []).has(key as any);
+
+  it('see_prices defaults to exactly the money roles', () => {
+    for (const r of ALL) expect(has(r, 'see_prices')).toBe(canSeeMoney([r]));
+  });
+
+  it('staff tools default to exactly the internal staff roles', () => {
+    for (const k of ['client_files', 'completion_photos', 'after_hours_calls', 'qc_fixes']) {
+      for (const r of ALL) expect(has(r, k)).toBe(INTERNAL_STAFF_ROLES.includes(r) || r === 'super_admin');
+    }
+  });
+
+  it('page keys default to who could open each page before', () => {
+    const who: Record<string, string[]> = {
+      graphics_builder: ['admin', 'super_admin', 'sales', 'graphics_production'],
+      install_guides: ['admin', 'super_admin', 'sales', 'graphics_production'],
+      quotes: ['admin', 'super_admin', 'sales'],
+      invoicing: ['admin', 'super_admin', 'sales', 'finance'],
+      vendor_payments: ['admin', 'super_admin', 'finance'],
+      part_admin: ['admin', 'super_admin'],
+    };
+    for (const [k, roles] of Object.entries(who)) {
+      for (const r of ALL) expect(has(r, k)).toBe(roles.includes(r));
+    }
+  });
+
+  it('turning see_prices on for graphics production shows prices to that role', () => {
+    const f = resolveFeatures(['graphics_production'], [], [{ role: 'graphics_production', feature: 'see_prices', granted: true }]);
+    expect(f.has('see_prices')).toBe(true);
   });
 });

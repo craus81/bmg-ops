@@ -42,8 +42,8 @@ const CONF_COLOR: Record<string, string> = { high: '#22c55e', medium: '#fbbf24',
 
 export default function SoMatchesPage() {
   const router = useRouter();
-  const { isAdmin, isSales, loading: authLoading } = useAuth();
-  const allowed = isAdmin || isSales;
+  const { loading: authLoading, hasFeature } = useAuth();
+  const allowed = hasFeature('quotes');
 
   const [rows, setRows] = useState<Suggestion[]>([]);
   const [loading, setLoading] = useState(true);
