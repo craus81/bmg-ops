@@ -21,6 +21,8 @@
  * already gone out under the FleetSuite number.
  */
 
+import { looseNumberIncludes } from './loose-search';
+
 export interface EstimateNumbered {
   estimate_number?: string | null;
   netsuite_estimate_number?: string | null;
@@ -49,5 +51,8 @@ export function estimateNumberMatches(est: EstimateNumbered | null | undefined, 
   const q = query.trim().toLowerCase();
   if (!q) return true;
   return clean(est?.estimate_number).toLowerCase().includes(q)
-    || clean(est?.netsuite_estimate_number).toLowerCase().includes(q);
+    || clean(est?.netsuite_estimate_number).toLowerCase().includes(q)
+    // Typed without the dashes: "EST2610014" finds EST-2610-014.
+    || looseNumberIncludes(est?.estimate_number, q)
+    || looseNumberIncludes(est?.netsuite_estimate_number, q);
 }

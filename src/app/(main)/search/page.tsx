@@ -21,9 +21,8 @@ import {
 import { buildRecent, pushRecent } from '@/lib/command-palette';
 import { deepLinks } from '@/lib/deep-links';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
+import { orderSearchGroups } from '@/lib/search-groups';
 
-/** Memos and notes first: they're why someone came to this page. */
-const ORDER = ['qb_history', 'ns_transactions', 'notes', 'bills'];
 
 export default function SearchPage() {
   const router = useRouter();
@@ -95,12 +94,8 @@ export default function SearchPage() {
     router.push(path);
   }, [router, urlQ]);
 
-  const groups = Object.keys(results)
-    .filter(g => (results[g] || []).length > 0)
-    .sort((a, b) => {
-      const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b);
-      return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
-    });
+  const groups = orderSearchGroups(Object.keys(results))
+    .filter(g => (results[g] || []).length > 0);
 
   if (loading || !user || !isStaff) return null;
 
