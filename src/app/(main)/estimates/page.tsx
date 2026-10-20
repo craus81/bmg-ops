@@ -2516,6 +2516,23 @@ export default function EstimatesPage() {
 
   // ── Print the same sales order as a Job Order pick ticket (no pricing) ──
   const [printingJobOrder, setPrintingJobOrder] = useState(false);
+  // Open job (2026-10-20, retiring the Upfit tab): the sold estimate's job
+  // page — found by estimate first, then by its sales order.
+  const [openingJob, setOpeningJob] = useState(false);
+  const openJob = async (estimateId: string, soId: string) => {
+    setOpeningJob(true);
+    try {
+      const { data: byEstimate } = await supabase
+        .from('upfit_projects').select('id').eq('estimate_id', estimateId).limit(1).maybeSingle();
+      const job = byEstimate || (await supabase
+        .from('upfit_projects').select('id').eq('netsuite_so_id', soId).limit(1).maybeSingle()).data;
+      if (job?.id) router.push(deepLinks.upfitProject(job.id));
+      else await dialog.alert('This sales order has no job yet. It gets one on the next NetSuite sync.');
+    } finally {
+      setOpeningJob(false);
+    }
+  };
+
   const printJobOrder = async (soId: string) => {
     if (printingJobOrder) return;
     setPrintingJobOrder(true);
@@ -3210,7 +3227,7 @@ export default function EstimatesPage() {
               + `${data.laborAmount ? ` ($${Number(data.laborAmount).toFixed(2)})` : ''}.`
               + ' Set Settings → NetSuite Labor Item and add the line in NetSuite.'
             : (data.laborItem ? `Labor billed to NetSuite item "${data.laborItem}".` : ''),
-          data.upfitProject?.created ? 'Upfit project created — parts readiness is on the Upfit tab.' : '',
+          data.upfitProject?.created ? 'Job created — open it from the sales order banner (Open job).' : '',
         ].filter(Boolean).join('\n');
         await dialog.alert(`Sales Order created!\nSO #: ${data.salesOrderNumber || data.salesOrderId}\nLine items: ${data.lineItemCount}${warnings ? '\n\n' + warnings : ''}`);
         // Stay in the estimate so the new SO number is visible in context.
@@ -6737,6 +6754,14 @@ export default function EstimatesPage() {
                 style={{ padding: '5px 10px', borderRadius: '7px', border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(96,165,250,0.12)', color: '#60a5fa', fontSize: '11px', fontWeight: 800, cursor: printingJobOrder ? 'wait' : 'pointer' }}
               >
                 {printingJobOrder ? 'Opening Job Order…' : '🖨 Print Job Order'}
+              </button>
+              <button
+                onClick={() => openJob(est.id, String(est.netsuite_so_id))}
+                disabled={openingJob}
+                title="Open this job: parts readiness, POs, vehicles, graphics, tasks and notes"
+                style={{ padding: '5px 10px', borderRadius: '7px', border: '1px solid rgba(34,197,94,0.5)', background: 'rgba(34,197,94,0.12)', color: '#22c55e', fontSize: '11px', fontWeight: 800, cursor: openingJob ? 'wait' : 'pointer' }}
+              >
+                {openingJob ? 'Opening…' : 'Open job →'}
               </button>
               {stale && <span>— out of date with this estimate</span>}
               {stale && (

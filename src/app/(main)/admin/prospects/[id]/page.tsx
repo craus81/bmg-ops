@@ -37,6 +37,7 @@ import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
 import ClientFilesSection from '@/components/ClientFilesSection';
 import CollapsibleCard from '@/components/CollapsibleCard';
+import CustomerJobsCard from '@/components/CustomerJobsCard';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import PhoneInput from '@/components/PhoneInput';
@@ -2310,6 +2311,12 @@ export default function CustomerRecordPage() {
         <div style={{ ...card, fontSize: '12px', color: 'var(--text-muted)' }}>
           No NetSuite spend history — {prospect ? 'this record isn’t linked to a NetSuite customer yet.' : 'customer not synced.'}
         </div>
+      )}
+
+      {/* Jobs (2026-10-20, retiring the Upfit tab): this customer's sold
+          jobs and what each is waiting on. Hidden when there are none. */}
+      {!isVendor && (
+        <CustomerJobsCard page={PAGE} customerNetsuiteId={customer?.netsuite_id || prospect?.netsuite_id || null} prospectId={prospect?.id || null} />
       )}
 
       {/* A/R aging + credit terms */}
