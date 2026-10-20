@@ -27,6 +27,7 @@ import { publicEstimate, publicLines, publicProofs, loadApprovalLines } from '@/
 import { r2GetBytes, r2Upload } from '@/lib/r2';
 import { recordQuoteView } from '@/lib/quote-view-recorder';
 import { loadApprovalDownloads } from '@/lib/estimate-approval-downloads';
+import { jobCoversEstimate } from '@/lib/graphics-fleet';
 
 export const dynamic = 'force-dynamic';
 
@@ -292,12 +293,13 @@ async function approveLinkedGraphicsJobs(
     try {
       const { data: job } = await supabase
         .from('graphics_jobs')
-        .select('id, job_number, title, customer, status, created_by, assigned_to, sent_for_approval_by, customer_approved, estimate_id')
+        .select('id, job_number, title, customer, status, created_by, assigned_to, sent_for_approval_by, customer_approved, estimate_id, fleet_group_id')
         .eq('id', block.jobId)
         .maybeSingle();
-      // Re-check the link and skip jobs already approved (an earlier
-      // proof-only approval stands — don't overwrite its audit trail).
-      if (!job || job.estimate_id !== estimate.id || job.customer_approved) continue;
+      // Re-check the link (its own job, or the fleet order's one job) and
+      // skip jobs already approved: an earlier proof-only approval, or
+      // another vehicle of the order approved first, stands.
+      if (!job || !jobCoversEstimate(job, estimate) || job.customer_approved) continue;
 
       // Clone the as-approved proof files to the immutable archive, same
       // destination shape as the proof-only flow.
@@ -395,10 +397,10 @@ async function noteRejectionOnLinkedJobs(estimate: any, proofBlocks: EstimatePro
     try {
       const { data: job } = await supabase
         .from('graphics_jobs')
-        .select('id, status, estimate_id, customer_approved')
+        .select('id, status, estimate_id, fleet_group_id, customer_approved')
         .eq('id', block.jobId)
         .maybeSingle();
-      if (!job || job.estimate_id !== estimate.id || job.customer_approved) continue;
+      if (!job || !jobCoversEstimate(job, estimate) || job.customer_approved) continue;
       await supabase.from('graphics_status_history').insert({
         job_id: job.id,
         from_status: job.status,

@@ -7,7 +7,7 @@ import { reconcileLinkedWrapQuotes } from '@/lib/wrap-quote-reconcile';
 import { sendEmailDetailed, repFromName } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
-import { renderEstimateDocument } from '@/lib/estimate-document';
+import { renderEstimateDocument, type FleetDocVehicle } from '@/lib/estimate-document';
 import { getEmailSignature } from '@/lib/email-signature';
 import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { loadEstimateGraphics, loadEstimateProofs, proofBlocksForEmail, type EstimateProofBlock } from '@/lib/estimate-graphics';
@@ -25,6 +25,9 @@ import { getShopLaborRate } from '@/lib/shop-labor';
 import { logAudit } from '@/lib/audit';
 import { notify, notifyMany, getSuperAdminIds } from '@/lib/notify';
 import { enforceCustomerHold } from '@/lib/customer-hold-server';
+import { fleetMembers, compareUnits } from '@/lib/estimate-fleet';
+import { estimateIsLocked } from '@/lib/estimate-copy';
+import { randomUUID } from 'crypto';
 
 // R3-22: proof images are presigned at the 7-day SigV4 maximum. Only the
 // compose preview shows those links now — the sent email points its proof
@@ -77,6 +80,12 @@ const SendForApprovalSchema = z.object({
   // Files the rep picked off the estimate (estimate_files) — pictures,
   // spec sheets. Attached to the email alongside the estimate document.
   attachmentFileIds: z.array(z.string().uuid()).max(20).optional(),
+  // A fleet order (migration 410) in ONE email (migration 412, Craig
+  // 2026-10-19): this estimate plus every other vehicle of its order that
+  // is still open for approval (not approved, not on a sales order). Each
+  // keeps its own token and approval; the email lists them all and links
+  // the order's approval page. Ignored for an estimate with no order.
+  fleet: z.boolean().optional().default(false),
 });
 
 /**
@@ -142,7 +151,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
-  const subject = `[BMG Fleet] Estimate #${estimate.estimate_number} — Ready for your approval`;
+  let subject = `[BMG Fleet] Estimate #${estimate.estimate_number} — Ready for your approval`;
   const message = body.message?.trim() || undefined;
 
   // The customer-facing document — line items, quantities, rates, totals —
@@ -181,10 +190,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   {
     const selections = body.proofSelections;
     if (selections !== undefined) {
+      // Its own jobs, and its fleet order's one job (the same set
+      // loadEstimateProofs reads).
       const { data: linkedJobs, error: linkErr } = await supabase
         .from('graphics_jobs')
         .select('id')
-        .eq('estimate_id', estimate.id);
+        .or(estimate.fleet_group_id ? `estimate_id.eq.${estimate.id},fleet_group_id.eq.${estimate.fleet_group_id}` : `estimate_id.eq.${estimate.id}`);
       if (linkErr) {
         return NextResponse.json({ error: 'Could not load linked graphics jobs: ' + linkErr.message }, { status: 500 });
       }
@@ -247,7 +258,31 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   // forward the estimate without digging through the original email. It is
   // named in the document's Attached section alongside the rep's picks.
   const pdfFilename = estimatePdfFilename(estimate);
-  const attachmentNames = [pdfFilename, ...picked.rows.map(r => r.file_name)];
+
+  // The other vehicles of a fleet order going in this same email, and every
+  // vehicle in unit order. With none open, this is an ordinary single send.
+  const siblings = body.fleet && estimate.fleet_group_id ? await sendableSiblings(estimate) : [];
+  const fleetSend = siblings.length > 0;
+  const orderEstimates = [estimate, ...siblings].sort((a, b) => compareUnits(a.unit_number, b.unit_number));
+  if (fleetSend) {
+    subject = `[BMG Fleet] Estimates for ${orderEstimates.length} vehicles (${orderEstimates.map(e => `#${e.estimate_number}`).join(', ')}) — Ready for your approval`;
+  }
+  // Every vehicle's PDF rides (each is that vehicle's transaction), then
+  // the rep's picks.
+  const pdfNames = orderEstimates.map(e => estimatePdfFilename(e));
+  const attachmentNames = [...(fleetSend ? pdfNames : [pdfFilename]), ...picked.rows.map(r => r.file_name)];
+  const fleetVehicles = (urls?: Map<string, { reviewUrl: string; pdfUrl: string }>): { vehicles: FleetDocVehicle[] } | null => (fleetSend
+    ? {
+      vehicles: orderEstimates.map(e => ({
+        estimateNumber: e.estimate_number,
+        unitNumber: e.unit_number || null,
+        vin: e.vin || null,
+        grandTotal: e.grand_total,
+        reviewUrl: urls?.get(e.id)?.reviewUrl || null,
+        pdfUrl: urls?.get(e.id)?.pdfUrl || null,
+      })),
+    }
+    : null);
 
   // Preview: show exactly what would go out (message, line items, totals,
   // Approve button) without minting a token, sending, or touching status.
@@ -259,73 +294,58 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       company,
       logoUrl,
       message,
-      ctaUrl: `${appUrl}/approve/estimate/`,
-      ctaLabel: 'Review & Approve',
+      ctaUrl: `${appUrl}/approve/${fleetSend ? 'fleet' : 'estimate'}/`,
+      ctaLabel: fleetSend ? `Review & approve all ${orderEstimates.length}` : 'Review & Approve',
       ctaNote: `A unique, secure link is generated when you send. It expires in ${expiryDays} days.`,
       signature,
       graphics: approvalGraphics,
       proofs: proofBlocks,
       attachmentNames,
+      fleet: fleetVehicles(),
     });
-    return NextResponse.json({ preview: true, to: emailList.join(', ') || null, subject, html, attachments: [pdfFilename] });
+    return NextResponse.json({
+      preview: true, to: emailList.join(', ') || null, subject, html,
+      attachments: fleetSend ? pdfNames : [pdfFilename],
+      // The compose screen says which vehicles this one email covers.
+      fleet: fleetSend ? orderEstimates.map(e => ({ id: e.id, estimateNumber: e.estimate_number, unitNumber: e.unit_number || null })) : null,
+    });
+  }
+
+  // Every estimate in the send carries its own lines; a fleet send checks
+  // each vehicle the way a single send checks one.
+  const rawLinesById = new Map<string, any[]>([[estimate.id, rawLineItems || []]]);
+  for (const sib of siblings) {
+    const { data } = await supabase.from('estimate_line_items').select('*').eq('estimate_id', sib.id).order('sort_order').order('id');
+    rawLinesById.set(sib.id, data || []);
   }
 
   // Discounts over the admin-approval limit (migration 365) stop here until
   // an admin approves them; an admin sending is their approval.
-  const discountBlock = await checkDiscountApproval(supabase, estimate, rawLineItems || [], { id: auth.user.id, roles: getProfileRoles(auth.profile) }, 'sent');
-  if (discountBlock) {
-    return NextResponse.json({ error: discountBlock.error, step: 'discount_approval', discountApproval: discountBlock.status }, { status: 409 });
+  for (const e of orderEstimates) {
+    const discountBlock = await checkDiscountApproval(supabase, e, rawLinesById.get(e.id) || [], { id: auth.user.id, roles: getProfileRoles(auth.profile) }, 'sent');
+    if (discountBlock) {
+      const error = fleetSend ? `Estimate #${e.estimate_number} (unit ${e.unit_number || '?'}): ${discountBlock.error}` : discountBlock.error;
+      return NextResponse.json({ error, step: 'discount_approval', discountApproval: discountBlock.status }, { status: 409 });
+    }
   }
 
   // ── Quoted-margin freeze + floor gate (R5-3, migration 275) ──
-  // The builder computes this live and throws it away; freeze it here, at
-  // the one real send path, BEFORE any attachment/PDF work is spent. The
-  // formula mirrors the builder's Parts Margin strip exactly (costs from
-  // netsuite_parts by part_id; uncosted lines excluded, never 100%);
-  // labor is costed separately at the blended shop rate when one is set.
-  const partIds = [...new Set((rawLineItems || []).map((l: any) => l.part_id).filter(Boolean))] as string[];
-  const costByPart = new Map<string, { purchase_price: number | null; avg_install_cost: number | null }>();
-  for (let i = 0; i < partIds.length; i += 200) {
-    const { data: parts } = await supabase
-      .from('netsuite_parts')
-      .select('id, purchase_price, avg_install_cost')
-      .in('id', partIds.slice(i, i + 200));
-    for (const p of parts || []) costByPart.set(p.id, { purchase_price: p.purchase_price, avg_install_cost: p.avg_install_cost });
-  }
-  const effectiveLaborHours = Number(estimate.labor_hours_override ?? estimate.labor_hours) || 0;
-  const [laborCostRate, floorPct] = await Promise.all([
-    getShopLaborRate(supabase),
-    getMarginFloorPct(supabase),
-  ]);
-  // Fleet multi-unit (R6-9): the frozen margin describes the WHOLE job, like
-  // the total the customer signs. The percentage is unchanged either way, so
-  // the floor gate behaves identically — but the stored cost and revenue
-  // figures feed the Quoted Margin report, and per-vehicle dollars there
-  // would be the job's margin divided by the vehicle count.
-  const marginUnits = normalizeVehicleCount((estimate as any).vehicle_count);
-  const quotedMargin = computeQuotedMargin(
-    (rawLineItems || []).map((l: any) => ({
-      item_number: l.item_number ?? null,
-      quantity: (Number(l.quantity) || 0) * marginUnits,
-      // After the line's own discount (migration 350): that is what it earns.
-      unit_price: netUnitPrice(l, marginUnits),
-      purchase_price: l.part_id ? (costByPart.get(l.part_id)?.purchase_price ?? null) : null,
-      avg_install_cost: l.part_id ? (costByPart.get(l.part_id)?.avg_install_cost ?? null) : null,
-    })),
-    effectiveLaborHours,
-    laborCostRate,
-    // A discount (migration 342) lowers what the parts earn; without it a
-    // big enough discount would slip a quote under the floor unseen.
-    estimateDiscountRatio(estimate),
-  );
-  const belowFloor = quotedMargin.marginPct != null && quotedMargin.marginPct < floorPct;
+  // Frozen here, at the one real send path, BEFORE any attachment/PDF work
+  // is spent (see quotedMarginFor). One reason covers a fleet send.
+  const margins = new Map<string, Awaited<ReturnType<typeof quotedMarginFor>>>();
+  for (const e of orderEstimates) margins.set(e.id, await quotedMarginFor(e, rawLinesById.get(e.id) || []));
   const floorReason = (body.floorReason || '').trim();
-  if (belowFloor && !floorReason) {
+  const under = orderEstimates.filter(e => margins.get(e.id)!.belowFloor);
+  if (under.length > 0 && !floorReason) {
+    const lowest = under.map(e => margins.get(e.id)!).sort((a, b) => (a.quotedMargin.marginPct ?? 0) - (b.quotedMargin.marginPct ?? 0))[0];
+    const which = fleetSend
+      ? `${under.length} of the ${orderEstimates.length} vehicles (${under.map(e => `#${e.estimate_number}`).join(', ')}) have a parts margin as low as`
+      : 'This quote\'s parts margin is';
     return NextResponse.json({
-      error: `This quote's parts margin is ${quotedMargin.marginPct}%, below the ${floorPct}% floor. Give a reason to send anyway — it's recorded and the owner is notified.`,
+      error: `${which} ${lowest.quotedMargin.marginPct}%, below the ${lowest.floorPct}% floor. Give a reason to send anyway — it's recorded and the owner is notified.`,
       belowFloor: true,
-      marginPct: quotedMargin.marginPct,
-      floorPct,
+      marginPct: lowest.quotedMargin.marginPct,
+      floorPct: lowest.floorPct,
       canOverride: true,
     }, { status: 409 });
   }
@@ -346,17 +366,26 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // (estimate_attach: coverage diagram, attachments, vinyl details) and
     // graphics-job proofs merged on, so the customer approves ONE document
     // carrying all of it.
-    let pdf: Awaited<ReturnType<typeof generateEstimatePdf>>;
-    try {
-      pdf = await generateEstimatePdf(supabase, estimate.id);
-    } catch (err: any) {
-      console.error('[send-for-approval] estimate PDF failed:', err?.message || err);
-      pdf = { ok: false, status: 500, error: err?.message || 'PDF render failed' };
+    //
+    // A fleet send attaches every vehicle's PDF, in unit order. A PDF that
+    // won't fit the size cap still reaches the customer: its vehicle row
+    // in the email links it behind that vehicle's token.
+    for (const e of fleetSend ? orderEstimates : [estimate]) {
+      let pdf: Awaited<ReturnType<typeof generateEstimatePdf>>;
+      try {
+        pdf = await generateEstimatePdf(supabase, e.id);
+      } catch (err: any) {
+        console.error('[send-for-approval] estimate PDF failed:', err?.message || err);
+        pdf = { ok: false, status: 500, error: err?.message || 'PDF render failed' };
+      }
+      if (!pdf.ok) {
+        const which = fleetSend ? `the PDF for estimate #${e.estimate_number}` : 'the estimate PDF';
+        return NextResponse.json({ error: `Could not generate ${which} (${pdf.error}). Nothing was sent — try again.` }, { status: pdf.status === 404 ? 404 : 502 });
+      }
+      const used = approvalAttachments.reduce((sum, a) => sum + a.content.byteLength, 0);
+      if (e.id !== estimate.id && used + pdf.buffer.byteLength > MAX_ATTACHMENT_BYTES) continue;
+      approvalAttachments.push({ filename: pdf.filename, content: pdf.buffer, contentType: 'application/pdf' });
     }
-    if (!pdf.ok) {
-      return NextResponse.json({ error: `Could not generate the estimate PDF (${pdf.error}). Nothing was sent — try again.` }, { status: pdf.status === 404 ? 404 : 502 });
-    }
-    approvalAttachments.push({ filename: pdf.filename, content: pdf.buffer, contentType: 'application/pdf' });
 
     const usedBytes = approvalAttachments.reduce((sum, a) => sum + a.content.byteLength, 0);
     const extras = await fetchEstimateAttachments(picked.rows, Math.max(0, MAX_ATTACHMENT_BYTES - usedBytes));
@@ -366,97 +395,39 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }
   }
 
-  // Mint a fresh token — rotating on resend invalidates prior links.
-  const { token, expiresAt } = generateToken(expiryDays);
-  const { error: updErr } = await supabase
-    .from('estimates')
-    .update({
-      approval_token: token,
-      approval_token_expires_at: expiresAt,
-      // Fingerprint of what this send actually contains (items + money).
-      // The accept route refuses when the estimate no longer matches it —
-      // an edit landing while the link is live can't become a "signed"
-      // record the customer never saw (migration 242, Round 3 finding).
-      approval_sent_hash: approvalContentHash(estimate, rawLineItems || []),
-      sent_for_approval_at: new Date().toISOString(),
-      sent_for_approval_by: auth.user.id,
-      // 'rejected' also flips back to 'sent': a resent-after-rejection
-      // estimate previously KEPT status 'rejected', dropping out of the
-      // follow-up cron and the open-quotes math while its link was live
-      // (Round 3 finding).
-      status: ['draft', 'rejected'].includes(estimate.status) ? 'sent' : estimate.status,
-      // Clear any prior rejection so the resent link is actionable — but
-      // keep the objection: it was the only record of WHY the customer
-      // said no, and nulling it erased that silently.
-      ...(estimate.customer_rejected_at ? {
-        internal_notes: `${estimate.internal_notes ? `${estimate.internal_notes}\n` : ''}[${new Date().toISOString().slice(0, 10)}] Resent after rejection (${String(estimate.customer_rejected_at).slice(0, 10)}): ${estimate.customer_rejection_reason || 'no reason given'}`.slice(0, 5000),
-      } : {}),
-      customer_rejected_at: null,
-      customer_rejection_reason: null,
-      // Frozen quoted-margin snapshot (R5-3): header-level so the line
-      // save path's delete+reinsert can't wipe it; a re-send overwrites —
-      // the snapshot always describes the version the customer last got.
-      quoted_cost_total: quotedMargin.costTotal,
-      quoted_margin_pct: quotedMargin.marginPct,
-      quoted_below_floor: belowFloor,
-      quoted_floor_pct: floorPct,
-      quoted_labor_cost: quotedMargin.laborCost,
-      quoted_margin_at: new Date().toISOString(),
-      below_floor_reason: belowFloor ? floorReason : null,
-      quoted_margin_detail: quotedMargin.lines,
-      // The files this send carries (migration 368): the download links in
-      // the email and on the approval page serve exactly these, whatever is
-      // added to the estimate later.
-      approval_file_ids: picked.rows.map(r => r.id),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', estimate.id);
-  if (updErr) {
-    return NextResponse.json({ error: 'Failed to mint token: ' + updErr.message }, { status: 500 });
+  // Mint a fresh token — rotating on resend invalidates prior links. A
+  // fleet send mints one per vehicle, all sharing a batch id the order's
+  // approval page finds them by; the other vehicles first, so a failure
+  // leaves this estimate's own link as it was.
+  const batchId = fleetSend ? randomUUID() : null;
+  const tokens = new Map<string, string>();
+  let expiresAt = '';
+  for (const e of [...siblings, estimate]) {
+    const minted = generateToken(expiryDays);
+    expiresAt = minted.expiresAt;
+    const { error: updErr } = await supabase
+      .from('estimates')
+      .update(approvalPatch(e, rawLinesById.get(e.id) || [], minted, margins.get(e.id)!, floorReason, e.id === estimate.id ? picked.rows.map(r => r.id) : [], batchId, auth.user.id))
+      .eq('id', e.id);
+    if (updErr) {
+      return NextResponse.json({ error: `Failed to mint token${fleetSend ? ` for estimate #${e.estimate_number}` : ''}: ` + updErr.message }, { status: 500 });
+    }
+    tokens.set(e.id, minted.token);
   }
+  const token = tokens.get(estimate.id)!;
 
-  // Below-floor governance (R5-3): the send is now committed — record who
-  // sent under the floor and tell the owners. Reads land in the weekly
-  // exceptions digest via the audit action.
-  if (belowFloor) {
-    await logAudit(supabase, {
-      actorId: auth.user.id,
-      table: 'estimates',
-      recordId: estimate.id,
-      action: 'estimate_below_floor_sent',
-      detail: {
-        estimate_number: estimate.estimate_number,
-        marginPct: quotedMargin.marginPct,
-        floorPct,
-        grandTotal: estimate.grand_total,
-        reason: floorReason,
-        uncostedLines: quotedMargin.uncostedCount,
-      },
-    });
-    getSuperAdminIds(auth.user.id).then(async ids => {
-      if (ids.length === 0) return;
-      await notifyMany(ids, {
-        type: 'below_floor_send',
-        title: `⚠ Estimate #${estimate.estimate_number} sent at ${quotedMargin.marginPct}% margin (floor ${floorPct}%)`,
-        body: `${estimate.customer_name || 'Customer'} — $${Number(estimate.grand_total || 0).toLocaleString()} quote sent below the margin floor. Reason: ${floorReason}`.slice(0, 900),
-        url: deepLinks.estimate(estimate.id),
-        channels: ['in_app', 'push'],
-      });
-    }).catch(err => console.error('below-floor notify failed:', err));
-  }
-
-  // A resend-after-rejection reopens the estimate (status back to 'sent'
-  // above) — folded wrap quotes that were auto-rejected with it come back
-  // too, so the whole document is live again, not just the upfit half.
-  if (estimate.customer_rejected_at) {
-    await reconcileLinkedWrapQuotes(supabase, estimate.id, 'reopened', new Date().toISOString());
-  }
+  for (const e of orderEstimates) await afterSendCommitted(e, margins.get(e.id)!, floorReason, auth.user.id);
 
   const dispatch: Record<string, any> = { email: null, sms: null };
 
   if (emailList.length > 0) {
-    const link = `${appUrl}/approve/estimate/${token}?via=email&to=${encodeURIComponent(emailList[0])}`;
+    const via = `?via=email&to=${encodeURIComponent(emailList[0])}`;
+    const link = fleetSend ? `${appUrl}/approve/fleet/${token}${via}` : `${appUrl}/approve/estimate/${token}${via}`;
     const downloadUrls = approvalDownloadUrls(appUrl, token);
+    const vehicleUrls = new Map(orderEstimates.map(e => [e.id, {
+      reviewUrl: `${appUrl}/approve/estimate/${tokens.get(e.id)}${via}`,
+      pdfUrl: approvalDownloadUrls(appUrl, tokens.get(e.id)!).pdf,
+    }]));
     // The real estimate document, not a notification card: the old email
     // carried a one-line summary and no quantities, rates, or line totals
     // at all — the fields customers kept asking about.
@@ -465,8 +436,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       logoUrl,
       message,
       ctaUrl: link,
-      ctaLabel: 'Review & Approve',
+      ctaLabel: fleetSend ? `Review & approve all ${orderEstimates.length}` : 'Review & Approve',
       ctaNote: `This link expires in ${expiryDays} days.`,
+      fleet: fleetVehicles(vehicleUrls),
       signature,
       graphics: approvalGraphics,
       proofs: proofBlocksForEmail(proofBlocks, appUrl, token),
@@ -474,7 +446,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // the customer whose mail system stripped it and for whoever they
       // forward the email to.
       attachmentNames: [
-        { name: pdfFilename, url: downloadUrls.pdf },
+        ...(fleetSend
+          ? orderEstimates.map((e, i) => ({ name: pdfNames[i], url: vehicleUrls.get(e.id)!.pdfUrl }))
+          : [{ name: pdfFilename, url: downloadUrls.pdf }]),
         ...picked.rows.map(r => ({ name: r.file_name, url: downloadUrls.file(r.id) })),
       ],
     });
@@ -505,7 +479,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           approval_email_detail: ok ? null : 'The email could not be handed to the delivery service',
           approval_email_updated_at: new Date().toISOString(),
         })
-        .eq('id', estimate.id);
+        .in('id', orderEstimates.map(e => e.id));
       if (trackErr) console.error('estimate email tracking update failed:', trackErr.message);
     } catch (err: any) {
       dispatch.email = { target: emailList.join(', '), ok: false, error: err?.message };
@@ -513,8 +487,10 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   if (phone) {
-    const link = `${appUrl}/approve/estimate/${token}?via=sms${phone ? `&to=${encodeURIComponent(phone)}` : ''}`;
-    const smsBody = `[BMG Fleet] Estimate #${estimate.estimate_number} ready for approval. ${link}`;
+    const link = `${appUrl}/approve/${fleetSend ? 'fleet' : 'estimate'}/${token}?via=sms${phone ? `&to=${encodeURIComponent(phone)}` : ''}`;
+    const smsBody = fleetSend
+      ? `[BMG Fleet] Estimates for ${orderEstimates.length} vehicles ready for approval. ${link}`
+      : `[BMG Fleet] Estimate #${estimate.estimate_number} ready for approval. ${link}`;
     try {
       const result = await sendSMS(phone, smsBody);
       dispatch.sms = {
@@ -530,32 +506,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
 
   // An internal review still open when the customer send lands is settled by
-  // that send (migration 316): whoever sent it to the customer has, by
-  // definition, cleared it — a reviewer sending it on themselves is one of
-  // the paths the step is for. Without this the estimate would read "in
-  // review" forever while the customer already had it.
-  if (estimate.internal_review_status === 'pending' && (dispatch.email?.ok || dispatch.sms?.ok)) {
-    const { error: reviewErr } = await supabase
-      .from('estimates')
-      .update({
-        internal_review_status: 'approved',
-        internal_review_decided_by: auth.user.id,
-        internal_review_decided_at: new Date().toISOString(),
-      })
-      .eq('id', estimate.id)
-      .eq('internal_review_status', 'pending');
-    if (reviewErr) {
-      console.error('resolving internal review on customer send failed:', reviewErr.message);
-    } else if (estimate.internal_review_requested_by && estimate.internal_review_requested_by !== auth.user.id) {
-      const senderName = (auth.profile as any)?.full_name || auth.user?.email || 'A teammate';
-      await notify({
-        userId: estimate.internal_review_requested_by,
-        type: 'estimate_review_update',
-        title: `Estimate #${estimate.estimate_number} reviewed and sent to the customer`,
-        body: `${senderName} reviewed your estimate and sent it on to ${estimate.customer_name || 'the customer'} — the approval link is live.`,
-        url: deepLinks.estimate(estimate.id),
-      }).catch(err => console.error('review-sent notify failed:', err));
-    }
+  // that send (see settleInternalReview).
+  if (dispatch.email?.ok || dispatch.sms?.ok) {
+    for (const e of orderEstimates) await settleInternalReview(e, auth);
   }
 
   // The live token/URL is deliberately NOT echoed back: any estimates user
@@ -568,5 +521,199 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     status: 'sent',
     expiresAt,
     dispatch,
+    fleet: fleetSend ? { count: orderEstimates.length } : null,
   });
+}
+
+/**
+ * The other vehicles of an estimate's fleet order that can go out with it:
+ * current members (not superseded by a revision) still open for approval,
+ * i.e. not customer-approved and not already on a sales order.
+ */
+async function sendableSiblings(estimate: any): Promise<any[]> {
+  const members = await fleetMembers(supabase, estimate.fleet_group_id);
+  const ids = members.map(m => m.id).filter(id => id !== estimate.id);
+  if (ids.length === 0) return [];
+  const { data } = await supabase.from('estimates').select('*, vehicle_platforms(label)').in('id', ids);
+  return (data || [])
+    .filter(e => !estimateIsLocked(e))
+    .map(e => ({ ...e, vehicle_platform_label: (e as any).vehicle_platforms?.label || null }));
+}
+
+/**
+ * The quoted parts margin frozen on a send (R5-3, migration 275). The
+ * builder computes this live and throws it away; the send freezes it. The
+ * formula mirrors the builder's Parts Margin strip exactly (costs from
+ * netsuite_parts by part_id; uncosted lines excluded, never 100%); labor is
+ * costed separately at the blended shop rate when one is set.
+ */
+async function quotedMarginFor(estimate: any, rawLineItems: any[]) {
+  const partIds = [...new Set(rawLineItems.map((l: any) => l.part_id).filter(Boolean))] as string[];
+  const costByPart = new Map<string, { purchase_price: number | null; avg_install_cost: number | null }>();
+  for (let i = 0; i < partIds.length; i += 200) {
+    const { data: parts } = await supabase
+      .from('netsuite_parts')
+      .select('id, purchase_price, avg_install_cost')
+      .in('id', partIds.slice(i, i + 200));
+    for (const p of parts || []) costByPart.set(p.id, { purchase_price: p.purchase_price, avg_install_cost: p.avg_install_cost });
+  }
+  const effectiveLaborHours = Number(estimate.labor_hours_override ?? estimate.labor_hours) || 0;
+  const [laborCostRate, floorPct] = await Promise.all([
+    getShopLaborRate(supabase),
+    getMarginFloorPct(supabase),
+  ]);
+  // Fleet multi-unit (R6-9): the frozen margin describes the WHOLE job, like
+  // the total the customer signs. The percentage is unchanged either way, so
+  // the floor gate behaves identically — but the stored cost and revenue
+  // figures feed the Quoted Margin report, and per-vehicle dollars there
+  // would be the job's margin divided by the vehicle count.
+  const marginUnits = normalizeVehicleCount(estimate.vehicle_count);
+  const quotedMargin = computeQuotedMargin(
+    rawLineItems.map((l: any) => ({
+      item_number: l.item_number ?? null,
+      quantity: (Number(l.quantity) || 0) * marginUnits,
+      // After the line's own discount (migration 350): that is what it earns.
+      unit_price: netUnitPrice(l, marginUnits),
+      purchase_price: l.part_id ? (costByPart.get(l.part_id)?.purchase_price ?? null) : null,
+      avg_install_cost: l.part_id ? (costByPart.get(l.part_id)?.avg_install_cost ?? null) : null,
+    })),
+    effectiveLaborHours,
+    laborCostRate,
+    // A discount (migration 342) lowers what the parts earn; without it a
+    // big enough discount would slip a quote under the floor unseen.
+    estimateDiscountRatio(estimate),
+  );
+  const belowFloor = quotedMargin.marginPct != null && quotedMargin.marginPct < floorPct;
+  return { quotedMargin, floorPct, belowFloor };
+}
+
+/** The estimate row a send stamps: the new link, the fingerprint, status and the frozen margin. */
+function approvalPatch(
+  estimate: any,
+  rawLineItems: any[],
+  minted: { token: string; expiresAt: string },
+  margin: Awaited<ReturnType<typeof quotedMarginFor>>,
+  floorReason: string,
+  fileIds: string[],
+  batchId: string | null,
+  userId: string,
+) {
+  const { quotedMargin, floorPct, belowFloor } = margin;
+  return {
+    approval_token: minted.token,
+    approval_token_expires_at: minted.expiresAt,
+    // Fingerprint of what this send actually contains (items + money).
+    // The accept route refuses when the estimate no longer matches it —
+    // an edit landing while the link is live can't become a "signed"
+    // record the customer never saw (migration 242, Round 3 finding).
+    approval_sent_hash: approvalContentHash(estimate, rawLineItems),
+    // The fleet order email this link went out in (migration 412); a
+    // single send clears it so the order page drops this vehicle's old link.
+    approval_batch_id: batchId,
+    sent_for_approval_at: new Date().toISOString(),
+    sent_for_approval_by: userId,
+    // 'rejected' also flips back to 'sent': a resent-after-rejection
+    // estimate previously KEPT status 'rejected', dropping out of the
+    // follow-up cron and the open-quotes math while its link was live
+    // (Round 3 finding).
+    status: ['draft', 'rejected'].includes(estimate.status) ? 'sent' : estimate.status,
+    // Clear any prior rejection so the resent link is actionable — but
+    // keep the objection: it was the only record of WHY the customer
+    // said no, and nulling it erased that silently.
+    ...(estimate.customer_rejected_at ? {
+      internal_notes: `${estimate.internal_notes ? `${estimate.internal_notes}\n` : ''}[${new Date().toISOString().slice(0, 10)}] Resent after rejection (${String(estimate.customer_rejected_at).slice(0, 10)}): ${estimate.customer_rejection_reason || 'no reason given'}`.slice(0, 5000),
+    } : {}),
+    customer_rejected_at: null,
+    customer_rejection_reason: null,
+    // Frozen quoted-margin snapshot (R5-3): header-level so the line
+    // save path's delete+reinsert can't wipe it; a re-send overwrites —
+    // the snapshot always describes the version the customer last got.
+    quoted_cost_total: quotedMargin.costTotal,
+    quoted_margin_pct: quotedMargin.marginPct,
+    quoted_below_floor: belowFloor,
+    quoted_floor_pct: floorPct,
+    quoted_labor_cost: quotedMargin.laborCost,
+    quoted_margin_at: new Date().toISOString(),
+    below_floor_reason: belowFloor ? floorReason : null,
+    quoted_margin_detail: quotedMargin.lines,
+    // The files this send carries (migration 368): the download links in
+    // the email and on the approval page serve exactly these, whatever is
+    // added to the estimate later.
+    approval_file_ids: fileIds,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+/** What follows a committed send: below-floor governance and reopening rejected wrap quotes. */
+async function afterSendCommitted(estimate: any, margin: Awaited<ReturnType<typeof quotedMarginFor>>, floorReason: string, userId: string) {
+  const { quotedMargin, floorPct, belowFloor } = margin;
+  // Below-floor governance (R5-3): the send is now committed — record who
+  // sent under the floor and tell the owners. Reads land in the weekly
+  // exceptions digest via the audit action.
+  if (belowFloor) {
+    await logAudit(supabase, {
+      actorId: userId,
+      table: 'estimates',
+      recordId: estimate.id,
+      action: 'estimate_below_floor_sent',
+      detail: {
+        estimate_number: estimate.estimate_number,
+        marginPct: quotedMargin.marginPct,
+        floorPct,
+        grandTotal: estimate.grand_total,
+        reason: floorReason,
+        uncostedLines: quotedMargin.uncostedCount,
+      },
+    });
+    getSuperAdminIds(userId).then(async ids => {
+      if (ids.length === 0) return;
+      await notifyMany(ids, {
+        type: 'below_floor_send',
+        title: `⚠ Estimate #${estimate.estimate_number} sent at ${quotedMargin.marginPct}% margin (floor ${floorPct}%)`,
+        body: `${estimate.customer_name || 'Customer'} — $${Number(estimate.grand_total || 0).toLocaleString()} quote sent below the margin floor. Reason: ${floorReason}`.slice(0, 900),
+        url: deepLinks.estimate(estimate.id),
+        channels: ['in_app', 'push'],
+      });
+    }).catch(err => console.error('below-floor notify failed:', err));
+  }
+
+  // A resend-after-rejection reopens the estimate (status back to 'sent'
+  // in approvalPatch) — folded wrap quotes that were auto-rejected with it
+  // come back too, so the whole document is live again, not just the
+  // upfit half.
+  if (estimate.customer_rejected_at) {
+    await reconcileLinkedWrapQuotes(supabase, estimate.id, 'reopened', new Date().toISOString());
+  }
+}
+
+/**
+ * An internal review still open when the customer send lands is settled by
+ * that send (migration 316): whoever sent it to the customer has, by
+ * definition, cleared it — a reviewer sending it on themselves is one of
+ * the paths the step is for. Without this the estimate would read "in
+ * review" forever while the customer already had it.
+ */
+async function settleInternalReview(estimate: any, auth: { user: { id: string; email?: string | null }; profile?: unknown }) {
+  if (estimate.internal_review_status !== 'pending') return;
+  const { error: reviewErr } = await supabase
+    .from('estimates')
+    .update({
+      internal_review_status: 'approved',
+      internal_review_decided_by: auth.user.id,
+      internal_review_decided_at: new Date().toISOString(),
+    })
+    .eq('id', estimate.id)
+    .eq('internal_review_status', 'pending');
+  if (reviewErr) {
+    console.error('resolving internal review on customer send failed:', reviewErr.message);
+  } else if (estimate.internal_review_requested_by && estimate.internal_review_requested_by !== auth.user.id) {
+    const senderName = (auth.profile as any)?.full_name || auth.user?.email || 'A teammate';
+    await notify({
+      userId: estimate.internal_review_requested_by,
+      type: 'estimate_review_update',
+      title: `Estimate #${estimate.estimate_number} reviewed and sent to the customer`,
+      body: `${senderName} reviewed your estimate and sent it on to ${estimate.customer_name || 'the customer'} — the approval link is live.`,
+      url: deepLinks.estimate(estimate.id),
+    }).catch(err => console.error('review-sent notify failed:', err));
+  }
 }
