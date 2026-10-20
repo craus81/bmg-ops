@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parseDraftReply, matchRequest, matchScore, summarize, MIN_MATCH_SCORE, DRAFT_SYSTEM,
+  parseDraftReply, matchRequest, matchScore, summarize, looseItemRegex, MIN_MATCH_SCORE, DRAFT_SYSTEM,
   type CatalogPart,
 } from './paste-to-estimate';
 
@@ -165,5 +165,15 @@ describe('summarize', () => {
     expect(s.unmatched).toBe(1);
     expect(s.missingQuantity).toBe(1);
     expect(s.missingPrice).toBe(1);
+  });
+});
+
+describe('looseItemRegex', () => {
+  it('matches the same characters whatever the punctuation, and nothing longer', () => {
+    const re = new RegExp(looseItemRegex('RB148')!, 'i');
+    expect(re.test('RB-148')).toBe(true);
+    expect(re.test('rb 148')).toBe(true);
+    expect(re.test('RB-1480')).toBe(false);
+    expect(looseItemRegex('--')).toBeNull();
   });
 });

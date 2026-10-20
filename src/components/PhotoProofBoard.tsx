@@ -42,7 +42,7 @@ interface Props {
 
 export default function PhotoProofBoard({
   proofs, onChange, imageUrl, onAddPhotos, onRemovePhoto, uploading, films, rollPriced, defaultFilmId, onPickFilm,
-  accept = 'image/*', emptyState, addLabel = '+ Add photo', labelPlaceholder, pageExtras, suggestedLineInches, lineHint,
+  accept = 'image/*', emptyState, addLabel = '+ Add photos', labelPlaceholder, pageExtras, suggestedLineInches, lineHint,
 }: Props) {
   const [activeId, setActiveId] = useState<string | null>(proofs[0]?.id || null);
   // Boxes checked for a bulk film change — across every photo, so "Select
@@ -101,7 +101,7 @@ export default function PhotoProofBoard({
 
   const addTile = (
     <label
-      title={full ? `${MAX_PHOTO_PROOFS} photos is the limit for one quote` : 'Add another view of this job'}
+      title={full ? `${MAX_PHOTO_PROOFS} photos is the limit for one quote` : 'Add more views of this job: pick several at once, or drop them on this row'}
       style={{
         width: '96px', height: '72px', flexShrink: 0, borderRadius: '8px',
         border: `1px dashed ${theme.border}`, background: 'var(--subtle-bg)',
@@ -110,7 +110,12 @@ export default function PhotoProofBoard({
         cursor: full || uploading ? 'default' : 'pointer', opacity: full || uploading ? 0.5 : 1,
       }}
     >
-      {uploading ? 'Working…' : full ? 'Limit reached' : addLabel}
+      {uploading ? 'Working…' : full ? 'Limit reached' : (
+        <span>
+          {addLabel}
+          <span style={{ display: 'block', fontWeight: 600, marginTop: '2px' }}>{MAX_PHOTO_PROOFS - proofs.length} more fit</span>
+        </span>
+      )}
       <input
         type="file" accept={accept} multiple disabled={full || uploading}
         onChange={e => { onAddPhotos(e.target.files); e.target.value = ''; }}
@@ -128,7 +133,7 @@ export default function PhotoProofBoard({
             {emptyState?.hint || (
               <>
                 Drop photos here (or take them on your phone) — a vehicle, a storefront, whatever is being covered,
-                one photo per view.<br />
+                one photo per view. Select several at once, up to {MAX_PHOTO_PROOFS}.<br />
                 Shoot each face straight on where you can: a square-on photo measures with one known length.
                 Draw boxes over what gets covered, then set a scale on each photo to price them.
               </>
@@ -139,7 +144,7 @@ export default function PhotoProofBoard({
             background: 'rgba(6,182,212,0.08)', border: '1px solid #06b6d4', color: '#06b6d4',
             cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1,
           }}>
-            {uploading ? 'Working…' : (emptyState?.choose || 'Choose Photos')}
+            {uploading ? 'Working…' : (emptyState?.choose || `Choose photos (select several at once, up to ${MAX_PHOTO_PROOFS})`)}
             <input type="file" accept={accept} multiple disabled={uploading} onChange={e => { onAddPhotos(e.target.files); e.target.value = ''; }} style={{ display: 'none' }} />
           </label>
         </div>

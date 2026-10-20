@@ -380,6 +380,80 @@ function PriceBreakdown({ totals }: { totals: { adjMaterials: number; adjLabor: 
 }
 const num = (v: any) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 
+// The first thing a new worksheet shows: what is being covered. Each card
+// opens one drawing surface; photos dropped on the storefront card open the
+// photo surface with them already loaded.
+type CoverSurface = 'template' | 'photo' | 'proof';
+function SurfaceChooser({ suggested, estimateVehicle, uploading, onChoose }: {
+  suggested: CoverSurface | null;
+  estimateVehicle: string | null;
+  uploading: boolean;
+  onChoose: (target: CoverSurface, files?: File[]) => void;
+}) {
+  const iconProps = { width: 34, height: 34, viewBox: '0 0 34 34', fill: 'none', stroke: '#06b6d4', strokeWidth: 2, 'aria-hidden': true } as const;
+  const cards: { surface: CoverSurface; title: string; desc: string; extra: string; icon: React.ReactNode }[] = [
+    {
+      surface: 'template',
+      title: 'A vehicle',
+      desc: 'Draw on a 1:20 outline from the template library.',
+      extra: estimateVehicle ? `Estimate's vehicle: ${estimateVehicle}` : 'Pick the year, make and model next',
+      icon: <svg {...iconProps}><path d="M3 22V12h18l6 5h4v5z" /><circle cx="10" cy="24" r="3" fill="var(--card)" /><circle cx="25" cy="24" r="3" fill="var(--card)" /></svg>,
+    },
+    {
+      surface: 'photo',
+      title: 'Storefront, building or anything else',
+      desc: 'Upload photos of the real thing, several at once, and draw boxes on each.',
+      extra: `Up to ${MAX_PHOTO_PROOFS} photos · drop them here`,
+      icon: <svg {...iconProps}><path d="M4 30V12l13-7 13 7v18z" /><rect x="9" y="15" width="16" height="5" /><path d="M14 30v-6h6v6" /></svg>,
+    },
+    {
+      surface: 'proof',
+      title: "The customer's proof",
+      desc: 'Upload their PDF or picture and pick the vehicle; every decal gets a box.',
+      extra: 'PDF or picture',
+      icon: <svg {...iconProps}><path d="M8 3h13l6 6v22H8z" /><path d="M21 3v6h6M12 17h11M12 22h11M12 27h7" /></svg>,
+    },
+  ];
+  const card = (c: typeof cards[number]) => (
+    <button
+      key={c.surface}
+      onClick={() => onChoose(c.surface)}
+      disabled={uploading}
+      style={{
+        width: '100%', height: '100%', textAlign: 'left', padding: '14px', borderRadius: '12px',
+        display: 'flex', flexDirection: 'column', gap: '6px',
+        cursor: uploading ? 'wait' : 'pointer',
+        background: suggested === c.surface ? 'rgba(6,182,212,0.10)' : 'var(--subtle-bg)',
+        border: `1px solid ${suggested === c.surface ? '#06b6d4' : 'var(--border)'}`,
+        color: 'var(--text-primary)',
+      }}
+    >
+      {c.icon}
+      <span style={{ fontSize: '14px', fontWeight: 800 }}>{c.title}</span>
+      <span style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.4 }}>{c.desc}</span>
+      <span style={{ fontSize: '11px', fontWeight: 700, color: '#06b6d4' }}>
+        {c.surface === 'photo' && uploading ? 'Uploading…' : c.extra}
+      </span>
+    </button>
+  );
+  return (
+    <div style={{ marginBottom: '10px' }}>
+      <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>What are you covering?</div>
+      <div style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '2px 0 12px' }}>You can switch later from the &quot;Draw on&quot; row.</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px' }}>
+        {cards.map(c => c.surface === 'photo'
+          ? (
+            <DropZone key={c.surface} accept="image/*" disabled={uploading} onFiles={files => onChoose('photo', files)}>
+              {card(c)}
+            </DropZone>
+          )
+          : card(c))}
+      </div>
+    </div>
+  );
+}
+
+
 const laborSectionTotal = (s: LaborSection) => num(s.flat) + num(s.hourly) * num(s.hours) + num(s.extra);
 
 // A column this page writes that the database doesn't have yet comes back
@@ -524,6 +598,10 @@ export default function WrapQuotePage() {
   // photoMode underneath, so pricing, nesting, the quote and the save all
   // see ordinary photo boxes.
   const [proofMode, setProofMode] = useState(false);
+  // A new worksheet asks what is being covered before it shows a surface
+  // (Valarie, 2026-10-20: storefront work and multi-photo upload were hidden
+  // behind the vehicle template the builder used to open on).
+  const [surfaceChosen, setSurfaceChosen] = useState(false);
   // What the reader is doing right now, or null when idle.
   const [proofBusy, setProofBusy] = useState<string | null>(null);
   // What the last read found and didn't, page by page.
@@ -2363,6 +2441,7 @@ export default function WrapQuotePage() {
   // Edit lands on the drawing (Estimator tab) where the boxes are; Resend
   // lands on the Quote tab to send it again unchanged.
   const loadQuoteForEdit = async (q: WrapQuote, landOn: 'estimator' | 'quote' = 'estimator') => {
+    setSurfaceChosen(true);
     const tpl = await loadTemplateById(q.template_id);
     const ppi = num(tpl?.px_per_in);
     // Quotes saved before geometry was snapshotted have no shape coordinates.
@@ -2838,6 +2917,19 @@ export default function WrapQuotePage() {
     if (target === 'photo') setTemplateId('');
     setPhotoMode(toPictures);
     setProofMode(target === 'proof');
+  };
+
+  const askSurface = !surfaceChosen && !savedQuoteId && !pendingEdit && !searchParams.get('quote')
+    && !hasCoverage && photoProofs.length === 0;
+  // The estimate's vehicle suggests the vehicle card; an estimate without
+  // one suggests photos.
+  const suggestedSurface: Surface | null = forEstimate
+    ? (forEstimate.templateId || forEstimate.vehicle ? 'template' : 'photo')
+    : null;
+  const chooseSurface = async (target: Surface, files?: File[]) => {
+    await switchSurface(target);
+    setSurfaceChosen(true);
+    if (files && files.length > 0) await addCoveragePhotos(files);
   };
 
   // ----- History: archive / delete -----
@@ -4038,6 +4130,14 @@ export default function WrapQuotePage() {
       {/* ================= ESTIMATOR ================= */}
       {tab === 'estimator' && (
         <div>
+          {askSurface ? (
+            <SurfaceChooser
+              suggested={suggestedSurface}
+              estimateVehicle={forEstimate?.vehicle || null}
+              uploading={photoUploading}
+              onChoose={chooseSurface}
+            />
+          ) : (<>
           {/* Drawing surface: a 1:20 outline template, or photos of the real
               thing — a vehicle the library has no template for, or a
               building being signed. */}
@@ -4046,7 +4146,7 @@ export default function WrapQuotePage() {
             {([
               { surface: 'template' as Surface, label: 'Vehicle Template', hint: 'Measure and price coverage over a calibrated 1:20 vehicle outline' },
               { surface: 'proof' as Surface, label: 'Customer Proof', hint: 'Upload the customer\u2019s proof (PDF or picture) and pick the vehicle: every decal gets a box, sized by the number printed on the proof or measured off the drawing by the wheelbase' },
-              { surface: 'photo' as Surface, label: 'Photos', hint: 'Draw boxes over photos of the real thing — a vehicle, or a building being signed. Set a scale on each photo and the boxes measure and price themselves' },
+              { surface: 'photo' as Surface, label: 'Photos (storefront, building, anything)', hint: 'Draw boxes over photos of the real thing — a vehicle, or a building being signed. Set a scale on each photo and the boxes measure and price themselves' },
             ]).map(o => (
               <button key={o.surface} onClick={() => switchSurface(o.surface)} title={o.hint} style={{
                 padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
@@ -4679,6 +4779,7 @@ export default function WrapQuotePage() {
               )}
             </div>
           )}
+          </>)}
         </div>
       )}
 
