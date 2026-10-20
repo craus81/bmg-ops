@@ -59,6 +59,7 @@ import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
 import { DeliveryPicker } from '@/components/DeliveryPicker';
 import { EMPTY_DELIVERY, deliveryColumns, deliveryFromRow, deliveryText, sameDelivery, type Delivery } from '@/lib/delivery';
 import VehicleTemplatePicker from '@/components/VehicleTemplatePicker';
+import { remapWorksheetIds } from '@/lib/estimate-copy-worksheets';
 import {
   EMPTY_FILTERS, TEMPLATE_COLUMNS, estimateVehicleFields, searchTemplates, templateLabel,
   type TemplateFilters, type VehicleTemplate,
@@ -2163,7 +2164,15 @@ export default function EstimatesPage() {
         res = await fetch('/api/estimates', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...body, id: dup.id, status: 'draft', internal_notes: revisionNotes }),
+          // The revision has its own copies of the Graphics Builder
+          // worksheets; point the on-screen lines at them, not the original's.
+          body: JSON.stringify({
+            ...body,
+            id: dup.id,
+            status: 'draft',
+            internal_notes: revisionNotes,
+            line_items: remapWorksheetIds(body.line_items, dup.worksheet_map),
+          }),
         });
         data = await res.json();
         revisionJumped = data.success === true;
