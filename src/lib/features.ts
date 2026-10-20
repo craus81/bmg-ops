@@ -147,33 +147,85 @@ export function isAdminRole(roles: string[]): boolean {
 }
 
 /**
- * Resolve the effective features for a user.
- * Starts with role defaults, then applies per-user overrides.
+ * A super admin's change to one role's default for one feature, saved on
+ * More → Admin → Permissions (table role_feature_settings, migration 418).
+ * Applied on top of ROLE_DEFAULT_FEATURES, under each person's own
+ * user_feature_overrides — so the order is: code default → role setting →
+ * per-person exception.
+ */
+export interface RoleFeatureSetting {
+  role: string;
+  feature: string;
+  granted: boolean;
+}
+
+/** Roles the Permissions screen edits. super_admin always has everything. */
+export const EDITABLE_ROLES: string[] = [
+  'admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech', 'finance', 'executive', 'installer', 'customer',
+];
+
+/** A role's out-of-the-box features, before any saved role setting. */
+export function roleDefaultFeatures(role: string): Set<FeatureKey> {
+  if (role === 'super_admin') return new Set(Object.keys(FEATURES) as FeatureKey[]);
+  if (role === 'admin') {
+    // Everything except the super-admin-only pages, so features added
+    // later default on for admins without a role-list edit.
+    return new Set((Object.keys(FEATURES) as FeatureKey[]).filter(f => !SUPER_ADMIN_FEATURES.includes(f)));
+  }
+  return new Set((ROLE_DEFAULT_FEATURES[role] || []) as FeatureKey[]);
+}
+
+/**
+ * May the Permissions screen turn `feature` ON for `role`? Turning a feature
+ * OFF is always allowed. Two walls stay:
+ *   * Owner-level pages (SUPER_ADMIN_FEATURES) can't be handed to a whole
+ *     role here — their APIs are super-admin-only, so the switch would open
+ *     a page that then refuses every request. One person can still be given
+ *     one through their own override on the Users page.
+ *   * Roles outside BMG staff (CNI installers from other companies,
+ *     customers, executive) can only keep what they ship with: the APIs
+ *     behind every other page refuse non-staff logins, and those walls are
+ *     what keep company-wide data away from outside accounts.
+ * The resolver enforces this too, so a stray row can never widen access.
+ */
+export function canGrantToRole(role: string, feature: string): boolean {
+  if (!(feature in FEATURES)) return false;
+  const key = feature as FeatureKey;
+  if (roleDefaultFeatures(role).has(key)) return true;
+  if (SUPER_ADMIN_FEATURES.includes(key)) return false;
+  return INTERNAL_STAFF_ROLES.includes(role);
+}
+
+/** One role's features once its saved settings are applied. */
+export function roleFeatures(role: string, roleSettings: RoleFeatureSetting[] = []): Set<FeatureKey> {
+  const features = roleDefaultFeatures(role);
+  if (role === 'super_admin') return features; // no exceptions, so nobody can be locked out
+  for (const s of roleSettings) {
+    if (s.role !== role || !(s.feature in FEATURES)) continue;
+    const key = s.feature as FeatureKey;
+    if (s.granted) {
+      if (canGrantToRole(role, key)) features.add(key);
+    } else {
+      features.delete(key);
+    }
+  }
+  return features;
+}
+
+/**
+ * Resolve the effective features for a user: each role's defaults with that
+ * role's saved settings applied, unioned across their roles, then their own
+ * per-user overrides.
  */
 export function resolveFeatures(
   roles: string[],
-  overrides: { feature: string; granted: boolean }[]
+  overrides: { feature: string; granted: boolean }[],
+  roleSettings: RoleFeatureSetting[] = [],
 ): Set<FeatureKey> {
   const features = new Set<FeatureKey>();
 
-  // Collect defaults from all roles
   for (const role of roles) {
-    const defaults = ROLE_DEFAULT_FEATURES[role] || [];
-    for (const f of defaults) features.add(f);
-  }
-
-  // Admin gets everything except the super-admin-only pages (so features
-  // added later default on for admins without a role-list edit); super
-  // admin gets everything, no exceptions.
-  if (roles.includes('admin')) {
-    for (const key of Object.keys(FEATURES) as FeatureKey[]) {
-      if (!SUPER_ADMIN_FEATURES.includes(key)) features.add(key);
-    }
-  }
-  if (roles.includes('super_admin')) {
-    for (const key of Object.keys(FEATURES) as FeatureKey[]) {
-      features.add(key);
-    }
+    for (const f of roleFeatures(role, roleSettings)) features.add(f);
   }
 
   // Apply overrides

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { requireAuth, isAdminRole, getProfileRoles } from '@/lib/api-auth';
+import { requireAuth, isAdminRole, getProfileRoles, loadRoleFeatureSettings } from '@/lib/api-auth';
 import { resolveFeatures } from '@/lib/features';
 import { cachedBadges, visibleQueues, ATTENTION_QUEUES } from '@/lib/attention-queues';
 import type { FeatureKey } from '@/lib/features';
@@ -33,11 +33,14 @@ export async function GET(req: NextRequest) {
   // then 403.
   const roles = getProfileRoles(auth.profile).map(r => (r === 'production' ? 'graphics_production' : r));
   const isAdmin = isAdminRole(roles);
-  const { data: overrides } = await service
-    .from('user_feature_overrides')
-    .select('feature, granted')
-    .eq('user_id', auth.user.id);
-  const features = resolveFeatures(roles, overrides || []);
+  const [{ data: overrides }, roleSettings] = await Promise.all([
+    service
+      .from('user_feature_overrides')
+      .select('feature, granted')
+      .eq('user_id', auth.user.id),
+    loadRoleFeatureSettings(service),
+  ]);
+  const features = resolveFeatures(roles, overrides || [], roleSettings);
   const access = { isAdmin, hasFeature: (k: FeatureKey) => features.has(k) };
 
   try {
