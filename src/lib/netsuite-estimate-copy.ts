@@ -83,6 +83,16 @@ export const isLaborLine = (l: NetsuiteSourceLine): boolean => /LABOR/i.test(l.i
 export const isDiscountLine = (l: NetsuiteSourceLine): boolean =>
   (l.amount !== null && l.amount < 0) || (l.rate !== null && l.rate < 0) || /DISCOUNT/i.test(l.itemNumber || '');
 
+/**
+ * An invoice line's amount with the sign a person reads: NetSuite stores
+ * invoice lines as credits (netamount is negative for a sold part, positive
+ * for a discount), so it's flipped. Falls back to the mirror's unsigned amount.
+ */
+export function invoiceLineAmount(nsNetAmount: unknown, unsigned: unknown): number | null {
+  const n = num(nsNetAmount);
+  return n !== null ? -n : num(unsigned);
+}
+
 /** Row shapes from the three copies → one line shape. */
 export function sourceLineFromRow(row: Record<string, any>): NetsuiteSourceLine {
   return {

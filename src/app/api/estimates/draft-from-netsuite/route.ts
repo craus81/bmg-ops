@@ -5,7 +5,7 @@ import { profileCanSeeMoney, requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { looseItemRegex, summarize, type DraftLine } from '@/lib/paste-to-estimate';
 import {
-  NETSUITE_COPY_LABEL, NETSUITE_COPY_TYPES, matchNetsuiteLine, nsItemNumber, netsuiteDraftRequests, sourceLineFromRow,
+  NETSUITE_COPY_LABEL, NETSUITE_COPY_TYPES, invoiceLineAmount, matchNetsuiteLine, nsItemNumber, netsuiteDraftRequests, sourceLineFromRow,
   type NetsuiteCatalogPart, type NetsuiteCopyType, type NetsuiteSourceDoc,
 } from '@/lib/netsuite-estimate-copy';
 
@@ -46,13 +46,15 @@ async function loadDoc(service: SupabaseClient, type: NetsuiteCopyType, nsId: st
     const { data: lines } = await service
       .from('ledger_invoice_lines')
       // The mirror stores amounts unsigned; NetSuite's own signed amount in
-      // `raw` is what tells a discount line apart.
+      // `raw` is what tells a discount line apart. NetSuite signs invoice
+      // lines as credits (a sold part is negative, a discount positive), so
+      // it's flipped here the way every invoice report does (-tl.netamount).
       .select('item_external_id, item_name, item_number, description, quantity, unit_price, amount, line_kind, line_no, ns_amount:raw->>netamount')
       .eq('document_id', head.id)
       .eq('line_kind', 'item')
       .order('line_no', { ascending: true, nullsFirst: false });
     return {
-      doc: { number: head.doc_number || nsId, typeLabel: label, date: head.doc_date || '', lines: (lines || []).map((l: any) => sourceLineFromRow({ ...l, amount: l.ns_amount ?? l.amount })) },
+      doc: { number: head.doc_number || nsId, typeLabel: label, date: head.doc_date || '', lines: (lines || []).map((l: any) => sourceLineFromRow({ ...l, amount: invoiceLineAmount(l.ns_amount, l.amount) })) },
       customerNetsuiteId: head.customer_netsuite_id || null,
     };
   }

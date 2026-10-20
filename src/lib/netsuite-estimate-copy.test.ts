@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  matchNetsuiteLine, netsuiteDraftRequests, nsItemNumber, sourceLineFromRow,
+  invoiceLineAmount, matchNetsuiteLine, netsuiteDraftRequests, nsItemNumber, sourceLineFromRow,
   type NetsuiteCatalogPart, type NetsuiteSourceLine,
 } from './netsuite-estimate-copy';
 
@@ -30,6 +30,25 @@ describe('sourceLineFromRow', () => {
   it('reads the invoice mirror shape', () => {
     expect(sourceLineFromRow({ item_external_id: '501', item_number: 'RB-148', quantity: 1, unit_price: 10, amount: '-10' }))
       .toMatchObject({ itemNetsuiteId: '501', rate: 10, amount: -10 });
+  });
+});
+
+describe('invoiceLineAmount', () => {
+  it('flips NetSuite invoice credits so parts are positive and discounts negative', () => {
+    expect(invoiceLineAmount('-843.3', 843.3)).toBe(843.3);
+    expect(invoiceLineAmount('50', 50)).toBe(-50);
+    expect(invoiceLineAmount(null, 12)).toBe(12);
+  });
+
+  it('keeps a sold part on the grid (INV1532: parts were counted as discounts)', () => {
+    const lines = [
+      sourceLineFromRow({ item_number: '1605-GS3', quantity: 1, unit_price: 843.3, amount: invoiceLineAmount('-843.3', 843.3) }),
+      sourceLineFromRow({ item_number: '16-U0005', quantity: 3, unit_price: 0, amount: invoiceLineAmount('0', 0) }),
+      sourceLineFromRow({ item_number: 'FLEET DISCOUNT', quantity: 1, unit_price: 50, amount: invoiceLineAmount('50', 50) }),
+    ];
+    const { requests, skipped } = netsuiteDraftRequests({ number: 'INV1532', typeLabel: 'Invoice', date: '2026-01-29', lines });
+    expect(requests.map(r => r.line.itemNumber)).toEqual(['1605-GS3', '16-U0005']);
+    expect(skipped.discountLines).toBe(1);
   });
 });
 
