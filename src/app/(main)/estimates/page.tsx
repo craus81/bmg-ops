@@ -2050,6 +2050,14 @@ export default function EstimatesPage() {
   };
 
   const saveEstimateNow = async (baseId: string | null, status: string, opts?: { offerRevision?: boolean }) => {
+    // Every estimate belongs to a customer or prospect (Craig, 2026-10-20).
+    // A typed name alone isn't enough: Convert and invoicing need the link.
+    if (!customerId && !prospectId && !customerNsId) {
+      await dialog.alert(customerName
+        ? `"${customerName}" isn't linked to a customer or prospect. Pick one from the customer search, then save.`
+        : 'Pick a customer or prospect before saving this estimate.');
+      return null;
+    }
     setSaving(true);
     try {
       const body = {
@@ -2409,14 +2417,21 @@ export default function EstimatesPage() {
     if (id) router.push(`/admin/wrap-quote?forEstimate=${id}${quoteId ? `&quote=${quoteId}` : ''}`);
   };
 
+  // Quoted for a prospect: push and Convert create the NetSuite customer on
+  // the way (resolveOrPromoteByName), so say so before anyone clicks OK.
+  const prospectNote = !customerNsId && prospectId
+    ? `\n\n${customerName || 'This prospect'} isn't a NetSuite customer yet, so this creates them as one first.`
+    : '';
+
   // ── Push to NetSuite (initial push or sync update) ──
   const pushToNetSuite = async (isSync: boolean = false) => {
     if (!editingId) {
       await dialog.alert('Please save the estimate first');
       return;
     }
-    if (!customerNsId) {
-      await dialog.alert('Please select a customer with a NetSuite ID');
+    // A prospect is fine: the push creates the NetSuite customer first.
+    if (!customerNsId && !prospectId) {
+      await dialog.alert('Please select a customer or prospect');
       return;
     }
     if (lines.length === 0) {
@@ -2434,6 +2449,7 @@ export default function EstimatesPage() {
     const confirmMsg = (isSync
       ? 'Sync changes to NetSuite? This will update the existing Estimate in NetSuite.'
       : 'Push this estimate to NetSuite? This will create an Estimate record in NetSuite.')
+      + prospectNote
       + unmatchedNote;
     if (!(await dialog.confirm(confirmMsg))) return;
 
@@ -3198,7 +3214,7 @@ export default function EstimatesPage() {
         return;
       }
       overrideReason = reason.trim();
-    } else if (!(await dialog.confirm('Create a Sales Order in NetSuite from this estimate?'))) {
+    } else if (!(await dialog.confirm(`Create a Sales Order in NetSuite from this estimate?${prospectNote}`))) {
       return;
     }
 
@@ -3322,6 +3338,26 @@ export default function EstimatesPage() {
     setCustomerDefaults(data as any || null);
   }, [supabase]);
 
+  const openedEstimateRef = useRef<string | null>(null);
+  const adoptPromotedProspect = async (estId: string, prospectId: string) => {
+    const { data: lead } = await supabase
+      .from('prospects')
+      .select('netsuite_id')
+      .eq('id', prospectId)
+      .maybeSingle();
+    if (!lead?.netsuite_id) return;
+    const nsId = String(lead.netsuite_id);
+    const { data: cust } = await supabase
+      .from('customers')
+      .select('id')
+      .eq('netsuite_id', nsId)
+      .limit(1)
+      .maybeSingle();
+    if (openedEstimateRef.current !== estId) return; // another estimate opened meanwhile
+    setCustomerNsId(nsId);
+    if (cust) setCustomerId(cust.id);
+  };
+
   // ── Open estimate for editing ──
   const openEstimate = async (est: Estimate) => {
     flushPendingDraft(); // don't lose the tail of whatever was open before
@@ -3332,6 +3368,14 @@ export default function EstimatesPage() {
     setCustomerName(est.customer_name || '');
     setCustomerNsId(est.customer_netsuite_id);
     setProspectId(est.prospect_id ?? null);
+    openedEstimateRef.current = est.id;
+    // Quoted while the customer was still a prospect, and the prospect has
+    // since become a NetSuite customer: pick that customer up now, so the
+    // NS # and Convert to Sales Order appear without re-picking the
+    // customer (EST-2610-024, Craig 2026-10-20). The next save stores it.
+    if (!est.customer_netsuite_id && est.prospect_id) {
+      void adoptPromotedProspect(est.id, est.prospect_id);
+    }
     setTaxRate(est.tax_rate || companyTaxRateRef.current);
     setTaxExempt(est.tax_exempt);
     setVehicleCount(normalizeVehicleCount(est.vehicle_count));
@@ -4315,6 +4359,13 @@ export default function EstimatesPage() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+        {!customerId && !prospectId && !customerNsId && (customerName || editingId || lines.length > 0) && (
+          <div style={{ color: '#ef4444', fontSize: '11px', fontWeight: 700, marginTop: '4px' }}>
+            {customerName
+              ? `"${customerName}" isn't linked to a customer or prospect. Pick one from the search before saving.`
+              : 'Pick a customer or prospect. The estimate can\'t be saved without one.'}
           </div>
         )}
       </div>
@@ -6174,7 +6225,7 @@ export default function EstimatesPage() {
         })()}
 
         {/* Push or Sync to NetSuite */}
-        {editingId && customerNsId && lines.length > 0 && !isPriceSheet && (
+        {editingId && (customerNsId || prospectId) && lines.length > 0 && !isPriceSheet && (
           <>
             <button
               onClick={() => pushToNetSuite(!!isPushed)}
@@ -6759,10 +6810,11 @@ export default function EstimatesPage() {
         )}
         {/* Convert to Sales Order — gated on customer approval; admins can
             override with a recorded reason (phone/email/PO approvals). */}
-        {editingId && customerNsId && lines.length > 0 && !isPriceSheet && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (() => {
+        {editingId && (customerNsId || prospectId) && lines.length > 0 && !isPriceSheet && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (() => {
           const approved = !!(estimates.find(e => e.id === editingId) as any)?.customer_approved;
           const locked = !approved && !isAdmin;
           return (
+            <>
             <button
               onClick={convertToSalesOrder}
               disabled={convertingToSO || locked}
@@ -6781,6 +6833,12 @@ export default function EstimatesPage() {
                 : approved ? 'Convert to Sales Order in NetSuite'
                 : 'Convert to Sales Order (admin override)'}
             </button>
+            {!customerNsId && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', marginTop: '4px' }}>
+                Creates {customerName || 'this prospect'} as a NetSuite customer first.
+              </div>
+            )}
+            </>
           );
         })()}
 
