@@ -66,7 +66,7 @@ export default function UsersPage() {
   // Create user form
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [createForm, setCreateForm] = useState({
-    fullName: '', email: '', password: '', roles: ['installer'] as AppRole[], companyId: '', sendInvite: true,
+    fullName: '', email: '', password: '', roles: [] as AppRole[], companyId: '', sendInvite: true,
   });
   const [creating, setCreating] = useState(false);
   const [createMessage, setCreateMessage] = useState('');
@@ -101,6 +101,24 @@ export default function UsersPage() {
     openEditModal(match);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- openEditModal is recreated per render
   }, [searchParams, loading, users]);
+
+  // ?new=1&name=&email= — the "Account request" email/notification
+  // (src/app/api/auth/request-access/route.ts): open Create User filled in.
+  // No role is preselected, so the admin picks the right one; defaulting to
+  // "Installer (Pre-Approval)" is how requested accounts couldn't search parts.
+  const prefilledRequest = useRef<string | null>(null);
+  useEffect(() => {
+    if (searchParams?.get('new') !== '1') return;
+    const email = (searchParams.get('email') || '').trim();
+    const key = `${email}|${searchParams.get('name') || ''}`;
+    if (!email || prefilledRequest.current === key) return;
+    prefilledRequest.current = key;
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+    let pass = '';
+    for (let i = 0; i < 10; i++) pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    setCreateForm({ fullName: (searchParams.get('name') || '').trim(), email, password: pass, roles: [], companyId: '', sendInvite: true });
+    setShowCreateForm(true);
+  }, [searchParams]);
 
   const loadData = async () => {
     const { data: companyData } = await supabase
@@ -156,9 +174,38 @@ export default function UsersPage() {
     });
   };
 
+  // Create User problems show INSIDE the form, in words that say what to fix.
+  // They used to land in the page banner behind the modal as "Invalid
+  // request" (a 6-7 character password passed here, then the server's
+  // 8-character minimum refused it).
+  const [createError, setCreateError] = useState('');
+  const MIN_PASSWORD = 8;
+  const friendlyCreateError = (data: any): string => {
+    const details: { path: string; message: string }[] = Array.isArray(data?.details) ? data.details : [];
+    const named: Record<string, string> = {
+      password: `Password must be at least ${MIN_PASSWORD} characters.`,
+      email: 'That email address doesn’t look right.',
+      fullName: 'Enter their full name.',
+      role: 'Pick at least one role.',
+      roles: 'Pick at least one role.',
+    };
+    const lines = details.map(d => named[d.path.split('.')[0]] || d.message);
+    if (lines.length > 0) return Array.from(new Set(lines)).join(' ');
+    return data?.error || 'Could not create the user.';
+  };
+
   const handleCreateUser = async () => {
+    setCreateError('');
     if (!createForm.fullName.trim() || !createForm.email.trim() || !createForm.password.trim()) {
-      setCreateMessage('Please fill in all required fields.');
+      setCreateError('Fill in name, email and password.');
+      return;
+    }
+    if (createForm.password.trim().length < MIN_PASSWORD) {
+      setCreateError(`Password must be at least ${MIN_PASSWORD} characters (or tap Generate).`);
+      return;
+    }
+    if (createForm.roles.length === 0) {
+      setCreateError('Pick at least one role.');
       return;
     }
 
@@ -180,21 +227,21 @@ export default function UsersPage() {
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        setCreateMessage(data.error || 'Failed to create user');
+        setCreateError(friendlyCreateError(data));
       } else {
         setCreateMessage(data.message || 'User created successfully');
         if (data.inviteLink) {
           setInviteLink(data.inviteLink);
         }
         setShowCreateForm(false);
-        setCreateForm({ fullName: '', email: '', password: '', roles: ['installer'], companyId: '', sendInvite: true });
+        setCreateForm({ fullName: '', email: '', password: '', roles: [], companyId: '', sendInvite: true });
         loadData();
       }
     } catch (err: any) {
-      setCreateMessage('Error: ' + err.message);
+      setCreateError('Could not create the user: ' + err.message);
     } finally {
       setCreating(false);
       setTimeout(() => setCreateMessage(''), 5000);
@@ -532,7 +579,7 @@ export default function UsersPage() {
             </div>
           )}
           <button
-            onClick={() => setShowCreateForm(true)}
+            onClick={() => { setCreateError(''); setShowCreateForm(true); }}
             style={{
               padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 800,
               background: 'var(--accent)', color: '#fff', border: 'none', cursor: 'pointer',
@@ -986,7 +1033,7 @@ export default function UsersPage() {
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%', maxHeight: 'calc(80vh / var(--ts))', overflowY: 'auto' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Create New User</div>
-              <button onClick={() => setShowCreateForm(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
+              <button onClick={() => { setShowCreateForm(false); setCreateError(''); }} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -1019,7 +1066,7 @@ export default function UsersPage() {
                     style={{ ...inputStyle, flex: 1 }}
                     value={createForm.password}
                     onChange={e => setCreateForm({ ...createForm, password: e.target.value })}
-                    placeholder="Min 6 characters"
+                    placeholder={`At least ${MIN_PASSWORD} characters`}
                   />
                   <button
                     onClick={generatePassword}
@@ -1092,6 +1139,12 @@ export default function UsersPage() {
                   fontSize: '11px', color: '#34d399', lineHeight: 1.5,
                 }}>
                   Customer users get a dashboard scoped to their own company. After creating the account, open Edit and link it to their NetSuite customer — until you do, the login sees nothing.
+                </div>
+              )}
+
+              {createError && (
+                <div role="alert" style={{ padding: '10px 12px', borderRadius: '10px', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.35)', color: '#ef4444', fontSize: '13px', fontWeight: 700 }}>
+                  {createError}
                 </div>
               )}
 

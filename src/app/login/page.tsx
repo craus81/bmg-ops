@@ -16,7 +16,9 @@ export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [requestedRole, setRequestedRole] = useState('installer');
+  const [phone, setPhone] = useState('');
+  const [note, setNote] = useState('');
+  const [website, setWebsite] = useState('');
   const [mode, setMode] = useState<'password' | 'magic' | 'signup' | 'forgot'>('password');
   const [sent, setSent] = useState(false);
   const [resetSent, setResetSent] = useState(false);
@@ -82,50 +84,31 @@ export default function LoginPage() {
     if (error) setError(error.message); else window.location.href = nextPath;
   };
 
+  // Request Access makes no account: it emails the super admins, who create
+  // it with the right role (see src/app/api/auth/request-access/route.ts).
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password || !fullName) return;
-    if (password.length < 6) { setError('Password must be at least 6 characters'); return; }
+    if (!email || !fullName) return;
     setLoading(true); setError('');
-
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          full_name: fullName,
-          requested_role: requestedRole,
-          status: 'pending',
-        },
-      },
-    });
-
-    if (error) {
+    try {
+      const res = await fetch('/api/auth/request-access', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: fullName.trim(),
+          email: email.trim(),
+          phone: phone.trim() || undefined,
+          note: note.trim() || undefined,
+          website: website || undefined,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || 'Could not send your request. Please try again.');
+    } catch (err: any) {
       setLoading(false);
-      setError(error.message);
+      setError(err.message);
       return;
     }
-
-    // Create the profile record so admins can see and approve the request
-    const userId = data.user?.id;
-    if (userId) {
-      try {
-        await fetch('/api/auth/signup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            userId,
-            email: email.trim(),
-            fullName: fullName.trim(),
-            requestedRole,
-          }),
-        });
-      } catch (profileErr: any) {
-        console.warn('Profile creation failed:', profileErr.message);
-        // Don't block signup — auth user exists, profile can be created manually
-      }
-    }
-
     setLoading(false);
     setSignupDone(true);
   };
@@ -195,8 +178,8 @@ export default function LoginPage() {
           <div style={{ background: 'var(--success-bg)', border: '1px solid var(--success-border)', borderRadius: '14px', padding: '24px', textAlign: 'center' }}>
             <div style={{ fontWeight: 700, fontSize: '16px', color: 'var(--success)' }}>OK — Request Submitted!</div>
             <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '8px', lineHeight: '1.6' }}>
-              Your request has been sent to an administrator for approval.
-              You&apos;ll receive an email once your access has been approved, and then you can sign in.
+              Your request has been sent to BMG. Once your account is set up,
+              you&apos;ll get an email with a link to sign in.
             </div>
             <button onClick={() => { setSignupDone(false); setMode('password'); setEmail(''); setPassword(''); setFullName(''); }} style={{ marginTop: '16px', padding: '10px 20px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.75)', fontSize: '13px', fontWeight: 600, background: 'transparent' }}>
               Back to Sign In
@@ -219,9 +202,18 @@ export default function LoginPage() {
             <label style={labelStyle}>Email Address</label>
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@bmgfleet.com" autoFocus autoComplete="email" style={inputStyle} />
 
-            {(mode === 'password' || mode === 'signup') && (<>
+            {mode === 'password' && (<>
               <label style={{ ...labelStyle, marginTop: '4px' }}>Password</label>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === 'signup' ? 'Create a password (6+ chars)' : 'Enter your password'} autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} style={inputStyle} />
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter your password" autoComplete="current-password" style={inputStyle} />
+            </>)}
+
+            {mode === 'signup' && (<>
+              <label style={labelStyle}>Phone (optional)</label>
+              <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(555) 555-0100" autoComplete="tel" style={inputStyle} />
+              <label style={labelStyle}>What do you do at BMG? (optional)</label>
+              <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. shop tech, sales, office" maxLength={500} style={inputStyle} />
+              {/* Honeypot: hidden from people, filled in by form bots. */}
+              <input type="text" value={website} onChange={(e) => setWebsite(e.target.value)} tabIndex={-1} autoComplete="off" aria-hidden="true" style={{ position: 'absolute', left: '-9999px', width: '1px', height: '1px', opacity: 0 }} />
             </>)}
 
             {error && (
@@ -230,13 +222,13 @@ export default function LoginPage() {
               </div>
             )}
 
-            <button type="submit" disabled={!email || (mode === 'password' || mode === 'signup' ? !password : false) || (mode === 'signup' && !fullName) || loading} style={{
+            <button type="submit" disabled={!email || (mode === 'password' ? !password : false) || (mode === 'signup' && !fullName) || loading} style={{
               width: '100%', padding: '16px', borderRadius: '12px', background: 'var(--accent)',
               color: '#fff', fontSize: '16px', fontWeight: 700,
-              opacity: (email && (mode === 'magic' || mode === 'forgot' || password) && (mode !== 'signup' || fullName) && !loading) ? 1 : 0.5,
+              opacity: (email && (mode !== 'password' || password) && (mode !== 'signup' || fullName) && !loading) ? 1 : 0.5,
               boxShadow: '0 4px 20px rgba(238,49,32,0.3)', transition: 'opacity 0.2s',
             }}>
-              {loading ? (mode === 'signup' ? 'Creating...' : mode === 'forgot' ? 'Sending...' : 'Signing in...') : mode === 'password' ? 'Sign In' : mode === 'magic' ? 'Send Magic Link' : mode === 'forgot' ? 'Send Reset Link' : 'Request Access'}
+              {loading ? (mode === 'signup' ? 'Sending...' : mode === 'forgot' ? 'Sending...' : 'Signing in...') : mode === 'password' ? 'Sign In' : mode === 'magic' ? 'Send Magic Link' : mode === 'forgot' ? 'Send Reset Link' : 'Request Access'}
             </button>
 
             {mode === 'password' ? (
@@ -257,7 +249,7 @@ export default function LoginPage() {
               </button>
             ) : (
               <p style={{ textAlign: 'center', fontSize: '12px', color: 'var(--login-text-muted, rgba(255,255,255,0.25))', marginTop: '16px' }}>
-                {mode === 'magic' ? 'No password needed — we\'ll email you a link' : 'Admin will review your request'}
+                {mode === 'magic' ? 'No password needed — we\'ll email you a link' : 'BMG will set up your account and email you a login link'}
               </p>
             )}
           </form>
