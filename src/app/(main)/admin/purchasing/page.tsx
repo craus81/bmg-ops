@@ -26,7 +26,7 @@
  * on any part ordered here with Create PO (VendorPosTab).
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -62,7 +62,7 @@ interface RequestRow {
   /** Joined on the ?id= single-row lookup and the On order list. ETA,
    *  carrier and tracking are written onto the PO by the Parts Mail scan. */
   ordered_po?: {
-    id?: string; tranid: string | null; vendor_name: string | null;
+    id?: string; netsuite_id?: string | null; tranid: string | null; vendor_name: string | null;
     status?: string | null; status_label?: string | null; trandate?: string | null;
     eta_date?: string | null; tracking_number?: string | null; carrier?: string | null;
   } | null;
@@ -77,6 +77,20 @@ interface RequestRow {
 }
 
 const UNASSIGNED = 'No vendor — assign one';
+
+/** NetSuite's own printed PO in the in-app PDF viewer; ← comes back here. */
+function poPdfHref(netsuiteId: string, number: string | null | undefined): string {
+  return deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', netsuiteId), {
+    name: `PO ${number || netsuiteId}.pdf`,
+    back: deepLinks.purchaseRequests(),
+    backLabel: 'Purchasing',
+  });
+}
+
+const pdfBtn: CSSProperties = {
+  display: 'inline-block', padding: '1px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+  border: `1px solid ${theme.border}`, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap',
+};
 
 export default function PurchasingQueuePage() {
   useRequireFeature('parts_ordering');
@@ -564,6 +578,13 @@ export default function PurchasingQueuePage() {
                 <a href={lastPo.url} target="_blank" rel="noreferrer" style={{ color: '#60a5fa', fontWeight: 700 }}>Open in NetSuite ↗</a>
               </>
             )}
+            {lastPo.netsuiteId && (
+              <>
+                {' '}
+                <a href={poPdfHref(lastPo.netsuiteId, lastPo.number)} target="_blank" rel="noreferrer"
+                  title="NetSuite's printed PO" style={{ ...pdfBtn, marginLeft: '6px' }}>📄 View PDF</a>
+              </>
+            )}
           </div>
           <button onClick={() => setLastPo(null)} title="Dismiss"
             style={{ background: 'none', border: 'none', color: theme.textMuted, cursor: 'pointer', fontSize: '13px', padding: 0 }}>✕</button>
@@ -797,7 +818,13 @@ export default function PurchasingQueuePage() {
                       </td>
                       <td style={{ padding: '9px 10px' }}>
                         {po?.id ? (
-                          <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>PO {po.tranid || '—'}</div>
+                          <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
+                            PO {po.tranid || '—'}
+                            {po.netsuite_id && (
+                              <a href={poPdfHref(po.netsuite_id, po.tranid)} target="_blank" rel="noreferrer"
+                                title="NetSuite's printed PO" style={{ ...pdfBtn, marginLeft: '6px' }}>📄 PDF</a>
+                            )}
+                          </div>
                         ) : r.ordered_po_number ? (
                           <div title="Not in FleetSuite yet. It links after the next NetSuite sync."
                             style={{ fontWeight: 700, color: 'var(--text-primary)' }}>PO {r.ordered_po_number} <span style={{ fontWeight: 400, color: theme.textMuted }}>· syncing…</span></div>

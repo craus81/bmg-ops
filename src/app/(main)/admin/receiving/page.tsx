@@ -390,8 +390,9 @@ export default function ReceivingPage() {
         const anyInput = lines.some(l => parseFloat(inputs[`${po.id}:${l.line_id}`] || '') > 0);
         return (
           <div key={po.id} id={`po-${po.id}`} style={{ marginBottom: '14px', background: theme.card, border: `1px solid ${flashPo === po.id ? 'rgba(96,165,250,0.6)' : theme.border}`, borderRadius: '14px', overflow: 'hidden', transition: 'border-color 0.6s' }}>
+            <div style={{ display: 'flex', alignItems: 'center', background: flashPo === po.id ? 'rgba(96,165,250,0.08)' : 'var(--subtle-bg)' }}>
             <button onClick={() => toggle(po.id)}
-              style={{ width: '100%', display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '11px 14px', background: flashPo === po.id ? 'rgba(96,165,250,0.08)' : 'var(--subtle-bg)', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+              style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', padding: '11px 14px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
               <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>PO {po.tranid || '?'}</span>
               <span style={{ fontSize: '12px', color: theme.textSecondary }}>{po.vendor_name || 'Unknown vendor'}</span>
               {po.trandate && <span style={{ fontSize: '11px', color: theme.textMuted }}>{fmtDate(po.trandate)}</span>}
@@ -400,6 +401,14 @@ export default function ReceivingPage() {
               {po.eta_date && <span style={{ fontSize: '10px', fontWeight: 700, color: '#a78bfa' }}>ETA {fmtDate(po.eta_date)}</span>}
               <span style={{ marginLeft: 'auto', fontSize: '11px', color: theme.textMuted }}>{openQty} to receive {isOpen ? '▾' : '▸'}</span>
             </button>
+            {/* NetSuite's printed PO — a sibling of the header button, since
+                a link can't sit inside a button. */}
+            {po.netsuite_id && (
+              <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', po.netsuite_id), { name: `PO ${po.tranid || po.netsuite_id}.pdf`, back: deepLinks.receiving(po.id), backLabel: 'Receiving' })}
+                target="_blank" rel="noreferrer" title="NetSuite's printed PO"
+                style={{ marginRight: '14px', padding: '1px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, border: `1px solid ${theme.border}`, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}>📄 PDF</a>
+            )}
+            </div>
             {isOpen && (
               <>
                 <div style={{ overflowX: 'auto' }}>

@@ -432,8 +432,9 @@ export const deepLinks = {
   ledgerDocument: (documentId: string) => `/api/ledger/documents/${documentId}`,
   /** NetSuite's own PDF of one transaction, as bytes (same-origin, staff
    *  only). Feed it to `pdfViewer`. The top bar opens a NetSuite estimate
-   *  this way (netsuite_estimates, migration 372). */
-  netsuitePdf: (type: 'salesOrder' | 'invoice' | 'estimate', netsuiteId: string | number) =>
+   *  this way (netsuite_estimates, migration 372); the Purchasing page a
+   *  vendor PO (netsuite_vendor_pos.netsuite_id). */
+  netsuitePdf: (type: 'salesOrder' | 'invoice' | 'estimate' | 'purchaseOrder', netsuiteId: string | number) =>
     `/api/netsuite/pdf?type=${type}&id=${encodeURIComponent(String(netsuiteId))}&format=pdf`,
   /** In-app PDF viewer tab. Use this instead of linking a new tab straight at
    *  PDF bytes: a raw-PDF tab has no app chrome and no working Back button,
