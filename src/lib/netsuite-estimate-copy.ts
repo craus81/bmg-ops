@@ -1,4 +1,4 @@
-import { matchRequest, type CatalogPart, type DraftLine } from '@/lib/paste-to-estimate';
+import { matchItemNumberOnly, matchRequest, type CatalogPart, type DraftLine } from '@/lib/paste-to-estimate';
 
 /**
  * "Copy to new estimate" from a NetSuite invoice, sales order or estimate
@@ -142,7 +142,11 @@ export function matchNetsuiteLine(q: NetsuiteCopyRequest, catalog: NetsuiteCatal
     signal: line.itemNumber ? `${line.itemNumber} isn't in today's catalog` : 'no catalog match',
     matchedText: null, score: null, unitPrice: null, laborHours: null,
   };
-  if (!part) return none;
+  if (!part) {
+    // Same characters, different punctuation: an unticked suggestion at most.
+    const near = matchItemNumberOnly(request, line.itemNumber, catalog.filter(p => p.is_active !== false), 'NetSuite');
+    return near.confidence === 'weak' ? near : none;
+  }
   if (part.is_active === false) return { ...none, signal: `${part.item_number} is inactive in the catalog` };
   const m = matchRequest({ ...request, itemNumber: part.item_number }, [part]);
   return {

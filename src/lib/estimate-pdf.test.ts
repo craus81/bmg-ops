@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildEstimatePdf, estimatePdfFilename, type EstimatePdfData } from './estimate-pdf';
+import { buildEstimatePdf, estimatePdfFilename, proFormaIssuedDate, type EstimatePdfData } from './estimate-pdf';
 
 // 1×1 PNG — enough for jsPDF to parse and embed.
 const PNG_1PX =
@@ -104,6 +104,18 @@ describe('buildEstimatePdf', () => {
     expect(out.toString('latin1')).toContain('Exempt');
   });
 
+  it('renders the pro forma invoice version for a lender', () => {
+    const raw = Buffer.from(buildEstimatePdf({ ...data, proForma: { issuedDate: 'October 20, 2026' } })
+      .output('arraybuffer')).toString('latin1');
+    expect(raw).toContain('Pro Forma Invoice');
+    expect(raw).toContain('For Estimate #EST-1042');
+    expect(raw).toContain('Issued October 20, 2026');
+    expect(raw).toContain('Bill to Acme Fleet Services');
+    expect(raw).toContain('PRO FORMA - NOT A BILL');
+    // The lender may take weeks; a pro forma doesn't expire.
+    expect(raw).not.toContain('Expires 2026-09-30');
+  });
+
   it('survives a corrupt image without throwing', () => {
     const doc = buildEstimatePdf({
       estimate: { estimate_number: 'EST-2', subtotal: 0, grand_total: 0, tax_exempt: false, labor_total: 0 },
@@ -117,5 +129,16 @@ describe('estimatePdfFilename', () => {
   it('sanitizes the estimate number', () => {
     expect(estimatePdfFilename({ estimate_number: 'EST 10/42' })).toBe('Estimate-EST_10_42.pdf');
     expect(estimatePdfFilename({})).toBe('Estimate-estimate.pdf');
+  });
+
+  it('names the pro forma version', () => {
+    expect(estimatePdfFilename({ estimate_number: '1042' }, { proForma: true })).toBe('Pro-Forma-Invoice-1042.pdf');
+  });
+});
+
+describe('proFormaIssuedDate', () => {
+  it('uses BMG\'s time zone', () => {
+    // 03:00Z on the 21st is still the evening of the 20th in O'Fallon.
+    expect(proFormaIssuedDate(new Date('2026-10-21T03:00:00Z'))).toBe('October 20, 2026');
   });
 });

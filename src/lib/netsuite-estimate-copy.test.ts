@@ -98,4 +98,11 @@ describe('matchNetsuiteLine', () => {
     const m = matchNetsuiteLine(req({ itemNumber: 'XYZ', description: 'Ranger bin package', quantity: 1 }), [part({})]);
     expect(m.part).toBeNull();
   });
+
+  it('offers a punctuation-only difference as an unticked suggestion', () => {
+    const m = matchNetsuiteLine(req({ itemNetsuiteId: '9', itemNumber: 'RB148', quantity: 1 }), [part({})]);
+    expect(m.part?.id).toBe('p1');
+    expect(m.confidence).toBe('weak');
+    expect(m.unitPrice).toBe(1399);
+  });
 });
