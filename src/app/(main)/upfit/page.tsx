@@ -16,6 +16,9 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import RecordChanges from '@/components/RecordChanges';
 import CreatedBy from '@/components/CreatedBy';
 import { looseMatcher } from '@/lib/loose-search';
+import { apiFetch } from '@/lib/api-client';
+import { DeliveryPicker, DeliverySummary } from '@/components/DeliveryPicker';
+import { deliveryFromRow, deliveryProblem, deliveryToRow, type Delivery } from '@/lib/delivery';
 
 interface UpfitNote {
   id: string;
@@ -113,6 +116,14 @@ interface UpfitProject {
   parts_eta: string | null;
   customer_dropoff_date: string | null;
   need_back_date: string | null;
+  /** Delivery method columns (migration 414, src/lib/delivery.ts). */
+  delivery_method?: string | null;
+  delivery_ship_speed?: string | null;
+  delivery_address?: string | null;
+  delivery_contact_name?: string | null;
+  delivery_contact_phone?: string | null;
+  delivery_notes?: string | null;
+  delivery_installer?: string | null;
   fleet_checkin_id: string | null;
   estimated_total: number | null;
   so_total: number | null;
@@ -206,6 +217,11 @@ export default function UpfitProjectsPage() {
 
   // Linked graphics jobs (one upfit project can have multiple graphics jobs)
   const [linkedGraphics, setLinkedGraphics] = useState<LinkedGraphicsJob[]>([]);
+  // Delivery method card (migration 414): null = not editing.
+  const [deliveryEdit, setDeliveryEdit] = useState<Delivery | null>(null);
+  const [deliveryTried, setDeliveryTried] = useState(false);
+  const [deliverySaving, setDeliverySaving] = useState(false);
+  const [deliveryNote, setDeliveryNote] = useState<string | null>(null);
 
   // Parts readiness — needed vs on hand vs on order for the project's SO
   const [readiness, setReadiness] = useState<any | null>(null);
@@ -725,6 +741,9 @@ export default function UpfitProjectsPage() {
 
   const openProject = (p: UpfitProject) => {
     setSelected(p);
+    setDeliveryEdit(null);
+    setDeliveryTried(false);
+    setDeliveryNote(null);
     setProjectPos([]);
     setPoLinkInput('');
     loadNotes(p.id);
@@ -789,6 +808,33 @@ export default function UpfitProjectsPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: selected.id, [field]: v }),
     });
+  };
+
+  // Saves on the project, its estimate and its open Production jobs.
+  const saveDelivery = async () => {
+    if (!selected || !deliveryEdit) return;
+    const problem = deliveryProblem(deliveryEdit, false);
+    if (problem) { setDeliveryTried(true); await dialog.alert(problem); return; }
+    setDeliverySaving(true);
+    try {
+      const res = await apiFetch('/api/delivery', {
+        method: 'POST',
+        body: JSON.stringify({ source: 'upfit_project', id: selected.id, delivery: deliveryEdit }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      const row = deliveryToRow(deliveryEdit, 'upfit_projects');
+      setSelected({ ...selected, ...row });
+      setProjects(prev => prev.map(p => p.id === selected.id ? { ...p, ...row } : p));
+      const u = body.updated || {};
+      const others = [...(u.estimates || []).map((n: string) => `estimate ${n}`), ...(u.jobs || [])];
+      setDeliveryNote(others.length ? `Also updated: ${others.join(', ')}.` : null);
+      setDeliveryEdit(null);
+      setDeliveryTried(false);
+    } catch (e: any) {
+      await dialog.alert(`Delivery didn't save: ${e?.message || 'network error'}`);
+    }
+    setDeliverySaving(false);
   };
 
   const createProject = async () => {
@@ -1069,6 +1115,57 @@ export default function UpfitProjectsPage() {
               On the shop arrival schedule for {fmt(selected.customer_dropoff_date)}.
             </div>
           )}
+        </div>
+
+        {/* Delivery method — entered on the estimate, shared with this
+            project's graphics jobs (migration 414). */}
+        <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Delivery</div>
+            {!deliveryEdit && (
+              <button
+                onClick={() => { setDeliveryEdit(deliveryFromRow(selected, 'upfit_projects')); setDeliveryNote(null); }}
+                style={{ fontSize: '10px', fontWeight: 700, color: theme.accent, background: 'none', border: 'none', cursor: 'pointer' }}
+              >
+                {selected.delivery_method ? 'Edit' : '+ Set delivery'}
+              </button>
+            )}
+          </div>
+          {deliveryEdit ? (
+            <>
+              <DeliveryPicker
+                value={deliveryEdit}
+                onChange={setDeliveryEdit}
+                showProblems={deliveryTried}
+                customerNetsuiteId={selected.customer_netsuite_id}
+                customerName={selected.customer_name}
+              />
+              <div style={{ display: 'flex', gap: '8px', marginTop: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  onClick={saveDelivery}
+                  disabled={deliverySaving}
+                  style={{ padding: '6px 14px', borderRadius: '6px', background: theme.accent, color: '#fff', border: 'none', fontSize: '12px', fontWeight: 700, cursor: 'pointer', opacity: deliverySaving ? 0.6 : 1 }}
+                >
+                  {deliverySaving ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  onClick={() => { setDeliveryEdit(null); setDeliveryTried(false); }}
+                  style={{ padding: '6px 12px', borderRadius: '6px', background: 'none', color: theme.textMuted, border: `1px solid ${theme.border}`, fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  Cancel
+                </button>
+                <span style={{ fontSize: '10px', color: theme.textMuted }}>Also updates the estimate and this project&apos;s open graphics jobs.</span>
+              </div>
+            </>
+          ) : (
+            <DeliverySummary value={deliveryFromRow(selected, 'upfit_projects')} emptyText="Not set yet. Usually entered on the estimate." />
+          )}
+          {!deliveryEdit && linkedGraphics.length > 0 && selected.delivery_method && (
+            <div style={{ fontSize: '10px', color: '#34d399', marginTop: '8px' }}>
+              Shared with {linkedGraphics.length} graphics job{linkedGraphics.length === 1 ? '' : 's'}: {linkedGraphics.map(g => g.job_number).filter(Boolean).join(', ')}.
+            </div>
+          )}
+          {deliveryNote && <div style={{ fontSize: '10px', color: theme.textMuted, marginTop: '4px' }}>{deliveryNote}</div>}
         </div>
 
         {/* Parts readiness — per part on the SO: needed vs on hand (live

@@ -55,6 +55,8 @@ import OrderTeamChat from '@/components/OrderTeamChat';
 import { looseMatcher, looseOrFilter, looseSearchRegex } from '@/lib/loose-search';
 import { holdAwareFetch } from '@/lib/hold-aware-fetch';
 import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
+import { DeliveryPicker } from '@/components/DeliveryPicker';
+import { EMPTY_DELIVERY, deliveryColumns, deliveryFromRow, deliveryText, sameDelivery, type Delivery } from '@/lib/delivery';
 
 interface Part {
   id: string;
@@ -358,7 +360,7 @@ interface Estimate {
   internal_review_snoozed_until?: string | null;
   internal_review_snoozed_by?: string | null;
   // Estimate number an approved review was given on, when this is an
-  // unchanged copy of it — migration 413.
+  // unchanged copy of it — migration 414.
   internal_review_copied_from?: string | null;
 }
 
@@ -783,6 +785,15 @@ export default function EstimatesPage() {
   // The internal notes as last loaded/saved — lets the mention report skip
   // teammates who were already @mentioned before this edit.
   const savedInternalNotesRef = useRef('');
+  // Delivery method (migration 414): saved through /api/delivery after the
+  // estimate saves, which also updates its upfit project and graphics jobs.
+  // delivery_preferences carries its one-line text to the PDF / NS memo.
+  const [delivery, setDeliveryState] = useState<Delivery>(EMPTY_DELIVERY);
+  const savedDeliveryRef = useRef<Delivery>(EMPTY_DELIVERY);
+  const setDelivery = (next: Delivery) => {
+    setDeliveryState(next);
+    if (next.method) setDeliveryPreferences(deliveryText(next) || '');
+  };
   const [customerDefaults, setCustomerDefaults] = useState<{
     delivery_instructions: string | null;
     billing_contact_name: string | null;
@@ -1207,7 +1218,7 @@ export default function EstimatesPage() {
     vehicleYear, vehicleWheelbase, vehicleRoof, vehicleCab, vehicleBed,
     installInstructions, onSiteContactName, onSiteContactPhone,
     deliveryPreferences, poNumber, expirationDate, internalNotes,
-    fleetCheckinId,
+    fleetCheckinId, delivery,
   };
   const draftSerialized = JSON.stringify(draftFields);
   // Bumped whenever builder state was just made to mirror persisted reality
@@ -1302,6 +1313,7 @@ export default function EstimatesPage() {
     setOnSiteContactName(f.onSiteContactName || '');
     setOnSiteContactPhone(f.onSiteContactPhone || '');
     setDeliveryPreferences(f.deliveryPreferences || '');
+    setDeliveryState(f.delivery ? { ...EMPTY_DELIVERY, ...f.delivery } : EMPTY_DELIVERY);
     setPoNumber(f.poNumber || '');
     setExpirationDate(f.expirationDate || '');
     setInternalNotes(f.internalNotes || '');
@@ -2069,6 +2081,25 @@ export default function EstimatesPage() {
             contextUrl: deepLinks.estimate(savedId, { flashNotes: true }),
           });
           savedInternalNotesRef.current = savedNotes;
+        }
+        // Delivery method: on this estimate, its upfit project and the
+        // project's open Production jobs. A first save or a revision is a
+        // new row, so it always writes.
+        if (delivery.method && (savedId !== baseId || !sameDelivery(delivery, savedDeliveryRef.current))) {
+          try {
+            const dres = await fetch('/api/delivery', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ source: 'estimate', id: savedId, delivery }),
+            });
+            if (!dres.ok) {
+              const d = await dres.json().catch(() => ({}));
+              throw new Error(d.error || `HTTP ${dres.status}`);
+            }
+            savedDeliveryRef.current = delivery;
+          } catch (e: any) {
+            await dialog.alert(`The estimate saved, but its delivery method didn't: ${e?.message || 'network error'}. Save again to retry.`);
+          }
         }
         await loadEstimates(true);
         setSaving(false);
@@ -3194,7 +3225,7 @@ export default function EstimatesPage() {
     const [{ data: fullEst }, { data: lineData }] = await Promise.all([
       supabase
         .from('estimates')
-        .select('install_instructions, on_site_contact_name, on_site_contact_phone, delivery_preferences, internal_notes, po_number, expiration_date')
+        .select(`install_instructions, on_site_contact_name, on_site_contact_phone, delivery_preferences, internal_notes, po_number, expiration_date, ${deliveryColumns('estimates')}`)
         .eq('id', est.id)
         .maybeSingle(),
       supabase
@@ -3208,6 +3239,11 @@ export default function EstimatesPage() {
     setOnSiteContactName(fullEst?.on_site_contact_name || '');
     setOnSiteContactPhone(fullEst?.on_site_contact_phone || '');
     setDeliveryPreferences(fullEst?.delivery_preferences || '');
+    {
+      const d = deliveryFromRow(fullEst as any, 'estimates');
+      setDeliveryState(d);
+      savedDeliveryRef.current = d;
+    }
     setPoNumber(fullEst?.po_number || '');
     setExpirationDate(fullEst?.expiration_date || '');
     setInternalNotes(fullEst?.internal_notes || '');
@@ -3511,6 +3547,8 @@ export default function EstimatesPage() {
     setOnSiteContactName('');
     setOnSiteContactPhone('');
     setDeliveryPreferences('');
+    setDeliveryState(EMPTY_DELIVERY);
+    savedDeliveryRef.current = EMPTY_DELIVERY;
     setPoNumber('');
     setExpirationDate('');
     setFleetCheckinId(null);
@@ -4136,15 +4174,6 @@ export default function EstimatesPage() {
           />
         </div>
         <div>
-          <div style={labelStyle}>Delivery Method</div>
-          <input
-            style={inputStyle}
-            value={deliveryPreferences}
-            onChange={e => setDeliveryPreferences(e.target.value)}
-            placeholder="e.g. Pickup, deliver to site…"
-          />
-        </div>
-        <div>
           <div style={labelStyle}>Expiration Date</div>
           <input
             type="date"
@@ -4153,6 +4182,24 @@ export default function EstimatesPage() {
             onChange={e => setExpirationDate(e.target.value)}
           />
         </div>
+      </div>
+
+      {/* Delivery method (migration 414) — prints on the estimate so the
+          customer can check it, and carries to the upfit project and its
+          Graphics Production jobs. Optional here; required on new jobs. */}
+      <div style={{ marginBottom: '12px', padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--subtle-bg)' }}>
+        <DeliveryPicker
+          value={delivery}
+          onChange={setDelivery}
+          customerNetsuiteId={customerNsId || null}
+          customerName={customerName || null}
+        />
+        {!delivery.method && deliveryPreferences.trim() && (
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>Earlier delivery note: {deliveryPreferences}</div>
+        )}
+        {delivery.method && (
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>Prints on the estimate. Saving also updates the upfit project and its graphics jobs.</div>
+        )}
       </div>
 
       {/* ── Vehicle (K5 + N4-B2) — identity prints on the estimate + pushes

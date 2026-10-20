@@ -13,6 +13,7 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { graphicsShipSpeedLabel, type GraphicsJob } from '@/lib/types';
+import { deliveryFromRow, deliveryLines } from '@/lib/delivery';
 
 // The BMG logo for the header, preloaded at module load rather than
 // fetched when the user clicks Print — an await before window.open()
@@ -54,6 +55,8 @@ export interface PackingListData {
   carrier?: string | null;
   /** Shipping speed label, e.g. "UPS 2nd Day Air" (migration 336). */
   shipSpeed?: string | null;
+  /** Delivery method lines (migration 414), e.g. Customer Pick-Up + contact. */
+  delivery?: { label: string; value: string }[];
   dueDate?: string | null;
   lines: PackingListLine[];
 }
@@ -100,7 +103,9 @@ export function packingListFromJob(
     invoiceNumber: job.netsuite_invoice_number,
     trackingNumber: job.tracking_number,
     carrier: job.carrier,
-    shipSpeed: graphicsShipSpeedLabel(job.ship_speed),
+    shipSpeed: job.delivery_method && job.delivery_method !== 'direct_ship' ? null : graphicsShipSpeedLabel(job.ship_speed),
+    // The ship-to address and speed already print in their own blocks.
+    delivery: deliveryLines(deliveryFromRow(job, 'graphics_jobs')).filter(l => l.label !== 'Ship to' && l.label !== 'Speed'),
     dueDate: job.due_date,
     lines,
   };
@@ -238,6 +243,26 @@ export function exportPackingListPDF(data: PackingListData, opts?: { print?: boo
     const shipBits = [data.shipSpeed, data.carrier, data.trackingNumber].filter(Boolean).join('  ·  ');
     doc.text(shipBits, margin, y);
     y += 16;
+  }
+
+  // ─── Delivery method ───────────────────────────────────────
+  if (data.delivery && data.delivery.length > 0) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(110);
+    doc.text('DELIVERY', margin, y);
+    doc.setTextColor(0);
+    y += 13;
+    doc.setFontSize(10);
+    for (const l of data.delivery) {
+      doc.setFont('helvetica', 'bold');
+      doc.text(`${l.label}:`, margin, y);
+      doc.setFont('helvetica', 'normal');
+      const valueLines = doc.splitTextToSize(l.value, pageW - margin * 2 - 90);
+      doc.text(valueLines, margin + 90, y);
+      y += Math.max(1, valueLines.length) * 13;
+    }
+    y += 4;
   }
 
   // ─── Sign-off lines (anchored near the bottom) ─────────────

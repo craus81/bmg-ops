@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { deliveryColumns, deliveryFromRow } from '@/lib/delivery';
+import { syncLinkedDelivery } from '@/lib/delivery-sync';
 
 /**
  * Find-or-create the upfit project for a sales order (R3-11).
@@ -47,8 +49,30 @@ export async function ensureUpfitProjectForSo(
   input: EnsureUpfitProjectInput,
 ): Promise<{ id: string; created: boolean } | null> {
   const project = await findOrCreateProject(client, input);
-  if (project && input.estimateId) await adoptEstimateRequests(client, input.estimateId, project.id);
+  if (project && input.estimateId) {
+    await adoptEstimateRequests(client, input.estimateId, project.id);
+    await adoptEstimateDelivery(client, input.estimateId, project.id);
+  }
   return project;
+}
+
+/**
+ * The estimate's delivery method (migration 414) carries to its project —
+ * and the project's open Production jobs — unless the project already has
+ * its own. Never throws.
+ */
+async function adoptEstimateDelivery(client: SupabaseClient, estimateId: string, projectId: string) {
+  try {
+    const [{ data: est }, { data: proj }] = await Promise.all([
+      client.from('estimates').select(deliveryColumns('estimates')).eq('id', estimateId).maybeSingle(),
+      client.from('upfit_projects').select('delivery_method').eq('id', projectId).maybeSingle(),
+    ]);
+    const delivery = deliveryFromRow(est as any, 'estimates');
+    if (!delivery.method || (proj as any)?.delivery_method) return;
+    await syncLinkedDelivery(client, 'estimate', estimateId, delivery);
+  } catch (err) {
+    console.warn('estimate delivery → project copy failed:', err);
+  }
 }
 
 /**
