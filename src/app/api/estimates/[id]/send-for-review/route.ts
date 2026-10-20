@@ -237,6 +237,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // A fresh round starts clean — last round's note described an estimate
       // that has since been edited.
       internal_review_note: null,
+      // This round is reviewed on this estimate, not carried from a copy.
+      internal_review_copied_from: null,
       // A fresh request is someone actively asking — last round's snooze
       // (migration 350) doesn't carry over.
       internal_review_snoozed_until: null,

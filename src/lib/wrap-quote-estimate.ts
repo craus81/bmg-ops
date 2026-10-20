@@ -10,6 +10,7 @@ import { linkQuoteJobsToEstimate } from '@/lib/graphics-links';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate } from '@/lib/labor-rate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
+import { snapshotReviewedContent, clearReviewIfContentChanged } from '@/lib/estimate-review-content';
 
 export interface WrapQuoteAttach {
   diagram?: boolean;
@@ -82,6 +83,9 @@ export async function addWrapQuoteToEstimate(
     vinylId = items[WRAP_VINYL_ITEM.toUpperCase()]?.id || null;
     laborId = items[WRAP_LABOR_ITEM.toUpperCase()]?.id || null;
   } catch { /* NS down — lines still land, unmatched */ }
+
+  // A re-priced worksheet changes what an approved review looked at.
+  const reviewedBefore = await snapshotReviewedContent(supabase, estimateId);
 
   // Replace any lines this quote already put on the estimate.
   await supabase.from('estimate_line_items').delete().eq('estimate_id', estimateId).eq('wrap_quote_id', wrapQuoteId);
@@ -168,8 +172,11 @@ export async function addWrapQuoteToEstimate(
   // only ever had the link it was created from).
   if (!sibling) await linkQuoteJobsToEstimate(supabase, wrapQuoteId, estimateId);
 
+  const reviewCleared = await clearReviewIfContentChanged(supabase, estimateId, reviewedBefore, null);
+
   return result({
     success: true,
+    reviewCleared,
     linesAdded: lineRows.length,
     matched: !!(vinylId || materials <= 0) && !!(laborId || labor <= 0),
   });

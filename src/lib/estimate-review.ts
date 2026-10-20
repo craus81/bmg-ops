@@ -144,3 +144,68 @@ export function reviewReminderDue(
   if (Number.isFinite(remindedMs) && remindedMs >= roundStart) return false;
   return shopMsBetween(requestedMs, nowMs) >= REVIEW_REMINDER_SHOP_HOURS * 3_600_000;
 }
+
+/**
+ * Every review column, for the routes that clear or copy a review. The
+ * snooze and reminder columns belong to a review round, so they go too.
+ */
+export const REVIEW_COLUMNS = [
+  'internal_review_status',
+  'internal_reviewer_id',
+  'internal_review_requested_by',
+  'internal_review_requested_at',
+  'internal_review_decided_by',
+  'internal_review_decided_at',
+  'internal_review_note',
+  'internal_review_reminded_at',
+  'internal_review_snoozed_until',
+  'internal_review_snoozed_by',
+  'internal_review_copied_from',
+] as const;
+
+/** The update that takes an estimate back to "never reviewed". */
+export function clearedReviewColumns(): Record<string, null> {
+  return Object.fromEntries(REVIEW_COLUMNS.map(c => [c, null]));
+}
+
+/**
+ * What an approved review vouches for: the lines and the money (Craig and
+ * Valarie, 2026-10-19 — "if I copy an order and add a few things, it will
+ * still need to be reviewed"). Notes, vehicle details, PO number and the
+ * like are not in it, so fixing a VIN doesn't undo a review. Values are
+ * normalized so a re-save of the same content ("1" vs 1, null vs "")
+ * gives the same signature.
+ */
+export function reviewContentSignature(
+  header: Record<string, any> | null | undefined,
+  lines: Array<Record<string, any>> | null | undefined,
+): string {
+  const num = (v: unknown) => {
+    if (v === null || v === undefined || v === '') return '';
+    const n = Number(v);
+    return Number.isFinite(n) ? String(Math.round(n * 10000) / 10000) : String(v).trim();
+  };
+  const str = (v: unknown) => (v === null || v === undefined ? '' : String(v).trim());
+  const h = header || {};
+  return JSON.stringify({
+    labor_rate: num(h.labor_rate),
+    labor_hours_override: num(h.labor_hours_override),
+    vehicle_count: num(h.vehicle_count ?? 1),
+    discount_type: str(h.discount_type),
+    discount_value: num(h.discount_value),
+    tax_exempt: !!h.tax_exempt,
+    // Sorted by content, not position: moving a line isn't a change, and
+    // a re-folded Graphics Builder worksheet lands at the end of the list.
+    lines: (lines || []).map(l => JSON.stringify([
+      str(l.item_number),
+      str(l.description),
+      num(l.quantity),
+      num(l.unit_price),
+      num(l.labor_hours),
+      str(l.discount_type),
+      num(l.discount_value),
+      str(l.kit_group_id ? l.kit_item_number : ''),
+      num(l.kit_group_id ? l.kit_quantity : ''),
+    ])).sort(),
+  });
+}

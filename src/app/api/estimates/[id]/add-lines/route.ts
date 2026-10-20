@@ -7,6 +7,7 @@ import { resolveLineTaxability } from '@/lib/line-taxability';
 import { FALLBACK_SALES_TAX_RATE } from '@/lib/sales-tax';
 import { FALLBACK_LABOR_RATE } from '@/lib/labor-rate';
 import { kitLineColumns, kitLineSchemaFields } from '@/lib/estimate-kits';
+import { snapshotReviewedContent, clearReviewIfContentChanged } from '@/lib/estimate-review-content';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,6 +67,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (estimate.status === 'accepted') {
       return NextResponse.json({ error: 'This estimate was accepted by the customer — its contents are locked. Start a new estimate instead.' }, { status: 409 });
     }
+
+    // Added lines are a change the review never saw (Craig, 2026-10-19).
+    const reviewedBefore = await snapshotReviewedContent(supabase, params.id);
 
     const { data: maxRow } = await supabase
       .from('estimate_line_items')
@@ -132,11 +136,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       updated_at: new Date().toISOString(),
     }).eq('id', params.id);
 
+    const reviewCleared = await clearReviewIfContentChanged(supabase, params.id, reviewedBefore, auth.user.id);
+
     return NextResponse.json({
       success: true,
       added: lineRows.length,
       estimate_number: estimate.estimate_number,
       grand_total: totals.grand_total,
+      reviewCleared,
     });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });
