@@ -8,6 +8,7 @@ import { normPart } from '@/lib/po-invoice-verify';
 import { logAudit, type AuditEntry } from '@/lib/audit';
 import { notifyPortalInvoice } from '@/lib/portal-invoice-notify';
 import { saveOwnInvoice } from '@/lib/books/own-invoices';
+import { saveOwnFulfillment } from '@/lib/books/own-fulfillments';
 
 const Schema = z.object({
   salesOrderIds: z.array(z.string().regex(/^\d{1,15}$/, 'Sales order id must be numeric')).min(1).max(200),
@@ -314,6 +315,19 @@ export async function POST(req: NextRequest) {
           });
           await releaseClaim();
           continue;
+        }
+
+        // FleetSuite's own copy of the fulfillment, for the books (never fails the invoice).
+        if (fulfil.fulfillmentId) {
+          await saveOwnFulfillment(supabase, {
+            netsuiteId: fulfil.fulfillmentId,
+            netsuiteNumber: fulfil.fulfillmentNumber || null,
+            madeFrom: 'sales_order',
+            madeFromId: po.id,
+            madeBy: auth.user.id,
+            salesOrderId: soId,
+            locationId: locationId ?? null,
+          });
         }
 
         // Create the invoice

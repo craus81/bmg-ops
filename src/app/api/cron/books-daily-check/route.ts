@@ -13,11 +13,12 @@ export const maxDuration = 300;
  * Puts every month of each company's books next to NetSuite's, as
  * Differences vs NetSuite does, each item's count next to NetSuite's, as
  * Stock by item does, each customer's and vendor's balance next to
- * NetSuite's, as Customer and vendor balances does, and each of
- * FleetSuite's own invoices next to NetSuite's, as Own invoices does, and
- * tells the super admins in FleetSuite, in the app and by push, when a
- * month, an item, a balance or an own invoice stops matching, with a link
- * to it there
+ * NetSuite's, as Customer and vendor balances does, each of FleetSuite's
+ * own invoices next to NetSuite's, as Own invoices does, and each of its
+ * own fulfillments next to NetSuite's, as Own fulfillments does, and tells
+ * the super admins in FleetSuite, in the app and by push, when a month, an
+ * item, a balance, an own invoice or an own fulfillment stops matching,
+ * with a link to it there
  * (src/lib/books/daily-check.ts, docs/books.md "Daily check"). The
  * 09:58 run notes what newly differs and the 13:58 run tells about what of
  * it still does. Minute 58 is free in vercel.json, and both runs come after
@@ -48,6 +49,7 @@ export async function GET(req: NextRequest) {
       if (alert.about === 'stock') await notifyMany(ids, { type: 'books_stock_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'balance') await notifyMany(ids, { type: 'books_balance_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'own') await notifyMany(ids, { type: 'books_own_invoice_differs', ...sent, channels: ['in_app', 'push'] });
+      else if (alert.about === 'fulfillment') await notifyMany(ids, { type: 'books_own_fulfillment_differs', ...sent, channels: ['in_app', 'push'] });
       else await notifyMany(ids, { type: 'books_month_differs', ...sent, channels: ['in_app', 'push'] });
     }
   };
