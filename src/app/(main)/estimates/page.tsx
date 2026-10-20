@@ -957,6 +957,8 @@ export default function EstimatesPage() {
   const [estimateFiles, setEstimateFiles] = useState<EmailComposeAttachment[]>([]);
 
   const [pdfEmailModal, setPdfEmailModal] = useState(false);
+  // The Email PDF screen sends the Pro Forma Invoice version instead.
+  const [pdfEmailProForma, setPdfEmailProForma] = useState(false);
   // Follow-up actions on sent estimates (list rows): compose modal target
   // and the log-a-note dialog — same machinery as /admin/quote-followups.
   const [followupEmailFor, setFollowupEmailFor] = useState<Estimate | null>(null);
@@ -2574,7 +2576,7 @@ export default function EstimatesPage() {
   // it?" — for anyone trying to print a signed estimate. Frozen contents
   // can't have drifted from the screen anyway, so there is nothing to
   // persist.
-  const openFleetsuitePdf = async (print = false) => {
+  const openFleetsuitePdf = async (print = false, proForma = false) => {
     if (!editingId) return;
     const w = window.open('', '_blank');
     const est = await freshEstimateRow(editingId);
@@ -2598,7 +2600,7 @@ export default function EstimatesPage() {
     // printing at the previous hours, while the NetSuite copy, fetched as
     // bytes each time, was correct). A url nothing has seen before cannot
     // be served from any cache.
-    const url = `/api/estimates/${editingId}/pdf?t=${Date.now()}${print ? '&print=1' : ''}`;
+    const url = `/api/estimates/${editingId}/pdf?t=${Date.now()}${print ? '&print=1' : ''}${proForma ? '&proforma=1' : ''}`;
     if (w) w.location.href = url;
     else window.open(url, '_blank');
   };
@@ -2651,7 +2653,7 @@ export default function EstimatesPage() {
   };
 
   // ── Email the enhanced-estimate PDF (standard compose screen) ──
-  const openPdfEmailModal = async () => {
+  const openPdfEmailModal = async (proForma = false) => {
     if (!editingId) return;
     // Persist current edits so the attached PDF matches what's on screen —
     // skipped on a frozen estimate for the same reason as View/Print: its
@@ -2668,6 +2670,7 @@ export default function EstimatesPage() {
       if (!saved) return;
     }
     await loadEstimateFiles(editingId);
+    setPdfEmailProForma(proForma);
     setPdfEmailModal(true);
   };
 
@@ -2682,6 +2685,7 @@ export default function EstimatesPage() {
           emails: fields.emails,
           message: fields.message || undefined,
           attachmentFileIds: fields.attachmentIds,
+          proForma: pdfEmailProForma || undefined,
         }),
       });
       const data = await res.json();
@@ -2703,6 +2707,7 @@ export default function EstimatesPage() {
           bccSelf: fields.bccSelf, cc: fields.cc,
           message: fields.message || undefined,
           attachmentFileIds: fields.attachmentIds,
+          proForma: pdfEmailProForma || undefined,
         }),
       });
       const data = await res.json();
@@ -2711,7 +2716,7 @@ export default function EstimatesPage() {
         return { ok: false };
       }
       const em = data.dispatch?.email;
-      await dialog.alert(`Estimate PDF sent to ${em?.target || 'recipient'}${em?.bcc ? ` (bcc ${em.bcc})` : ''}.`);
+      await dialog.alert(`${pdfEmailProForma ? 'Pro forma invoice' : 'Estimate PDF'} sent to ${em?.target || 'recipient'}${em?.bcc ? ` (bcc ${em.bcc})` : ''}.`);
       return { ok: true };
     } catch {
       await dialog.alert('Network error — please try again.');
@@ -6029,8 +6034,31 @@ export default function EstimatesPage() {
               <button onClick={() => openFleetsuitePdf(true)} style={pdfBtn} title="Open the PDF with the print dialog ready">
                 Print
               </button>
-              <button onClick={openPdfEmailModal} style={pdfBtn} title="Email the estimate PDF to the customer">
+              <button onClick={() => openPdfEmailModal()} style={pdfBtn} title="Email the estimate PDF to the customer">
                 Email PDF
+              </button>
+            </div>
+          );
+        })()}
+
+        {/* Pro forma invoice (Craig, 2026-10-20): the estimate retitled for a
+            dealer's lender, which funds the customer before the work. Not a
+            bill and nothing posts anywhere — the real invoice still comes
+            off the sales order when the work is done. */}
+        {editingId && lines.length > 0 && (() => {
+          const pfBtn: React.CSSProperties = {
+            flex: 1, padding: '8px', borderRadius: '10px',
+            background: 'transparent', border: '1px dashed var(--border)',
+            color: 'var(--text-label)', fontWeight: 700, fontSize: '11px',
+            cursor: 'pointer', whiteSpace: 'nowrap',
+          };
+          return (
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button onClick={() => openFleetsuitePdf(false, true)} style={pfBtn} title="A pro forma invoice for a dealer or lender to submit for financing. Not a bill.">
+                Pro Forma Invoice
+              </button>
+              <button onClick={() => openPdfEmailModal(true)} style={pfBtn} title="Email the pro forma invoice for financing">
+                Email Pro Forma
               </button>
             </div>
           );
@@ -7039,11 +7067,12 @@ export default function EstimatesPage() {
           attachment is the same file the Estimate PDF button opens. */}
       {pdfEmailModal && (
         <EmailComposeModal
-          title="Email Estimate PDF"
+          title={pdfEmailProForma ? 'Email Pro Forma Invoice' : 'Email Estimate PDF'}
+          intro={pdfEmailProForma ? 'For a dealer or lender to submit for financing. It says plainly that it is not a bill, and nothing is posted to NetSuite.' : undefined}
           customerId={customerId}
           offerNewContacts={{ customerId, prospectId }}
-          stateKey={`estimate-pdf:${editingId}`}
-          sendLabel="Send PDF"
+          stateKey={`estimate-pdf:${editingId}${pdfEmailProForma ? ':proforma' : ''}`}
+          sendLabel={pdfEmailProForma ? 'Send Pro Forma' : 'Send PDF'}
           messagePlaceholder="Optional note to the customer — shown in the email above the attached PDF…"
           attachments={estimateFiles}
           onUploadAttachment={f => uploadEstimateFile(editingId!, f)}
