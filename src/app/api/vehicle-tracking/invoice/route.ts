@@ -6,6 +6,7 @@ import { createInvoiceFromSO, fulfillSalesOrder } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
 import { notifyPortalInvoice } from '@/lib/portal-invoice-notify';
 import { saveOwnInvoice } from '@/lib/books/own-invoices';
+import { saveOwnFulfillment } from '@/lib/books/own-fulfillments';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -228,6 +229,18 @@ export async function POST(req: NextRequest) {
         error: `Could not fulfil the sales order, so it was not invoiced: ${fulfil.error || 'NetSuite item fulfillment failed'}`,
         step: 'fulfillment',
       }, { status: 502 });
+    }
+
+    // FleetSuite's own copy of the fulfillment, for the books (never fails the invoice).
+    if (fulfil.fulfillmentId) {
+      await saveOwnFulfillment(supabase, {
+        netsuiteId: fulfil.fulfillmentId,
+        netsuiteNumber: fulfil.fulfillmentNumber || null,
+        madeFrom: 'vehicle',
+        madeFromId: checkinId,
+        madeBy: auth.user.id,
+        salesOrderId,
+      });
     }
 
     // Full-SO transform: no line overrides, no memo/location overrides —

@@ -215,6 +215,8 @@ export default function BooksOwnInvoicesPage() {
           <Link href="/admin/books/lists" style={{ color: 'var(--text-secondary)' }}>NetSuite lists</Link>
           {' · '}
           <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
+          {' · '}
+          <Link href="/admin/books/own-fulfillments" style={{ color: 'var(--text-secondary)' }}>Own fulfillments</Link>
         </div>
       </div>
 

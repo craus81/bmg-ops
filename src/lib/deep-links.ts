@@ -400,6 +400,20 @@ export const deepLinks = {
    *  the daily books check's notification about one own invoice. Super
    *  admins only. */
   booksOwnInvoice: (netsuiteId: string) => `/admin/books/own-invoices/invoice?${new URLSearchParams({ id: netsuiteId })}`,
+  /** Books → Own fulfillments on the month ('YYYY-MM' or 'YYYY-MM-01')
+   *  they were made in, the newest month when it's left out, only those
+   *  that differ from NetSuite's with `differs`: the landing for the daily
+   *  books check's notification about several own fulfillments
+   *  (src/lib/books/daily-check.ts). Super admins only. */
+  booksOwnFulfillments: (month?: string | null, differs = false) => {
+    const query = new URLSearchParams({ ...(month ? { month: month.slice(0, 7) } : {}), ...(differs ? { only: 'differs' } : {}) }).toString();
+    return `/admin/books/own-fulfillments${query ? `?${query}` : ''}`;
+  },
+  /** Books → Own fulfillments → FleetSuite's own copy of one fulfillment,
+   *  by NetSuite's id for it, next to NetSuite's item by item: the landing
+   *  for the daily books check's notification about one own fulfillment.
+   *  Super admins only. */
+  booksOwnFulfillment: (netsuiteId: string) => `/admin/books/own-fulfillments/fulfillment?${new URLSearchParams({ id: netsuiteId })}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it

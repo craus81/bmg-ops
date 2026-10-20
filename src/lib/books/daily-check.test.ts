@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
-  alertsFor, balanceAlertsFor, balanceKey, lookOf, nextCheck, ownAlertsFor, parseCheckState, stockAlertsFor,
+  alertsFor, balanceAlertsFor, balanceKey, fulfillmentAlertsFor, lookOf, nextCheck, ownAlertsFor, parseCheckState, stockAlertsFor,
   type BalanceNews, type CompanyCheck, type DifferingMonths, type MonthFacts, type MonthNews, type StockNews,
 } from './daily-check';
 import type { DiffDocumentData } from './differences';
+import type { OwnFulfillmentCheck } from './own-fulfillment-check';
 import type { OwnInvoiceCheck } from './own-invoice-check';
 import type { StockLine } from './stock-items';
 import { deepLinks } from '@/lib/deep-links';
@@ -73,6 +74,16 @@ describe('parseCheckState', () => {
     expect(parseCheckState({ companies: {}, own })).toEqual({ companies: {}, own });
     for (const bad of [null, 'x', { known: { 'INV5001': 1 }, noted: {} }, { known: { 5001: 0.5 }, noted: {} }, { known: {} }]) {
       expect(parseCheckState({ companies: {}, own: bad })).toEqual({ companies: {} });
+    }
+  });
+
+  it("reads what it holds for FleetSuite's own fulfillments apart from its own invoices, and drops it when it doesn't read", () => {
+    const fulfillments = { known: { 7001: 1 }, noted: { 7002: 2 } };
+    expect(parseCheckState({ companies: {}, fulfillments })).toEqual({ companies: {}, fulfillments });
+    expect(parseCheckState({ companies: {}, own: { known: {}, noted: {} }, fulfillments }))
+      .toEqual({ companies: {}, own: { known: {}, noted: {} }, fulfillments });
+    for (const bad of [null, 'x', { known: { IF7001: 1 }, noted: {} }, { known: { 7001: -1 }, noted: {} }, { noted: {} }]) {
+      expect(parseCheckState({ companies: {}, fulfillments: bad })).toEqual({ companies: {} });
     }
   });
 
@@ -408,6 +419,44 @@ describe('ownAlertsFor', () => {
   });
 });
 
+describe('fulfillmentAlertsFor', () => {
+  const checked = (id: string, over: Partial<OwnFulfillmentCheck> = {}): OwnFulfillmentCheck => ({
+    netsuiteId: id, number: `IF${id}`, date: '2026-10-20', madeFrom: 'vehicle', madeFromText: 'a finished vehicle', customer: 'Acme Fleet',
+    salesOrderId: '6001', salesOrder: 'SO6001', locationId: '2', invoice: null,
+    status: 'differs', summary: "Cost: NetSuite's is $5.00 more.",
+    differing: 1, fleetsuiteCost: 45500, netsuiteCost: 46000, fields: [], items: [], entry: [], unknowns: [], workedOut: [], ...over,
+  });
+  const news = (id: string, before: number | null = null): MonthNews => ({ month: id, documents: 1, before });
+
+  it('names the fulfillment and its customer, says what differs, and links to its check', () => {
+    expect(fulfillmentAlertsFor([news('7001')], new Map([['7001', checked('7001')]]))).toEqual([{
+      title: "Own fulfillments: IF7001 (Acme Fleet) differs from NetSuite's",
+      body: "Cost: NetSuite's is $5.00 more. Own fulfillments shows why.",
+      url: '/admin/books/own-fulfillments/fulfillment?id=7001',
+      about: 'fulfillment',
+    }]);
+    const [more] = fulfillmentAlertsFor([news('7001', 1)], new Map([['7001', checked('7001', { customer: null })]]));
+    expect(more.title).toBe("Own fulfillments: more of IF7001 differs from NetSuite's");
+  });
+
+  it("tells about up to three one by one, and more in one notification linking to the newest month's that differ", () => {
+    const ids = ['7001', '7002', '7003', '7004'];
+    const checks = new Map(ids.map((id, i) => [id, checked(id, { date: i === 1 ? '2026-11-03' : '2026-10-20' })]));
+    expect(fulfillmentAlertsFor(ids.slice(0, 3).map((id) => news(id)), checks)).toHaveLength(3);
+    expect(fulfillmentAlertsFor(ids.map((id) => news(id)), checks)).toEqual([{
+      title: "Own fulfillments: 4 differ from NetSuite's now",
+      body: 'IF7001 (Acme Fleet), IF7002 (Acme Fleet), IF7003 (Acme Fleet) and 1 more. Own fulfillments shows why.',
+      url: '/admin/books/own-fulfillments?month=2026-11&only=differs',
+      about: 'fulfillment',
+    }]);
+  });
+
+  it('tells nothing of a fulfillment it has no check for, nor when nothing changed', () => {
+    expect(fulfillmentAlertsFor([news('7009')], new Map())).toEqual([]);
+    expect(fulfillmentAlertsFor([], new Map())).toEqual([]);
+  });
+});
+
 describe('deepLinks.booksOwnInvoices and booksOwnInvoice', () => {
   it('open Own invoices on a month, on the ones that differ when asked, and one invoice', () => {
     expect(deepLinks.booksOwnInvoices()).toBe('/admin/books/own-invoices');
@@ -415,6 +464,16 @@ describe('deepLinks.booksOwnInvoices and booksOwnInvoice', () => {
     expect(deepLinks.booksOwnInvoices('2026-10-20', true)).toBe('/admin/books/own-invoices?month=2026-10&only=differs');
     expect(deepLinks.booksOwnInvoices(null, true)).toBe('/admin/books/own-invoices?only=differs');
     expect(deepLinks.booksOwnInvoice('5001')).toBe('/admin/books/own-invoices/invoice?id=5001');
+  });
+});
+
+describe('deepLinks.booksOwnFulfillments and booksOwnFulfillment', () => {
+  it('open Own fulfillments on a month, on the ones that differ when asked, and one fulfillment', () => {
+    expect(deepLinks.booksOwnFulfillments()).toBe('/admin/books/own-fulfillments');
+    expect(deepLinks.booksOwnFulfillments('2026-10-01')).toBe('/admin/books/own-fulfillments?month=2026-10');
+    expect(deepLinks.booksOwnFulfillments('2026-10-20', true)).toBe('/admin/books/own-fulfillments?month=2026-10&only=differs');
+    expect(deepLinks.booksOwnFulfillments(null, true)).toBe('/admin/books/own-fulfillments?only=differs');
+    expect(deepLinks.booksOwnFulfillment('7001')).toBe('/admin/books/own-fulfillments/fulfillment?id=7001');
   });
 });
 

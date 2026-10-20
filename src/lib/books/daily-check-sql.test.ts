@@ -2,20 +2,23 @@
 // companies' books the way Differences vs NetSuite does, through migration
 // 377's functions, at each item's count the way Stock by item does, through
 // migration 401's, at each customer's and vendor's balance the way Customer
-// and vendor balances does, through migration 406's, and at FleetSuite's own
-// invoices the way Own invoices does, through migration 407's. This runs the
-// same migrations as differences-sql.test.ts, with 401, 406 and 407, in an
-// in-memory Postgres (PGlite) as the app's server login, copies a made-up
-// handful of NetSuite documents for BMG and 1084, posts FleetSuite's entries
-// for some of them, copies a few stock moves and NetSuite's counts, saves an
-// own invoice, and runs the check's looks against it the way the cron does,
-// holding what it tells the super admins and what it records.
+// and vendor balances does, through migration 406's, at FleetSuite's own
+// invoices the way Own invoices does, through migration 407's, and at its own
+// fulfillments the way Own fulfillments does, through migration 416's. This
+// runs the same migrations as differences-sql.test.ts, with 401, 406, 407 and
+// 416, in an in-memory Postgres (PGlite) as the app's server login, copies a
+// made-up handful of NetSuite documents for BMG and 1084, posts FleetSuite's
+// entries for some of them, copies a few stock moves and NetSuite's counts,
+// saves an own invoice and an own fulfillment, and runs the check's looks
+// against it the way the cron does, holding what it tells the super admins
+// and what it records.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { BOOKS_DAILY_CHECK, runDailyCheck, type CheckAlert, type Look } from './daily-check';
 import { BOOKS_INVOICE_POSTING } from './invoice-posting';
+import { BOOKS_GL_SYNC } from './netsuite-gl';
 import { BOOKS_STOCK_SYNC } from './netsuite-stock';
 
 /** Made-up chart: '120' receivables, '210' payables, '400' sales, '220' sales tax, '110' undeposited funds, '600' rent. */
@@ -43,9 +46,13 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migration 314 points at in the app's own schema.
+    -- What migrations 314 and 416 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
     CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT);
+    CREATE TABLE public.netsuite_sales_orders (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(), netsuite_id TEXT NOT NULL UNIQUE, tranid TEXT,
+      customer_netsuite_id TEXT, customer_name TEXT
+    );
     CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
   `);
   for (const file of [
@@ -56,7 +63,7 @@ async function freshDb(): Promise<PGlite> {
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
-    '402-books-stock-values.sql', '406-books-party-balances.sql', '407-books-own-invoices.sql',
+    '402-books-stock-values.sql', '406-books-party-balances.sql', '407-books-own-invoices.sql', '416-books-own-fulfillments.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -126,13 +133,14 @@ const post = (pg: PGlite, company: string, kind: string, id: string, date: strin
 
 describe('the daily books check', () => {
   let pg: PGlite;
-  const store = new Map<string, { last_result: unknown; updated_at: string }>();
+  const store = new Map<string, { last_result: unknown; updated_at: string; last_synced_at?: string }>();
   /** When a function fails, by what it was asked. */
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
-  /** What a look told about months and stock; about balances and own invoices, apart. */
+  /** What a look told about months and stock; about balances, own invoices and own fulfillments, apart. */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
   let toldOwn: CheckAlert[] = [];
+  let toldFulfillments: CheckAlert[] = [];
 
   // sync_state and cron_runs in memory; every function the real one, called the way supabase-js calls it.
   const service = () => ({
@@ -172,10 +180,13 @@ describe('the daily books check', () => {
     told = [];
     toldBalances = [];
     toldOwn = [];
+    toldFulfillments = [];
+    const into = (alert: CheckAlert) =>
+      (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn : alert.about === 'fulfillment' ? toldFulfillments : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
-        for (const alert of alerts) (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn : told).push(alert);
+        for (const alert of alerts) into(alert).push(alert);
       },
     });
   };
@@ -314,6 +325,7 @@ describe('the daily books check', () => {
         1084: { known: {}, noted: {} },
       },
       own: { known: {}, noted: {} },
+      fulfillments: { known: {}, noted: {} },
     });
   });
 
@@ -476,7 +488,7 @@ describe('the daily books check', () => {
 
   it('records items and how far apart their counts are, never an amount', () => {
     const record = store.get(BOOKS_DAILY_CHECK)!.last_result as Record<string, unknown>;
-    expect(Object.keys(record).sort()).toEqual(['balances', 'companies', 'look', 'own', 'stock', 'told']);
+    expect(Object.keys(record).sort()).toEqual(['balances', 'companies', 'fulfillments', 'look', 'own', 'stock', 'told']);
     expect(record.stock).toEqual({ by: 'item', known: { [LADDER]: 1, [BINS]: 5 }, noted: {} });
   });
 
@@ -634,5 +646,75 @@ describe('the daily books check', () => {
 
   it('records which own invoices differ and in how many things, never an amount', () => {
     expect(heldOwn()).toEqual({ known: { 5201: 1 }, noted: {} });
+  });
+
+  // ── FleetSuite's own fulfillments ──────────────────────────────────────
+
+  const heldFulfillments = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.fulfillments;
+
+  it("tells when one of FleetSuite's own fulfillments stops matching NetSuite's, linking to its check", async () => {
+    // FleetSuite fulfilled Acme's order from Kansas City, where its PO location rule books the PO's invoice...
+    await pg.exec(`
+      RESET ROLE;
+      INSERT INTO netsuite_sales_orders (netsuite_id, tranid, customer_netsuite_id, customer_name) VALUES ('6201', 'SO6201', '9001', 'Acme Fleet');
+      SET ROLE service_role;
+    `);
+    await pg.query('SELECT gl_own_fulfillment_save($1::jsonb)', [JSON.stringify({
+      netsuite_id: '6101', netsuite_number: 'IF6101', company: 'BMG', made_from: 'sales_order', made_from_id: 'po-1', sales_order_id: '6201',
+      customer_netsuite_id: '9001', fulfil_date: '2026-10-19', location_netsuite_id: KANSAS_CITY, location_from: 'po_rule', unknowns: [],
+      lines: [{ line_no: 1, item_netsuite_id: LADDER, item_number: 'LDR-24', item_type: 'InvtPart', quantity: 2, sales_order_line_id: '1' }],
+    })]);
+    // ...and NetSuite took the racks from Wentzville, booking no cost, as the copy of its ledger, made since, has it.
+    await fn('gl_netsuite_stock_apply', {
+      documents: [{
+        netsuite_id: '6101', tran_type: 'ItemShip', tranid: 'IF6101', trandate: '2026-10-19',
+        lines: [{ line_id: '1', company: 'BMG', item_id: LADDER, location_id: WENTZVILLE, quantity: '-2', moves_stock: true }],
+      }],
+    });
+    await counted([{ item_id: LADDER, quantity: '9' }, { item_id: BINS, quantity: '38' }], 'item');
+    // Another, still waiting for NetSuite's fulfillment, which isn't told about.
+    await pg.query('SELECT gl_own_fulfillment_save($1::jsonb)', [JSON.stringify({
+      netsuite_id: '6102', netsuite_number: 'IF6102', company: 'BMG', made_from: 'vehicle', sales_order_id: '6201', fulfil_date: '2026-10-19',
+      location_netsuite_id: WENTZVILLE, location_from: 'customer_rule', unknowns: [],
+      lines: [{ line_no: 1, item_netsuite_id: BINS, item_number: 'BIN-10', item_type: 'InvtPart', quantity: 1, sales_order_line_id: '2' }],
+    })]);
+    store.set(BOOKS_GL_SYNC, { last_result: {}, updated_at: new Date().toISOString(), last_synced_at: new Date(Date.now() + 3_600_000).toISOString() });
+
+    await look('first');
+    expect(toldFulfillments).toEqual([]);
+    expect(heldFulfillments()).toEqual({ known: {}, noted: { 6101: 1 } });
+
+    expect(await look('second')).toMatchObject({ told: 1 });
+    expect(toldFulfillments).toEqual([{
+      title: "Own fulfillments: IF6101 (Acme Fleet) differs from NetSuite's",
+      body: "Location: FleetSuite's PO location rule puts it in Kansas City, and NetSuite took stock from Wentzville. "
+        + 'Own fulfillments shows why.',
+      url: '/admin/books/own-fulfillments/fulfillment?id=6101',
+      about: 'fulfillment',
+    }]);
+    expect(told).toEqual([]);
+    expect(toldOwn).toEqual([]);
+    expect(heldFulfillments()).toEqual({ known: { 6101: 1 }, noted: {} });
+
+    // The next morning, nothing more.
+    await look('first');
+    await look('second');
+    expect(toldFulfillments).toEqual([]);
+  });
+
+  it("keeps what it held for the own fulfillments when it couldn't look, and says why", async () => {
+    const before = heldFulfillments();
+    failing = (name) => name === 'gl_own_fulfillment_pairs';
+    try {
+      const result = await look('first');
+      expect(result.error).toBe("Own fulfillments: couldn't check October 2026's fulfillments (gl_own_fulfillment_pairs failed)");
+      expect(heldFulfillments()).toEqual(before);
+    } finally {
+      failing = null;
+    }
+  });
+
+  it('records which own fulfillments differ and in how many things, never an amount', () => {
+    expect(heldFulfillments()).toEqual({ known: { 6101: 1 }, noted: {} });
   });
 });
