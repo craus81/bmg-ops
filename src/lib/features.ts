@@ -19,6 +19,7 @@ export const FEATURES = {
   purchase_orders: 'Purchase Orders',
   customers: 'Customers & Contacts',
   parts_catalog: 'Parts Catalog',
+  installer_parts: 'Installer Parts (no prices)',
   parts_ordering: 'Parts Ordering',
   schedule: 'Schedule',
   reports: 'Reports',
@@ -118,20 +119,23 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
 
   // parts_ordering: shop techs are the ones staring at a short readiness
   // card — raising the purchase request is exactly their moment.
+  // installer_parts (Craig, 2026-10-20): the price-free parts list — part
+  // photo, description, labor hours, install files and installed photos —
+  // for techs and outside installers. Prices never leave the server.
   shop_tech: [
     'home', 'scan', 'fleet_checkin', 'in_shop',
-    'messages', 'schedule', 'upfit_projects', 'parts_ordering', ...STAFF_TOOLS,
+    'messages', 'schedule', 'upfit_projects', 'parts_ordering', 'installer_parts', ...STAFF_TOOLS,
   ],
 
   // schedule: install events are about field techs and calendar-note mentions
   // deep-link them to /admin/schedule (shop_tech already held it).
   field_tech: [
     'home', 'scan', 'in_shop', 'fleet_checkin', 'messages', 'schedule',
-    'upfit_projects', ...STAFF_TOOLS,
+    'upfit_projects', 'installer_parts', ...STAFF_TOOLS,
   ],
 
   installer: [
-    'home', 'scan', 'messages', 'cni_portal',
+    'home', 'scan', 'messages', 'cni_portal', 'installer_parts',
   ],
 
   // AP/bookkeeping: the payment queue plus enough context to verify what's
