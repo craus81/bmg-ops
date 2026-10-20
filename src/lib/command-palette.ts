@@ -228,12 +228,14 @@ export function quickActionsFor(group: string, item: any, a: PaletteAccess): Qui
     // today's catalog prices (src/lib/netsuite-estimate-copy.ts). The copy
     // route sits behind the money wall, so the action does too.
     case 'invoices':
-    case 'ns_estimates': {
+    case 'ns_estimates':
+    case 'ns_sales_orders': {
       const nsId = String((group === 'invoices' ? item.netsuite_invoice_id : item.netsuite_id) ?? '').trim();
+      const type = group === 'invoices' ? 'invoice' : group === 'ns_sales_orders' ? 'salesOrder' : 'estimate';
       if (/^\d+$/.test(nsId) && a.hasFeature('estimates') && a.canSeeMoney) {
         out.push({
           key: 'copy_to_estimate', label: 'Copy to estimate', kind: 'link',
-          url: deepLinks.newEstimate(null, null, { fromNetSuite: { type: group === 'invoices' ? 'invoice' : 'estimate', id: nsId } }),
+          url: deepLinks.newEstimate(null, null, { fromNetSuite: { type, id: nsId } }),
           title: "Start a new estimate with this record's parts at today's catalog prices",
         });
       }
