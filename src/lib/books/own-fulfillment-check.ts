@@ -3,7 +3,7 @@ import { dayText, MADE_FROM_TEXT, OWN_CHECK_STATUSES, type OwnCheckStatus } from
 import type { FulfilledFrom, FulfilUnknown, KeptType, LocationFrom } from './own-fulfillments';
 
 /**
- * FleetSuite's own fulfillments next to NetSuite's (migration 416,
+ * FleetSuite's own fulfillments next to NetSuite's (migration 417,
  * docs/books.md "FleetSuite's own fulfillments"; owner decision 2026-10-19,
  * thread "Replacing NetSuite with FleetSuite", "Fulfillments").
  *

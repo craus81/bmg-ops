@@ -37,3 +37,34 @@ it('migration 379 applies twice and behaves', async () => {
   r = await db.query(`select file_count, total_bytes::int as b from dropbox_client_folders`);
   expect(r.rows[0]).toEqual({ file_count: 2, b: 1000 });
 });
+
+/**
+ * Migration 417 (Client Files linked onto graphics jobs): applies twice, a
+ * file links once per job, and deleting the job or the file drops the link.
+ */
+it('migration 417 applies twice and behaves', async () => {
+  const db = new PGlite({ extensions: { pg_trgm } });
+  await db.exec(`CREATE SCHEMA extensions; CREATE ROLE authenticated; CREATE ROLE anon;
+    CREATE TABLE customers (id uuid primary key default gen_random_uuid(), company_name text);
+    CREATE TABLE profiles (id uuid primary key);
+    CREATE TABLE graphics_jobs (id uuid primary key default gen_random_uuid());
+    CREATE FUNCTION public.is_internal_staff() RETURNS boolean LANGUAGE sql AS 'select true';`);
+  await db.exec(readFileSync(join(__dirname, '../../migrations/379-dropbox-client-files.sql'), 'utf8'));
+  const sql = readFileSync(join(__dirname, '../../migrations/417-graphics-job-client-files.sql'), 'utf8');
+  await db.exec(sql);
+  await db.exec(sql);
+  await db.exec(`INSERT INTO graphics_jobs DEFAULT VALUES;
+    INSERT INTO dropbox_client_files (dropbox_id, path_lower, path_display, rel_path, name)
+    VALUES ('id:1', '/office/clients/a/x.ai', '/OFFICE/Clients/A/x.ai', 'A/x.ai', 'x.ai');
+    INSERT INTO graphics_job_client_files (job_id, client_file_id)
+    SELECT j.id, f.id FROM graphics_jobs j, dropbox_client_files f;
+    INSERT INTO graphics_job_client_files (job_id, client_file_id)
+    SELECT j.id, f.id FROM graphics_jobs j, dropbox_client_files f ON CONFLICT (job_id, client_file_id) DO NOTHING;`);
+  let r = await db.query(`select count(*)::int as n from graphics_job_client_files`);
+  expect(r.rows[0]).toEqual({ n: 1 });
+  await expect(db.exec(`INSERT INTO graphics_job_client_files (job_id, client_file_id)
+    SELECT j.id, f.id FROM graphics_jobs j, dropbox_client_files f`)).rejects.toThrow();
+  await db.exec(`delete from dropbox_client_files`);
+  r = await db.query(`select count(*)::int as n from graphics_job_client_files`);
+  expect(r.rows[0]).toEqual({ n: 0 });
+});
