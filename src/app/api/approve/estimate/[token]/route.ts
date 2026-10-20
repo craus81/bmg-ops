@@ -18,7 +18,8 @@ import {
 import { COMBINED_AGREEMENT_TEXT } from '@/lib/approval-agreement';
 import { approvalContentHash } from '@/lib/magic-link-approval';
 import { reconcileLinkedWrapQuotes } from '@/lib/wrap-quote-reconcile';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, notifyDecisionWatchers } from '@/lib/notify';
+import { notifyProofDecision } from '@/lib/proof-decision-notify';
 import { deepLinks } from '@/lib/deep-links';
 import { logQuoteResponse } from '@/lib/quote-response-activity';
 import { validateBody, z } from '@/lib/validate';
@@ -186,7 +187,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     // made (Stage 3 finding). Quotes separately accepted keep standing.
     await reconcileLinkedWrapQuotes(supabase, estimate.id, 'rejected', new Date().toISOString());
 
-    await notifySalesRep(estimate, 'rejected', reason);
+    await notifySalesRep(estimate, 'rejected', reason, metadata.deliveryTarget);
     return NextResponse.json({ status: 'submitted_rejected' });
   }
 
@@ -265,7 +266,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   // follow-up queue and the open pipeline forever (Stage 3 finding).
   await reconcileLinkedWrapQuotes(supabase, estimate.id, 'accepted', approvedAt);
 
-  await notifySalesRep(estimate, 'accepted');
+  await notifySalesRep(estimate, 'accepted', undefined, metadata.deliveryTarget);
   return NextResponse.json({ status: 'submitted_accepted' });
 }
 
@@ -376,7 +377,7 @@ async function notifyGraphicsTeamCombined(job: any, estimate: any) {
     for (const p of prod || []) targetIds.add(p.id);
     if (targetIds.size === 0) return;
 
-    await notifyMany(Array.from(targetIds), {
+    await notifyProofDecision(job, targetIds, {
       type: 'proof_approved',
       title: `Proof approved: ${job.title || `Job #${job.job_number}`}`,
       body: `${job.customer || 'Customer'} approved the proof together with Estimate #${estimate.estimate_number}. You can move to production.`,
@@ -413,7 +414,7 @@ async function noteRejectionOnLinkedJobs(estimate: any, proofBlocks: EstimatePro
   }
 }
 
-async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', reason?: string) {
+async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', reason?: string, answeredFrom?: string | null) {
   // The customer's answer belongs on their account history too — the
   // timeline showed the estimate going out (the email row) but never what
   // came back. Best-effort; the approval itself already succeeded.
@@ -454,35 +455,51 @@ async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', r
   }
   if (targetIds.size === 0) return;
 
+  // Every one of these emails (estimate_accepted / estimate_rejected are
+  // alwaysOn in the registry) — staff asked where approvals go and found
+  // only the bell (Craig, 2026-10-20). The subject names the estimate and
+  // the customer so the inbox line alone says what happened.
+  const customer = estimate.customer_name || 'The customer';
+  const label = `Estimate #${estimate.estimate_number}${estimate.title ? ` (${estimate.title})` : ''}`;
+  const from = answeredFrom ? ` from ${answeredFrom}` : '';
+  const total = Number(estimate.grand_total || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
   const title = verdict === 'accepted'
-    ? `Estimate #${estimate.estimate_number} accepted`
-    : `Estimate #${estimate.estimate_number} rejected`;
+    ? `Approved: Estimate #${estimate.estimate_number}, ${estimate.customer_name || 'customer'}`
+    : `Changes requested: Estimate #${estimate.estimate_number}, ${estimate.customer_name || 'customer'}`;
   const body = verdict === 'accepted'
-    ? `${estimate.customer_name || 'Customer'} approved the estimate. Review before pushing to NetSuite.`
-    : `${estimate.customer_name || 'Customer'} requested changes: ${reason || '(no reason provided)'}`;
+    ? `${customer} approved ${label}${from}. Review it, then push it to NetSuite.`
+    : `${customer} asked for changes on ${label}${from}: "${reason || '(no reason given)'}"`;
 
   // A change request needs an answer, not just an acknowledgment — make the
   // rejection alert itself the reply path. Reply-To goes to the mailbox the
   // approval was sent to (falling back to the customer record), so the rep
   // can answer the customer straight from their own inbox; the in-app route
-  // is the estimate's "Reply to customer" thread. estimate_rejected is in
-  // notify's always-all-channels set, so this email reliably goes out.
+  // is the estimate's "Reply to customer" thread.
   const replyTo: string[] =
     Array.isArray(estimate.approval_email_to) && estimate.approval_email_to.length > 0
       ? estimate.approval_email_to
       : (customerEmail ? [customerEmail] : []);
+  const replyPath = verdict === 'rejected' && replyTo.length > 0
+    ? {
+        emailReplyTo: replyTo,
+        emailCtaNote: `Replying to this email goes directly to ${estimate.customer_name || 'the customer'} (${replyTo.join(', ')}) — or open the estimate above and use "Reply to customer" to keep the conversation in FleetSuite.`,
+      }
+    : {};
 
   await notifyMany(Array.from(targetIds), {
     type: verdict === 'accepted' ? 'estimate_accepted' : 'estimate_rejected',
     title,
+    // The total is for the people on the record; the opt-in copy below can
+    // reach roles that don't see prices, so it leaves the money out.
+    body: verdict === 'accepted' ? `${body} Total ${total}.` : body,
+    url: deepLinks.estimate(estimate.id),
+    ...replyPath,
+  });
+  await notifyDecisionWatchers(targetIds, {
+    title,
     body,
     url: deepLinks.estimate(estimate.id),
-    ...(verdict === 'rejected' && replyTo.length > 0
-      ? {
-          emailReplyTo: replyTo,
-          emailCtaNote: `Replying to this email goes directly to ${estimate.customer_name || 'the customer'} (${replyTo.join(', ')}) — or open the estimate above and use "Reply to customer" to keep the conversation in FleetSuite.`,
-        }
-      : {}),
+    ...replyPath,
   });
 }
 

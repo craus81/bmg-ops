@@ -118,7 +118,8 @@ export default function NotificationMatrix({ overrides, accountInApp, accountEma
                               {def.emailNow ? 'Email arrives right away.' : 'Email comes in your afternoon daily summary.'}
                             </span></>
                           )}
-                          {!def.alwaysOn && !explicit && <><br /><span style={{ opacity: 0.8 }}>Following your account defaults.</span></>}
+                          {def.optIn && !explicit && <><br /><span style={{ opacity: 0.8 }}>{def.optIn}</span></>}
+                          {!def.alwaysOn && !def.optIn && !explicit && <><br /><span style={{ opacity: 0.8 }}>Following your account defaults.</span></>}
                         </div>
                       </td>
                       {CHANNELS.map(c => {
