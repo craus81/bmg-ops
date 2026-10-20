@@ -37,7 +37,7 @@ import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailCo
 import { PartLabel } from '@/components/PartLabel';
 import { canonicalPartFromCache } from '@/lib/parts-cache';
 import { NotInCatalogAdd } from '@/components/AddToCatalog';
-import DropboxProofSearch from '@/components/DropboxProofSearch';
+import GraphicsJobClientFiles from '@/components/GraphicsJobClientFiles';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import GraphicsRollPlan from '@/components/GraphicsRollPlan';
 import GraphicsPackChecklist from '@/components/GraphicsPackChecklist';
@@ -2086,6 +2086,8 @@ export default function GraphicsJobRecordPage() {
               </div>
             </div>
           )}
+          {/* Dropbox client files linked onto the job (migration 417). */}
+          <GraphicsJobClientFiles jobId={job.id} customerName={job.customer || null} customerNetsuiteId={job.customer_netsuite_id || null} />
           <input
             ref={fileInputRef}
             type="file"
@@ -2110,11 +2112,6 @@ export default function GraphicsJobRecordPage() {
             {uploadingFiles ? 'Uploading...' : '+ Upload Files (proofs, logos, photos)'}
           </button>
 
-          {/* Dropbox proof search — pre-filled with the customer so users can
-              find existing artwork without hand-walking the folder tree. */}
-          <div style={{ marginTop: '8px' }}>
-            <DropboxProofSearch defaultQuery={job.customer || job.part_number || ''} />
-          </div>
         </DropZone>
       </div>
 
