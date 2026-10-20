@@ -8,6 +8,13 @@
 
 ALTER TABLE estimates ADD COLUMN IF NOT EXISTS copied_graphics_proofs JSONB;
 
+-- Migration 045 put the generic updated_at trigger on estimate_line_items,
+-- which never had the column, so every UPDATE of a line failed with
+-- 'record "new" has no field "updated_at"' (step 2 below, and the part
+-- merge in src/lib/parts-sync.ts, which ignores the error). Give the
+-- trigger its column.
+ALTER TABLE estimate_line_items ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+
 -- Duplicated estimates get their own Graphics Builder worksheet (Craig,
 -- 2026-10-20). Before this, Duplicate copied the graphics lines (with their
 -- wrap_quote_id) but left the worksheet pinned to the original, so the copy
