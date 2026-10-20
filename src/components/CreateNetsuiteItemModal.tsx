@@ -7,6 +7,7 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import { createClient } from '@/lib/supabase-browser';
 import { looseOrFilter } from '@/lib/loose-search';
 import { useImageDrop } from '@/lib/use-image-drop';
+import PhoneInput from '@/components/PhoneInput';
 
 export interface CreatedPart {
   id: string;
@@ -72,13 +73,16 @@ export function CreateNetsuiteItemModal({
   const [vendor, setVendor] = useState<{ id: string; name: string } | null>(null);
   const [vendorQuery, setVendorQuery] = useState('');
   const [vendorResults, setVendorResults] = useState<{ id: string; name: string }[]>([]);
+  // The query the current results answer — the "+ Add" row waits for it so
+  // it never shows before the existing matches have had a chance to load.
+  const [vendorSearched, setVendorSearched] = useState('');
   useEffect(() => {
     const q = vendorQuery.trim();
-    if (vendor || q.length < 2) { setVendorResults([]); return; }
+    if (vendor || q.length < 2) { setVendorResults([]); setVendorSearched(''); return; }
     let cancelled = false;
     const t = setTimeout(async () => {
       const filter = looseOrFilter(['company_name', 'entity_id'], q);
-      if (!filter) { if (!cancelled) setVendorResults([]); return; }
+      if (!filter) { if (!cancelled) { setVendorResults([]); setVendorSearched(q); } return; }
       const { data } = await createClient()
         .from('netsuite_vendors')
         .select('netsuite_id, company_name, entity_id')
@@ -88,10 +92,63 @@ export function CreateNetsuiteItemModal({
         .limit(10);
       if (!cancelled) {
         setVendorResults((data || []).map((v: { netsuite_id: string; company_name: string | null; entity_id: string | null }) => ({ id: v.netsuite_id, name: v.company_name || v.entity_id || v.netsuite_id })));
+        setVendorSearched(q);
       }
     }, 200);
     return () => { cancelled = true; clearTimeout(t); };
   }, [vendorQuery, vendor]);
+  // Add a vendor that isn't in NetSuite yet without leaving the part — the
+  // same /api/cni/create-vendor flow as the Scan Log and Vendor Invoices
+  // (FleetSuite company + NetSuite vendor), then pick it.
+  const [addVendorOpen, setAddVendorOpen] = useState(false);
+  const [addVendorName, setAddVendorName] = useState('');
+  const [addVendorEmail, setAddVendorEmail] = useState('');
+  const [addVendorPhone, setAddVendorPhone] = useState('');
+  const [addingVendor, setAddingVendor] = useState(false);
+  const [addVendorError, setAddVendorError] = useState<string | null>(null);
+  const [vendorNotice, setVendorNotice] = useState<string | null>(null);
+  const openAddVendor = () => {
+    setAddVendorName(vendorQuery.trim());
+    setAddVendorError(null);
+    setVendorNotice(null);
+    setAddVendorOpen(true);
+  };
+  const addVendor = async () => {
+    const name = addVendorName.trim();
+    if (addingVendor || !name) return;
+    setAddingVendor(true);
+    setAddVendorError(null);
+    try {
+      const res = await fetch('/api/cni/create-vendor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          email: addVendorEmail.trim() || undefined,
+          phone: addVendorPhone.trim() || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setAddVendorError(data.error || `Failed (${res.status})`);
+      } else if (!data.netsuiteVendorId) {
+        // The part's vendor has to be a NetSuite vendor, so there's nothing
+        // to pick — the FleetSuite company was still saved.
+        setAddVendorError(`${data.companyName || name} was saved in FleetSuite, but NetSuite didn't create the vendor: ${data.vendorError || 'no vendor id returned'}. You can still create the part without a vendor.`);
+      } else {
+        setVendor({ id: String(data.netsuiteVendorId), name: data.companyName || name });
+        setVendorResults([]);
+        setAddVendorOpen(false);
+        setAddVendorEmail('');
+        setAddVendorPhone('');
+        setVendorNotice(data.vendorError
+          || `${data.companyName || name} · NetSuite vendor #${data.netsuiteVendorId}${data.alreadyExists || data.linked ? ' (already existed)' : ' created'}.`);
+      }
+    } catch (e: any) {
+      setAddVendorError(e?.message || 'Failed to add vendor');
+    }
+    setAddingVendor(false);
+  };
   const purchasable = /Resale|^inventory/.test(recordType);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -332,12 +389,12 @@ export function CreateNetsuiteItemModal({
               {vendor ? (
                 <div style={{ ...inputStyle, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{vendor.name}</span>
-                  <button type="button" onClick={() => { setVendor(null); setVendorQuery(''); }} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: 0 }}>✕</button>
+                  <button type="button" onClick={() => { setVendor(null); setVendorQuery(''); setVendorNotice(null); }} style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px', padding: 0 }}>✕</button>
                 </div>
               ) : (
                 <input value={vendorQuery} onChange={e => setVendorQuery(e.target.value)} placeholder="Search NetSuite vendors" style={inputStyle} />
               )}
-              {!vendor && vendorResults.length > 0 && (
+              {!vendor && !addVendorOpen && (vendorResults.length > 0 || (vendorSearched && vendorSearched === vendorQuery.trim())) && (
                 <div style={{ position: 'absolute', left: 0, right: 0, top: '100%', zIndex: 5, marginTop: '2px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.25)', maxHeight: '220px', overflowY: 'auto' }}>
                   {vendorResults.map(v => (
                     <button
@@ -349,10 +406,63 @@ export function CreateNetsuiteItemModal({
                       {v.name}
                     </button>
                   ))}
+                  {vendorSearched && vendorSearched === vendorQuery.trim() && (
+                    <button
+                      type="button"
+                      onClick={openAddVendor}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 10px', background: 'rgba(34,197,94,0.06)', border: 'none', color: '#22c55e', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      {vendorResults.length === 0 ? `No match · ` : ''}+ Add &quot;{vendorQuery.trim()}&quot; as a new vendor
+                    </button>
+                  )}
                 </div>
               )}
             </div>
           </div>
+          {vendor && vendorNotice && (
+            <div style={{ fontSize: '11px', fontWeight: 600, color: '#22c55e', marginTop: '-6px' }}>{vendorNotice}</div>
+          )}
+          {!vendor && addVendorOpen && (
+            <div style={{ padding: '10px', borderRadius: '8px', marginTop: '-4px', background: 'rgba(34,197,94,0.05)', border: '1px solid rgba(34,197,94,0.25)', display: 'grid', gap: '8px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 600, color: '#22c55e' }}>
+                New vendor · added to NetSuite and FleetSuite, then picked for this part.
+              </div>
+              <div>
+                <label style={labelStyle}>Vendor Name</label>
+                <input
+                  value={addVendorName}
+                  onChange={e => setAddVendorName(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { e.preventDefault(); addVendor(); }
+                    if (e.key === 'Escape') { e.preventDefault(); setAddVendorOpen(false); }
+                  }}
+                  autoFocus
+                  style={inputStyle}
+                />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div>
+                  <label style={labelStyle}>Email (optional)</label>
+                  <input value={addVendorEmail} onChange={e => setAddVendorEmail(e.target.value)} type="email" style={inputStyle} />
+                </div>
+                <div>
+                  <label style={labelStyle}>Phone (optional)</label>
+                  <PhoneInput value={addVendorPhone} onChange={v => setAddVendorPhone(v)} style={inputStyle} />
+                </div>
+              </div>
+              {addVendorError && (
+                <div style={{ fontSize: '11px', fontWeight: 600, color: '#f87171' }}>{addVendorError}</div>
+              )}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button type="button" onClick={addVendor} disabled={addingVendor || !addVendorName.trim()} style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: 'pointer', opacity: addingVendor || !addVendorName.trim() ? 0.6 : 1 }}>
+                  {addingVendor ? 'Adding…' : 'Add Vendor'}
+                </button>
+                <button type="button" onClick={() => setAddVendorOpen(false)} disabled={addingVendor} style={{ padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer' }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
           {!purchasable && (cost.trim() || vendor) && (
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '-6px' }}>
               &quot;For Sale&quot; items have no cost or vendor in NetSuite, so these are saved in FleetSuite only. Pick a &quot;For Resale&quot; or Inventory type to send them to NetSuite.
@@ -410,7 +520,7 @@ export function CreateNetsuiteItemModal({
         <div style={{ padding: '12px 18px', borderTop: '1px solid var(--border)', display: 'flex', gap: '8px' }}>
           <button
             onClick={submit}
-            disabled={submitting || !partNumber.trim()}
+            disabled={submitting || addingVendor || !partNumber.trim()}
             style={{
               flex: 1, padding: '11px', borderRadius: '10px', border: 'none',
               background: submitting || !partNumber.trim() ? 'var(--subtle-bg)' : 'rgba(34,197,94,0.9)',
