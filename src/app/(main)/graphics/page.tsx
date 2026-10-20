@@ -346,7 +346,7 @@ export default function GraphicsPage() {
 
   // Files attached in the create wizard, uploaded after the job row exists
   const [createFiles, setCreateFiles] = useState<File[]>([]);
-  // Dropbox client files picked in the wizard, linked once the job exists (migration 417).
+  // Dropbox client files picked in the wizard, linked once the job exists (migration 418).
   const [createClientFiles, setCreateClientFiles] = useState<ClientFile[]>([]);
   const [clientPickerOpen, setClientPickerOpen] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState(false);

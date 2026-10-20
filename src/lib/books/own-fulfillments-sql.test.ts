@@ -1,4 +1,4 @@
-// migration 417 keeps FleetSuite's own copy of each fulfillment it makes and
+// migration 418 keeps FleetSuite's own copy of each fulfillment it makes and
 // puts it next to NetSuite's, with what FleetSuite counted of each item just
 // before. This runs migrations 314, 359–363, 401–405 and 407 with 416 in an
 // in-memory Postgres (PGlite) as the app's server login, saves copies worked
@@ -135,7 +135,7 @@ const OWN_TWIN = doc('7001', 'ItemShip', 'IF7001', '2026-10-19', [
 const LATER_SAME_DAY = doc('7002', 'ItemRcpt', 'IR7002', '2026-10-19', [['1', LADDER, WENTZVILLE, '5', true]]);
 const BACKDATED = doc('7003', 'ItemRcpt', 'IR7003', '2026-10-01', [['1', LADDER, WENTZVILLE, '4', true]]);
 
-describe("migration 417: FleetSuite's own fulfillments", () => {
+describe("migration 418: FleetSuite's own fulfillments", () => {
   let pg: PGlite;
   beforeAll(async () => {
     pg = await freshDb();

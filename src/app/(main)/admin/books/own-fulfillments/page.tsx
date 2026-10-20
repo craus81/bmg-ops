@@ -11,7 +11,7 @@ import type { OwnCheckStatus } from '@/lib/books/own-invoice-check';
 import type { OwnFulfillmentCheck } from '@/lib/books/own-fulfillment-check';
 
 /**
- * Books → Own fulfillments (migration 417, src/lib/books/own-fulfillments.ts
+ * Books → Own fulfillments (migration 418, src/lib/books/own-fulfillments.ts
  * and own-fulfillment-check.ts, docs/books.md "FleetSuite's own
  * fulfillments"; owner decision 2026-10-19, "Fulfillments").
  *

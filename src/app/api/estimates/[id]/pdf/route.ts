@@ -20,6 +20,7 @@ function getSupabase() {
  *
  *   ?print=1    → autoPrint: the browser's PDF viewer opens its print dialog
  *   ?download=1 → attachment disposition instead of inline
+ *   ?proforma=1 → the Pro Forma Invoice version (for a dealer's lender)
  */
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireFeature(req, 'estimates');
@@ -27,8 +28,9 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
   const print = req.nextUrl.searchParams.get('print') === '1';
   const download = req.nextUrl.searchParams.get('download') === '1';
+  const proForma = req.nextUrl.searchParams.get('proforma') === '1';
 
-  const result = await generateEstimatePdf(getSupabase(), params.id, { print });
+  const result = await generateEstimatePdf(getSupabase(), params.id, { print, proForma });
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }

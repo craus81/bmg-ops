@@ -120,6 +120,7 @@ export default function MorePage() {
     {
       header: 'Admin',
       items: [
+        { title: 'Permissions', sub: 'Switch what each user type can use — one place for every role', path: '/admin/permissions', show: hasRole('super_admin') },
         { title: 'User Management', sub: badgeFor('pending_users') ? `${badgeFor('pending_users')} pending approval` : 'Manage team access', path: '/admin/users', show: F('user_management'), badge: badgeFor('pending_users') },
         { title: 'Customer Notifications', sub: 'Who gets automatic emails — everything else is on-demand', path: '/admin/customer-notifications', show: F('customers') },
         { title: 'Bulk Upload', sub: 'Import templates & proofs from ZIP', path: '/admin/bulk-upload', show: F('bulk_upload') },

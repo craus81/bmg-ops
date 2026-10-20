@@ -62,6 +62,12 @@ export interface EstimatePdfData {
   /** Linked wrap quotes whose "Vinyl details" checkbox was on — rendered
    *  as a Vinyl / Graphics section (film names + coverage areas). */
   graphics?: EstimatePdfGraphics[];
+  /** Pro forma invoice (Craig, 2026-10-20): a dealer's lender wants an
+   *  invoice before the work so it can fund the customer. Same content as
+   *  the estimate, retitled, with a "not a bill" notice. Nothing is posted
+   *  to NetSuite or Books — the real invoice still comes off the SO when
+   *  the work is done. */
+  proForma?: { issuedDate: string } | null;
 }
 
 const money = (n: any) => `$${Number(n || 0).toFixed(2)}`;
@@ -71,7 +77,7 @@ const PHOTO = 40; // thumbnail edge in pt
 const LINK_LABEL = 'View product';
 
 export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
-  const { estimate: est, company, logo, graphics } = data;
+  const { estimate: est, company, logo, graphics, proForma } = data;
   // Rack kits: one priced rack line, components indented beneath it.
   // A line's own discount (migration 350) is its own row under the line.
   const lines = toKitDisplayLines(data.lines).flatMap((l: any) => (Number(l.discount_amount) > 0
@@ -106,11 +112,15 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   }
 
   doc.setFontSize(20).setFont('helvetica', 'bold').setTextColor(17, 24, 39);
-  doc.text(`Estimate #${est.estimate_number ?? ''}`, margin, y + 12);
+  doc.text(proForma ? 'Pro Forma Invoice' : `Estimate #${est.estimate_number ?? ''}`, margin, y + 12);
   let leftY = y + 26;
   doc.setFontSize(10).setFont('helvetica', 'normal').setTextColor(107, 114, 128);
+  if (proForma) {
+    doc.text(`For Estimate #${est.estimate_number ?? ''} · Issued ${proForma.issuedDate}`, margin, leftY);
+    leftY += 13;
+  }
   if (est.title) { doc.text(String(est.title), margin, leftY, { maxWidth: pageW * 0.55 }); leftY += 13; }
-  doc.text(`Prepared for ${est.customer_name || 'you'}`, margin, leftY);
+  doc.text(proForma ? `Bill to ${est.customer_name || ''}` : `Prepared for ${est.customer_name || 'you'}`, margin, leftY);
   leftY += 13;
   const vehicleLine = [
     vehicleDescription(est),
@@ -126,7 +136,8 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   }
   const refLine = [
     est.po_number ? `PO #${est.po_number}` : '',
-    est.expiration_date ? `Expires ${est.expiration_date}` : '',
+    // A pro forma has no expiry — the lender may take weeks to fund.
+    est.expiration_date && !proForma ? `Expires ${est.expiration_date}` : '',
   ].filter(Boolean).join(' · ');
   if (refLine) { doc.text(refLine, margin, leftY); leftY += 12; }
 
@@ -296,6 +307,22 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     cursorY += bold ? 17 : 14;
   }
 
+  // ── Pro forma notice — right under the total the lender will read ─────
+  if (proForma) {
+    const boxW = pageW - margin * 2;
+    const body = doc.setFontSize(9.5).splitTextToSize(PRO_FORMA_NOTICE, boxW - 24);
+    const boxH = 30 + body.length * 12;
+    ensureRoom(boxH + 12);
+    cursorY += 6;
+    doc.setFillColor(255, 247, 237).setDrawColor(251, 146, 60).setLineWidth(1);
+    doc.roundedRect(margin, cursorY, boxW, boxH, 4, 4, 'FD');
+    doc.setFontSize(9).setFont('helvetica', 'bold').setTextColor(154, 52, 18);
+    doc.text('PRO FORMA - NOT A BILL', margin + 12, cursorY + 16);
+    doc.setFontSize(9.5).setFont('helvetica', 'normal').setTextColor(17, 24, 39);
+    doc.text(body, margin + 12, cursorY + 30);
+    cursorY += boxH + 8;
+  }
+
   // ── Context sections — mirror the HTML document's order ────────────────
   const sections: [string, string][] = [];
   if (est.install_instructions) sections.push(['Install Instructions', String(est.install_instructions)]);
@@ -345,8 +372,17 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   return doc;
 }
 
+export const PRO_FORMA_NOTICE = 'This pro forma invoice shows the price of the work listed above so it can be '
+  + 'submitted for financing. It is not a request for payment. We will send the final invoice when the work '
+  + 'is complete, and the final amount will change only if the work changes.';
+
 /** File name for the generated PDF, shared by the view and email routes. */
-export function estimatePdfFilename(est: any): string {
+export function estimatePdfFilename(est: any, opts: { proForma?: boolean } = {}): string {
   const num = String(est?.estimate_number ?? 'estimate').replace(/[^\w\-]+/g, '_');
-  return `Estimate-${num}.pdf`;
+  return opts.proForma ? `Pro-Forma-Invoice-${num}.pdf` : `Estimate-${num}.pdf`;
+}
+
+/** "October 20, 2026" in BMG's own time zone — the pro forma's issue date. */
+export function proFormaIssuedDate(now: Date = new Date()): string {
+  return now.toLocaleDateString('en-US', { timeZone: 'America/Chicago', month: 'long', day: 'numeric', year: 'numeric' });
 }

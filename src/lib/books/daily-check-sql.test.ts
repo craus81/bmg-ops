@@ -4,7 +4,7 @@
 // migration 401's, at each customer's and vendor's balance the way Customer
 // and vendor balances does, through migration 406's, at FleetSuite's own
 // invoices the way Own invoices does, through migration 407's, and at its own
-// fulfillments the way Own fulfillments does, through migration 417's. This
+// fulfillments the way Own fulfillments does, through migration 418's. This
 // runs the same migrations as differences-sql.test.ts, with 401, 406, 407 and
 // 416, in an in-memory Postgres (PGlite) as the app's server login, copies a
 // made-up handful of NetSuite documents for BMG and 1084, posts FleetSuite's
