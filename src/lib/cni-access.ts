@@ -10,6 +10,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { resolveFeatures } from '@/lib/features';
+import { loadRoleFeatureSettings } from '@/lib/role-feature-settings';
 
 export function rolesOf(profile: { role?: string | null; roles?: string[] | null } | null): string[] {
   if (!profile) return [];
@@ -62,7 +63,7 @@ export async function getCniStaffIds(
   service: SupabaseClient,
   excludeUserId?: string | null,
 ): Promise<string[]> {
-  const [{ data: profiles }, { data: overrides }] = await Promise.all([
+  const [{ data: profiles }, { data: overrides }, roleSettings] = await Promise.all([
     service
       .from('profiles')
       .select('id, role, roles')
@@ -71,6 +72,7 @@ export async function getCniStaffIds(
       .from('user_feature_overrides')
       .select('user_id, granted')
       .eq('feature', 'cni_admin'),
+    loadRoleFeatureSettings(service),
   ]);
 
   const overrideByUser = new Map<string, boolean>();
@@ -82,7 +84,7 @@ export async function getCniStaffIds(
       const ov = overrideByUser.has(p.id)
         ? [{ feature: 'cni_admin', granted: overrideByUser.get(p.id)! }]
         : [];
-      return resolveFeatures(roles, ov).has('cni_admin');
+      return resolveFeatures(roles, ov, roleSettings).has('cni_admin');
     })
     .map((p: any) => p.id as string)
     .filter((id: string) => id && id !== excludeUserId);

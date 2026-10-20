@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
-import { resolveFeatures, isAdminRole, type FeatureKey } from '@/lib/features';
+import { resolveFeatures, isAdminRole, type FeatureKey, type RoleFeatureSetting } from '@/lib/features';
 import { canSeeMoney as moneyVisibleTo } from '@/lib/money-visibility';
 import { forgetSiriKey } from '@/lib/siri-bridge';
 
@@ -58,6 +58,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [featureOverrides, setFeatureOverrides] = useState<{ feature: string; granted: boolean }[]>([]);
+  // Role-wide switches from More → Admin → Permissions (migration 418).
+  const [roleSettings, setRoleSettings] = useState<RoleFeatureSetting[]>([]);
   /** The profile read failed — roles are UNKNOWN, not absent. */
   const [profileError, setProfileError] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -85,11 +87,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // never reaches it at all (no network, DNS, TLS) REJECTS instead. Checking
     // only the first left the second silent — the app sat on a spinner with no
     // banner, which is how this fix first shipped half-done.
-    let profileRes: any, overridesRes: any;
+    let profileRes: any, overridesRes: any, roleSettingsRes: any;
     try {
-      [profileRes, overridesRes] = await Promise.all([
+      [profileRes, overridesRes, roleSettingsRes] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
         supabase.from('user_feature_overrides').select('feature, granted').eq('user_id', userId),
+        supabase.from('role_feature_settings').select('role, feature, granted'),
       ]);
     } catch (e: any) {
       if (mountedRef.current) setProfileError(true);
@@ -101,7 +104,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Either read failing leaves the permission picture incomplete: without
     // the overrides row a user who was individually granted a feature
     // silently loses it, which looks exactly like the grant being revoked.
-    const failure = profileRes.error || overridesRes.error;
+    // The role settings are the same picture one level up.
+    const failure = profileRes.error || overridesRes.error || roleSettingsRes.error;
     if (failure) {
       setProfileError(true);
       throw new Error(failure.message);
@@ -111,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // on a new profile object, and this re-reads on every return to the tab.
     setProfile(p => sameJson(p, profileRes.data) ? p : profileRes.data);
     setFeatureOverrides(o => sameJson(o, overridesRes.data || []) ? o : (overridesRes.data || []));
+    setRoleSettings(r => sameJson(r, roleSettingsRes.data || []) ? r : (roleSettingsRes.data || []));
   };
 
   /**
@@ -224,6 +229,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!u) {
         setProfile(null);
         setFeatureOverrides([]);
+        setRoleSettings([]);
       } else if (event === 'SIGNED_IN') {
         // Deliberately NOT awaited: supabase-js holds an internal auth lock
         // while onAuthStateChange callbacks run, and any awaited query here
@@ -260,6 +266,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setProfile(null);
     setFeatureOverrides([]);
+    setRoleSettings([]);
   };
 
   // Admin "View As" role override
@@ -289,7 +296,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const canSeeMoney = moneyVisibleTo(userRoles);
 
   // Feature access — resolved from effective roles + per-user overrides
-  const features = resolveFeatures(userRoles, viewAsRole ? [] : featureOverrides);
+  // Role settings apply under View As too, so the preview matches the role.
+  const features = resolveFeatures(userRoles, viewAsRole ? [] : featureOverrides, roleSettings);
   const hasFeature = (feature: FeatureKey) => features.has(feature);
 
   // UNKNOWN roles are exposed as "still resolving", because that is what the

@@ -42,7 +42,7 @@ it('migration 379 applies twice and behaves', async () => {
  * Migration 417 (Client Files linked onto graphics jobs): applies twice, a
  * file links once per job, and deleting the job or the file drops the link.
  */
-it('migration 417 applies twice and behaves', async () => {
+it('migration 418 applies twice and behaves', async () => {
   const db = new PGlite({ extensions: { pg_trgm } });
   await db.exec(`CREATE SCHEMA extensions; CREATE ROLE authenticated; CREATE ROLE anon;
     CREATE TABLE customers (id uuid primary key default gen_random_uuid(), company_name text);

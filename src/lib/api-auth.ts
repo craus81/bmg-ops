@@ -10,11 +10,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { resolveFeatures, isAdminRole, INTERNAL_STAFF_ROLES, type FeatureKey } from '@/lib/features';
+import { loadRoleFeatureSettings } from '@/lib/role-feature-settings';
 import { canSeeMoney } from '@/lib/money-visibility';
 
 // Server-side call sites read admin authority through api-auth; the predicate
 // itself lives in features.ts (client-safe) so AuthProvider shares it.
-export { isAdminRole };
+export { isAdminRole, loadRoleFeatureSettings };
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -334,17 +335,20 @@ export async function profileHasFeature(userId: string, profile: any, key: Featu
  */
 export async function profileFeatures(userId: string, profile: any): Promise<Set<FeatureKey>> {
   const service = createClient(supabaseUrl, supabaseServiceKey);
-  const { data: overrides } = await service
-    .from('user_feature_overrides')
-    .select('feature, granted')
-    .eq('user_id', userId);
+  const [{ data: overrides }, roleSettings] = await Promise.all([
+    service
+      .from('user_feature_overrides')
+      .select('feature, granted')
+      .eq('user_id', userId),
+    loadRoleFeatureSettings(service),
+  ]);
 
   // Normalize the legacy 'production' role to 'graphics_production' so the
   // server resolves the same feature set the client does (AuthProvider does
   // this normalization); without it a 'production'-role account would resolve
   // to zero features here while the UI shows it the graphics set.
   const roles = profileRoles(profile).map(r => (r === 'production' ? 'graphics_production' : r));
-  return resolveFeatures(roles, overrides || []);
+  return resolveFeatures(roles, overrides || [], roleSettings);
 }
 
 /**

@@ -2086,7 +2086,7 @@ export default function GraphicsJobRecordPage() {
               </div>
             </div>
           )}
-          {/* Dropbox client files linked onto the job (migration 417). */}
+          {/* Dropbox client files linked onto the job (migration 418). */}
           <GraphicsJobClientFiles jobId={job.id} customerName={job.customer || null} customerNetsuiteId={job.customer_netsuite_id || null} />
           <input
             ref={fileInputRef}
