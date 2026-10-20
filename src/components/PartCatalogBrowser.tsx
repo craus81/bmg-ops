@@ -8,6 +8,7 @@ import AddToEstimateModal from '@/components/AddToEstimateModal';
 import { loadKits, normItem, type KitWithMembers } from '@/lib/part-kits';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { useImageDrop } from '@/lib/use-image-drop';
+import RackKitBrowser from '@/components/RackKitBrowser';
 
 /**
  * The Ranger-Design-style catalog browser (roadmap N4-A): a faceted,
@@ -133,6 +134,8 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   // onAdd/onAddKit — i.e. the /parts Visual Catalog): pick an existing
   // estimate or spin up a new one around this part/package.
   const [addTarget, setAddTarget] = useState<{ part?: BrowsePart; kit?: KitWithMembers } | null>(null);
+  // Parts or the Rack kits browser (Craig 2026-10-20).
+  const [view, setView] = useState<'parts' | 'racks'>('parts');
   const photoInputRef = useRef<HTMLInputElement>(null);
   const photoTargetRef = useRef<string | null>(null);
   const platformPhotoInputRef = useRef<HTMLInputElement>(null);
@@ -345,20 +348,42 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
         <div style={{ fontSize: '16px', fontWeight: 800 }}>Parts Catalog</div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{loading ? 'Loading…' : `${total.toLocaleString()} part${total === 1 ? '' : 's'}`}</div>
+        <div role="tablist" style={{ display: 'flex', gap: '4px' }}>
+          {(['parts', 'racks'] as const).map(v => (
+            <button key={v} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)} style={{
+              padding: '5px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, cursor: 'pointer',
+              background: view === v ? 'rgba(59,130,246,0.2)' : 'var(--card)',
+              border: `1px solid ${view === v ? 'rgba(59,130,246,0.5)' : 'var(--border)'}`,
+              color: view === v ? '#60a5fa' : 'var(--text-secondary)',
+            }}>{v === 'parts' ? 'Parts' : 'Rack kits'}</button>
+          ))}
+        </div>
+        {view === 'parts' && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{loading ? 'Loading…' : `${total.toLocaleString()} part${total === 1 ? '' : 's'}`}</div>}
         <span style={{ flex: 1 }} />
-        <input
+        {view === 'parts' && <input
           value={q}
           onChange={e => setQ(e.target.value)}
           placeholder="Search part #, name, description…"
           style={{ width: '300px', maxWidth: 'calc(45vw / var(--ts))', padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '13px' }}
-        />
+        />}
         {variant === 'modal' && onClose && (
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
         )}
       </div>
 
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      {view === 'racks' && (
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 16px' }}>
+          {/* From an estimate, Add rack drops it straight in; from /parts it
+              asks which estimate, like a part does. */}
+          <RackKitBrowser
+            showPrice
+            addLabel={onAddKit ? 'Add rack' : 'Add to estimate'}
+            onAdd={k => (onAddKit ? onAddKit(k) : setAddTarget({ kit: k }))}
+          />
+        </div>
+      )}
+
+      <div style={{ display: view === 'parts' ? 'flex' : 'none', flex: 1, minHeight: 0 }}>
         {/* Facet rail */}
         <div style={{ width: '210px', flexShrink: 0, borderRight: '1px solid var(--border)', padding: '12px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <div>

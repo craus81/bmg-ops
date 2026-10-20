@@ -267,3 +267,67 @@ export function kitBuildable(
   if (rows.length === 0) return { now: 0, withOnOrder: 0, bottleneck: null, components: [] };
   return { now, withOnOrder, bottleneck, components: rows };
 }
+
+// NetSuite sub-items are "PARENT : CHILD" on PO lines — compare on the last
+// segment (same rule as /admin/inventory).
+const normPart = (s: string | null | undefined) => {
+  const segs = String(s || '').split(':');
+  return normItem(segs[segs.length - 1]);
+};
+
+const CLOSED_PO_STATUSES = ['F', 'G', 'H'];
+
+/**
+ * Free stock and open-PO quantity for every component of these kits:
+ * free = NetSuite available minus FleetSuite reservations (same numbers as
+ * /admin/inventory), on order = open vendor PO lines not yet received.
+ * Shared by the Rack Kits page and the rack kit browser.
+ */
+export async function loadKitStock(supabase: SupabaseClient, kits: KitWithMembers[]): Promise<Map<string, KitStock>> {
+  const [allocRes, poRes] = await Promise.all([
+    fetchAllRows<any>((from, to) =>
+      supabase.from('part_allocations')
+        .select('item_number, quantity')
+        .eq('status', 'reserved')
+        .order('id')
+        .range(from, to)),
+    fetchAllRows<any>((from, to) =>
+      supabase.from('netsuite_vendor_po_lines')
+        .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(status)')
+        .order('id')
+        .range(from, to)),
+  ]);
+
+  const available = new Map<string, number>();
+  for (const k of kits) {
+    for (const m of k.members) available.set(normItem(m.part.item_number), Number(m.part.quantity_available) || 0);
+  }
+  const allocated = new Map<string, number>();
+  for (const a of allocRes.data) {
+    const key = normPart(a.item_number);
+    allocated.set(key, (allocated.get(key) || 0) + (Number(a.quantity) || 0));
+  }
+  const onOrder = new Map<string, number>();
+  for (const l of poRes.data) {
+    if (CLOSED_PO_STATUSES.includes(String(l.netsuite_vendor_pos?.status || '').toUpperCase())) continue;
+    const remaining = Math.max(0, (Number(l.quantity) || 0) - (Number(l.quantity_received) || 0));
+    if (remaining <= 0) continue;
+    const key = normPart(l.item_number);
+    onOrder.set(key, (onOrder.get(key) || 0) + remaining);
+  }
+  const stock = new Map<string, KitStock>();
+  const keys = new Set([...available.keys(), ...onOrder.keys()]);
+  for (const key of keys) {
+    stock.set(key, {
+      free: Math.max(0, (available.get(key) || 0) - (allocated.get(key) || 0)),
+      on_order: onOrder.get(key) || 0,
+    });
+  }
+  return stock;
+}
+
+/** kitBuildable for a loaded kit (missing members count as no stock). */
+export const kitBuildableFor = (kit: KitWithMembers, stock: Map<string, KitStock>): KitBuildable => kitBuildable([
+  ...kit.members.map(m => ({ item_number: m.part.item_number, quantity: m.quantity, in_catalog: true })),
+  ...kit.missing.map(m => ({ item_number: m.item_number, quantity: m.quantity, in_catalog: false })),
+], stock);
