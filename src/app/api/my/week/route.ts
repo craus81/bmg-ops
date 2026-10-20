@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
         .eq('completed_by', me).gte('completed_at', w.lastStart.toISOString())
         .order('completed_at').order('id').range(from, to)),
     service.from('upfit_project_tasks')
-      .select('id, title, due_date, project_id, upfit_projects(project_name)')
+      .select('id, title, due_date, project_id, upfit_projects(project_name, fleet_checkin_id)')
       .eq('assigned_to', me).is('completed_at', null)
       .order('due_date', { ascending: true, nullsFirst: false }).order('id').limit(10),
     service.from('calendar_events')
@@ -81,6 +81,7 @@ export async function GET(req: NextRequest) {
         due: t.due_date,
         projectId: t.project_id,
         project: t.upfit_projects?.project_name || null,
+        vehicleId: t.upfit_projects?.fleet_checkin_id || null,
       })),
       events: (events.data || []).map(e => ({ id: e.id, title: e.title, date: e.event_date, time: e.event_time })),
       ...roleBlock.next,

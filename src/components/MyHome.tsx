@@ -24,7 +24,7 @@ interface MyWeek {
   today: string;
   done: Record<string, WeekCount | number | undefined>;
   next: {
-    tasks: { id: string; title: string; due: string | null; projectId: string; project: string | null }[];
+    tasks: { id: string; title: string; due: string | null; projectId: string; project: string | null; vehicleId?: string | null }[];
     events: { id: string; title: string; date: string; time: string | null }[];
     vehicles?: { id: string; label: string; vin: string; customer: string | null; status: string; due: string | null }[];
     vehiclesTotal?: number;
@@ -213,7 +213,7 @@ export default function MyHome({ role, embedded = false }: { role: MyHomeRole; e
     if (n.tasks.length) sections.push({
       title: 'My tasks',
       rows: n.tasks.map(k => ({
-        key: k.id, title: k.title, href: deepLinks.upfitProject(k.projectId, { taskId: k.id }),
+        key: k.id, title: k.title, href: deepLinks.jobTask({ projectId: k.projectId, taskId: k.id, vehicleId: k.vehicleId }),
         sub: join(k.project, k.due && `Due ${fmtDay(k.due, t)}`),
       })),
     });

@@ -19,6 +19,7 @@ import VehicleQcFixes from '@/components/VehicleQcFixes';
 import { openOrCreateVehicleThread } from '@/lib/customer-thread';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { deepLinks } from '@/lib/deep-links';
+import VehicleJobPanel from '@/components/VehicleJobPanel';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob, GraphicsInstallStatus, CheckinSalesOrder } from '@/lib/types';
 import { VEHICLE_STATUS_LABELS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_LABELS, IN_SHOP_STATUSES, VEHICLE_ROW, VEHICLE_ROW_LABELS, VEHICLE_ROW_COLORS, vehicleRowKey, type VehicleRowKey } from '@/lib/types';
 import VehicleStatusRow from '@/components/VehicleStatusRow';
@@ -2695,6 +2696,13 @@ export default function TrackingPage() {
                         />
                       </div>
                     </div>
+
+                    {/* The vehicle's job: link + open tasks (2026-10-20,
+                        retiring the Upfit tab — techs' tasks open here). */}
+                    <VehicleJobPanel
+                      vehicleId={vehicle.id}
+                      salesOrderIds={(vehicleSalesOrders[vehicle.id] || []).map(so => String(so.netsuite_sales_order_id)).filter(Boolean)}
+                    />
 
                     {/* Sales Orders — a vehicle may be linked to more than
                         one NetSuite SO (e.g. upfit billed against several). */}

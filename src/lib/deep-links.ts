@@ -54,6 +54,13 @@ export const deepLinks = {
   /** Pricing requests (Masterack, migration 352): the list, or one request. */
   pricingRequests: () => '/pricing-requests',
   pricingRequest: (id: string) => `/pricing-requests?id=${encodeURIComponent(id)}`,
+  /** A job task: the job's vehicle on In-Shop once one is checked in (techs
+   *  work from the vehicle card, which lists the job's open tasks),
+   *  otherwise the job page flashing the task (2026-10-20). */
+  jobTask: (task: { projectId: string; taskId: string; vehicleId?: string | null }) =>
+    task.vehicleId
+      ? `/tracking?vehicle=${task.vehicleId}`
+      : `/upfit?id=${task.projectId}&task=${task.taskId}`,
   /** Upfit board — opens the project detail (optionally flashing a note or task). */
   upfitProject: (projectId: string, opts?: { noteId?: string | null; taskId?: string | null }) =>
     `/upfit?id=${projectId}${opts?.noteId ? `&note=${opts.noteId}` : ''}${opts?.taskId ? `&task=${opts.taskId}` : ''}`,

@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
   if (data?.assigned_to && data.assigned_to !== auth.user.id) {
     const { data: project } = await supabase
       .from('upfit_projects')
-      .select('project_name')
+      .select('project_name, fleet_checkin_id')
       .eq('id', body.project_id)
       .single();
     notify({
@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
       type: 'assignment',
       title: 'New upfit task',
       body: `${data.title}${project?.project_name ? ` — ${project.project_name}` : ''}`,
-      url: deepLinks.upfitProject(body.project_id, { taskId: data.id }),
+      url: deepLinks.jobTask({ projectId: body.project_id, taskId: data.id, vehicleId: project?.fleet_checkin_id }),
     }).catch(err => console.warn('Task assignment notification error:', err));
   }
 
@@ -146,7 +146,7 @@ export async function PATCH(req: NextRequest) {
   ) {
     const { data: project } = await supabase
       .from('upfit_projects')
-      .select('project_name')
+      .select('project_name, fleet_checkin_id')
       .eq('id', existing.project_id)
       .single();
     notify({
@@ -154,7 +154,7 @@ export async function PATCH(req: NextRequest) {
       type: 'assignment',
       title: 'Upfit task assigned',
       body: `${existing.title}${project?.project_name ? ` — ${project.project_name}` : ''}`,
-      url: deepLinks.upfitProject(existing.project_id, { taskId: id }),
+      url: deepLinks.jobTask({ projectId: existing.project_id, taskId: id, vehicleId: project?.fleet_checkin_id }),
     }).catch(err => console.warn('Task reassignment notification error:', err));
   }
 
