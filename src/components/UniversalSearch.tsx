@@ -38,6 +38,8 @@ export const GROUP_CONFIG: Record<string, { label: string; icon: string; color: 
   estimates: { label: 'Estimates', icon: '', color: '#fbbf24' },
   // Made in NetSuite, never in FleetSuite (migration 372).
   ns_estimates: { label: 'NetSuite Estimates', icon: '', color: '#fbbf24' },
+  // Every NetSuite sales order, by its own number (migration 196).
+  ns_sales_orders: { label: 'NetSuite Sales Orders', icon: '', color: '#38bdf8' },
   parts: { label: 'Parts Catalog', icon: '', color: '#f97316' },
   customers: { label: 'Customers', icon: '', color: '#06b6d4' },
   cni_companies: { label: 'CNI Companies', icon: '', color: '#f472b6' },
@@ -56,7 +58,7 @@ export const DEEP_GROUPS = new Set(['qb_history', 'ns_transactions', 'notes', 'b
 
 /** Groups whose rows open their own URL (deepResultUrl) instead of a popout
  *  page, and whose "more" is the full results page. */
-export const URL_GROUPS = new Set([...DEEP_GROUPS, 'ns_estimates']);
+export const URL_GROUPS = new Set([...DEEP_GROUPS, 'ns_estimates', 'ns_sales_orders']);
 
 /** The full results page (memos and notes get more rows there, plus bills). */
 export const searchAllUrl = (q: string) => `/search?q=${encodeURIComponent(q)}`;
@@ -183,12 +185,14 @@ export function renderResult(group: string, item: any, onSelect: (group: string,
         </button>
       );
 
-    // A NetSuite estimate FleetSuite never had: opens NetSuite's PDF.
+    // A NetSuite estimate FleetSuite never had, or any NetSuite sales order:
+    // opens NetSuite's PDF.
     case 'ns_estimates':
+    case 'ns_sales_orders':
       return (
         <button key={item.id} onClick={select} style={resultBtnStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-            <span style={titleStyle}>{item.tranid || 'NetSuite estimate'}</span>
+            <span style={titleStyle}>{item.tranid || (group === 'ns_sales_orders' ? 'NetSuite sales order' : 'NetSuite estimate')}</span>
             <div>
               {item.status_label && <span style={{ ...statusBadge, color: statusColor(item.status_label) }}>{item.status_label}</span>}
               {showMoney && item.total > 0 && <span style={valueStyle}>{formatCurrency(item.total)}</span>}
@@ -350,11 +354,13 @@ export function deepResultUrl(group: string, item: any, backTo?: string | null):
       return item.url || null;
     // NetSuite's PDF in the app's viewer; ← goes to the customer when we
     // know them, else back to the search.
-    case 'ns_estimates': {
+    case 'ns_estimates':
+    case 'ns_sales_orders': {
       const back = item.customer_netsuite_id ? deepLinks.customerByNetsuiteId(item.customer_netsuite_id) : (backTo || null);
+      const so = group === 'ns_sales_orders';
       return item.netsuite_id
-        ? deepLinks.pdfViewer(deepLinks.netsuitePdf('estimate', item.netsuite_id), {
-            name: `NetSuite estimate ${item.tranid || item.netsuite_id}`,
+        ? deepLinks.pdfViewer(deepLinks.netsuitePdf(so ? 'salesOrder' : 'estimate', item.netsuite_id), {
+            name: `NetSuite ${so ? 'sales order' : 'estimate'} ${item.tranid || item.netsuite_id}`,
             back, backLabel: item.customer_netsuite_id ? (item.customer_name || 'Customer') : (back ? 'Search' : null),
           })
         : null;
@@ -430,8 +436,8 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
   // now bounces to /home is a dead click, which is the whole failure mode a
   // launcher has to avoid.
   const access: PaletteAccess = useMemo(() => ({
-    isAdmin, isSales, isGraphicsProduction, isInstaller, isShopTech, isFieldTech, hasFeature,
-  }), [isAdmin, isSales, isGraphicsProduction, isInstaller, isShopTech, isFieldTech, hasFeature]);
+    isAdmin, isSales, isGraphicsProduction, isInstaller, isShopTech, isFieldTech, hasFeature, canSeeMoney,
+  }), [isAdmin, isSales, isGraphicsProduction, isInstaller, isShopTech, isFieldTech, hasFeature, canSeeMoney]);
   // A "View all" link only renders when the viewer can open its list page —
   // the gated destinations bounce to /home and discard the search otherwise.
   const canViewAll = (group: string): boolean => {
@@ -518,7 +524,7 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
     }
     // Memos and notes carry their own destination (and no popout type).
     if (group === 'qb_history') { setQbRecordId(item.id); return; }
-    if (group === 'ns_transactions' || group === 'notes' || group === 'bills' || group === 'ns_estimates') {
+    if (group === 'ns_transactions' || group === 'notes' || group === 'bills' || group === 'ns_estimates' || group === 'ns_sales_orders') {
       const url = deepResultUrl(group, item);
       if (!url) return;
       onClose();

@@ -266,3 +266,22 @@ describe('keyboard', () => {
     expect(isPaletteChord(ev({ key: 'j', metaKey: true }))).toBe(false);
   });
 });
+
+describe('quickActionsFor: copy a NetSuite record to an estimate', () => {
+  const money = (over: Partial<PaletteAccess> = {}) => ({ ...withFeatures('estimates'), canSeeMoney: true, ...over });
+
+  it('offers it on a NetSuite estimate, sales order and an invoice with a NetSuite id', () => {
+    const est = quickActionsFor('ns_estimates', { id: 'x', netsuite_id: '8812' }, money());
+    expect(est).toEqual([expect.objectContaining({ key: 'copy_to_estimate', url: '/estimates?new=1&ns=estimate:8812' })]);
+    const inv = quickActionsFor('invoices', { id: 'poinv-1', netsuite_invoice_id: 4410 }, money());
+    expect(inv.map(a => (a as any).url)).toEqual(['/estimates?new=1&ns=invoice:4410']);
+    const so = quickActionsFor('ns_sales_orders', { id: 'y', netsuite_id: '9901' }, money());
+    expect(so.map(a => (a as any).url)).toEqual(['/estimates?new=1&ns=salesOrder:9901']);
+  });
+
+  it('skips it without a NetSuite id, the estimates feature, or the money wall', () => {
+    expect(quickActionsFor('invoices', { id: 'scaninv-9', invoice_number: '9' }, money())).toEqual([]);
+    expect(quickActionsFor('ns_estimates', { netsuite_id: '8812' }, money({ hasFeature: () => false }))).toEqual([]);
+    expect(quickActionsFor('ns_estimates', { netsuite_id: '8812' }, money({ canSeeMoney: false }))).toEqual([]);
+  });
+});

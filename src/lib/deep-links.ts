@@ -77,11 +77,13 @@ export const deepLinks = {
    *  pre-selecting a customer (local customers.id) or a CRM lead
    *  (prospects.id, for records not yet promoted to NetSuite). The straight
    *  path from entering a new client to quoting them. `fromQuickBooks` (a
-   *  ledger_invoices id) opens the review grid on that old record's lines.
+   *  ledger_invoices id) opens the review grid on that old record's lines;
+   *  `fromNetSuite` does the same for a NetSuite invoice, sales order or
+   *  estimate by its internal id.
    *  `fromCustomer` works as on `estimate`: the builder's back button
    *  returns to that customer's page. */
-  newEstimate: (customerId?: string | null, prospectId?: string | null, opts?: { fromQuickBooks?: string | null; fromCustomer?: string | null }) =>
-    `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}${!customerId && prospectId ? `&prospect=${prospectId}` : ''}${opts?.fromQuickBooks ? `&qbo=${opts.fromQuickBooks}` : ''}${opts?.fromCustomer ? `&fromCustomer=${encodeURIComponent(opts.fromCustomer)}` : ''}`,
+  newEstimate: (customerId?: string | null, prospectId?: string | null, opts?: { fromQuickBooks?: string | null; fromNetSuite?: { type: 'invoice' | 'salesOrder' | 'estimate'; id: string } | null; fromCustomer?: string | null }) =>
+    `/estimates?new=1${customerId ? `&customer=${customerId}` : ''}${!customerId && prospectId ? `&prospect=${prospectId}` : ''}${opts?.fromQuickBooks ? `&qbo=${opts.fromQuickBooks}` : ''}${opts?.fromNetSuite ? `&ns=${opts.fromNetSuite.type}:${encodeURIComponent(opts.fromNetSuite.id)}` : ''}${opts?.fromCustomer ? `&fromCustomer=${encodeURIComponent(opts.fromCustomer)}` : ''}`,
   /** Signed E-SIGN snapshot viewer — the frozen approval document with its
    *  integrity verdict (type: estimate | wrap_quote | proof). */
   signedDocument: (type: 'estimate' | 'wrap_quote' | 'proof', id: string) =>
