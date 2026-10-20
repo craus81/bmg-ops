@@ -56,6 +56,9 @@ it('migration 419 copies worksheets and art proofs onto old duplicates, once', a
       total numeric, approval_token uuid, approval_relink_count int not null default 0, netsuite_estimate_id text,
       created_by uuid, created_at timestamptz default now(), updated_at timestamptz default now());
     CREATE TABLE estimate_line_items (id serial primary key, estimate_id uuid, wrap_quote_id uuid);
+    -- Production's migration-045 trigger, on a table with no updated_at.
+    CREATE FUNCTION public.update_updated_at() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.updated_at = NOW(); RETURN NEW; END $$;
+    CREATE TRIGGER update_estimate_line_items_updated_at BEFORE UPDATE ON estimate_line_items FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
     CREATE TABLE graphics_jobs (id uuid primary key, estimate_id uuid, fleet_group_id uuid, estimate_attach jsonb, created_at timestamptz default now());
     CREATE TABLE audit_log (id serial primary key, table_name text, record_id text, action text, detail jsonb);
     CREATE SEQUENCE wq_seq;
