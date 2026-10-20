@@ -18,7 +18,6 @@ import JSZip from 'jszip';
 import { useAuth } from '@/components/AuthProvider';
 import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
 import { apiFetch } from '@/lib/api-client';
-import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import {
   COMPLETION_PHOTO_SOURCES, SOURCE_LABELS, numberedFileNames,
   type CompletionPhotoSource,
@@ -81,8 +80,8 @@ async function fetchPhotoBlob(p: Photo): Promise<Blob | null> {
 
 export default function CompletionPhotosPage() {
   const router = useRouter();
-  const { hasRole, loading: authLoading } = useAuth();
-  const isStaff = INTERNAL_STAFF_ROLES.some(r => hasRole(r));
+  const { loading: authLoading, hasFeature } = useAuth();
+  const isStaff = hasFeature('completion_photos');
 
   const [qInput, setQInput] = useState('');
   const [q, setQ] = useState('');

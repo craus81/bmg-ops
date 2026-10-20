@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireRole } from '@/lib/api-auth';
+import { requireFeature, outsideStaff } from '@/lib/api-auth';
 import { syncVendorBillPayments, syncPayoutBillPayments } from '@/lib/vendor-bill-sync';
 
 export const dynamic = 'force-dynamic';
@@ -21,8 +21,10 @@ const service = createClient(
  * Powers the "Check NetSuite" button on the AP queue's Awaiting Payment tab.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireRole(req, ['finance']);
+  const auth = await requireFeature(req, 'vendor_payments');
   if (auth.error) return auth.error;
+  const outside = outsideStaff(auth);
+  if (outside) return outside;
 
   try {
     const result = await syncVendorBillPayments(service);

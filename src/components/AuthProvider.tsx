@@ -6,7 +6,6 @@ import { createClient } from '@/lib/supabase-browser';
 import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
 import { resolveFeatures, isAdminRole, type FeatureKey, type RoleFeatureSetting } from '@/lib/features';
-import { canSeeMoney as moneyVisibleTo } from '@/lib/money-visibility';
 import { forgetSiriKey } from '@/lib/siri-bridge';
 
 interface AuthContextType {
@@ -290,15 +289,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isInstaller = hasRole('installer') || isAdmin;
   const isFieldTech = hasRole('field_tech') || isAdmin;
   const isShopTech = hasRole('shop_tech') || isAdmin;
-  // Resolved from EFFECTIVE roles, so an admin using View As sees exactly
-  // what that role sees — a money gate you can't preview is a money gate
-  // nobody trusts.
-  const canSeeMoney = moneyVisibleTo(userRoles);
 
   // Feature access — resolved from effective roles + per-user overrides
   // Role settings apply under View As too, so the preview matches the role.
   const features = resolveFeatures(userRoles, viewAsRole ? [] : featureOverrides, roleSettings);
   const hasFeature = (feature: FeatureKey) => features.has(feature);
+  // Money is the `see_prices` feature (defaults: MONEY_ROLES), resolved from
+  // EFFECTIVE roles, so an admin using View As sees exactly what that role
+  // sees — a money gate you can't preview is a money gate nobody trusts.
+  const canSeeMoney = features.has('see_prices');
 
   // UNKNOWN roles are exposed as "still resolving", because that is what the
   // whole app already knows how to wait for. Only 17 pages use

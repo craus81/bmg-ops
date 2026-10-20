@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { getProfileRoles, requireFeature } from '@/lib/api-auth';
-import { canSeeMoney } from '@/lib/money-visibility';
+import { profileCanSeeMoney, requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { getHistoryDetail } from '@/lib/ledger/history';
-import { summarize, type CatalogPart, type DraftLine } from '@/lib/paste-to-estimate';
-import { catalogSearchTerms, matchQuickbooksLine, quickbooksDraftRequests } from '@/lib/quickbooks-estimate-copy';
+import { looseItemRegex, summarize, type CatalogPart, type DraftLine } from '@/lib/paste-to-estimate';
+import { matchQuickbooksLine, quickbooksDraftRequests } from '@/lib/quickbooks-estimate-copy';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -32,7 +31,7 @@ const PART_FIELDS =
 export async function POST(req: NextRequest) {
   const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
-  if (!canSeeMoney(getProfileRoles(auth.profile))) {
+  if (!(await profileCanSeeMoney(auth.user.id, auth.profile))) {
     return NextResponse.json({ error: 'Forbidden: this account cannot see billing' }, { status: 403 });
   }
 
@@ -53,20 +52,17 @@ export async function POST(req: NextRequest) {
         const i = next++;
         if (i >= requests.length) return;
         const q = requests[i];
-        const terms = catalogSearchTerms(q);
+        // Catalog numbers equal to the item name once punctuation is
+        // ignored; the matcher decides exact vs suggestion. Inactive parts
+        // are left out, so they come back as no match.
+        const re = looseItemRegex(q.qboItem);
         let candidates: CatalogPart[] = [];
-        if (terms.length > 0) {
-          // Quoted: a QuickBooks item name can carry spaces and dots.
-          const filters = terms.flatMap(t => [
-            `item_number.ilike."%${t}%"`,
-            `display_name.ilike."%${t}%"`,
-            `description.ilike."%${t}%"`,
-          ]);
+        if (re) {
           const { data } = await service
             .from('netsuite_parts')
             .select(PART_FIELDS)
             .eq('is_active', true)
-            .or(filters.join(','))
+            .filter('item_number', 'imatch', re)
             .limit(15);
           candidates = (data as CatalogPart[]) || [];
         }

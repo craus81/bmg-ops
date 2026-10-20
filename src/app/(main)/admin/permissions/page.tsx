@@ -19,10 +19,11 @@ import { ROLE_LABELS, type AppRole } from '@/lib/types';
 // still shows, under "Other", so new pages always get a switch.
 const GROUPS: { title: string; keys: FeatureKey[] }[] = [
   { title: 'Everyday', keys: ['home', 'scan', 'fleet_checkin', 'in_shop', 'schedule', 'messages'] },
-  { title: 'Sales & Customers', keys: ['prospects', 'customers', 'estimates', 'credit_applications', 'upfit_configurator'] },
-  { title: 'Production', keys: ['graphics', 'upfit_projects', 'proof_search', 'install_admin'] },
+  { title: 'Files & Follow-up', keys: ['client_files', 'completion_photos', 'after_hours_calls', 'qc_fixes'] },
+  { title: 'Sales & Customers', keys: ['prospects', 'customers', 'estimates', 'quotes', 'invoicing', 'credit_applications', 'upfit_configurator'] },
+  { title: 'Production', keys: ['graphics', 'graphics_builder', 'install_guides', 'upfit_projects', 'proof_search', 'install_admin'] },
   { title: 'Parts & Purchasing', keys: ['parts_catalog', 'parts_ordering', 'purchase_orders', 'part_admin'] },
-  { title: 'Money & Reports', keys: ['reports', 'vendor_payments', 'ledger', 'financials', 'payroll', 'invoice_admin'] },
+  { title: 'Money & Reports', keys: ['see_prices', 'reports', 'vendor_payments', 'ledger', 'financials', 'payroll', 'invoice_admin'] },
   { title: 'CNI Network', keys: ['cni_portal', 'cni_admin'] },
   { title: 'Admin Tools', keys: ['bulk_upload', 'data_import', 'proof_admin', 'user_management', 'audit_log', 'system_health', 'ai_instructions', 'knowledge_base'] },
 ];
@@ -40,7 +41,11 @@ const HINTS: Partial<Record<FeatureKey, string>> = {
   financials: 'The executive P&L on Home',
   cni_portal: 'CNI Jobs: bids, schedule, photos, invoices',
   cni_admin: 'Jobs, companies, installers',
-  part_admin: 'Part tagging, dimensions, vehicle interiors',
+  part_admin: 'Part tagging, dimensions, vehicle interiors, vendor costs',
+  see_prices: 'Customer prices, our cost and margin on every screen',
+  quotes: 'Quotes list, follow-ups, unmatched sales orders',
+  invoicing: 'Create and email NetSuite invoices',
+  qc_fixes: 'Issues Masterack’s QC team reports',
 };
 
 const OUTSIDE_ROLES = ['installer', 'customer', 'executive'];
@@ -151,6 +156,7 @@ export default function PermissionsPage() {
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', maxWidth: '720px' }}>
           Pick a user type, then switch what it can use. A switch changes everyone with that role.
           To make an exception for one person, open them on User Management. Super Admin always has everything.
+          Books stays super-admin only until FleetSuite’s books replace NetSuite.
         </div>
         {viewAsRole && (
           <div style={{ fontSize: '12px', color: 'var(--orange)', marginTop: '6px' }}>

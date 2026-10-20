@@ -11,7 +11,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { resolveFeatures, isAdminRole, INTERNAL_STAFF_ROLES, type FeatureKey } from '@/lib/features';
 import { loadRoleFeatureSettings } from '@/lib/role-feature-settings';
-import { canSeeMoney } from '@/lib/money-visibility';
 
 // Server-side call sites read admin authority through api-auth; the predicate
 // itself lives in features.ts (client-safe) so AuthProvider shares it.
@@ -259,8 +258,7 @@ export async function requireMoney(req: NextRequest): Promise<AuthResult> {
   const auth = await requireAuth(req);
   if (auth.error) return auth;
 
-  const roles = profileRoles(auth.profile);
-  if (!canSeeMoney(roles)) {
+  if (!(await profileCanSeeMoney(auth.user.id, auth.profile))) {
     return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error: 'Forbidden: this account cannot see billing' }, { status: 403 }) };
   }
 
@@ -349,6 +347,28 @@ export async function profileFeatures(userId: string, profile: any): Promise<Set
   // to zero features here while the UI shows it the graphics set.
   const roles = profileRoles(profile).map(r => (r === 'production' ? 'graphics_production' : r));
   return resolveFeatures(roles, overrides || [], roleSettings);
+}
+
+/**
+ * The BMG-staff wall for a route that moved from requireStaff to
+ * requireFeature so the Permissions screen can switch it: the feature decides
+ * WHICH staff get in, this keeps outside logins out even when someone hands
+ * one the feature through a per-person override. Returns the 403 to send, or
+ * null to carry on.
+ */
+export function outsideStaff(auth: AuthResult): NextResponse | null {
+  return isInternalStaffRole(auth.profile)
+    ? null
+    : NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+}
+
+/**
+ * May this user see prices, cost and margin? The `see_prices` feature —
+ * MONEY_ROLES by default (src/lib/money-visibility.ts), switchable per role on
+ * More → Admin → Permissions and per person on the Users page.
+ */
+export async function profileCanSeeMoney(userId: string, profile: any): Promise<boolean> {
+  return (await profileFeatures(userId, profile)).has('see_prices');
 }
 
 /**

@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createServiceClient } from '@/lib/supabase-service';
-import { getProfileRoles, requireFeature } from '@/lib/api-auth';
-import { canSeeMoney } from '@/lib/money-visibility';
+import { profileCanSeeMoney, requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { summarize, type DraftLine } from '@/lib/paste-to-estimate';
+import { looseItemRegex, summarize, type DraftLine } from '@/lib/paste-to-estimate';
 import {
-  NETSUITE_COPY_LABEL, NETSUITE_COPY_TYPES, matchNetsuiteLine, netsuiteDraftRequests, sourceLineFromRow,
+  NETSUITE_COPY_LABEL, NETSUITE_COPY_TYPES, matchNetsuiteLine, nsItemNumber, netsuiteDraftRequests, sourceLineFromRow,
   type NetsuiteCatalogPart, type NetsuiteCopyType, type NetsuiteSourceDoc,
 } from '@/lib/netsuite-estimate-copy';
 
@@ -93,7 +92,7 @@ async function loadDoc(service: SupabaseClient, type: NetsuiteCopyType, nsId: st
 export async function POST(req: NextRequest) {
   const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
-  if (!canSeeMoney(getProfileRoles(auth.profile))) {
+  if (!(await profileCanSeeMoney(auth.user.id, auth.profile))) {
     return NextResponse.json({ error: 'Forbidden: this account cannot see billing' }, { status: 403 });
   }
 
@@ -125,6 +124,15 @@ export async function POST(req: NextRequest) {
     }
     if (numbers.length > 0) {
       const { data } = await service.from('netsuite_parts').select(PART_FIELDS).in('item_number', numbers);
+      for (const p of (data as NetsuiteCatalogPart[]) || []) if (!catalog.some(c => c.id === p.id)) catalog.push(p);
+    }
+    // Numbers still unfound: look for the same characters with different
+    // punctuation (RB148 / RB-148), offered only as unticked suggestions.
+    const unfound = numbers.filter(n => !catalog.some(c => nsItemNumber(c.item_number) === n));
+    for (const n of unfound.slice(0, MAX_LINES)) {
+      const re = looseItemRegex(n);
+      if (!re) continue;
+      const { data } = await service.from('netsuite_parts').select(PART_FIELDS).eq('is_active', true).filter('item_number', 'imatch', re).limit(5);
       for (const p of (data as NetsuiteCatalogPart[]) || []) if (!catalog.some(c => c.id === p.id)) catalog.push(p);
     }
     // An active row wins over an inactive one with the same number.

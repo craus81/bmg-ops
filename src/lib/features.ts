@@ -45,6 +45,20 @@ export const FEATURES = {
   ai_instructions: 'AI Instructions',
   financials: 'Financials (Executive)',
   ledger: 'Ledger (QuickBooks & NetSuite history)',
+
+  // Pages that were gated by role in code until the Permissions screen
+  // (owner ask 2026-10-20). Each one's role defaults below match exactly
+  // who could open it before, so adding the key changed nobody's access.
+  graphics_builder: 'Graphics Builder',
+  quotes: 'Quotes & Unmatched Sales Orders',
+  invoicing: 'Invoicing',
+  install_guides: 'Install Guides',
+  client_files: 'Client Files',
+  completion_photos: 'Completion Photos',
+  after_hours_calls: 'After-hours Calls',
+  qc_fixes: 'QC Fixes',
+  // Prices, cost and margin anywhere in the app (src/lib/money-visibility.ts).
+  see_prices: 'See prices, cost & margin',
 } as const;
 
 export type FeatureKey = keyof typeof FEATURES;
@@ -69,6 +83,10 @@ export const SUPER_ADMIN_FEATURES: FeatureKey[] = [
   'user_management', 'audit_log', 'system_health', 'ai_instructions', 'knowledge_base', 'financials',
 ];
 
+// Every internal staff role could open these four before they had keys
+// (the More menu showed them to INTERNAL_STAFF_ROLES).
+const STAFF_TOOLS: FeatureKey[] = ['client_files', 'completion_photos', 'after_hours_calls', 'qc_fixes'];
+
 // Default features per role — what each role can access out of the box
 export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   super_admin: Object.keys(FEATURES) as FeatureKey[], // everything, no exceptions
@@ -80,6 +98,7 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
     'home', 'fleet_checkin', 'in_shop', 'graphics', 'estimates',
     'messages', 'customers', 'parts_catalog', 'schedule', 'prospects', 'upfit_projects',
     'upfit_configurator', 'parts_ordering',
+    'graphics_builder', 'quotes', 'invoicing', 'install_guides', 'see_prices', ...STAFF_TOOLS,
   ],
 
   // upfit_projects: graphics and both tech roles get assigned upfit tasks and
@@ -95,6 +114,7 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   graphics_production: [
     'home', 'in_shop', 'graphics',
     'messages', 'customers', 'parts_catalog', 'schedule', 'upfit_projects',
+    'graphics_builder', 'install_guides', ...STAFF_TOOLS,
   ],
 
   // parts_ordering: shop techs are the ones staring at a short readiness
@@ -104,14 +124,14 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   // for techs and outside installers. Prices never leave the server.
   shop_tech: [
     'home', 'scan', 'fleet_checkin', 'in_shop',
-    'messages', 'schedule', 'upfit_projects', 'parts_ordering', 'installer_parts',
+    'messages', 'schedule', 'upfit_projects', 'parts_ordering', 'installer_parts', ...STAFF_TOOLS,
   ],
 
   // schedule: install events are about field techs and calendar-note mentions
   // deep-link them to /admin/schedule (shop_tech already held it).
   field_tech: [
     'home', 'scan', 'in_shop', 'fleet_checkin', 'messages', 'schedule',
-    'upfit_projects', 'installer_parts',
+    'upfit_projects', 'installer_parts', ...STAFF_TOOLS,
   ],
 
   installer: [
@@ -120,16 +140,18 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
 
   // AP/bookkeeping: the payment queue plus enough context to verify what's
   // being paid — without admin's user management or data tools.
+  // invoicing: the Invoicing page already admitted finance (its menu entry
+  // just never showed it).
   finance: [
     'home', 'messages', 'reports', 'vendor_payments', 'customers',
-    'credit_applications', 'ledger',
+    'credit_applications', 'ledger', 'invoicing', 'see_prices', ...STAFF_TOOLS,
   ],
 
   // Leadership: the Home dashboard's Financials tab and nothing else — no
   // settings, user management, or ops tooling. `financials` is otherwise
   // super-admin-only, so this explicit grant is what lets an executive see it.
   executive: [
-    'home', 'financials', 'ledger',
+    'home', 'financials', 'ledger', 'see_prices',
   ],
 
   customer: ['home'],
