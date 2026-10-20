@@ -87,7 +87,12 @@ const UpsertEstimateSchema = z.object({
   // Free-text vehicle when no platform matches (VIN decode or hand-typed);
   // null whenever a platform is selected.
   vehicle_other: z.string().max(120).optional().nullable(),
-  vehicle_year: z.string().max(8).optional().nullable(),
+  // A template year can be a range ("2015-2024").
+  vehicle_year: z.string().max(20).optional().nullable(),
+  // The picker's choice from the template library (migration 410).
+  vehicle_template_id: z.string().uuid().optional().nullable(),
+  vehicle_make: z.string().max(80).optional().nullable(),
+  vehicle_model: z.string().max(80).optional().nullable(),
   vehicle_wheelbase: z.string().max(40).optional().nullable(),
   vehicle_roof: z.string().max(40).optional().nullable(),
   vehicle_cab: z.string().max(40).optional().nullable(),
@@ -186,6 +191,7 @@ export async function POST(req: NextRequest) {
     vin, unit_number, po_number, expiration_date, fleet_checkin_id,
     vehicle_platform_id, vehicle_other, vehicle_year, vehicle_wheelbase,
     vehicle_roof, vehicle_cab, vehicle_bed,
+    vehicle_template_id, vehicle_make, vehicle_model,
     overrideReason,
   } = parsed.data;
 
@@ -360,6 +366,9 @@ export async function POST(req: NextRequest) {
           vehicle_roof: vehicle_roof?.trim() || null,
           vehicle_cab: vehicle_cab?.trim() || null,
           vehicle_bed: vehicle_bed?.trim() || null,
+          vehicle_template_id: vehicle_template_id || null,
+          vehicle_make: vehicle_make?.trim() || null,
+          vehicle_model: vehicle_model?.trim() || null,
           updated_at: new Date().toISOString(),
         })
         .eq('id', id);
@@ -482,6 +491,9 @@ export async function POST(req: NextRequest) {
           vehicle_roof: vehicle_roof?.trim() || null,
           vehicle_cab: vehicle_cab?.trim() || null,
           vehicle_bed: vehicle_bed?.trim() || null,
+          vehicle_template_id: vehicle_template_id || null,
+          vehicle_make: vehicle_make?.trim() || null,
+          vehicle_model: vehicle_model?.trim() || null,
           created_by: created_by || null,
         })
         .select()

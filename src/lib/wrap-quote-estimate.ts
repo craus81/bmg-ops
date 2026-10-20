@@ -11,6 +11,7 @@ import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate } from '@/lib/labor-rate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { snapshotReviewedContent, clearReviewIfContentChanged } from '@/lib/estimate-review-content';
+import { TEMPLATE_COLUMNS, estimateVehicleFields, type PlatformLite, type VehicleTemplate } from '@/lib/vehicle-templates';
 
 export interface WrapQuoteAttach {
   diagram?: boolean;
@@ -20,6 +21,48 @@ export interface WrapQuoteAttach {
 
 function result(body: any, init?: { status?: number }) {
   return { status: init?.status ?? 200, body };
+}
+
+// The estimate columns a worksheet's vehicle template writes, worked out the
+// same way the estimate's own picker does (src/lib/vehicle-templates.ts).
+async function templateVehicleFields(supabase: SupabaseClient, templateId: string | null | undefined) {
+  if (!templateId) return null;
+  const [{ data: tpl }, { data: platforms }] = await Promise.all([
+    supabase.from('vehicle_templates').select(TEMPLATE_COLUMNS).eq('id', templateId).maybeSingle(),
+    supabase.from('vehicle_platforms').select('id, key, config').eq('active', true),
+  ]);
+  if (!tpl) return null;
+  return estimateVehicleFields(tpl as unknown as VehicleTemplate, {}, (platforms || []) as PlatformLite[]);
+}
+
+/**
+ * Keep an estimate's vehicle the same as its worksheet's (Craig
+ * 2026-10-19, "Same picker + sync"): every builder save writes the
+ * worksheet's template onto the estimate. Left alone when the estimate is
+ * locked (approved / on a sales order), when the worksheet draws on photos
+ * (no template), when the estimate already has this template (so qualifiers
+ * a rep fixed by hand survive), and when another worksheet on the estimate
+ * draws a different vehicle — one estimate can't hold two.
+ */
+export async function syncEstimateVehicleFromQuote(
+  supabase: SupabaseClient,
+  estimateId: string,
+  wrapQuoteId: string,
+  templateId: string | null | undefined,
+): Promise<boolean> {
+  if (!templateId) return false;
+  const [{ data: est }, { data: others }] = await Promise.all([
+    supabase.from('estimates').select('id, vehicle_template_id, customer_approved, status, netsuite_so_id').eq('id', estimateId).maybeSingle(),
+    supabase.from('wrap_quotes').select('id, template_id').eq('estimate_id', estimateId).neq('id', wrapQuoteId),
+  ]);
+  if (!est) return false;
+  if (est.netsuite_so_id || est.customer_approved || est.status === 'accepted') return false;
+  if (est.vehicle_template_id === templateId) return false;
+  if ((others || []).some((o: { template_id: string | null }) => o.template_id && o.template_id !== templateId)) return false;
+  const fields = await templateVehicleFields(supabase, templateId);
+  if (!fields) return false;
+  const { error } = await supabase.from('estimates').update(fields).eq('id', estimateId);
+  return !error;
 }
 
 /**
@@ -245,6 +288,7 @@ export async function openEstimateForWrapQuote(
         }).eq('id', wrapQuoteId);
         await linkQuoteJobsToEstimate(supabase, wrapQuoteId, est.id);
       }
+      await syncEstimateVehicleFromQuote(supabase, est.id, wrapQuoteId, quote.template_id);
       return result({ success: true, estimateId: est.id, estimateNumber: est.estimate_number, netsuiteEstimateNumber: est.netsuite_estimate_number, created: false, ...(fleet ? { fleet } : {}) });
     }
     // The estimate it pointed at is gone — fall through and make a new one.
@@ -268,20 +312,18 @@ export async function openEstimateForWrapQuote(
     return result({ error: 'Pick a customer on the Price & Estimate tab first — the estimate needs one.' }, { status: 400 });
   }
 
-  // Vehicle: the template's year rides in vehicle_year; the description
-  // (year make model) goes in vehicle_other, which the estimate shows as the
-  // vehicle until someone picks a platform.
-  let vehicleYear: string | null = null;
-  if (quote.template_id) {
-    const { data: tpl } = await supabase.from('vehicle_templates').select('year').eq('id', quote.template_id).maybeSingle();
-    if (tpl?.year) vehicleYear = String(tpl.year).trim() || null;
-  }
+  // Vehicle: the worksheet's template fills the estimate's picker (make,
+  // model, year, and the parts-catalog platform behind it). A photo
+  // worksheet has only its typed description, which goes in vehicle_other.
   const vehicle = String(quote.vehicle_description || '').trim();
-  if (!vehicleYear) {
+  let vehicleFields: Record<string, string | null> | null = await templateVehicleFields(supabase, quote.template_id);
+  if (!vehicleFields) {
     const m = vehicle.match(/\b(19|20)\d{2}\b/);
-    if (m) vehicleYear = m[0];
+    vehicleFields = {
+      vehicle_year: m ? m[0] : null,
+      vehicle_other: vehicle ? vehicle.replace(/^\s*(19|20)\d{2}\s*/, '').trim().slice(0, 120) || null : null,
+    };
   }
-  const vehicleOther = vehicle ? vehicle.replace(/^\s*(19|20)\d{2}\s*/, '').trim().slice(0, 120) || null : null;
 
   const taxRate = await getSalesTaxRate(supabase);
   const laborRate = await getDefaultLaborRate(supabase);
@@ -306,8 +348,7 @@ export async function openEstimateForWrapQuote(
       labor_total: 0,
       tax_amount: 0,
       grand_total: 0,
-      vehicle_year: vehicleYear,
-      vehicle_other: vehicleOther,
+      ...vehicleFields,
       created_by: userId,
     })
     .select('id, estimate_number')
