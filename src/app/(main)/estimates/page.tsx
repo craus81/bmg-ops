@@ -6339,7 +6339,7 @@ export default function EstimatesPage() {
                             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
                               {l.part ? `${l.part.item_number} — ${l.part.display_name || l.part.description || ''}` : l.request.description}
                               <span style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, color: tone, textTransform: 'uppercase' }}>
-                                {l.confidence === 'none' ? 'custom line' : l.confidence}
+                                {l.confidence === 'none' ? 'custom line' : l.confidence === 'weak' ? 'suggested' : l.confidence}
                               </span>
                             </div>
                             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', lineHeight: 1.5 }}>

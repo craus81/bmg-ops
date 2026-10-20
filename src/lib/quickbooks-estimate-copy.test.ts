@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { catalogSearchTerms, matchQuickbooksLine, qboItemName, quickbooksDraftRequests } from './quickbooks-estimate-copy';
+import { matchQuickbooksLine, qboItemName, quickbooksDraftRequests } from './quickbooks-estimate-copy';
 import type { HistoryLine } from './ledger/history';
 
 const line = (over: Partial<HistoryLine>): HistoryLine => ({
@@ -61,11 +61,27 @@ describe('matchQuickbooksLine', () => {
     expect(m.signal).toContain('QuickBooks item RB-148');
   });
 
-  it('falls back to the words when the item name is not a catalog number', () => {
+  it('never matches by the description words', () => {
     const [q] = quickbooksDraftRequests(doc([line({ itemName: 'Racks', description: 'Ladder rack aluminum', quantity: 1, amount: 700 })]));
     const m = matchQuickbooksLine(q, [other, part]);
-    expect(m.part?.id).toBe('p2');
-    expect(m.unitPrice).toBe(900);
+    expect(m.part).toBeNull();
+    expect(m.confidence).toBe('none');
+    expect(m.signal).toBe("Racks isn't in today's catalog");
+  });
+
+  it('offers a punctuation-only difference as an unticked suggestion', () => {
+    const [q] = quickbooksDraftRequests(doc([line({ itemName: 'RB148', description: 'bins', quantity: 2, amount: 1 })]));
+    const m = matchQuickbooksLine(q, [part]);
+    expect(m.part?.id).toBe('p1');
+    expect(m.confidence).toBe('weak');
+    expect(m.unitPrice).toBe(1500);
+  });
+
+  it('says so when the QuickBooks line has no item', () => {
+    const [q] = quickbooksDraftRequests(doc([line({ description: 'Ranger bin package 148', amount: 1 })]));
+    const m = matchQuickbooksLine(q, [part]);
+    expect(m.part).toBeNull();
+    expect(m.signal).toBe('no item number on the QuickBooks line');
   });
 
   it('leaves a line with no match as a custom line with no price', () => {
@@ -74,14 +90,5 @@ describe('matchQuickbooksLine', () => {
     expect(m.part).toBeNull();
     expect(m.confidence).toBe('none');
     expect(m.unitPrice).toBeNull();
-  });
-});
-
-describe('catalogSearchTerms', () => {
-  it('searches the item name and the description words, without filter syntax', () => {
-    const [q] = quickbooksDraftRequests(doc([line({ itemName: 'Shelving:RB,148 (a)', description: 'Ranger bins for the Transit', amount: 1 })]));
-    const terms = catalogSearchTerms(q);
-    expect(terms[0]).not.toMatch(/[,()]/);
-    expect(terms).toEqual(expect.arrayContaining(['ranger', 'bins', 'for', 'the']));
   });
 });

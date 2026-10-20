@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireFeature, outsideStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { openEstimateForWrapQuote } from '@/lib/wrap-quote-estimate';
 
@@ -36,8 +36,10 @@ const Schema = z.object({
  * graphics can start the estimate; sending it is still the estimate's job.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireFeature(req, 'graphics_builder');
   if (auth.error) return auth.error;
+  const outside = outsideStaff(auth);
+  if (outside) return outside;
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;

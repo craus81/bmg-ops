@@ -20,10 +20,10 @@ import GuideTemplatePicker from '@/components/GuideTemplatePicker';
 import { defaultGuideSections, type GuidePage, type InstallGuide } from '@/lib/install-guide';
 
 export default function InstallGuidesPage() {
-  const { user, isAdmin, isSales, isGraphicsProduction, hasRole, loading: authLoading } = useAuth();
+  const { user, isAdmin, loading: authLoading, hasFeature } = useAuth();
   // super_admin included explicitly — isAdmin tests only the literal
   // 'admin' role (Stage 6 finding; migration 248 fixes the matching RLS).
-  const hasAccess = isAdmin || isSales || isGraphicsProduction || hasRole('super_admin');
+  const hasAccess = hasFeature('install_guides');
   const router = useRouter();
   const dialog = useDialog();
   const supabase = createClient();

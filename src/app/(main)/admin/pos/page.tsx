@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { flashNote } from '@/lib/focus-note';
 import { createClient } from '@/lib/supabase-browser';
@@ -30,6 +30,7 @@ import { pickPrice } from '@/lib/part-suggest';
 import CreatedBy from '@/components/CreatedBy';
 import { poCreatedBy } from '@/lib/created-by';
 import { looseMatcher } from '@/lib/loose-search';
+import { diffAgainstExisting, describeChanges, pendingExtractions } from '@/lib/pending-po-existing';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -179,6 +180,13 @@ export default function POsPage() {
   const supabase = createClient();
 
   const [pos, setPos] = useState<(PurchaseOrder & { line_items: POLineItem[]; po_invoices?: any[] })[]>([]);
+  // PO number → PO, so the pending-import queue can flag emails for POs
+  // that are already in FleetSuite.
+  const posByNumber = useMemo(() => {
+    const m = new Map<string, (typeof pos)[number]>();
+    for (const po of pos) if (po.po_number) m.set(String(po.po_number).trim(), po);
+    return m;
+  }, [pos]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   // Monotonic guard for async catalog reloads: a reload only lands if
   // nothing newer wrote the catalog while it was in flight (manual part
@@ -2303,7 +2311,16 @@ export default function POsPage() {
               const extracted = p.raw_extraction;
               const poNum = extracted?.po_number || p.po_number || 'Unknown';
               const customer = extracted?.customer || '';
-              const lineCount = extracted?.line_items?.length || 0;
+              const lineCount = (extracted?.lines || extracted?.line_items)?.length || 0;
+              // Is this PO already in FleetSuite, and does the email differ
+              // from it? Same number match + line diff the import runs on
+              // Review, shown up front so a repeat can be dismissed unopened.
+              const existingMatches = pendingExtractions(extracted, p.po_number)
+                .map(e => {
+                  const po = posByNumber.get(e.poNumber);
+                  return po ? { po, changes: describeChanges(diffAgainstExisting(e.lines, po.line_items || [])) } : null;
+                })
+                .filter((m): m is { po: any; changes: string } => m !== null);
               return (
                 <div key={p.id} id={`pending-po-${p.id}`} style={{
                   padding: '10px 12px', borderRadius: '8px', background: 'var(--bg)', border: '1px solid var(--border)',
@@ -2322,6 +2339,19 @@ export default function POsPage() {
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                      {existingMatches.length === 1 && (
+                        <a
+                          href={deepLinks.po(existingMatches[0].po.id)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open the PO already in FleetSuite in a new tab"
+                          style={{
+                            padding: '6px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                            background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)',
+                            color: '#4ade80', textDecoration: 'none',
+                          }}
+                        >Open PO</a>
+                      )}
                       <button
                         onClick={() => reviewPendingPO(p)}
                         style={{
@@ -2340,6 +2370,31 @@ export default function POsPage() {
                       >Dismiss</button>
                     </div>
                   </div>
+                  {existingMatches.map(({ po, changes }) => {
+                    const same = !changes;
+                    const imported = po.created_at ? new Date(po.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
+                    const lines = (po.line_items || []).length;
+                    return (
+                      <div key={po.id} style={{
+                        marginTop: '8px', padding: '7px 9px', borderRadius: '6px', fontSize: '11px', lineHeight: 1.45,
+                        color: 'var(--text-body)',
+                        background: same ? 'rgba(34,197,94,0.08)' : 'rgba(251,191,36,0.08)',
+                        border: `1px solid ${same ? 'rgba(34,197,94,0.3)' : 'rgba(251,191,36,0.3)'}`,
+                      }}>
+                        <span style={{ fontWeight: 700, color: same ? '#4ade80' : '#fbbf24' }}>
+                          {same ? '✓ ' : '⚠ '}
+                          {existingMatches.length > 1 ? `PO #${po.po_number} already in FleetSuite` : 'Already in FleetSuite'}
+                          {same ? ', nothing changed.' : ', this email is different.'}
+                        </span>{' '}
+                        {same
+                          ? <>Imported {imported}{po.customer ? ` · ${po.customer}` : ''} · {lines} line{lines !== 1 ? 's' : ''}. Safe to dismiss.</>
+                          : <>{changes}. Review to update the PO.</>}
+                        {existingMatches.length > 1 && (
+                          <> <a href={deepLinks.po(po.id)} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', fontWeight: 700 }}>Open</a></>
+                        )}
+                      </div>
+                    );
+                  })}
                   {/* Reviewer note — why this hasn't been imported yet. Saved on
                       blur (the wrapper catches the textarea's bubbling blur;
                       picking an @name keeps focus, so it doesn't save early). */}

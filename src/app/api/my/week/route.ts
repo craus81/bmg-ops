@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff, getProfileRoles } from '@/lib/api-auth';
+import { requireStaff, profileCanSeeMoney } from '@/lib/api-auth';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { weekWindows, countByWeek, type WeekWindows } from '@/lib/my-week';
 import { addDays } from '@/lib/shop-week';
-import { canSeeMoney } from '@/lib/money-visibility';
 import { GRAPHICS_ACTIVE_STATUSES, GRAPHICS_AWAITING_STATUSES } from '@/lib/graphics-status';
 
 export const dynamic = 'force-dynamic';
@@ -64,7 +63,7 @@ export async function GET(req: NextRequest) {
 
   const roleBlock = view === 'tech' ? await loadTech(me, w, nextWeekEnd)
     : view === 'graphics' ? await loadGraphics(me, w)
-    : await loadSales(me, w, nextWeekEnd, canSeeMoney(getProfileRoles(auth.profile)));
+    : await loadSales(me, w, nextWeekEnd, await profileCanSeeMoney(auth.user.id, auth.profile));
   if ('error' in roleBlock) return NextResponse.json({ error: roleBlock.error }, { status: 500 });
 
   return NextResponse.json({

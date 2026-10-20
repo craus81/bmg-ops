@@ -33,7 +33,12 @@
  * the server (route guards) and in the browser (what renders).
  */
 
-/** Roles that see customer money, cost and margin. */
+/**
+ * Roles that see customer money, cost and margin OUT OF THE BOX. Since the
+ * Permissions screen (2026-10-20) this is the role default of the
+ * `see_prices` feature (src/lib/features.ts); what actually decides is that
+ * feature, which a super admin can switch per role or per person.
+ */
 export const MONEY_ROLES: readonly string[] = ['admin', 'super_admin', 'sales', 'finance', 'executive'];
 
 /**

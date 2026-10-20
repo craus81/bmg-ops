@@ -23,7 +23,6 @@ import { useDialog } from '@/components/DialogProvider';
 import EmailComposeModal, { type EmailComposeAttachment } from '@/components/EmailComposeModal';
 import CustomerPicker from '@/components/CustomerPicker';
 import { apiFetch } from '@/lib/api-client';
-import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import { deepLinks } from '@/lib/deep-links';
 import { shrinkPhotoForUpload } from '@/lib/photo-upload-shrink';
 import { fmtQcDate, qcStatusLabel, type QcStatus } from '@/lib/qc-fixes';
@@ -163,8 +162,8 @@ function QcFixes() {
   const params = useSearchParams();
   const openId = params.get('id');
   const dialog = useDialog();
-  const { hasRole, isAdmin, loading: authLoading } = useAuth();
-  const isStaff = INTERNAL_STAFF_ROLES.some(r => hasRole(r));
+  const { isAdmin, loading: authLoading, hasFeature } = useAuth();
+  const isStaff = hasFeature('qc_fixes');
 
   const [show, setShow] = useState<QcStatus>('new');
   const [reports, setReports] = useState<Report[]>([]);
