@@ -285,6 +285,7 @@ export default function VehicleRecordPage() {
         index={viewer ? viewer.idx : null}
         onClose={() => setViewer(null)}
         onIndex={i => setViewer(v => (v ? { ...v, idx: i } : v))}
+        printHeading={`VIN ${vin}`}
       />
 
       <div style={{ height: '80px' }} />
