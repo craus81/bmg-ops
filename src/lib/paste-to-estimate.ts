@@ -127,6 +127,59 @@ const normalizeItem = (s: unknown): string =>
 const looseItem = (s: unknown): string =>
   String(s ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, '');
 
+/**
+ * A Postgres regex (for an `imatch` filter) that finds catalog numbers equal
+ * to `item` once punctuation and spaces are ignored: RB148 finds RB-148 and
+ * RB 148. Null when the item has no letters or digits.
+ */
+export function looseItemRegex(item: unknown): string | null {
+  const chars = looseItem(item);
+  if (!chars) return null;
+  return `^[^a-z0-9]*${chars.toLowerCase().split('').join('[^a-z0-9]*')}[^a-z0-9]*$`;
+}
+
+/**
+ * Match a line by its item number alone, never by its words (owner rule
+ * 2026-10-20 for copying old transactions). The same number is an exact
+ * match. The same characters with different punctuation is only a
+ * suggestion the rep ticks, because collapsing punctuation can merge two
+ * different catalog numbers. Anything else is no match.
+ */
+export function matchItemNumberOnly(
+  request: DraftRequestLine,
+  item: string | null,
+  candidates: CatalogPart[],
+  source: string,
+): DraftLine {
+  const none: DraftLine = {
+    request, part: null, confidence: 'none',
+    signal: item ? `${item} isn't in today's catalog` : `no item number on the ${source} line`,
+    matchedText: null, score: null, unitPrice: null, laborHours: null,
+  };
+  if (!item) return none;
+  const wanted = normalizeItem(item);
+  const exact = candidates.find(c => normalizeItem(c.item_number) === wanted);
+  if (exact) {
+    return {
+      request, part: exact, confidence: 'exact',
+      signal: `item number ${exact.item_number}`,
+      matchedText: exact.item_number, score: 1,
+      unitPrice: priceOf(exact), laborHours: laborOf(exact),
+    };
+  }
+  const wantedLoose = looseItem(item);
+  const near = wantedLoose ? candidates.find(c => looseItem(c.item_number) === wantedLoose) : undefined;
+  if (near) {
+    return {
+      request, part: near, confidence: 'weak',
+      signal: `${source} had ${item}; the catalog carries ${near.item_number}, same characters with different punctuation`,
+      matchedText: near.item_number, score: 1,
+      unitPrice: priceOf(near), laborHours: laborOf(near),
+    };
+  }
+  return none;
+}
+
 const tokens = (s: unknown): string[] =>
   String(s ?? '')
     .toLowerCase()
