@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { queuePhoto, photosForScan, deletePhoto, allQueuedPhotos, countByScan, waitingNote } from '@/lib/offline-photos';
 import { createClient } from '@/lib/supabase-browser';
 import { storage } from '@/lib/storage';
+import MyScansPanel from '@/components/MyScansPanel';
 import ProofViewer from '@/components/ProofViewer';
 import { toJpegIfHeic } from '@/lib/heic';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
@@ -63,6 +64,8 @@ export default function ScanPage() {
 
   // Step state
   const [step, setStep] = useState<'customer' | 'part' | 'location' | 'scan'>('customer');
+  // "My scans": the person's own scans and photos (Craig, 2026-10-20).
+  const [showMyScans, setShowMyScans] = useState(false);
 
   // Customer selection — who gets invoiced for this shift's work. Asked
   // explicitly (not inferred from the location or the part) because Reading
@@ -844,6 +847,7 @@ export default function ScanPage() {
 
   return (
     <div data-form="scan_vin" data-form-manual="true">
+      {showMyScans && <MyScansPanel onClose={() => setShowMyScans(false)} waitingPhotos={totalQueuedPhotos} />}
       {isOffline && (
         <div style={{
           padding: '8px 12px', borderRadius: '8px', marginBottom: '12px',
@@ -878,8 +882,15 @@ export default function ScanPage() {
       {/* ─── STEP 0: Pick Customer ─── */}
       {step === 'customer' && (
         <div>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '4px' }}>
-            Who are you working for?
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+              Who are you working for?
+            </div>
+            <button type="button" onClick={() => setShowMyScans(true)} style={{
+              padding: '4px 10px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+              background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.25)',
+              color: '#60a5fa', cursor: 'pointer', whiteSpace: 'nowrap',
+            }}>My scans</button>
           </div>
           <div style={{ fontSize: '12px', color: theme.textMuted, marginBottom: '14px' }}>
             The company that gets invoiced for this work.
@@ -1252,6 +1263,11 @@ export default function ScanPage() {
                   background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
                   color: '#22c55e', textDecoration: 'none',
                 }}>My Earnings</a>
+                <button type="button" onClick={() => setShowMyScans(true)} style={{
+                  padding: '2px 8px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                  background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)',
+                  color: '#60a5fa', cursor: 'pointer',
+                }}>My scans</button>
               </div>
             )}
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
