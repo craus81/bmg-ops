@@ -1,22 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireStaff } from '@/lib/api-auth';
+import { requireAuth, isInternalStaffRole, getProfileRoles } from '@/lib/api-auth';
 
 export const dynamic = 'force-dynamic';
 
 // Active parts for the pickers (scan page, PartPicker). Served with the
 // service role: techs and CNI installers used to read netsuite_parts straight
 // from the browser, where any RLS/policy mismatch silently returns zero rows
-// and the pickers just look empty. Any approved non-customer account may read
-// — the same population the table's RLS intends.
+// and the pickers just look empty. Internal staff and external CNI
+// installers may read — installers pick the parts they put on when they log
+// a scan (owner decision 2026-10-20: installers see the full list). This was
+// requireStaff until then, which 403'd every installer and left Scan's part
+// search empty for them. Customer-only accounts stay blocked.
 export async function GET(req: NextRequest) {
-  const auth = await requireStaff(req);
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
-  const roles: string[] = auth.profile?.roles?.length ? auth.profile.roles : [auth.profile?.role];
-  // Customer-ONLY accounts are blocked. A multi-role account (e.g. an admin
-  // who also carries the customer role to preview the portal) is still
-  // internal — same semantics as /api/scans/log.
-  if (roles.includes('customer') && roles.length === 1) {
+  const roles = getProfileRoles(auth.profile);
+  if (!isInternalStaffRole(auth.profile) && !roles.includes('installer')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
 
