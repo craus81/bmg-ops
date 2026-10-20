@@ -57,8 +57,10 @@ import NumberInput from '@/components/NumberInput';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
-  GRAPHICS_SHIP_SPEED_OPTIONS, graphicsShipSpeedLabel,
+  graphicsShipSpeedLabel,
 } from '@/lib/types';
+import { DeliveryPicker, DeliverySummary } from '@/components/DeliveryPicker';
+import { deliveryFromRow, deliveryProblem, deliveryRowRaw, deliveryToRow, installLocationForDelivery, sameDelivery } from '@/lib/delivery';
 import { requiresReason, proofGateApplies, isOffTheFloor } from '@/lib/graphics-status';
 import { closeOnEscape } from '@/lib/modal-escape';
 
@@ -157,6 +159,9 @@ export default function GraphicsJobRecordPage() {
   const shareRunRef = useRef(0);
   const [assignments, setAssignments] = useState<string[]>([]);
   const [upfit, setUpfit] = useState<UpfitProject | null>(null);
+  // Delivery method editing (migration 414).
+  const [deliveryTried, setDeliveryTried] = useState(false);
+  const [deliveryNote, setDeliveryNote] = useState<string | null>(null);
   // Bridge: the CNI job spawned from this graphics job, if one exists.
   const [cniJob, setCniJob] = useState<{ id: string; job_number: string | null; title: string; status: string } | null>(null);
   const [views, setViews] = useState<GraphicsJobView[]>([]);
@@ -693,6 +698,7 @@ export default function GraphicsJobRecordPage() {
     'due_date', 'scheduled_install_date', 'install_location', 'supplier',
     'content', 'vinyl_type', 'vinyl_color', 'laminate', 'print_method',
     'cut_method', 'premask', 'tracking_number', 'ship_to', 'ship_speed', 'notes',
+    'delivery_method', 'delivery_contact_name', 'delivery_contact_phone', 'delivery_notes', 'delivery_installer',
   ] as const;
   // Unsaved-changes signal: any editable field differing between the edit
   // copy and the loaded job. Warns on tab close/refresh while dirty (in-app
@@ -707,10 +713,20 @@ export default function GraphicsJobRecordPage() {
 
   const saveJob = async () => {
     if (!edit || !job) return;
+    // Delivery method (migration 414): once one is picked its details must
+    // be complete. Older jobs without a method can still save.
+    const editDelivery = deliveryFromRow(edit, 'graphics_jobs');
+    const prodJob = (edit.job_category || 'production') === 'production';
+    if (prodJob && editDelivery.method) {
+      const problem = deliveryProblem(editDelivery, false);
+      if (problem) { setDeliveryTried(true); await dialog.alert(problem); return; }
+    }
     setSaving(true);
     const id = edit.id;
     const picked: Record<string, any> = {};
     for (const f of EDITABLE_FIELDS) picked[f] = (edit as any)[f];
+    if (prodJob && editDelivery.method) Object.assign(picked, deliveryToRow(editDelivery, 'graphics_jobs'));
+    const deliveryChanged = prodJob && !sameDelivery(editDelivery, deliveryFromRow(job, 'graphics_jobs'));
     // Convert non-date values like "N/A" or empty strings to null for date columns
     const sanitized = {
       ...picked,
@@ -744,6 +760,29 @@ export default function GraphicsJobRecordPage() {
 
       setJob({ ...job, ...sanitized } as any);
       setEdit(null);
+      setDeliveryTried(false);
+
+      // Same delivery on the upfit project, its estimate and their other
+      // open Production jobs (Craig, 2026-10-20).
+      if (deliveryChanged && editDelivery.method && (job.upfit_project_id || job.estimate_id)) {
+        try {
+          const res = await apiFetch('/api/delivery', {
+            method: 'POST',
+            body: JSON.stringify({ source: 'graphics_job', id, delivery: editDelivery }),
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+          const u = body.updated || {};
+          const others = [
+            ...(u.projects || []).map((n: string) => `project ${n}`),
+            ...(u.estimates || []).map((n: string) => `estimate ${n}`),
+            ...(u.jobs || []).filter((n: string) => n !== job.job_number),
+          ];
+          setDeliveryNote(others.length ? `Also updated: ${others.join(', ')}.` : null);
+        } catch (e: any) {
+          await dialog.alert(`The job saved, but its delivery method didn't copy to the linked project and estimate: ${e?.message || 'network error'}.`);
+        }
+      }
 
       // Sync install date to Google Calendar (create, update, or delete event)
       fetch('/api/calendar/sync-graphics', {
@@ -1330,7 +1369,22 @@ export default function GraphicsJobRecordPage() {
             </div>
           )}
 
-          {(job.tracking_number || job.ship_to || job.ship_speed) && (
+          {job.delivery_method && (
+            <div style={{ marginBottom: '10px' }}>
+              <div style={labelStyle}>Delivery{upfit ? ' · same on the upfit project' : ''}</div>
+              <DeliverySummary value={deliveryFromRow(job, 'graphics_jobs')} />
+              {job.tracking_number && (
+                <div style={{ fontSize: '11px', marginTop: '4px' }}>
+                  Tracking:{' '}
+                  <a href={upsTrackingUrl(job.tracking_number)} target="_blank" rel="noopener noreferrer" title="Track on ups.com" style={{ color: '#60a5fa', fontWeight: 700 }}>
+                    {job.tracking_number}
+                  </a>
+                </div>
+              )}
+              {deliveryNote && <div style={{ fontSize: '10px', color: '#34d399', marginTop: '4px' }}>{deliveryNote}</div>}
+            </div>
+          )}
+          {!job.delivery_method && (job.tracking_number || job.ship_to || job.ship_speed) && (
             <div style={{ marginBottom: '10px' }}>
               <div style={labelStyle}>Shipping</div>
               <div style={{ fontSize: '11px' }}>
@@ -1537,25 +1591,36 @@ export default function GraphicsJobRecordPage() {
             </>
           )}
 
-          <div style={labelStyle}>Shipping</div>
-          {((edit.job_category || 'production') === 'production' || edit.ship_speed) && (
-            <div style={{ marginBottom: '6px' }}>
-              <div style={{ ...labelStyle, fontSize: '8px' }}>Shipping Speed</div>
-              <select style={inputStyle} value={edit.ship_speed || ''} onChange={e => setEdit({ ...edit, ship_speed: (e.target.value || null) as GraphicsJob['ship_speed'] })}>
-                <option value="">Not set</option>
-                {GRAPHICS_SHIP_SPEED_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
+          {(edit.job_category || 'production') === 'production' ? (
+            <div style={{ marginBottom: '10px' }}>
+              <DeliveryPicker
+                value={deliveryFromRow(edit, 'graphics_jobs')}
+                showProblems={deliveryTried}
+                customerNetsuiteId={edit.customer_netsuite_id || null}
+                customerName={edit.customer || null}
+                onChange={next => setEdit(prev => {
+                  if (!prev) return prev;
+                  const loc = installLocationForDelivery(next);
+                  const install_location = loc ?? (next.method && prev.install_location === SHOP_INSTALL_LOCATION ? null : prev.install_location);
+                  return { ...prev, ...deliveryRowRaw(next, 'graphics_jobs'), install_location } as GraphicsJob;
+                })}
+              />
+              {upfit && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>Saving also updates the upfit project, its estimate and its other open Production jobs.</div>}
             </div>
+          ) : (
+            <>
+              <div style={labelStyle}>Shipping</div>
+              <div style={{ marginBottom: '6px' }}>
+                <div style={{ ...labelStyle, fontSize: '8px' }}>Ship To Address</div>
+                <textarea style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }} value={edit.ship_to || ''} onChange={e => setEdit({ ...edit, ship_to: e.target.value })}
+                  placeholder={'Company Name\n123 Street Address\nCity, State ZIP'}
+                />
+              </div>
+            </>
           )}
-          <div style={{ marginBottom: '6px' }}>
+          <div style={{ marginBottom: '10px' }}>
             <div style={{ ...labelStyle, fontSize: '8px' }}>Tracking #</div>
             <input style={inputStyle} value={edit.tracking_number || ''} onChange={e => setEdit({ ...edit, tracking_number: e.target.value })} />
-          </div>
-          <div style={{ marginBottom: '10px' }}>
-            <div style={{ ...labelStyle, fontSize: '8px' }}>Ship To Address</div>
-            <textarea style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }} value={edit.ship_to || ''} onChange={e => setEdit({ ...edit, ship_to: e.target.value })}
-              placeholder={'Company Name\n123 Street Address\nCity, State ZIP'}
-            />
           </div>
 
           <div style={{ marginBottom: '12px' }}>

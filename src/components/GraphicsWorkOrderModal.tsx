@@ -20,6 +20,8 @@
  * drag handle is the enhancement.
  */
 
+import { DeliveryChip } from '@/components/DeliveryPicker';
+import { deliveryFromRow } from '@/lib/delivery';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 import { isOffTheFloor } from '@/lib/graphics-status';
@@ -178,8 +180,12 @@ export default function GraphicsWorkOrderModal({ jobs, profiles = [], onClose }:
           {GRAPHICS_STATUS_LABELS[job.status].replace('Job ', '')}
         </span>
         {job.priority !== 'normal' && <span style={chip(priorityColor(job.priority))}>{job.priority}</span>}
-        {/* Ground is the norm; only call out a faster or non-UPS speed. */}
-        {job.ship_speed && job.ship_speed !== 'ups_ground' && (
+        {/* Delivery method; plain UPS Ground is the norm and gets no chip. */}
+        {job.delivery_method ? (
+          !(job.delivery_method === 'direct_ship' && (!job.ship_speed || job.ship_speed === 'ups_ground')) && (
+            <DeliveryChip value={deliveryFromRow(job, 'graphics_jobs')} />
+          )
+        ) : job.ship_speed && job.ship_speed !== 'ups_ground' && (
           <span style={chip('#38bdf8')}>{graphicsShipSpeedLabel(job.ship_speed)}</span>
         )}
         {job.due_date && (

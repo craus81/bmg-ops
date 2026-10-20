@@ -681,6 +681,13 @@ export interface GraphicsJob {
   carrier: string | null;
   ship_to: string | null;
   ship_speed: GraphicsShipSpeed | null;
+  /** Delivery method (migration 414, src/lib/delivery.ts). ship_speed and
+   *  ship_to hold its speed and address. */
+  delivery_method?: 'direct_ship' | 'onsite_install' | 'customer_pickup' | 'bmg_shop' | null;
+  delivery_contact_name?: string | null;
+  delivery_contact_phone?: string | null;
+  delivery_notes?: string | null;
+  delivery_installer?: 'bmg_crew' | 'cni' | null;
   priority: 'low' | 'normal' | 'high' | 'rush';
   due_date: string | null;
   scheduled_install_date: string | null;

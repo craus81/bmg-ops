@@ -43,6 +43,21 @@ import { DropZone } from '@/components/DropZone';
 import UploadProgressBar, { type UploadProgress } from '@/components/UploadProgressBar';
 import { buildGraphicsJobPrefillFromPo, attachPartFilesToGraphicsJob, buildGfxJobTitle } from '@/lib/graphics-job-from-po';
 import { INSTALL_LOCATIONS, SHOP_INSTALL_LOCATION } from '@/lib/shop-inbound';
+import { DeliveryPicker } from '@/components/DeliveryPicker';
+import {
+  deliveryFromRow, deliveryProblem, deliveryRowRaw, deliveryToRow, installLocationForDelivery, sameDelivery,
+  type Delivery,
+} from '@/lib/delivery';
+
+// The New Job form keeps delivery as row columns (ship_speed / ship_to
+// already live in it), see src/lib/delivery.ts.
+const EMPTY_DELIVERY_FORM = {
+  delivery_method: null as string | null,
+  delivery_contact_name: null as string | null,
+  delivery_contact_phone: null as string | null,
+  delivery_notes: null as string | null,
+  delivery_installer: null as string | null,
+};
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
@@ -55,7 +70,7 @@ import { NotInCatalogAdd } from '@/components/AddToCatalog';
 import {
   GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_COLORS, GRAPHICS_STATUS_ORDER,
   GRAPHICS_CATEGORY_LABELS, GRAPHICS_CATEGORY_COLORS,
-  GRAPHICS_SHIP_SPEED_OPTIONS, DEFAULT_GRAPHICS_SHIP_SPEED,
+  DEFAULT_GRAPHICS_SHIP_SPEED,
 } from '@/lib/types';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { looseMatcher, looseSearchRegex } from '@/lib/loose-search';
@@ -233,6 +248,8 @@ export default function GraphicsPage() {
     estimateId: string; estimateNumber: string | null; customerNetsuiteId: string | null;
     /** The estimate's wrap quote, when it has exactly one no job holds yet. */
     wrapQuoteId: string | null;
+    /** The delivery method the estimate / its project already had. */
+    delivery?: Delivery | null;
     /** The estimate's fleet order (migration 410), when it has other vehicles. */
     fleet?: {
       count: number; units: string[]; contentLine: string; singleQuantity: number;
@@ -276,6 +293,17 @@ export default function GraphicsPage() {
     ship_to: '',
     ship_speed: DEFAULT_GRAPHICS_SHIP_SPEED as GraphicsShipSpeed,
     po_number: '',
+    ...EMPTY_DELIVERY_FORM,
+  });
+  // Pressed Create with the delivery method incomplete — show what's missing.
+  const [deliveryTried, setDeliveryTried] = useState(false);
+  const createDelivery = deliveryFromRow(createForm, 'graphics_jobs');
+  // A method that implies where it's installed sets Install Location too
+  // (BMG shop → O'Fallon Shop, which feeds the shop arrival schedule).
+  const setCreateDelivery = (next: Delivery) => setCreateForm(f => {
+    const loc = installLocationForDelivery(next);
+    const install_location = loc ?? (next.method && f.install_location === SHOP_INSTALL_LOCATION ? '' : f.install_location);
+    return { ...f, ...deliveryRowRaw(next, 'graphics_jobs'), ship_to: next.address || '', ship_speed: (next.shipSpeed || DEFAULT_GRAPHICS_SHIP_SPEED) as GraphicsShipSpeed, install_location };
   });
   const [createAssignees, setCreateAssignees] = useState<string[]>([]);
   // "Proof goes to" (migration 378): customer, or the rep first. A null rep
@@ -485,6 +513,8 @@ export default function GraphicsPage() {
               laminate: p.laminate || f.laminate,
               // Customer's PO when the estimate has one, else the SO #.
               po_number: p.poNumber || p.soNumber || f.po_number,
+              // The project's (or estimate's) delivery method, when set.
+              ...(p.delivery?.method ? deliveryRowRaw(p.delivery, 'graphics_jobs') : {}),
             }));
             if (p.customer) setCustomerSearch(p.customer);
             if (p.defaultAssigneeId) setCreateAssignees([p.defaultAssigneeId]);
@@ -499,6 +529,7 @@ export default function GraphicsPage() {
               estimateNumber: p.estimateNumber || null,
               customerNetsuiteId: p.customerNetsuiteId || null,
               wrapQuoteId: p.wrapQuoteId || null,
+              delivery: p.delivery || null,
               fleet,
             });
             setPrefillNote(`Filled in from ${p.soNumber ? `SO #${p.soNumber} (estimate ${p.estimateNumber})` : `estimate ${p.estimateNumber}`}${p.wrapQuoteNumber ? ` and wrap quote ${p.wrapQuoteNumber}` : ''}. Check it over, then create.`);
@@ -548,6 +579,7 @@ export default function GraphicsPage() {
             install_location: src.install_location || '',
             ship_to: src.ship_to || '',
             ship_speed: (src.ship_speed as GraphicsShipSpeed) || DEFAULT_GRAPHICS_SHIP_SPEED,
+            ...deliveryRowRaw(deliveryFromRow(src, 'graphics_jobs'), 'graphics_jobs'),
           }));
           setCustomerSearch(src.customer || '');
           const files = srcFiles || [];
@@ -864,8 +896,17 @@ export default function GraphicsPage() {
 
   // Create new job
   const createJob = async () => {
-    setCreating(true);
     const cat = createForm.job_category || 'production';
+    // Required on new Production jobs (Valarie / Craig, 2026-10-20).
+    if (cat === 'production') {
+      const problem = deliveryProblem(createDelivery, true);
+      if (problem) {
+        setDeliveryTried(true);
+        await dialog.alert(problem);
+        return;
+      }
+    }
+    setCreating(true);
     const prefix = cat === 'proofing' ? 'PRF' : cat === 'internal' ? 'INT' : 'GFX';
     const jobNumber = await nextJobNumber(supabase, prefix, () => legacyJobNumber.gfx(prefix));
     // Every category, proofing included, starts at Received (owner decision,
@@ -895,6 +936,8 @@ export default function GraphicsPage() {
         install_location: cat !== 'internal' ? (createForm.install_location || null) : null,
         ship_to: cat === 'production' ? (createForm.ship_to || null) : null,
         ship_speed: cat === 'production' ? createForm.ship_speed : null,
+        // Production: the delivery method's columns (speed + address too).
+        ...(cat === 'production' ? deliveryToRow(createDelivery, 'graphics_jobs') : {}),
         po_number: createForm.po_number || null,
         status: initialStatus,
         created_by: user?.id,
@@ -982,6 +1025,15 @@ export default function GraphicsPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ estimateId: prefillEstimateLink.estimateId, mode: 'created', existingJobId: data.id }),
+        }).catch(() => {});
+      }
+
+      // A delivery method picked (or changed) here goes back to the estimate,
+      // its upfit project and their other open Production jobs.
+      if (prefillEstimateLink && cat === 'production' && !sameDelivery(createDelivery, prefillEstimateLink.delivery)) {
+        apiFetch('/api/delivery', {
+          method: 'POST',
+          body: JSON.stringify({ source: 'graphics_job', id: data.id, delivery: createDelivery }),
         }).catch(() => {});
       }
 
@@ -1119,7 +1171,9 @@ export default function GraphicsPage() {
         content: '', notes: '',
         vinyl_type: '', vinyl_color: '', laminate: '', print_method: '', cut_method: '', premask: '',
         priority: 'normal', due_date: '', scheduled_install_date: '', install_location: '', ship_to: '', ship_speed: DEFAULT_GRAPHICS_SHIP_SPEED, po_number: '',
+        ...EMPTY_DELIVERY_FORM,
       });
+      setDeliveryTried(false);
       setCreateAssignees([]);
       setCreateProofRoute('customer');
       setCreateProofRep(null);
@@ -2249,20 +2303,16 @@ export default function GraphicsPage() {
                       )}
                     </div>
                   )}
-                  {/* Production jobs get ship speed + ship-to */}
+                  {/* Production jobs: required delivery method (migration 414) */}
                   {createForm.job_category === 'production' && (
                     <div style={{ gridColumn: '1 / -1' }}>
-                      <div style={labelStyle}>Shipping Speed</div>
-                      <select style={inputStyle} value={createForm.ship_speed} onChange={e => setCreateForm({ ...createForm, ship_speed: e.target.value as GraphicsShipSpeed })}>
-                        {GRAPHICS_SHIP_SPEED_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                      </select>
-                    </div>
-                  )}
-                  {createForm.job_category === 'production' && (
-                    <div style={{ gridColumn: '1 / -1' }}>
-                      <div style={labelStyle}>Ship To Address</div>
-                      <textarea style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }} value={createForm.ship_to} onChange={e => setCreateForm({ ...createForm, ship_to: e.target.value })}
-                        placeholder={'Company Name\n123 Street Address\nCity, State ZIP'}
+                      <DeliveryPicker
+                        value={createDelivery}
+                        required
+                        showProblems={deliveryTried}
+                        customerNetsuiteId={prefillEstimateLink?.customerNetsuiteId || prefillPoLink?.customerNetsuiteId || null}
+                        customerName={createForm.customer || null}
+                        onChange={setCreateDelivery}
                       />
                     </div>
                   )}

@@ -8,6 +8,7 @@ import {
   estimateJobPo, estimateVehicleLine, findEstimateWrapQuote, joinBlocks, wrapQuoteJobFields,
 } from '@/lib/graphics-links';
 import { fleetMembers } from '@/lib/estimate-fleet';
+import { deliveryColumns, deliveryFromRow } from '@/lib/delivery';
 import { fleetContentLine, fleetJobFor, linkFleetCheckins } from '@/lib/graphics-fleet';
 
 export const dynamic = 'force-dynamic';
@@ -176,6 +177,16 @@ export async function POST(req: NextRequest) {
 
     if (mode === 'prefill') {
       const prefill = await buildEstimateJobPrefill(supabase, estimate);
+      // Delivery method (migration 414): the upfit project's when it has one,
+      // else the estimate's — they're kept the same once both exist.
+      const [{ data: estDelivery }, { data: projDelivery }] = await Promise.all([
+        supabase.from('estimates').select(deliveryColumns('estimates')).eq('id', estimateId).maybeSingle(),
+        supabase.from('upfit_projects').select(deliveryColumns('upfit_projects')).eq('estimate_id', estimateId)
+          .not('delivery_method', 'is', null).limit(1).maybeSingle(),
+      ]);
+      const delivery = projDelivery
+        ? deliveryFromRow(projDelivery as any, 'upfit_projects')
+        : deliveryFromRow(estDelivery as any, 'estimates');
       const fleetJob = members.length > 1 && groupId ? await fleetJobFor(supabase, groupId) : null;
       return NextResponse.json({
         success: true,
@@ -186,6 +197,7 @@ export async function POST(req: NextRequest) {
           notes: prefill.notes || '',
           soNumber: estimate.netsuite_so_number || '',
           estimateNumber: estimate.estimate_number,
+          delivery: delivery.method ? delivery : null,
           fleet: members.length > 1
             ? {
                 count: members.length,
