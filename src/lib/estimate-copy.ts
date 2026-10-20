@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { logAudit } from '@/lib/audit';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { kitLineColumns } from '@/lib/estimate-kits';
+import { clearedReviewColumns } from '@/lib/estimate-review';
 
 // Header fields that must never survive a duplicate: identity, lifecycle,
 // and audit columns. Everything else on the row is descriptive content
@@ -65,6 +66,9 @@ export function estimateIsLocked(e: { customer_approved?: boolean | null; status
  * Fleet copy (`fleet` given): always a new job for another vehicle, never a
  * revision, whatever the source's state. It takes the unit number and VIN
  * given, joins the group, and keeps the PO number only when asked.
+ *
+ * An approved internal review survives, marked as copied, until a line or
+ * price changes; any other review state does not.
  *
  * What never survives the copy: approval/rejection state, the magic-link
  * token, signed-document pointers, NetSuite ids, push/send timestamps,
@@ -146,6 +150,21 @@ export async function copyEstimate(
   copy.created_by = userId;
   copy.supersedes_estimate_id = isRevision ? source.id : null;
   copy.internal_notes = [provenanceNote, rejectionLine, source.internal_notes].filter(Boolean).join('\n');
+
+  // Internal review (Craig and Valarie, 2026-10-19): the copy has exactly
+  // the reviewed lines and prices, so an APPROVED review comes along,
+  // marked with the estimate it was given on. The first save that changes
+  // a line or price clears it (src/lib/estimate-review-content.ts). A
+  // review still pending or sent back stays with the original, and the
+  // reminder/snooze state belongs to the original's round either way.
+  Object.assign(copy, clearedReviewColumns());
+  if (source.internal_review_status === 'approved') {
+    for (const col of ['internal_review_status', 'internal_reviewer_id', 'internal_review_requested_by',
+      'internal_review_requested_at', 'internal_review_decided_by', 'internal_review_decided_at', 'internal_review_note']) {
+      copy[col] = source[col] ?? null;
+    }
+    copy.internal_review_copied_from = source.internal_review_copied_from || source.estimate_number;
+  }
 
   // Same 23505 retry as the create path: the number is UNIQUE and the
   // RPC-failure fallback format can collide within a month.

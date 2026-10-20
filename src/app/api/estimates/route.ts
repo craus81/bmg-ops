@@ -11,6 +11,7 @@ import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate, toLaborRate } from '@/lib/labor-rate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { kitLineColumns, kitLineSchemaFields } from '@/lib/estimate-kits';
+import { snapshotReviewedContent, clearReviewIfContentChanged } from '@/lib/estimate-review-content';
 
 export const dynamic = 'force-dynamic';
 
@@ -283,6 +284,10 @@ export async function POST(req: NextRequest) {
         });
       }
 
+      // An approved review covers these lines and prices; snapshot them
+      // so a save that changes them clears it (Craig, 2026-10-19).
+      const reviewedBefore = await snapshotReviewedContent(supabase, id);
+
       // ── UPDATE existing estimate ──
       // A builder Save/Sync only ever submits 'draft' or 'pushed'. The sales
       // stages ('sent'/'accepted'/'rejected') are owned by the send-for-approval
@@ -423,7 +428,9 @@ export async function POST(req: NextRequest) {
         console.warn('[estimates] SO sync check skipped:', err?.message || err);
       }
 
-      return NextResponse.json({ success: true, id, soOutOfDate, salesOrderNumber });
+      const reviewCleared = await clearReviewIfContentChanged(supabase, id, reviewedBefore, auth.user.id);
+
+      return NextResponse.json({ success: true, id, soOutOfDate, salesOrderNumber, reviewCleared });
     } else {
       // ── CREATE new estimate ──
       // The number has a UNIQUE constraint and a 4-char random suffix — two

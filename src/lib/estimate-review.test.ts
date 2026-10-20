@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickReviewer, reviewStateOf, canDecideReview, reviewReminderDue, reviewSnoozedUntil, type StaffOption } from './estimate-review';
+import { pickReviewer, reviewStateOf, canDecideReview, reviewReminderDue, reviewSnoozedUntil, reviewContentSignature, clearedReviewColumns, type StaffOption } from './estimate-review';
 import { shopWorkMs } from './shop-hours';
 
 const STAFF: StaffOption[] = [
@@ -152,5 +152,43 @@ describe('review snooze', () => {
     const est = { ...base, internal_review_snoozed_until: '2026-10-04T13:00:00Z' };
     expect(reviewSnoozedUntil(est)).toBeNull();
     expect(reviewReminderDue(est, at('2026-10-05T19:30:00Z'), shopWorkMs)).toBe(true);
+  });
+});
+
+describe('reviewContentSignature', () => {
+  const header = { labor_rate: 125, labor_hours_override: null, vehicle_count: 1, discount_type: null, discount_value: null, tax_exempt: false };
+  const lines = [
+    { sort_order: 0, item_number: 'RACK-1', description: 'Ladder rack', quantity: 1, unit_price: 899, labor_hours: 2 },
+    { sort_order: 1, item_number: 'BIN-4', description: 'Bin unit', quantity: 2, unit_price: 310.5, labor_hours: null },
+  ];
+
+  it('matches an unchanged re-save, whatever the value types or line order', () => {
+    const resaved = [
+      { ...lines[1], sort_order: 0, quantity: '2', unit_price: '310.50', labor_hours: '' },
+      { ...lines[0], sort_order: 1, quantity: '1' },
+    ];
+    expect(reviewContentSignature({ ...header, labor_rate: '125.00' }, resaved))
+      .toBe(reviewContentSignature(header, lines));
+  });
+
+  it('changes when a line is added, a price moves, or the job discount changes', () => {
+    const base = reviewContentSignature(header, lines);
+    expect(reviewContentSignature(header, [...lines, { item_number: 'LIGHT', quantity: 1, unit_price: 40 }])).not.toBe(base);
+    expect(reviewContentSignature(header, [{ ...lines[0], unit_price: 850 }, lines[1]])).not.toBe(base);
+    expect(reviewContentSignature({ ...header, discount_type: 'percent', discount_value: 5 }, lines)).not.toBe(base);
+  });
+
+  it('ignores fields outside the review, like notes and VIN', () => {
+    expect(reviewContentSignature({ ...header, vin: '1FT', internal_notes: 'x' }, lines.map(l => ({ ...l, notes: 'n' }))))
+      .toBe(reviewContentSignature(header, lines));
+  });
+});
+
+describe('clearedReviewColumns', () => {
+  it('nulls every review column, including the copied-from mark', () => {
+    const cleared = clearedReviewColumns();
+    expect(cleared.internal_review_status).toBeNull();
+    expect(cleared.internal_review_copied_from).toBeNull();
+    expect(cleared.internal_review_snoozed_until).toBeNull();
   });
 });

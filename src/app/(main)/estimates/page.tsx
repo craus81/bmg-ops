@@ -357,6 +357,9 @@ interface Estimate {
   // Team-wide snooze on the overdue-review reminder — migration 350.
   internal_review_snoozed_until?: string | null;
   internal_review_snoozed_by?: string | null;
+  // Estimate number an approved review was given on, when this is an
+  // unchanged copy of it — migration 413.
+  internal_review_copied_from?: string | null;
 }
 
 // Allowed qualifier options per platform, from vehicle_platforms.config —
@@ -2069,6 +2072,11 @@ export default function EstimatesPage() {
         }
         await loadEstimates(true);
         setSaving(false);
+        // Lines or prices changed after an approved review: the review no
+        // longer covers this estimate (Craig, 2026-10-19).
+        if (data.reviewCleared) {
+          await dialog.alert('You changed lines or prices after this estimate was reviewed, so the review was cleared. Use Send for Review if it needs another look before it goes to the customer.');
+        }
         // The estimate already has a sales order and this save changed
         // what the SO carries (migration 259): ask, never push silently.
         if (data.soOutOfDate && savedId) {
@@ -3874,7 +3882,7 @@ export default function EstimatesPage() {
                           <div
                             title={rs.status === 'pending'
                               ? `In review with ${staffName(rs.reviewerId)}`
-                              : `${d.label} by ${staffName(rs.decidedBy)}${rs.note ? ` — “${rs.note}”` : ''}`}
+                              : `${d.label} by ${staffName(rs.decidedBy)}${est.internal_review_copied_from ? ` on ${est.internal_review_copied_from} (copied unchanged)` : ''}${rs.note ? ` — “${rs.note}”` : ''}`}
                             style={{
                               padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                               background: `${d.color}18`, border: `1px solid ${d.color}44`,
@@ -6289,12 +6297,19 @@ export default function EstimatesPage() {
             }}>
               <div style={{ fontWeight: 800, color: display.color }}>
                 {state.status === 'pending' && `⏳ In review with ${staffName(state.reviewerId)}`}
-                {state.status === 'approved' && `✓ Reviewed by ${staffName(state.decidedBy)} — cleared to send to the customer`}
+                {state.status === 'approved' && (est.internal_review_copied_from
+                  ? `✓ Reviewed by ${staffName(state.decidedBy)} on ${est.internal_review_copied_from} — copied unchanged, cleared to send`
+                  : `✓ Reviewed by ${staffName(state.decidedBy)} — cleared to send to the customer`)}
                 {state.status === 'changes_requested' && `↩ ${staffName(state.decidedBy)} sent this back for changes`}
                 {when && <span style={{ fontWeight: 600, color: 'var(--text-muted)' }}> · {new Date(when).toLocaleDateString()}</span>}
               </div>
               {state.note && (
                 <div style={{ marginTop: '3px' }}>“{state.note}”</div>
+              )}
+              {state.status === 'approved' && est.internal_review_copied_from && (
+                <div style={{ marginTop: '3px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                  Change a line or a price and the review clears, so it goes through Send for Review again.
+                </div>
               )}
               {state.status === 'pending' && (
                 <div style={{ marginTop: '3px', fontSize: '11px', color: 'var(--text-muted)' }}>
