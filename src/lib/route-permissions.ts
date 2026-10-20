@@ -459,7 +459,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/parts/merge/route.ts': admin(),
   'src/app/api/parts/mirror/route.ts': staff(),
   'src/app/api/parts/proof-sweep/route.ts': admin(),
-  'src/app/api/parts/route.ts': staff(),
+  'src/app/api/parts/route.ts': authScoped('the Scan part picker serves internal staff AND external CNI installers (owner decision 2026-10-20); the route enforces that staff-or-installer allowlist itself', 'isInternalStaffRole('),
   'src/app/api/parts/sync/route.ts': admin(),
   'src/app/api/parts/transactions/route.ts': staff(),
   'src/app/api/pay-rates/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin('] },
