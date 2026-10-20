@@ -71,6 +71,9 @@ export interface PaletteAccess {
   /** Typed against the real key union — a typo'd key would otherwise just
    *  return false and quietly hide an action the viewer is entitled to. */
   hasFeature: (feature: FeatureKey) => boolean;
+  /** Behind the money wall. Optional so a caller that never offers money
+   *  actions needn't say; absent reads as no. */
+  canSeeMoney?: boolean;
 }
 
 // ── Access ──────────────────────────────────────────────────────────────
@@ -131,8 +134,8 @@ export type QuickAction =
  *    runs against vendor POs (`netsuite_vendor_pos`) and `deepLinks.receiving`
  *    takes that table's id. Passing a customer PO id would open the receiving
  *    page on nothing. There is no receive flow for a customer PO to link to.
- *  · parts / invoices / messages — nothing beyond opening the record that is
- *    both keyed on data the search row carries and lands somewhere real.
+ *  · parts / messages — nothing beyond opening the record that is both
+ *    keyed on data the search row carries and lands somewhere real.
  */
 export function quickActionsFor(group: string, item: any, a: PaletteAccess): QuickAction[] {
   const out: QuickAction[] = [];
@@ -216,6 +219,22 @@ export function quickActionsFor(group: string, item: any, a: PaletteAccess): Qui
           key: 'pdf', label: 'PDF', kind: 'external',
           url: deepLinks.estimatePdf(String(item.id)),
           title: 'Open the estimate PDF in a new tab',
+        });
+      }
+      break;
+    }
+
+    // Repeat an old build from a NetSuite document: its part numbers at
+    // today's catalog prices (src/lib/netsuite-estimate-copy.ts). The copy
+    // route sits behind the money wall, so the action does too.
+    case 'invoices':
+    case 'ns_estimates': {
+      const nsId = String((group === 'invoices' ? item.netsuite_invoice_id : item.netsuite_id) ?? '').trim();
+      if (/^\d+$/.test(nsId) && a.hasFeature('estimates') && a.canSeeMoney) {
+        out.push({
+          key: 'copy_to_estimate', label: 'Copy to estimate', kind: 'link',
+          url: deepLinks.newEstimate(null, null, { fromNetSuite: { type: group === 'invoices' ? 'invoice' : 'estimate', id: nsId } }),
+          title: "Start a new estimate with this record's parts at today's catalog prices",
         });
       }
       break;

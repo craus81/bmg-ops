@@ -430,8 +430,8 @@ export default function UniversalSearch({ open, onClose }: UniversalSearchProps)
   // now bounces to /home is a dead click, which is the whole failure mode a
   // launcher has to avoid.
   const access: PaletteAccess = useMemo(() => ({
-    isAdmin, isSales, isGraphicsProduction, isInstaller, isShopTech, isFieldTech, hasFeature,
-  }), [isAdmin, isSales, isGraphicsProduction, isInstaller, isShopTech, isFieldTech, hasFeature]);
+    isAdmin, isSales, isGraphicsProduction, isInstaller, isShopTech, isFieldTech, hasFeature, canSeeMoney,
+  }), [isAdmin, isSales, isGraphicsProduction, isInstaller, isShopTech, isFieldTech, hasFeature, canSeeMoney]);
   // A "View all" link only renders when the viewer can open its list page —
   // the gated destinations bounce to /home and discard the search otherwise.
   const canViewAll = (group: string): boolean => {

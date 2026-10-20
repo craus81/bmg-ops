@@ -2998,6 +2998,21 @@ export default function CustomerRecordPage() {
                                 {pdfBusy === t.key ? '…' : 'NetSuite PDF'}
                               </button>
                             )}
+                            {/* Repeat an old build: the NetSuite document's
+                                part numbers at today's catalog prices
+                                (src/lib/netsuite-estimate-copy.ts). */}
+                            {t.nsId && t.nsPdfType && hasFeature('estimates') && canSeeMoney && (
+                              <button
+                                onClick={() => router.push(deepLinks.newEstimate(
+                                  customer?.id || null, customer ? null : (prospect?.id || null),
+                                  { fromNetSuite: { type: t.nsPdfType!, id: t.nsId! }, fromCustomer: recordRouteId },
+                                ))}
+                                title={`Start a new estimate with the parts on ${t.typeLabel.toLowerCase()} ${t.number}, at today's catalog prices. You pick which lines to keep.`}
+                                style={{ ...btnSm, padding: '4px 10px' }}
+                              >
+                                Copy to estimate
+                              </button>
+                            )}
                             {/* Email just this invoice — same screen as the
                                 selection action above, scoped to one row. */}
                             {t.kind === 'invoice' && t.number && !t.qbo && (
