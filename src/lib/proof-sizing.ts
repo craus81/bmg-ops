@@ -28,6 +28,7 @@
 // Image routines work on plain RGBA buffers (what canvas getImageData gives)
 // and are unit-tested on synthetic pictures in proof-sizing.test.ts.
 
+import { sanitizeProofVehicle, type ProofVehicle } from './proof-vehicle';
 import { measureRect, type PhotoCalibration, type PixelRect } from './photo-scale';
 import {
   measureBoxes,
@@ -74,6 +75,8 @@ export interface ProofReadResult {
   views: ProofView[];
   size_table: ProofSizeRow[];
   decals: ProofDecal[];
+  /** The vehicle the page prints, if it prints one (src/lib/proof-vehicle.ts). */
+  vehicle: ProofVehicle | null;
 }
 
 const MAX_VIEWS = 12;
@@ -134,7 +137,7 @@ export function sanitizeProofRead(raw: any): ProofReadResult {
     decals.push({ name: str(d?.name, 80) || `Decal ${decals.length + 1}`, view, box, size_table_index: sti });
     if (decals.length >= MAX_DECALS) break;
   }
-  return { page_title: str(src.page_title, 80) || null, views, size_table, decals };
+  return { page_title: str(src.page_title, 80) || null, views, size_table, decals, vehicle: sanitizeProofVehicle(src.vehicle) };
 }
 
 export function viewKindLabel(kind: ProofViewKind): string {

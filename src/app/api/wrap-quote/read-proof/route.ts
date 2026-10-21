@@ -22,6 +22,7 @@ const PROMPT = `You are reading ONE page of a vehicle graphics proof (a customer
 
 {
   "page_title": "short name for this page, e.g. 'Driver side' or 'Side views', or null",
+  "vehicle": { "year": 2024, "make": "Ford", "model": "Transit", "body": "Cargo Van", "wheelbase_in": 148, "roof": "High" },
   "views": [
     { "kind": "driver_side", "label": "Driver side", "box": { "x": 0.05, "y": 0.20, "w": 0.60, "h": 0.35 } }
   ],
@@ -39,7 +40,8 @@ Rules:
 - decals: one entry per separate piece of artwork applied to the vehicle — each logo, lettering block, stripe, phone number, web address, graphic. The same logo on two doors is two decals. Box each decal with about 5% margin around its artwork, never including the vehicle outline, dimension arrows, leader lines, callout text or the size table. Treat a continuous graphic (a stripe with text inside it) as one decal. Name decals the way the proof names them when it does; otherwise describe them briefly ("Phone number", "Rear door logo").
 - size_table: every size the proof PRINTS for a decal — in a legend, a table, or a callout beside the artwork (24" x 12", 24in x 12in, 24 x 12, 2' x 1', "24 in tall", "36 wide"). Convert feet to inches. width_in is the horizontal size, height_in the vertical. A callout giving one dimension leaves the other null. qty only when the proof states a count, else null. Never invent a size: a decal with no printed size gets no row.
 - size_table_index: the index of the row that prints this decal's size, else null. Several decals may share one row (the same logo on both sides).
-- Ignore the vehicle outline, grids, title blocks, approval signatures, the proof maker's own logo, revision notes and colour swatches.`;
+- vehicle: the vehicle this proof is for, ONLY as it is WRITTEN on the page (title block, header, notes, a label beside a view: "2024 Ford Transit 148\" WB High Roof", "Ram ProMaster 2500 159 WB"). Copy what is printed; leave any part that isn't printed null. wheelbase_in in inches (148" WB, 148 WB, "148 wheelbase"; a bare 148 or 159 after a van model is its wheelbase). roof is Low, Medium, High or Super High when printed. Never work the vehicle out from the drawing's shape or the artwork — if the page prints no vehicle, vehicle is null.
+- Apart from reading the vehicle, ignore the vehicle outline, grids, title blocks, approval signatures, the proof maker's own logo, revision notes and colour swatches.`;
 
 /**
  * POST /api/wrap-quote/read-proof
