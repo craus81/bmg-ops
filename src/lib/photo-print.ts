@@ -105,7 +105,9 @@ async function loadPhotoBlob(url: string): Promise<Blob> {
     if (!file.ok) throw new Error(`HTTP ${file.status}`);
     return file.blob();
   }
-  const res = await fetch(url, { credentials: 'include' });
+  // 'same-origin', not 'include': public-domain photos answer with a
+  // wildcard CORS header, which browsers refuse alongside credentials.
+  const res = await fetch(url, { credentials: 'same-origin' });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.blob();
 }
