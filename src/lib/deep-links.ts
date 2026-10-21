@@ -61,6 +61,8 @@ export const deepLinks = {
     task.vehicleId
       ? `/tracking?vehicle=${task.vehicleId}`
       : `/upfit?id=${task.projectId}&task=${task.taskId}`,
+  /** The FleetSuite sales order page (read live from NetSuite; admins edit). */
+  salesOrder: (netsuiteId: string | number) => `/sales-orders/${encodeURIComponent(String(netsuiteId))}`,
   /** Upfit board — opens the project detail (optionally flashing a note or task). */
   upfitProject: (projectId: string, opts?: { noteId?: string | null; taskId?: string | null }) =>
     `/upfit?id=${projectId}${opts?.noteId ? `&note=${opts.noteId}` : ''}${opts?.taskId ? `&task=${opts.taskId}` : ''}`,

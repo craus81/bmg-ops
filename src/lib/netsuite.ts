@@ -2134,6 +2134,82 @@ export async function updatePurchaseOrderItemLines(
   return res.ok ? { success: true } : { success: false, error: res.error };
 }
 
+/** GET/PATCH a salesOrder record — the same envelope as purchaseOrderRecordCall. */
+async function salesOrderRecordCall(
+  path: string,
+  method: 'GET' | 'PATCH',
+  body?: unknown,
+): Promise<{ ok: true; data: any } | { ok: false; error: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/salesOrder/${path}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { ok: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+    const text = await response.text();
+    return { ok: true, data: text ? JSON.parse(text) : {} };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * A sales order record read live, item sublist included — the sales order
+ * page (src/lib/sales-order-edit.ts parses it). Live because the mirror can
+ * be two hours old and an edit must be planned against what NetSuite has now.
+ */
+export async function getSalesOrderRecord(
+  salesOrderId: string | number,
+): Promise<{ success: true; record: any } | { success: false; error: string }> {
+  const res = await salesOrderRecordCall(`${salesOrderId}?expandSubResources=true`, 'GET');
+  return res.ok ? { success: true, record: res.data } : { success: false, error: res.error };
+}
+
+/**
+ * Edit a sales order from the sales order page. Lines are keyed by their
+ * `line`, never rebuilt from an estimate, so shipped and billed lines are
+ * left alone. `replace` (only when a line is removed) makes the item sublist
+ * exactly the lines sent: every kept line goes with its `line` key, the same
+ * way the purchasing Undo removes a PO line.
+ */
+export async function patchSalesOrder(
+  salesOrderId: string | number,
+  body: Record<string, unknown>,
+  opts: { replace: boolean },
+): Promise<{ success: boolean; error?: string }> {
+  const res = await salesOrderRecordCall(
+    `${salesOrderId}${opts.replace ? '?replace=item' : ''}`,
+    'PATCH',
+    body,
+  );
+  return res.ok ? { success: true } : { success: false, error: res.error };
+}
+
 /**
  * Look up a NetSuite customer by name (partial match)
  */

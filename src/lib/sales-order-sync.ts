@@ -207,7 +207,7 @@ export function buildSoHeaderQuery(sinceIso: string, beforeId: string | null, co
     `;
 }
 
-function buildSoLinesQuery(soIds: string[]): string {
+export function buildSoLinesQuery(soIds: string[]): string {
   return `
       SELECT tl.transaction AS so_id, tl.id AS line_id, tl.item, i.itemid AS item_number,
              tl.memo AS description, tl.quantity, tl.quantitybilled, tl.rate, tl.netamount

@@ -1123,6 +1123,12 @@ export default function UpfitProjectsPage() {
                 Parts Readiness{readiness?.soNumber ? ` · ${readiness.soNumber}` : ''}
               </div>
               <span style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <a
+                  href={deepLinks.salesOrder(selected.netsuite_so_id)}
+                  style={{ fontSize: '10px', fontWeight: 700, color: 'var(--accent)', textDecoration: 'none' }}
+                >
+                  Open sales order
+                </a>
                 {readiness?.available && (readiness.parts || []).some((p: any) => p.allocatable > 0) && (
                   <button
                     onClick={() => allocate({ action: 'allocate_all' })}
