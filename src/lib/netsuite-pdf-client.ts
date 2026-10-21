@@ -1,11 +1,14 @@
 'use client';
 
+import { openPdfBytes } from './native-files';
+
 /**
  * Open a NetSuite transaction PDF in a new tab from the browser.
  *
  * The window is opened synchronously inside the caller's click handler
  * (popup blockers require a direct user gesture) and pointed at a blob URL
- * once the PDF arrives from /api/netsuite/pdf.
+ * once the PDF arrives from /api/netsuite/pdf, under NetSuite's file name
+ * (Invoice_INV1532.pdf) so Save keeps it in the app and on a computer.
  */
 export async function openNetSuitePdf(
   type: 'invoice' | 'salesOrder' | 'estimate',
@@ -46,9 +49,7 @@ async function openResolved(
     const data = await res.json();
     if (!data.success || !data.pdfBase64) throw new Error(data.error || 'PDF fetch failed');
     const bytes = Uint8Array.from(atob(data.pdfBase64), c => c.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-    if (w) w.location.href = url;
-    else window.open(url, '_blank');
+    openPdfBytes(w, bytes, data.filename || `${type}-${id}.pdf`);
     return { ok: true };
   } catch (e: any) {
     w?.close();

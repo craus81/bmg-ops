@@ -6,6 +6,7 @@ import { useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { looseMatcher } from '@/lib/loose-search';
+import { openPdfBytes } from '@/lib/native-files';
 
 const ENDPOINT = '/api/netsuite/backfill-invoice-locations';
 // NetSuite invoice PATCHes are slow (several seconds each) and the function has
@@ -170,9 +171,7 @@ export default function InvoiceLocationsPage() {
       const raw = atob(data.pdfBase64);
       const bytes = new Uint8Array(raw.length);
       for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-      if (win) win.location.href = url;
-      else window.open(url, '_blank');
+      openPdfBytes(win, bytes, data.filename || `Invoice_${inv.invoiceNumber || inv.invoiceId}.pdf`);
     } catch (e: any) {
       if (win) win.close();
       setError(`${inv.invoiceNumber || inv.invoiceId}: ${e?.message || 'PDF failed'}`);

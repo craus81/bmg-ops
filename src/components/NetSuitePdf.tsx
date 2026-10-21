@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { openJobOrder } from '@/lib/job-order-pdf';
+import { openPdfBytes } from '@/lib/native-files';
 
 interface NetSuitePdfProps {
   type: 'salesOrder' | 'invoice';
@@ -103,9 +104,7 @@ export default function NetSuitePdf({ type, recordId, recordNumber, label }: Net
     const raw = atob(pdfBase64);
     const bytes = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-    const blob = new Blob([bytes], { type: 'application/pdf' });
-    const blobUrl = URL.createObjectURL(blob);
-    window.open(blobUrl, '_blank');
+    openPdfBytes(window.open('about:blank', '_blank'), bytes, `${type === 'invoice' ? 'Invoice' : 'SalesOrder'}_${recordNumber}.pdf`);
   };
 
   return (

@@ -75,3 +75,89 @@ export function canShareFiles(files: File[]): boolean {
     return false;
   }
 }
+
+const EXT_FOR_TYPE: Record<string, string> = {
+  'application/pdf': 'pdf',
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'application/zip': 'zip',
+  'text/csv': 'csv',
+};
+
+/**
+ * A file name the phone can open. Files on the iPhone go by the name's
+ * ending alone: "Save to Files" on a PDF called just "File" (what a NetSuite
+ * invoice opened from a blob: link used to get) saves a blank icon nothing
+ * will open (Craig, 2026-10-21). Keeps a name that already has an ending and
+ * adds the one its type calls for otherwise; a PDF is told by its first
+ * bytes ("%PDF") when the type is missing.
+ */
+export function withFileExtension(name: string | null | undefined, type?: string | null, head?: Uint8Array | null): string {
+  const base = (name || '').trim().replace(/[\\/:*?"<>|]+/g, '-') || 'File';
+  if (/\.[a-z0-9]{2,5}$/i.test(base)) return base;
+  let ext = EXT_FOR_TYPE[(type || '').split(';')[0].trim().toLowerCase()];
+  if (!ext && head && head.length >= 4 && head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46) ext = 'pdf';
+  return ext ? `${base}.${ext}` : base;
+}
+
+// blob: URLs carry no file name, so a screen that opens one says what it is
+// called here, and the app's viewer (NativeLinkHandler) looks it up.
+const blobNames = new Map<string, string>();
+
+/** Remember the file name for a blob: URL a screen is about to open. */
+export function nameBlobUrl(url: string, name: string | null | undefined): string {
+  if (name) blobNames.set(url, name);
+  return url;
+}
+
+/** The name a screen gave a blob: URL, if any. */
+export function blobUrlName(url: string): string | null {
+  return blobNames.get(url) ?? null;
+}
+
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, c => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!
+));
+
+/**
+ * Show a PDF held in memory in the tab the caller opened inside its click
+ * (`w`), or a new one, under its real name.
+ *
+ *  - In the app the blob goes to the in-app viewer (NativeLinkHandler) as
+ *    `name`, so Save keeps it, e.g. Invoice_INV1532.pdf.
+ *  - On a computer a bare blob: tab saves as "unknown.pdf" (no browser can
+ *    name one), so the tab gets a slim bar with a Save button that does,
+ *    over the browser's own PDF view.
+ *  - Phones and tablets in Safari keep the bare tab: an iframe there shows
+ *    only the first page.
+ */
+export function openPdfBytes(w: Window | null, bytes: BlobPart, name: string | null | undefined): void {
+  const fileName = withFileExtension(name, 'application/pdf');
+  const url = nameBlobUrl(URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })), fileName);
+  const isTouch = typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
+  if (!w || isNativeApp() || isTouch) {
+    if (w) w.location.href = url;
+    else window.open(url, '_blank');
+    return;
+  }
+  const n = escapeHtml(fileName);
+  try {
+    w.document.open();
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${n}</title><style>
+      html, body { margin: 0; height: 100%; background: #525659; font-family: -apple-system, Segoe UI, Helvetica, Arial, sans-serif; }
+      body { display: flex; flex-direction: column; }
+      .bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #1f2937; color: #fff; }
+      .name { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      a.save { padding: 7px 14px; border-radius: 8px; background: #2563eb; color: #fff; font-size: 13px; font-weight: 700; text-decoration: none; }
+      iframe { flex: 1; border: 0; width: 100%; }
+    </style></head><body>
+      <div class="bar"><div class="name">${n}</div><a class="save" href="${url}" download="${n}">Save PDF</a></div>
+      <iframe src="${url}" title="${n}"></iframe>
+    </body></html>`);
+    w.document.close();
+  } catch {
+    w.location.href = url;
+  }
+}

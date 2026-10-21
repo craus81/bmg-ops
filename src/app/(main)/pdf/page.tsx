@@ -25,6 +25,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { allowedPdfSrc } from '@/lib/deep-links';
+import { withFileExtension } from '@/lib/native-files';
 
 function safePath(raw: string | null): string | null {
   if (!raw) return null;
@@ -90,7 +91,9 @@ export default function PdfViewerPage() {
         </div>
         {src && (
           <>
-            <a href={src} download={name} style={btn}>Download</a>
+            {/* A name without ".pdf" saves as a file nothing opens; with no
+                name at all the server's file name is used. */}
+            <a href={src} download={searchParams.get('name') ? withFileExtension(name, 'application/pdf') : ''} style={btn}>Download</a>
             {/* Escape hatch for browsers (notably iOS) whose in-frame PDF
                 rendering only shows the first page. */}
             <a href={src} target="_blank" rel="noreferrer" style={btn}>Full screen ↗</a>

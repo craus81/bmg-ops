@@ -14,6 +14,7 @@
  */
 
 import { apiFetch } from '@/lib/api-client';
+import { openPdfBytes } from '@/lib/native-files';
 import { companyLines, type CompanyLetterhead } from '@/lib/company-profile';
 import type { OpenArInvoice, OpenVendorBill, AgingBucketKey } from '@/lib/financials-data';
 
@@ -237,9 +238,7 @@ export async function openArInvoicePdf(id: string): Promise<{ ok: boolean; error
     const data = await res.json();
     if (!data.success || !data.pdfBase64) throw new Error(data.error || 'PDF fetch failed');
     const bytes = Uint8Array.from(atob(data.pdfBase64), c => c.charCodeAt(0));
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-    if (w) w.location.href = url;
-    else window.open(url, '_blank');
+    openPdfBytes(w, bytes, data.filename || `Invoice_${id}.pdf`);
     return { ok: true };
   } catch (e: any) {
     w?.close();

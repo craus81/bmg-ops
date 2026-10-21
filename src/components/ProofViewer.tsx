@@ -3,7 +3,8 @@
 /**
  * Full-screen proof viewer for installers: every page of a PDF proof (or the
  * image itself) at full width, pinch / double-tap / +/- zoom, and a Print
- * button.
+ * button and a Save button, side by side so it's plain which does what
+ * (Craig, 2026-10-21).
  *
  * Built because the vehicle record's proof preview only grew inline to 300px,
  * too small to read the dimensions on a proof and wide enough to push the
@@ -18,12 +19,17 @@
  * browser can share files (iOS Safari and the app) Print opens the share
  * sheet with the file, which has Print, AirPrint and Save to Files. Elsewhere
  * it prints the rendered pages from a hidden frame.
+ *
+ * Save: on phones the share sheet too (Save to Files, AirDrop, Mail); on a
+ * computer a plain download. Either way the file keeps a real name with its
+ * ending (EST-2610-024.pdf): one called just "File" saved to Files as a
+ * blank icon the phone couldn't open.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getTextZoom } from '@/lib/text-size';
-import { isNativeApp } from '@/lib/native-files';
+import { isNativeApp, withFileExtension } from '@/lib/native-files';
 
 const MAX_PAGES = 20;
 const MIN_ZOOM = 1;
@@ -311,21 +317,32 @@ export default function ProofViewer({ url, loadFile, filename, noun = 'proof', d
     });
   };
 
+  /** The loaded file under a name the phone can open. */
+  const namedFile = (blob: Blob): File => {
+    const fallback = noun === 'proof' ? 'Proof' : 'File';
+    return new File([blob], withFileExtension(filename || fallback, blob.type), { type: blob.type || 'application/octet-stream' });
+  };
+
+  /** Hand the file to the share sheet. False when this browser can't. */
+  const shareFile = async (blob: Blob): Promise<boolean> => {
+    if (typeof navigator === 'undefined' || !navigator.canShare) return false;
+    const file = namedFile(blob);
+    if (!navigator.canShare({ files: [file] })) return false;
+    try {
+      await navigator.share({ files: [file], title });
+    } catch { /* cancelled */ }
+    return true;
+  };
+
+  const isTouch = () => typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches;
+
   const handlePrint = async () => {
     if (printing) return;
     setPrinting(true);
     const blob = blobRef.current;
-    const isTouch = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
-    if (blob && isTouch && typeof navigator !== 'undefined' && navigator.canShare) {
-      const name = filename || `proof.${blob.type === 'application/pdf' ? 'pdf' : 'png'}`;
-      const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
-      if (navigator.canShare({ files: [file] })) {
-        try {
-          await navigator.share({ files: [file], title });
-        } catch { /* cancelled */ }
-        setPrinting(false);
-        return;
-      }
+    if (blob && isTouch() && await shareFile(blob)) {
+      setPrinting(false);
+      return;
     }
     if (pages.length > 0) {
       printInFrame();
@@ -333,6 +350,24 @@ export default function ProofViewer({ url, loadFile, filename, noun = 'proof', d
     }
     if (url) window.open(url, '_blank', 'noopener');
     setPrinting(false);
+  };
+
+  const handleSave = async () => {
+    const blob = blobRef.current;
+    if (!blob) {
+      if (url) window.open(url, '_blank', 'noopener');
+      return;
+    }
+    if ((isTouch() || isNativeApp()) && await shareFile(blob)) return;
+    const file = namedFile(blob);
+    const href = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 10_000);
   };
 
   const btn: React.CSSProperties = {
@@ -370,6 +405,12 @@ export default function ProofViewer({ url, loadFile, filename, noun = 'proof', d
           disabled={phase !== 'ready' && !url && !blobRef.current}
           style={{ ...btn, background: '#2563eb', border: '1px solid #2563eb', opacity: printing ? 0.6 : 1 }}
         >{printing ? 'Preparing…' : 'Print'}</button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={!url && !blobRef.current}
+          style={{ ...btn, background: '#16a34a', border: '1px solid #16a34a' }}
+        >Save</button>
         <button type="button" onClick={onClose} aria-label="Close" style={{ ...btn, fontSize: '16px', padding: '6px 12px' }}>✕</button>
       </div>
 
@@ -389,7 +430,7 @@ export default function ProofViewer({ url, loadFile, filename, noun = 'proof', d
             {phase === 'unsupported' && blobRef.current && isNativeApp() ? (
               // A link would leave the app for Safari, which isn't signed in.
               <div style={{ marginTop: '12px' }}>
-                <button type="button" onClick={handlePrint} style={{ ...btn, background: '#2563eb', border: '1px solid #2563eb' }}>Save or share</button>
+                <button type="button" onClick={handleSave} style={{ ...btn, background: '#16a34a', border: '1px solid #16a34a' }}>Save</button>
               </div>
             ) : url && !isNativeApp() && (
               <div style={{ marginTop: '12px' }}>
