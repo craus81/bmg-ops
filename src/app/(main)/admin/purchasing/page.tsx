@@ -80,8 +80,9 @@ const UNASSIGNED = 'No vendor — assign one';
 
 /** NetSuite's own printed PO in the in-app PDF viewer; ← comes back here. */
 function poPdfHref(netsuiteId: string, number: string | null | undefined): string {
-  return deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', netsuiteId), {
-    name: `PO ${number || netsuiteId}.pdf`,
+  const name = deepLinks.poPdfFileName(number, netsuiteId);
+  return deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', netsuiteId, name), {
+    name,
     back: deepLinks.purchaseRequests(),
     backLabel: 'Purchasing',
   });

@@ -404,7 +404,7 @@ export default function ReceivingPage() {
             {/* NetSuite's printed PO — a sibling of the header button, since
                 a link can't sit inside a button. */}
             {po.netsuite_id && (
-              <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', po.netsuite_id), { name: `PO ${po.tranid || po.netsuite_id}.pdf`, back: deepLinks.receiving(po.id), backLabel: 'Receiving' })}
+              <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', po.netsuite_id, deepLinks.poPdfFileName(po.tranid, po.netsuite_id)), { name: deepLinks.poPdfFileName(po.tranid, po.netsuite_id), back: deepLinks.receiving(po.id), backLabel: 'Receiving' })}
                 target="_blank" rel="noreferrer" title="NetSuite's printed PO"
                 style={{ marginRight: '14px', padding: '1px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, border: `1px solid ${theme.border}`, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}>📄 PDF</a>
             )}

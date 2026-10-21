@@ -921,7 +921,7 @@ export default function UpfitProjectsPage() {
                   )}
                   {l.po?.eta_date && <span style={{ color: theme.textSecondary }}>ETA {fmt(l.po.eta_date)}</span>}
                   {l.po?.netsuite_id && (
-                    <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', l.po.netsuite_id), { name: `PO ${l.po.tranid || l.po.netsuite_id}.pdf`, back: deepLinks.upfitProject(selected.id), backLabel: selected.project_name || 'Upfit project' })}
+                    <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', l.po.netsuite_id, deepLinks.poPdfFileName(l.po.tranid, l.po.netsuite_id)), { name: deepLinks.poPdfFileName(l.po.tranid, l.po.netsuite_id), back: deepLinks.upfitProject(selected.id), backLabel: selected.project_name || 'Upfit project' })}
                       target="_blank" rel="noreferrer" title="NetSuite's printed PO"
                       style={{ padding: '1px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, border: `1px solid ${theme.border}`, color: '#60a5fa', textDecoration: 'none', whiteSpace: 'nowrap' }}>📄 PDF</a>
                   )}

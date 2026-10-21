@@ -214,7 +214,7 @@ export default function VendorPosTab({ isAdmin, onChanged }: { isAdmin: boolean;
                       <a href={po.url} target="_blank" rel="noreferrer" style={{ marginLeft: '8px', fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>NetSuite ↗</a>
                     )}
                     {po.netsuite_id && (
-                      <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', po.netsuite_id), { name: `PO ${po.tranid || po.netsuite_id}.pdf`, back: '/admin/purchasing?tab=vendor-pos', backLabel: 'Vendor POs' })}
+                      <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', po.netsuite_id, deepLinks.poPdfFileName(po.tranid, po.netsuite_id)), { name: deepLinks.poPdfFileName(po.tranid, po.netsuite_id), back: '/admin/purchasing?tab=vendor-pos', backLabel: 'Vendor POs' })}
                         target="_blank" rel="noreferrer" title="NetSuite's printed PO"
                         style={{ marginLeft: '8px', fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>📄 PDF</a>
                     )}
