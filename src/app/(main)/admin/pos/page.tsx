@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { flashNote } from '@/lib/focus-note';
 import { createClient } from '@/lib/supabase-browser';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -3493,11 +3494,31 @@ export default function POsPage() {
                     const hasFlags = jobs.length > 0 || noteCount > 0 || checkStatus === 'attention'
                       || (checkStatus === 'no_invoices' && po.status === 'complete')
                       || !!(po as any).netsuite_invoice_number;
+                    // Outside edit mode each cell's content is a real link to the PO,
+                    // so right-click "Open in new tab" and Cmd/Ctrl-click work
+                    // anywhere on the row. The link takes the cell's padding so the
+                    // whole cell is clickable, not just the text.
+                    const poHref = deepLinks.po(po.id);
+                    const linkCell = (style: React.CSSProperties, children: React.ReactNode, title?: string) => editMode
+                      ? <td style={style} title={title}>{children}</td>
+                      : (
+                        <td style={{ ...style, padding: 0 }} title={title}>
+                          <Link href={poHref} prefetch={false} style={{ display: 'block', padding: style.padding, color: 'inherit', textDecoration: 'none' }}>
+                            {children}
+                          </Link>
+                        </td>
+                      );
                     return (
                       <tr
                         key={po.id}
                         className="table-row-link"
-                        onClick={() => editMode ? toggleDeleteSelection(po.id) : router.push(`/admin/pos/${po.id}`)}
+                        onClick={(e) => {
+                          if (editMode) { toggleDeleteSelection(po.id); return; }
+                          // Clicks on a cell link navigate on their own (and keep
+                          // Cmd/Ctrl-click opening a new tab); the Flags cell isn't a link.
+                          if ((e.target as HTMLElement).closest('a')) return;
+                          router.push(poHref);
+                        }}
                       >
                         {editMode && (
                           <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
@@ -3509,31 +3530,31 @@ export default function POsPage() {
                             />
                           </td>
                         )}
-                        <td style={tdStyle}>
+                        {linkCell(tdStyle, <>
                           <span style={{ fontWeight: 800, color: '#60a5fa' }}>{po.po_number}</span>
                           <CreatedBy compact {...poCreatedBy(po)} at={po.created_at} style={{ display: 'block', fontSize: '10px', fontWeight: 500 }} />
-                        </td>
-                        <td style={{ ...tdStyle, color: 'var(--text-secondary)' }}>{po.customer}</td>
-                        <td style={{ ...tdStyle, color: loc ? 'var(--text-secondary)' : 'var(--text-muted)' }} title={formatShipTo(po.ship_to) || undefined}>
-                          {loc || '—'}
-                        </td>
-                        <td style={{ ...tdStyle, color: 'var(--text-secondary)' }} title={po.ordered_date ? 'PO date' : 'Imported date (no PO date on record)'}>
-                          {displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
-                        </td>
-                        <td style={numStyle} title={`${billed <= 0 ? '$0' : fmt(billed)} billed of ${fmt(totalValue)}`}>
-                          <span style={{ fontWeight: 700, color: billedColor }}>{billed <= 0 ? '$0' : fmt(billed)}</span>
-                        </td>
-                        <td style={numStyle}>
-                          <span style={{ fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</span>
-                        </td>
-                        <td style={tdStyle}>
+                        </>)}
+                        {linkCell({ ...tdStyle, color: 'var(--text-secondary)' }, po.customer)}
+                        {linkCell({ ...tdStyle, color: loc ? 'var(--text-secondary)' : 'var(--text-muted)' }, loc || '—', formatShipTo(po.ship_to) || undefined)}
+                        {linkCell(
+                          { ...tdStyle, color: 'var(--text-secondary)' },
+                          displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }),
+                          po.ordered_date ? 'PO date' : 'Imported date (no PO date on record)',
+                        )}
+                        {linkCell(
+                          numStyle,
+                          <span style={{ fontWeight: 700, color: billedColor }}>{billed <= 0 ? '$0' : fmt(billed)}</span>,
+                          `${billed <= 0 ? '$0' : fmt(billed)} billed of ${fmt(totalValue)}`,
+                        )}
+                        {linkCell(numStyle, <span style={{ fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</span>)}
+                        {linkCell(tdStyle, (
                           <span style={{
                             fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '999px',
                             background: `${statusMeta.color}15`, border: `1px solid ${statusMeta.color}33`, color: statusMeta.color,
                           }}>
                             {statusMeta.label}
                           </span>
-                        </td>
+                        ))}
                         <td style={tdStyle}>
                           {hasFlags ? (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
