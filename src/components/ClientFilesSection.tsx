@@ -15,6 +15,9 @@
  * Several files come down as one zip (Craig, 2026-10-16): "Pick files" ticks
  * rows for a zip, "Zip a folder" zips the whole folder or a sub-folder.
  *
+ * It opens on the folders, laid out as in Dropbox (ClientFolderBrowser;
+ * Craig, 2026-10-21), with "Newest files" one tap away for the old list.
+ *
  * With no folder linked yet it says so, shows any folder the matcher thinks
  * might be this customer, and lets an admin link one.
  */
@@ -26,6 +29,7 @@ import { deepLinks } from '@/lib/deep-links';
 import ClientFileRow, { type ClientFile } from '@/components/ClientFileRow';
 import { setFolderMatch, type ClientFolder } from '@/components/ClientFolderMatches';
 import { ZipBar, FolderZipList } from '@/components/ClientFilesDownload';
+import ClientFolderBrowser from '@/components/ClientFolderBrowser';
 
 const SHOW = 8;
 /** Rows added by "Show more" (and shown at once when picking files for a zip). */
@@ -54,6 +58,7 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
   const [limit, setLimit] = useState(SHOW);
   const [mode, setMode] = useState<'pick' | 'folders' | null>(null);
   const [picked, setPicked] = useState<Map<string, ClientFile>>(new Map());
+  const [layout, setLayout] = useState<'folders' | 'newest'>('folders');
 
   useEffect(() => {
     const t = setTimeout(() => setQ(qInput.trim()), 300);
@@ -155,6 +160,18 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading…</div>
       ) : linked.length > 0 ? (
         <>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+            <button onClick={() => setLayout('folders')} style={chip(layout === 'folders')}>📁 Folders</button>
+            <button onClick={() => setLayout('newest')} style={chip(layout === 'newest')}>🕑 Newest files</button>
+          </div>
+          {layout === 'folders' ? (
+            <ClientFolderBrowser
+              compact
+              roots={linked.map(f => ({ id: f.id, name: f.name, fileCount: f.fileCount }))}
+              rootLabel={customerName}
+              rootSearch={`customer=${customerId}`}
+            />
+          ) : (<>
           {many ? (
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
               <button onClick={() => setOnlyFolder(null)} style={chip(!onlyFolder)}>
@@ -214,6 +231,7 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
               ))}
             </div>
           )}
+          </>)}
           <a href={allHref} style={{ display: 'inline-block', marginTop: '8px', fontSize: '12px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none' }}>
             {total > SHOW ? `See all ${total.toLocaleString()} in Client Files →` : 'Open in Client Files →'}
           </a>

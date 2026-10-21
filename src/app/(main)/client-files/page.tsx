@@ -10,6 +10,10 @@
  * wide screens) and, for admins, Check matches, where the Dropbox client
  * folders the matcher wasn't sure about get linked to the right customer.
  *
+ * Once a client (or a customer's folders) is picked it opens on the folders,
+ * laid out as in Dropbox (ClientFolderBrowser; Craig, 2026-10-21), with
+ * "Newest files" one tap away for the flat list.
+ *
  * URL params (deepLinks.clientFiles): q, folder, customer (+ customerName,
  * every folder linked to that customer), matches=1.
  */
@@ -22,6 +26,7 @@ import { CLIENT_FILE_KINDS, KIND_LABELS, formatBytes, type ClientFileKind } from
 import ClientFileRow, { FileTile, CopiedBadge, clientFileUrl, fmtFileDate, type ClientFile } from '@/components/ClientFileRow';
 import ClientFolderMatches from '@/components/ClientFolderMatches';
 import { ZipBar, FolderZipList } from '@/components/ClientFilesDownload';
+import ClientFolderBrowser, { type BrowserRoot } from '@/components/ClientFolderBrowser';
 
 const PAGE_SIZE = 50;
 
@@ -100,6 +105,10 @@ function ClientFilesInner() {
   const [mode, setMode] = useState<'pick' | 'folders' | null>(null);
   const [picked, setPicked] = useState<Map<string, ClientFile>>(new Map());
   const reqId = useRef(0);
+  // A picked client opens on its folders (Craig, 2026-10-21); 'newest' is the flat list.
+  const [layout, setLayout] = useState<'folders' | 'newest'>('folders');
+  const [customerRoots, setCustomerRoots] = useState<BrowserRoot[] | null>(null);
+  const [browserFiles, setBrowserFiles] = useState<ClientFile[]>([]);
 
   useEffect(() => {
     const t = setTimeout(() => setQ(qInput.trim()), 300);
@@ -173,7 +182,35 @@ function ClientFilesInner() {
     }
   };
 
-  const selected = useMemo(() => files.find(f => f.id === selectedId) || null, [files, selectedId]);
+  // Every folder linked to the customer, as the browser's top level.
+  useEffect(() => {
+    if (!customer || folder) { setCustomerRoots(null); return; }
+    let live = true;
+    (async () => {
+      try {
+        const res = await apiFetch(`/api/client-files/folders?customer=${customer.id}`);
+        const json = await res.json();
+        if (live) setCustomerRoots(res.ok ? (json.linked || []).map((f: any) => ({ id: f.id, name: f.name, fileCount: f.fileCount })) : []);
+      } catch {
+        if (live) setCustomerRoots([]);
+      }
+    })();
+    return () => { live = false; };
+  }, [customer, folder]);
+
+  const browserRoots: BrowserRoot[] | null = folder
+    ? [{ id: folder.id, name: folder.name || 'This client' }]
+    : customer ? customerRoots : null;
+  const browsing = layout === 'folders' && !!browserRoots && browserRoots.length > 0;
+  const onBrowserShown = useCallback((list: ClientFile[]) => {
+    setBrowserFiles(list);
+    setSelectedId(prev => (prev && list.some(f => f.id === prev) ? prev : (list[0]?.id ?? null)));
+  }, []);
+
+  const selected = useMemo(
+    () => (browsing ? browserFiles : files).find(f => f.id === selectedId) || null,
+    [browsing, browserFiles, files, selectedId],
+  );
 
   const copyLink = async (f: ClientFile) => {
     const url = `${window.location.origin}${clientFileUrl(f)}`;
@@ -280,11 +317,13 @@ function ClientFilesInner() {
         padding: '12px', borderRadius: '12px', marginBottom: '14px',
         background: 'var(--card)', border: '1px solid var(--border)',
       }}>
-        <input
-          type="search" value={qInput} onChange={e => setQInput(e.target.value)}
-          placeholder="🔍 Client, folder or file name"
-          style={{ ...inputStyle, flex: '2 1 260px' }}
-        />
+        {!browsing && (
+          <input
+            type="search" value={qInput} onChange={e => setQInput(e.target.value)}
+            placeholder="🔍 Client, folder or file name"
+            style={{ ...inputStyle, flex: '2 1 260px' }}
+          />
+        )}
         <select
           value={folder?.id || ''}
           onChange={e => {
@@ -301,12 +340,18 @@ function ClientFilesInner() {
         {customer && !folder && (
           <button onClick={() => setCustomer(null)} title="Show every client" style={chip(true)}>{customer.name}'s folders ✕</button>
         )}
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+        {browserRoots && browserRoots.length > 0 && (
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button onClick={() => setLayout('folders')} style={chip(layout === 'folders')}>📁 Folders</button>
+            <button onClick={() => setLayout('newest')} style={chip(layout === 'newest')}>🕑 Newest files</button>
+          </div>
+        )}
+        {!browsing && <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button onClick={() => setKind('')} style={chip(kind === '')}>All</button>
           {CLIENT_FILE_KINDS.filter(k => k !== 'other').map(k => (
             <button key={k} onClick={() => setKind(k)} style={chip(kind === k)}>{KIND_LABELS[k]}</button>
           ))}
-        </div>
+        </div>}
         {anyFilter && (
           <button onClick={clearFilters} style={{ ...inputStyle, fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)', cursor: 'pointer' }}>✕ Clear</button>
         )}
@@ -326,6 +371,21 @@ function ClientFilesInner() {
         }}>Could not load files: {error}</div>
       )}
 
+      {browsing && browserRoots ? (
+        <div style={{ display: 'grid', gridTemplateColumns: wide && preview ? 'minmax(0, 1fr) 360px' : 'minmax(0, 1fr)', gap: '16px' }}>
+          <div style={{ minWidth: 0 }}>
+            <ClientFolderBrowser
+              roots={browserRoots}
+              rootLabel={customer ? `${customer.name}'s folders` : 'Client files'}
+              rootSearch={customer ? `customer=${customer.id}` : undefined}
+              selectedId={wide ? selectedId : null}
+              onSelect={wide ? f => setSelectedId(f.id) : undefined}
+              onShown={onBrowserShown}
+            />
+          </div>
+          {wide && preview}
+        </div>
+      ) : (<>
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
         <button onClick={() => setMode(m => (m === 'pick' ? null : 'pick'))} style={chip(mode === 'pick')}>☑ Pick files to zip</button>
         <button
@@ -383,6 +443,7 @@ function ClientFilesInner() {
           {wide && preview}
         </div>
       )}
+      </>)}
     </div>
   );
 }
