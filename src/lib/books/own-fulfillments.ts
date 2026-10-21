@@ -191,6 +191,15 @@ export async function readSalesOrderStock(service: SupabaseClient, salesOrderId:
   return { customerNetsuiteId: numericId(head.customer_netsuite_id), customerName: head.customer_name, lines };
 }
 
+/** The order's open stock lines cut down to what shipped, for a fulfillment of part of the order. Pure. */
+export function shippedLines(open: FulfilledLine[], shipped: { salesOrderLineId: string; quantity: number }[]): FulfilledLine[] {
+  const qty = new Map<string, number>();
+  for (const s of shipped) qty.set(s.salesOrderLineId, (qty.get(s.salesOrderLineId) ?? 0) + s.quantity);
+  return open
+    .filter((l) => l.salesOrderLineId !== null && qty.has(l.salesOrderLineId))
+    .map((l) => ({ ...l, quantity: fourPlaces(qty.get(l.salesOrderLineId!)!) }));
+}
+
 // ── Saving ─────────────────────────────────────────────────────────────────
 
 /** What one of the two ways of invoicing a sales order knows once NetSuite has fulfilled it. */
@@ -203,6 +212,8 @@ export interface MadeFulfillment {
   salesOrderId: string | null | undefined;
   /** Where FleetSuite's PO location rule books the PO's invoice, for a sales order's installed quantities. */
   locationId?: string | number | null;
+  /** What shipped, by sales order line, when FleetSuite shipped part of the order; absent when it shipped every open line. */
+  shipped?: { salesOrderLineId: string; quantity: number }[] | null;
 }
 
 /**
@@ -237,7 +248,7 @@ export async function saveOwnFulfillment(service: SupabaseClient, made: MadeFulf
       locationId,
       locationFrom,
       fulfilDate: chicagoDate(at),
-      lines: so.lines,
+      lines: made.shipped && so.lines ? shippedLines(so.lines, made.shipped) : so.lines,
       madeBy: made.madeBy ?? null,
     });
 

@@ -47,6 +47,7 @@ const ALLOWED: Record<string, string> = {
   'src/components/AddToEstimateModal.tsx': 'opens only from the estimate builder',
   'src/components/PartCatalogBrowser.tsx': 'used by the estimate builder and part_admin, both money-walled',
   'src/components/GraphicsInvoiceReviewModal.tsx': 'rendered only behind canSeeMoney on the graphics board and record',
+  'src/components/FulfillInvoiceModal.tsx': 'opened only by admins (isAdmin) on the estimate, and reads /api/estimates/[id]/fulfill-invoice, which is requireAdmin',
   'src/components/QuickBooksRecordModal.tsx': 'loads from /api/ledger/history/[id], which is requireMoney; its openers only fetch history when canSeeMoney',
   'src/components/FinancialsDashboard.tsx': 'financials — super_admin/executive only',
   'src/app/(main)/admin/books/trial-balance/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
