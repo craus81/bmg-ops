@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { checkRateLimit, getRequestIp, validateExpiry } from '@/lib/magic-link-approval';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
@@ -9,10 +9,7 @@ export const dynamic = 'force-dynamic';
 // can run out on a proof-heavy estimate.
 export const maxDuration = 60;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 /**
  * GET /api/approve/estimate/[token]/download/pdf

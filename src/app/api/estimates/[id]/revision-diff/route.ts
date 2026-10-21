@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { diffEstimates } from '@/lib/estimate-diff';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 const HEADER_FIELDS =
   'id, estimate_number, status, subtotal, labor_total, labor_hours, labor_hours_override, tax_amount, grand_total, vehicle_count, supersedes_estimate_id, customer_rejection_reason, customer_rejected_at';

@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { copyEstimate } from '@/lib/estimate-copy';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 /**
  * POST /api/estimates/[id]/duplicate — copy an estimate (header + lines)

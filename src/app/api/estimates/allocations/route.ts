@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { computeEstimateReadiness, type EstimateReadinessLine } from '@/lib/estimate-readiness';
@@ -7,10 +7,7 @@ import { computeEstimateReadiness, type EstimateReadinessLine } from '@/lib/esti
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * POST /api/estimates/allocations — hold stock for a quote, or let it go.

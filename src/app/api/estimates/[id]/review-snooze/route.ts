@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature, getProfileRoles, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
@@ -7,10 +7,7 @@ import { canDecideReview, reviewStateOf, REVIEW_SNOOZE_DAYS } from '@/lib/estima
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const SnoozeSchema = z.object({
   /** 1, 3 or 7 days; null wakes it back up. */

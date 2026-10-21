@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature, getProfileRoles } from '@/lib/api-auth';
 import { checkDiscountApproval } from '@/lib/discount-approval';
 import { generateToken, approvalContentHash } from '@/lib/magic-link-approval';
@@ -42,10 +42,7 @@ export const dynamic = 'force-dynamic';
 // is too tight for a cold start with several assets.
 export const maxDuration = 60;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const SendForApprovalSchema = z.object({
   email: z.string().email().max(254).optional().nullable(),

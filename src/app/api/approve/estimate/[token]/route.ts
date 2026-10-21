@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import {
   loadEstimateGraphics,
   inlineDiagrams,
@@ -41,10 +41,7 @@ const ApprovalSchema = z.object({
   deliveryTarget: z.string().max(254).optional().nullable(),
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 async function loadEstimateByToken(token: string) {
   const { data: estimate, error } = await supabase
