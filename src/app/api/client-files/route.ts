@@ -6,6 +6,7 @@ import { searchWords, looseSearchRegex } from '@/lib/loose-search';
 import { CLIENT_FILE_KINDS } from '@/lib/client-files';
 import { CLIENT_FILE_ITEM_SELECT, toClientFileItem, type ClientFileItem } from '@/lib/client-file-item';
 import { CLIENT_FILES_SYNC_TYPE } from '@/lib/client-files-sync';
+import { escapeIlike } from '@/lib/customer-dupes';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +16,8 @@ const Schema = z.object({
   kind: z.enum(CLIENT_FILE_KINDS as [string, ...string[]]).optional(),
   /** One client folder (dropbox_client_folders.id). */
   folder: z.string().uuid().optional(),
+  /** With folder: only files under this sub-folder ("Chevy Express/PRINT"), at any depth. */
+  sub: z.string().max(500).optional(),
   /** Every folder linked to one customer (customers.id) — the customer page. */
   customer: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -40,6 +43,7 @@ export async function GET(req: NextRequest) {
   const parsed = validateSearchParams(req, Schema);
   if (parsed.error) return parsed.error;
   const { q, kind, folder, customer } = parsed.data;
+  const sub = (parsed.data.sub || '').replace(/^\/+|\/+$/g, '');
   const limit = parsed.data.limit ?? 50;
   const offset = parsed.data.offset ?? 0;
   const service = createServiceClient();
@@ -56,6 +60,15 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Searching inside one sub-folder of the folder browser (Craig, 2026-10-21).
+    let subPrefix: string | null = null;
+    if (folder && sub) {
+      const { data: f, error } = await service.from('dropbox_client_folders')
+        .select('path_lower').eq('id', folder).maybeSingle();
+      if (error) throw new Error(error.message);
+      if (f) subPrefix = `${f.path_lower}/${sub.toLowerCase()}/`;
+    }
+
     let query = service.from('dropbox_client_files')
       .select(
         CLIENT_FILE_ITEM_SELECT,
@@ -67,6 +80,7 @@ export async function GET(req: NextRequest) {
       .range(offset, offset + limit - 1);
     if (kind) query = query.eq('kind', kind);
     if (folder) query = query.eq('folder_id', folder);
+    if (subPrefix) query = query.like('path_lower', `${escapeIlike(subPrefix)}%`);
     if (folderIds) query = query.in('folder_id', folderIds);
     for (const word of searchWords(q).slice(0, 8)) {
       const re = looseSearchRegex(word);

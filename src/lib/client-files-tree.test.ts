@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildFolderTree, pathInFolder } from './client-files-tree';
+import { buildFolderTree, listFolderLevel, pathInFolder } from './client-files-tree';
 
 const rows = [
   { id: '1', name: 'a.eps', size_bytes: 100, rel_path: 'ATCO/Chevy Express/PRINT/a.eps' },
@@ -38,5 +38,37 @@ describe('buildFolderTree', () => {
   it('does not treat a folder with the same prefix as a sub-folder', () => {
     const t = buildFolderTree([{ id: '9', name: 'x', size_bytes: 1, rel_path: 'ATCO/Chevy Express 2/x' }], 'Chevy Express');
     expect(t.files).toEqual([]);
+  });
+});
+
+describe('listFolderLevel', () => {
+  it('lists the folders and loose files directly in the client folder', () => {
+    const l = listFolderLevel(rows);
+    expect(l.total).toEqual({ files: 5, bytes: 362 });
+    expect(l.folders.map(n => [n.path, n.files, n.bytes, n.folders])).toEqual([
+      ['Chevy Express', 3, 350, 2],
+      ['New Folder', 1, 7, 0],
+    ]);
+    expect(l.fileIds).toEqual(['4']);
+  });
+
+  it('goes any depth, matching the folder names case-insensitively', () => {
+    const l = listFolderLevel(rows, 'chevy express/PRINT');
+    expect(l.folders.map(n => [n.path, n.files])).toEqual([['chevy express/PRINT/Master', 1]]);
+    expect(l.fileIds).toEqual(['1']);
+    expect(listFolderLevel(rows, 'Chevy Express/PRINT/Master').fileIds).toEqual(['2']);
+  });
+
+  it('sorts numbers in order and ignores a look-alike sibling', () => {
+    const l = listFolderLevel([
+      { id: 'a', name: 'x', size_bytes: 1, rel_path: 'C/Unit 10/x' },
+      { id: 'b', name: 'x', size_bytes: 1, rel_path: 'C/Unit 9/x' },
+      { id: 'c', name: 'x', size_bytes: 1, rel_path: 'C/Unit 9b/x' },
+    ], 'Unit 9');
+    expect(l.fileIds).toEqual(['b']);
+    expect(listFolderLevel([
+      { id: 'a', name: 'x', size_bytes: 1, rel_path: 'C/Unit 10/x' },
+      { id: 'b', name: 'x', size_bytes: 1, rel_path: 'C/Unit 9/x' },
+    ]).folders.map(f => f.name)).toEqual(['Unit 9', 'Unit 10']);
   });
 });

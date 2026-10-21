@@ -80,13 +80,15 @@ interface RowProps {
   onClient?: (folderId: string, name: string) => void;
   /** Hide the client name (the customer page already says whose files these are). */
   hideClient?: boolean;
+  /** Click the folder path to open that folder in the folder browser (path below the client folder, "/"-separated). */
+  onFolder?: (folderId: string, sub: string) => void;
   compact?: boolean;
   /** Pick mode for a zip download: shows a checkbox, and a tap on the row ticks it. */
   checked?: boolean;
   onCheck?: () => void;
 }
 
-export default function ClientFileRow({ file, selected, onSelect, onClient, hideClient, compact, checked, onCheck }: RowProps) {
+export default function ClientFileRow({ file, selected, onSelect, onClient, hideClient, onFolder, compact, checked, onCheck }: RowProps) {
   const picking = !!onCheck;
   return (
     <div
@@ -130,7 +132,13 @@ export default function ClientFileRow({ file, selected, onSelect, onClient, hide
             ) : <span style={{ color: 'var(--orange, #fb923c)', fontWeight: 700 }}>{file.client.name}</span>
           )}
           {!hideClient && file.client && file.folderPath ? ' · ' : ''}
-          {file.folderPath}
+          {onFolder && file.client && file.folderPath ? (
+            <button
+              onClick={e => { e.stopPropagation(); onFolder(file.client!.folderId, file.folderPath.split(' › ').join('/')); }}
+              title="Open this folder"
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#60a5fa', fontWeight: 600, fontSize: 'inherit', textAlign: 'left' }}
+            >📁 {file.folderPath}</button>
+          ) : file.folderPath}
         </div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px', display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
           <span>{[fmtFileDate(file.modified), formatBytes(file.size)].filter(Boolean).join(' · ')}</span>

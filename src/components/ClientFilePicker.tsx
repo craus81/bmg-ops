@@ -6,7 +6,9 @@
  * them again (Craig, 2026-10-19: "A lot of the files i need to upload come
  * from that dropbox folder"). Opens on the job's customer folders, with a
  * chip per folder (Masterack's end customers live in their own) and an
- * "All clients" chip for anything filed elsewhere.
+ * "All clients" chip for anything filed elsewhere. The customer's folders
+ * show as in Dropbox, folders and sub-folders (ClientFolderBrowser, Craig
+ * 2026-10-21); All clients is a search.
  *
  * The picker only picks; the caller links the files (POST
  * /api/graphics-jobs/<id>/client-files), straight away on the job page or
@@ -20,6 +22,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { closeOnEscape } from '@/lib/modal-escape';
 import ClientFileRow, { type ClientFile } from '@/components/ClientFileRow';
 import type { ClientFolder } from '@/components/ClientFolderMatches';
+import ClientFolderBrowser from '@/components/ClientFolderBrowser';
 
 const PAGE = 30;
 
@@ -87,13 +90,12 @@ export default function ClientFilePicker({ customerName, customerNetsuiteId, alr
   }, [customerName, customerNetsuiteId]);
 
   useEffect(() => {
-    if (folders === null) return;
+    if (folders === null || scope !== 'all') return;
     let live = true;
     (async () => {
       try {
+        // The customer's own folders browse in ClientFolderBrowser; this is the All clients search.
         const p = new URLSearchParams({ limit: String(Math.min(limit, 100)) });
-        if (scope === 'customer' && customerId) p.set('customer', customerId);
-        else if (scope !== 'all' && scope !== 'customer') p.set('folder', scope);
         if (q) p.set('q', q);
         const res = await apiFetch(`/api/client-files?${p.toString()}`);
         const json = await res.json();
@@ -197,15 +199,25 @@ export default function ClientFilePicker({ customerName, customerNetsuiteId, alr
                 : 'Pick the customer first to start in their folder. Searching every client.'}
             </div>
           )}
-          <input
+          {scope === 'all' && <input
             type="search" value={qInput} onChange={e => setQInput(e.target.value)} autoFocus
             placeholder={`🔍 Search ${scopeName}: file name or folder`}
             style={{ width: '100%', padding: '8px 10px', borderRadius: '8px', fontSize: '16px', background: 'var(--input-bg)', border: '1px solid var(--border-strong)', color: 'var(--text-primary)' }}
-          />
+          />}
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 16px', WebkitOverflowScrolling: 'touch' }}>
-          {files === null ? (
+          {scope !== 'all' && folders ? (
+            <div style={{ paddingTop: '10px' }}>
+              <ClientFolderBrowser
+                compact
+                roots={(scope === 'customer' ? sorted : sorted.filter(f => f.id === scope)).map(f => ({ id: f.id, name: f.name, fileCount: f.fileCount }))}
+                rootLabel={`${customerName}'s folders`}
+                rootSearch={customerId ? `customer=${customerId}` : undefined}
+                pick={{ checked: id => picked.has(id) || !!alreadyIds?.has(id), toggle }}
+              />
+            </div>
+          ) : files === null ? (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '14px 0' }}>Loading…</div>
           ) : files.length === 0 ? (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '14px 0' }}>
@@ -225,12 +237,12 @@ export default function ClientFilePicker({ customerName, customerNetsuiteId, alr
               />
             ))
           )}
-          {files && files.length < total && limit < 100 && (
+          {scope === 'all' && files && files.length < total && limit < 100 && (
             <button onClick={() => setLimit(100)} style={{ display: 'block', margin: '8px 0 12px', padding: '6px 10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-strong)' }}>
               Show more ({(total - files.length).toLocaleString()} left)
             </button>
           )}
-          {files && files.length < total && limit >= 100 && (
+          {scope === 'all' && files && files.length < total && limit >= 100 && (
             <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', margin: '8px 0 12px' }}>
               Showing the newest 100 of {total.toLocaleString()}. Type more words to narrow it down.
             </div>
