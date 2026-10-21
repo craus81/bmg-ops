@@ -15,6 +15,7 @@
 import { useMemo, useState } from 'react';
 import { theme } from '@/lib/theme';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { cleanPoSuffix, suggestedPoSuffix } from '@/lib/po-number';
 
 const LOCATIONS = ["O'Fallon", 'Wentzville', 'Kansas City', 'Social Circle'] as const;
 type LocationName = typeof LOCATIONS[number];
@@ -31,6 +32,8 @@ export interface ReviewRequest {
   catalog_cost?: number | null;
   /** "Project · SO 1234", "Estimate 55", or "stock". */
   forLabel: string;
+  /** The job's customer: starts the PO number ending (PO453-ACME). */
+  customerName?: string | null;
 }
 
 export interface CreatePoResult {
@@ -40,6 +43,8 @@ export interface CreatePoResult {
   netsuiteId: string | null;
   mirrored: boolean;
   stamped: boolean;
+  /** Set when NetSuite wouldn't take the customer ending on the number. */
+  suffixError?: string | null;
 }
 
 interface Props {
@@ -61,6 +66,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
   const [priceEdits, setPriceEdits] = useState<Record<string, string>>({});
   const [location, setLocation] = useState<LocationName>("O'Fallon");
   const [memo, setMemo] = useState('');
+  const [suffix, setSuffix] = useState(() => suggestedPoSuffix(rows.map(r => r.customerName)));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -101,6 +107,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
           vendorName: vendor.name,
           memo: memo.trim() || null,
           locationName: location,
+          poSuffix: cleanPoSuffix(suffix) || null,
           lines: chosen.map(r => ({ requestId: r.id, quantity: qtyFor(r), rate: priceFor(r) })),
         }),
       });
@@ -112,6 +119,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
         netsuiteId: body.poId ? String(body.poId) : null,
         mirrored: !!body.mirrored,
         stamped: !!body.stamped,
+        suffixError: body.suffixError || null,
       });
     } catch (e: any) {
       setError(`PO creation failed: ${e?.message || 'unknown error'}. Nothing was ordered, and the requests are still in the queue.`);
@@ -211,6 +219,14 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
                 style={{ padding: '6px 8px', fontSize: '16px', borderRadius: '7px', background: theme.inputBg, color: theme.textPrimary, border: `1px solid ${theme.border}` }}>
                 {LOCATIONS.map(l => <option key={l} value={l}>{l}</option>)}
               </select>
+            </label>
+            <label style={{ fontSize: '12px', fontWeight: 700, color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '6px' }}
+              title="Added after NetSuite's own number. Blank leaves the number as NetSuite gives it.">
+              PO # ending
+              <input id="po-suffix" value={suffix} disabled={busy} maxLength={20} placeholder="ACME"
+                onChange={e => setSuffix(e.target.value.toUpperCase())}
+                style={{ width: '96px', padding: '6px 8px', fontSize: '16px', borderRadius: '7px', background: theme.inputBg, color: theme.textPrimary, border: `1px solid ${theme.border}`, textTransform: 'uppercase' }} />
+              <span style={{ fontWeight: 400, color: theme.textMuted }}>{cleanPoSuffix(suffix) ? `PO###-${cleanPoSuffix(suffix)}` : 'NetSuite’s number'}</span>
             </label>
             <div style={{ marginLeft: 'auto', fontSize: '12px', color: theme.textSecondary }}>
               {chosen.length} line{chosen.length !== 1 ? 's' : ''} · <b style={{ color: theme.textPrimary }}>{money(total)}</b>

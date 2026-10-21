@@ -55,7 +55,7 @@ interface RequestRow {
   /** NULL = raised by a person; 'auto_reorder' = the nightly reorder sweep (migration 271). */
   source?: string | null;
   created_at: string;
-  upfit_projects?: { id: string; project_name: string | null; netsuite_so_number: string | null } | null;
+  upfit_projects?: { id: string; project_name: string | null; netsuite_so_number: string | null; customer_name?: string | null } | null;
   /** Raised from an estimate's Request parts button (migration 335). */
   estimates?: { id: string; estimate_number: string | null; customer_name: string | null } | null;
   requester?: { full_name: string | null } | null;
@@ -573,6 +573,7 @@ export default function PurchasingQueuePage() {
               ? 'Readiness cards show these parts on order now.'
               : 'The 2-hourly sync will mirror it into FleetSuite shortly.'}
             {!lastPo.stamped && ' Heads up: the queue rows could not be marked ordered — refresh, and cancel them by hand so they aren’t ordered twice.'}
+            {lastPo.suffixError && <span style={{ display: 'block', marginTop: '4px', color: '#f59e0b', fontWeight: 700 }}>{lastPo.suffixError}</span>}
             {lastPo.url && (
               <>
                 {' '}
@@ -886,6 +887,7 @@ export default function PurchasingQueuePage() {
             id: r.id, item_number: r.item_number, netsuite_item_id: r.netsuite_item_id,
             description: r.description, quantity: Number(r.quantity), catalog_cost: r.catalog_cost ?? null,
             forLabel: forLabel(r),
+            customerName: r.upfit_projects?.customer_name || r.estimates?.customer_name || null,
           }))}
           initiallySelected={new Set(review.rows.filter(r => selected.has(r.id)).map(r => r.id))}
           onClose={() => setReview(null)}
