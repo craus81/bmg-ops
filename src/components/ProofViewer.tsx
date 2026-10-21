@@ -86,7 +86,10 @@ export default function ProofViewer({ url, loadFile, filename, noun = 'proof', d
           blob = await loadFile();
         } else {
           if (!url) throw new Error('no url');
-          const res = await fetch(url, { credentials: 'include' });
+          // Cookies only for our own routes: the public file domain answers
+          // with a wildcard CORS header, which browsers refuse alongside
+          // credentials, so 'include' made those proofs fail to load.
+          const res = await fetch(url, { credentials: 'same-origin' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           blob = await res.blob();
         }
