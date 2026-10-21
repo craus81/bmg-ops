@@ -31,6 +31,8 @@ interface MyWeek {
     arrivals?: { id: string; label: string; customer: string | null; date: string }[];
     graphicsJobs?: { id: string; label: string; jobNumber: string | null; customer: string | null; status: string; due: string | null }[];
     graphicsJobsTotal?: number;
+    graphicsReady?: { id: string; label: string; customer: string | null; due: string | null; approvedAt: string | null }[];
+    graphicsReadyTotal?: number;
     proofsWaiting?: { id: string; jobId: string; label: string; customer: string | null; round: number; sentAt: string }[];
     estimatesAwaiting?: { id: string; label: string; customer: string | null; total: number | null; since: string }[];
     reminders?: { id: string; title: string; due: string; prospectId: string }[];
@@ -73,7 +75,8 @@ const daysAgo = (iso: string) => {
 const fmtMoney = (n: number) => `$${Math.round(n).toLocaleString()}`;
 
 interface Row { key: string; title: string; sub: string; href: string }
-interface Section { title: string; rows: Row[]; link?: { label: string; href: string } }
+// tone 'go': a green section, for work that is cleared to start.
+interface Section { title: string; rows: Row[]; link?: { label: string; href: string }; tone?: 'go' }
 
 /**
  * @param embedded  rendered above another dashboard (sales), which already
@@ -173,6 +176,17 @@ export default function MyHome({ role, embedded = false }: { role: MyHomeRole; e
       rows: n.vehicles.map(v => ({
         key: v.id, title: v.label, href: deepLinks.vehicle(v.id),
         sub: join(v.customer, VEHICLE_STATUS[v.status] || v.status, v.due && `Due ${fmtDay(v.due, t)}`),
+      })),
+    });
+    // Proof approved, nobody printing yet (owner decision 2026-10-21): first,
+    // and green, so the floor sees what it can start on.
+    if (n.graphicsReady?.length) sections.push({
+      title: `✓ Approved, ready to produce (${n.graphicsReadyTotal ?? n.graphicsReady.length})`,
+      link: { label: 'Board →', href: deepLinks.graphicsBoard({ approved: true }) },
+      tone: 'go',
+      rows: n.graphicsReady.map(j => ({
+        key: j.id, title: j.label, href: deepLinks.graphicsJob(j.id),
+        sub: join(j.customer, j.due && `Due ${fmtDay(j.due, t)}`, j.approvedAt && `approved ${daysAgo(j.approvedAt)}`),
       })),
     });
     if (n.graphicsJobs?.length) sections.push({
@@ -299,11 +313,15 @@ export default function MyHome({ role, embedded = false }: { role: MyHomeRole; e
             {sections.map(s => (
               <div key={s.title}>
                 <div style={{ ...cardHead, borderTop: '1px solid var(--border)', paddingBottom: '4px' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>{s.title}</span>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: s.tone === 'go' ? '#22c55e' : 'var(--text-secondary)' }}>{s.title}</span>
                   {s.link && <button style={headLink} onClick={() => router.push(s.link!.href)}>{s.link.label}</button>}
                 </div>
                 {s.rows.map(r => (
-                  <button key={r.key} style={rowStyle} onClick={() => router.push(r.href)}>
+                  <button
+                    key={r.key}
+                    style={s.tone === 'go' ? { ...rowStyle, background: 'rgba(34,197,94,0.08)', boxShadow: 'inset 3px 0 0 #22c55e' } : rowStyle}
+                    onClick={() => router.push(r.href)}
+                  >
                     <div style={{ fontSize: '14px', fontWeight: 700 }}>{r.title}</div>
                     {r.sub && <div style={sub}>{r.sub}</div>}
                   </button>

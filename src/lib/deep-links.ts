@@ -30,7 +30,8 @@ export const deepLinks = {
   /** The graphics board. `mine` opens it on the My Jobs tab — only ever for
    *  a digest of the recipient's OWN jobs: sent to anyone else it lands on
    *  an empty board, which is a dead click with extra steps. */
-  graphicsBoard: (opts?: { mine?: boolean }) => `/graphics${opts?.mine ? '?mine=1' : ''}`,
+  graphicsBoard: (opts?: { mine?: boolean; approved?: boolean }) =>
+    `/graphics${opts?.mine ? '?mine=1' : opts?.approved ? '?approved=1' : ''}`,
   /** The graphics board's New Job form, filled in from an existing job (Duplicate). */
   graphicsDuplicate: (jobId: string) => `/graphics?new=1&copyFrom=${jobId}`,
   /** In-Shop board — opens the vehicle's detail modal (optionally flashing one note). */

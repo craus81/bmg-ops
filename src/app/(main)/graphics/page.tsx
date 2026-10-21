@@ -29,6 +29,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { roundChip, summarizeRounds } from '@/lib/proof-rounds';
 import { isFinishedStatus, inStatusScope, GRAPHICS_ACTIVE_STATUSES, GRAPHICS_AWAITING_STATUSES } from '@/lib/graphics-status';
+import { isReadyToProduce, proofState, compareReadyJobs } from '@/lib/graphics-proof-state';
 import { workOrderPositions, compareByDueDate } from '@/lib/graphics-work-order';
 import GraphicsWorkOrderModal from '@/components/GraphicsWorkOrderModal';
 import PersonalListsModal from '@/components/PersonalListsModal';
@@ -78,7 +79,9 @@ import {
 import { closeOnEscape } from '@/lib/modal-escape';
 import { looseMatcher, looseSearchRegex } from '@/lib/loose-search';
 
-type FilterStatus = GraphicsJobStatus | 'all' | 'active' | 'awaiting';
+// 'approved' = the ✓ Approved tab: proof approved, not printing yet. It
+// depends on more than the status, so it's checked with inScope() below.
+type FilterStatus = GraphicsJobStatus | 'all' | 'active' | 'awaiting' | 'approved';
 type FilterCategory = GraphicsJobCategory | 'all';
 type MetricFilter = 'overdue' | 'dueWeek' | 'stuck';
 
@@ -110,6 +113,19 @@ function relativeTime(iso: string): string {
   const day = Math.round(hr / 24);
   if (day < 7) return `${day}d ago`;
   return new Date(iso).toLocaleDateString();
+}
+
+// When a proof was approved, the way people say it: "today 9:14 AM",
+// "yesterday", "Mon 10/20".
+function approvedWhen(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (!isFinite(d.getTime())) return '';
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((day(new Date()) - day(d)) / 86_400_000);
+  if (diff === 0) return `today ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  if (diff === 1) return 'yesterday';
+  return d.toLocaleDateString([], { weekday: 'short', month: 'numeric', day: 'numeric' });
 }
 
 const PRIORITY_RANK: Record<string, number> = { low: 0, normal: 1, high: 2, rush: 3 };
@@ -418,6 +434,8 @@ export default function GraphicsPage() {
   // list it was talking about rather than on the whole board.
   useEffect(() => {
     if (searchParams.get('mine') === '1') setMyJobsOnly(true);
+    // ?approved=1 — Home's "Approved, ready to produce" link.
+    if (searchParams.get('approved') === '1') setFilterStatus('approved');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: follow the param on each URL change
   }, [searchParams]);
 
@@ -1289,6 +1307,11 @@ export default function GraphicsPage() {
     ? (listOwner === user?.id ? 'on your list' : `on ${personName(listOwner!)}'s list`)
     : 'in the work order';
 
+  // The tab's scope. ✓ Approved looks at the proof as well as the status;
+  // everything else is the status alone.
+  const inScope = (j: GraphicsJob) =>
+    filterStatus === 'approved' ? isReadyToProduce(j as any) : inStatusScope(j.status, filterStatus);
+
   // Filter jobs
   const matchSearch = looseMatcher(search);
   const filteredJobs = jobs.filter(j => {
@@ -1304,7 +1327,7 @@ export default function GraphicsPage() {
     // Metric tile filter (overdue / due this week / stuck)
     if (metricFilter && !metricPredicates[metricFilter](j)) return false;
     // Status filter (Active / All tabs + the popover's per-status select)
-    if (!inStatusScope(j.status, filterStatus)) return false;
+    if (!inScope(j)) return false;
     if (search) return matchSearch(j.title, j.part_number, j.customer, j.job_number, j.po_number, j.content);
     return true;
   });
@@ -1339,16 +1362,20 @@ export default function GraphicsPage() {
   // Scoped to the status showing, or the tab lies: an unscoped count read
   // "My Jobs (23)" over a table of 6, the other 17 being jobs that shipped
   // and stayed assigned. A tab's number is a promise about its own rows.
-  const myJobCount = visibleJobs.filter(j => isMine(j) && inStatusScope(j.status, filterStatus)).length;
+  const myJobCount = visibleJobs.filter(j => isMine(j) && inScope(j)).length;
+  // Approved, ready to produce (owner decision 2026-10-21): the green box at
+  // the top and the ✓ Approved tab. Approval never moves the status, so
+  // without this an approved job still just reads "Designing".
+  const readyJobs = visibleJobs.filter(j => isReadyToProduce(j as any)).sort(compareReadyJobs as any);
 
   // The assignee dropdown lists people who actually hold jobs on this board,
   // with counts, rather than every approved account — a picker full of names
   // with (0) beside them is a list you have to read to dismiss.
   const assigneeOptions = (() => {
-    const inScope = visibleJobs.filter(j => inStatusScope(j.status, filterStatus));
+    const inScopeJobs = visibleJobs.filter(inScope);
     const counts = new Map<string, number>();
     let unassigned = 0;
-    for (const j of inScope) {
+    for (const j of inScopeJobs) {
       const ids = assigneesOf(j);
       if (ids.length === 0) { unassigned++; continue; }
       for (const id of ids) counts.set(id, (counts.get(id) || 0) + 1);
@@ -1375,7 +1402,7 @@ export default function GraphicsPage() {
   };
 
   // Whether the popover's per-status select (not the tabs) is narrowing
-  const statusSelectActive = filterStatus !== 'active' && filterStatus !== 'awaiting' && filterStatus !== 'all';
+  const statusSelectActive = filterStatus !== 'active' && filterStatus !== 'awaiting' && filterStatus !== 'approved' && filterStatus !== 'all';
 
   const toggleArchived = () => {
     const next = !showArchived;
@@ -1563,6 +1590,75 @@ export default function GraphicsPage() {
 
       <MentionsInbox />
 
+      {/* ═══════════ APPROVED, READY TO PRODUCE ═══════════
+          Proof approved, nobody has started printing. Approval doesn't move
+          the status (owner decision 2026-10-21), so this box is how the floor
+          sees it. Gone when nothing is waiting. */}
+      {readyJobs.length > 0 && (
+        <div style={{
+          marginBottom: '12px', padding: '12px', borderRadius: '12px',
+          background: 'rgba(34,197,94,0.10)', border: '1.5px solid rgba(34,197,94,0.45)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+            <span style={{ fontSize: '14px', fontWeight: 800, color: '#22c55e' }}>✓ Approved, ready to produce</span>
+            <span style={{
+              fontSize: '12px', fontWeight: 800, color: '#fff', background: '#16a34a',
+              borderRadius: '999px', padding: '1px 9px', fontVariantNumeric: 'tabular-nums',
+            }}>{readyJobs.length}</span>
+            <button
+              onClick={() => {
+                const on = filterStatus === 'approved' && !myJobsOnly;
+                setFilterStatus(on ? 'active' : 'approved'); setMyJobsOnly(false); setMetricFilter(null);
+              }}
+              style={{
+                marginLeft: 'auto', padding: '5px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                background: 'var(--card)', border: '1px solid rgba(34,197,94,0.5)', color: '#22c55e', cursor: 'pointer',
+              }}
+            >{filterStatus === 'approved' && !myJobsOnly ? 'Show all active jobs' : 'Show only these'}</button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px' }}>
+            {readyJobs.slice(0, 6).map(j => {
+              const ja = j as any;
+              const overdue = !!j.due_date && j.due_date.slice(0, 10) < new Date().toISOString().slice(0, 10);
+              const who = ja.approval_verbal_note
+                ? `Rep OK'd by phone${ja.customer_approved_by ? ` (${personName(ja.customer_approved_by)})` : ''}`
+                : `Approved${ja.customer_responder ? ` by ${ja.customer_responder}` : ''}`;
+              return (
+                <button
+                  key={j.id}
+                  onClick={() => router.push(`/graphics/${j.id}`)}
+                  style={{
+                    textAlign: 'left', padding: '9px 10px', borderRadius: '10px', cursor: 'pointer',
+                    background: 'var(--card)', border: '1px solid rgba(34,197,94,0.4)', minWidth: 0,
+                    display: 'flex', flexDirection: 'column', gap: '3px',
+                  }}
+                >
+                  <span style={{ fontSize: '12.5px', fontWeight: 800, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+                    {[j.customer, j.title].filter(Boolean).join(' · ')}
+                  </span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {j.job_number || ''}{j.job_number && j.due_date ? ' · ' : ''}
+                    {j.due_date && (
+                      <span style={{ color: overdue ? '#ef4444' : undefined, fontWeight: overdue ? 700 : undefined }}>
+                        {overdue ? 'Overdue ' : 'Due '}{displayDate(j.due_date)}
+                      </span>
+                    )}
+                  </span>
+                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#22c55e' }}>
+                    {who}{ja.customer_approved_at ? ` · ${approvedWhen(ja.customer_approved_at)}` : ''}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {readyJobs.length > 6 && (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
+              And {readyJobs.length - 6} more. Use Show only these to see them all.
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Production metrics strip — bottleneck + due-date risk at a glance */}
       {metricJobs.length > 0 && (
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
@@ -1617,6 +1713,19 @@ export default function GraphicsPage() {
           }}
         >
           Active ({activeCount})
+        </button>
+        <button
+          onClick={() => { setFilterStatus('approved'); setMyJobsOnly(false); setMetricFilter(null); }}
+          title="Proof approved by the customer (or the rep's phone OK) and not printing yet"
+          style={{
+            padding: '7px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+            background: !myJobsOnly && filterStatus === 'approved' ? 'rgba(34,197,94,0.15)' : 'var(--subtle-bg)',
+            border: `1px solid ${!myJobsOnly && filterStatus === 'approved' ? 'rgba(34,197,94,0.5)' : readyJobs.length > 0 ? 'rgba(34,197,94,0.35)' : 'var(--border)'}`,
+            color: !myJobsOnly && filterStatus === 'approved' ? '#22c55e' : readyJobs.length > 0 ? '#22c55e' : 'var(--text-label)',
+            whiteSpace: 'nowrap', cursor: 'pointer', flexShrink: 0,
+          }}
+        >
+          ✓ Approved ({readyJobs.length})
         </button>
         {/* Graphics' part is done — waiting on an installer or the customer.
             Off Active so the floor's own work isn't buried under it, but not
@@ -1782,7 +1891,7 @@ export default function GraphicsPage() {
         return (
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
             <div className="responsive-table">
-              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '1060px' }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '1180px' }}>
                 <thead><tr>
                   <SortableTh label="#" sortKey="rank" sort={sort} onToggle={toggle} style={{ ...thStyle, width: '44px' }} />
                   <SortableTh label="Title" sortKey="title" sort={sort} onToggle={toggle} style={thStyle} />
@@ -1794,6 +1903,7 @@ export default function GraphicsPage() {
                   <SortableTh label="Priority" sortKey="priority" sort={sort} onToggle={toggle} defaultDir="desc" style={thStyle} />
                   <SortableTh label="Due" sortKey="due" sort={sort} onToggle={toggle} style={thStyle} />
                   <SortableTh label="Status" sortKey="status" sort={sort} onToggle={toggle} style={thStyle} />
+                  <th style={{ ...thStyle, textAlign: 'left' }}>Proof</th>
                   <th style={{ ...thStyle, textAlign: 'left' }}>Flags</th>
                 </tr></thead>
                 <tbody>
@@ -1820,18 +1930,6 @@ export default function GraphicsPage() {
                       }
                     }
                     const ja = job as any;
-                    if (!ja.customer_approved && !ja.customer_rejected_at && ja.sent_for_approval_at) {
-                      const waitDays = Math.floor((Date.now() - new Date(ja.sent_for_approval_at).getTime()) / 86_400_000);
-                      if (waitDays >= 3) {
-                        flags.push(
-                          <span
-                            key="proof"
-                            title={`Proof sent ${new Date(ja.sent_for_approval_at).toLocaleDateString()}${ja.approval_reminder_count ? ` · ${ja.approval_reminder_count} auto-reminder${ja.approval_reminder_count !== 1 ? 's' : ''}` : ''}${ja.approval_escalated_at ? ' · escalated' : ''}`}
-                            style={flagChip(waitDays >= 7 ? '#ef4444' : '#fbbf24')}
-                          >⏱ proof {waitDays}d</span>
-                        );
-                      }
-                    }
                     // R6-10: how many proofs this job has taken. No chip on
                     // a first proof — every job has one of those; the chip
                     // exists to make a job on its third round visible.
@@ -1885,14 +1983,17 @@ export default function GraphicsPage() {
                         >👁 {seenByOthers.length}</span>
                       );
                     }
+                    const proof = proofState(ja);
+                    const ready = proof.kind === 'ready';
                     return (
                       <tr
                         key={job.id}
                         className="table-row-link"
                         onClick={() => router.push(`/graphics/${job.id}`)}
+                        style={ready ? { background: 'rgba(34,197,94,0.08)' } : undefined}
                         title={job.notes ? (job.notes.length > 120 ? job.notes.slice(0, 120) + '...' : job.notes) : undefined}
                       >
-                        <td style={{ ...tdStyle, fontVariantNumeric: 'tabular-nums' }}>
+                        <td style={{ ...tdStyle, fontVariantNumeric: 'tabular-nums', boxShadow: ready ? 'inset 4px 0 0 #22c55e' : undefined }}>
                           {listPosition.has(job.id)
                             ? (
                               <span
@@ -1992,6 +2093,33 @@ export default function GraphicsPage() {
                           }}>
                             {GRAPHICS_STATUS_LABELS[job.status].replace('Job ', '')}
                           </span>
+                        </td>
+                        {/* Where the proof stands. Green only means go:
+                            approved and not printing yet. */}
+                        <td style={tdStyle}>
+                          {proof.kind === 'ready' && (
+                            <span title={ja.approval_verbal_note ? `Rep OK'd by phone: ${ja.approval_verbal_note}` : undefined}>
+                              <span style={{ fontSize: '10px', fontWeight: 800, color: '#fff', background: '#16a34a', padding: '2px 7px', borderRadius: '4px', whiteSpace: 'nowrap' }}>✓ Approved</span>
+                              <span style={{ display: 'block', fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                {[approvedWhen(proof.approvedAt), ja.approval_verbal_note ? 'by phone' : ja.customer_responder].filter(Boolean).join(' · ')}
+                              </span>
+                            </span>
+                          )}
+                          {proof.kind === 'approved' && (
+                            <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+                              ✓ Approved{proof.approvedAt ? ` ${new Date(proof.approvedAt).toLocaleDateString([], { month: 'numeric', day: 'numeric' })}` : ''}
+                            </span>
+                          )}
+                          {proof.kind === 'changes' && (
+                            <span style={flagChip('#f97316')}>Changes requested</span>
+                          )}
+                          {proof.kind === 'waiting' && (
+                            <span
+                              title={`Proof sent ${new Date(proof.sentAt).toLocaleDateString()}${ja.approval_reminder_count ? ` · ${ja.approval_reminder_count} auto-reminder${ja.approval_reminder_count !== 1 ? 's' : ''}` : ''}${ja.approval_escalated_at ? ' · escalated' : ''}`}
+                              style={flagChip(proof.days >= 7 ? '#ef4444' : proof.days >= 3 ? '#fbbf24' : '#94a3b8')}
+                            >Waiting on customer · {proof.days}d</span>
+                          )}
+                          {proof.kind === 'none' && <span style={{ color: 'var(--text-muted)' }}>—</span>}
                         </td>
                         <td style={tdStyle}>
                           {flags.length > 0
