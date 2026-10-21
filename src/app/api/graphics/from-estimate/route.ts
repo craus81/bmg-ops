@@ -5,7 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import {
   ESTIMATE_LINK_COLUMNS,
-  estimateJobPo, estimateVehicleLine, findEstimateWrapQuote, joinBlocks, wrapQuoteJobFields,
+  estimateJobPo, estimateVehicleLine, findEstimateWrapQuote, joinBlocks, linkQuoteClientFiles, wrapQuoteJobFields,
 } from '@/lib/graphics-links';
 import { fleetMembers } from '@/lib/estimate-fleet';
 import { deliveryColumns, deliveryFromRow } from '@/lib/delivery';
@@ -212,12 +212,13 @@ export async function POST(req: NextRequest) {
       // job really is this estimate's before marking the estimate won.
       const { data: job } = await supabase
         .from('graphics_jobs')
-        .select('id, estimate_id')
+        .select('id, estimate_id, wrap_quote_id')
         .eq('id', existingJobId)
         .maybeSingle();
       if (!job || job.estimate_id !== estimateId) {
         return NextResponse.json({ error: 'Graphics job is not linked to this estimate' }, { status: 400 });
       }
+      await linkQuoteClientFiles(supabase, job.id, job.wrap_quote_id, userId || auth.user.id);
       if (fleet && groupId && members.length > 1) {
         // One job, one kit per vehicle: the kits are the order's estimates,
         // read live, so a vehicle added later gets its kit automatically.
@@ -269,6 +270,7 @@ export async function POST(req: NextRequest) {
       if (updErr) {
         return NextResponse.json({ error: updErr.message }, { status: 500 });
       }
+      await linkQuoteClientFiles(supabase, existing.id, existing.wrap_quote_id || linkQuote?.id, userId || auth.user.id);
 
       await supabase.from('graphics_status_history').insert({
         job_id: existingJobId,
@@ -329,6 +331,7 @@ export async function POST(req: NextRequest) {
       changed_by: userId || auth.user.id,
       note: `Spawned from estimate ${estimate.estimate_number}`,
     });
+    await linkQuoteClientFiles(supabase, newJob.id, prefill.wrapQuoteId, userId || auth.user.id);
 
     await markEstimateWon(supabase, estimateId);
 

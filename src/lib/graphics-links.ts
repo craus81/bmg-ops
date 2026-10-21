@@ -120,3 +120,45 @@ export async function linkQuoteJobsToEstimate(supabase: SupabaseClient, wrapQuot
     .eq('wrap_quote_id', wrapQuoteId)
     .is('estimate_id', null);
 }
+
+/** Client Files ids a worksheet's proof pages were opened from (PhotoProof.client_file_id). */
+export function proofClientFileIds(photoProofs: unknown): string[] {
+  if (!Array.isArray(photoProofs)) return [];
+  const ids = photoProofs
+    .map((p: any) => (typeof p?.client_file_id === 'string' ? p.client_file_id : null))
+    .filter((id): id is string => !!id && /^[0-9a-f-]{36}$/i.test(id));
+  return [...new Set(ids)];
+}
+
+/**
+ * A proof opened from Client Files into the Graphics Builder (Craig,
+ * 2026-10-21) follows the worksheet onto its graphics job: every job that
+ * gains the worksheet gets the client file under "From Client Files", so
+ * production works from the exact proof the job was priced from. Best
+ * effort: a failed link never stops the job.
+ */
+export async function linkQuoteClientFiles(
+  supabase: SupabaseClient,
+  jobId: string,
+  wrapQuoteId: string | null | undefined,
+  userId?: string | null,
+): Promise<number> {
+  if (!jobId || !wrapQuoteId) return 0;
+  try {
+    const { data: quote } = await supabase.from('wrap_quotes').select('photo_proofs').eq('id', wrapQuoteId).maybeSingle();
+    const ids = proofClientFileIds((quote as any)?.photo_proofs);
+    if (ids.length === 0) return 0;
+    const { error } = await supabase.from('graphics_job_client_files').upsert(
+      ids.map(client_file_id => ({ job_id: jobId, client_file_id, added_by: userId || null })),
+      { onConflict: 'job_id,client_file_id', ignoreDuplicates: true },
+    );
+    if (error) {
+      console.error('[graphics-links] client file link failed:', error.message);
+      return 0;
+    }
+    return ids.length;
+  } catch (e: any) {
+    console.error('[graphics-links] client file link failed:', e?.message || e);
+    return 0;
+  }
+}

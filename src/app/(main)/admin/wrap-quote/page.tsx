@@ -726,6 +726,10 @@ export default function WrapQuotePage() {
     templateId: string | null;
   } | null>(null);
   const [addingToEstimate, setAddingToEstimate] = useState(false);
+  // "Open in Graphics Builder" on a Client Files file (?clientFile=<id>):
+  // the banner naming the proof this worksheet was opened from.
+  const [fromClientFile, setFromClientFile] = useState<{ id: string; name: string; client: string | null; customer: string | null } | null>(null);
+  const clientFileHandled = useRef(false);
   // Vehicle identity carried over from the estimate; resolved against the
   // template library once it loads (loadAll races this effect on arrival).
   const [vehiclePrefill, setVehiclePrefill] = useState<{ year: string; label: string; templateId: string | null } | null>(null);
@@ -1826,6 +1830,7 @@ export default function WrapQuotePage() {
 
   const resetEstimate = () => {
     if (pinnedByQuote.current) { setForEstimate(null); pinnedByQuote.current = false; }
+    setFromClientFile(null);
     setDrawnMeasurements([]);
     // The photo is one customer's vehicle (unlike a reusable template), so it
     // goes with the estimate it was drawn for.
@@ -2753,7 +2758,9 @@ export default function WrapQuotePage() {
 
   // Read a proof: every page rendered in the browser, uploaded as the
   // picture the boxes sit on, read by the proof reader, then measured here.
-  const readProofFiles = async (files: FileList | File[] | null) => {
+  // A proof opened from Client Files (opts.clientFileId) tags its pages with
+  // the file, so the worksheet's graphics job links it.
+  const readProofFiles = async (files: FileList | File[] | null, opts: { clientFileId?: string } = {}) => {
     const picked = files ? Array.from(files) : [];
     if (picked.length === 0) return;
     const notes: string[] = [];
@@ -2780,7 +2787,9 @@ export default function WrapQuotePage() {
         try {
           pages = await rasterizeProofFile(file, m => setProofBusy(m));
         } catch (e: any) {
-          notes.push(`${file.name}: couldn't open it (${e?.message || 'unreadable'}).`);
+          notes.push(/\.ai$/i.test(file.name)
+            ? `${file.name}: couldn't open it. This Illustrator file was saved without "Create PDF Compatible File"; save a PDF of it (or open the PDF next to it in Client Files) instead.`
+            : `${file.name}: couldn't open it (${e?.message || 'unreadable'}).`);
           continue;
         }
         for (const pg of pages) {
@@ -2814,6 +2823,7 @@ export default function WrapQuotePage() {
               source: 'customer_proof',
               legend: built.legend,
               wheel_line: built.wheels ? { x1: built.wheels.a.x, y1: built.wheels.a.y, x2: built.wheels.b.x, y2: built.wheels.b.y } : null,
+              client_file_id: opts.clientFileId || null,
             });
             room--;
             for (const n of built.notes) notes.push(`${label}: ${n}`);
@@ -3012,6 +3022,67 @@ export default function WrapQuotePage() {
     setSurfaceChosen(true);
     if (files && files.length > 0) await addCoveragePhotos(files);
   };
+
+  // ?clientFile=<id> (Craig, 2026-10-21: open a proof from Client Files to
+  // measure it, then estimate, then graphics job): fill the customer in
+  // from the file's client folder, open the Customer Proof surface and read
+  // the file as if it had been uploaded here. The pages remember the file,
+  // so the graphics job made from this worksheet links it.
+  useEffect(() => {
+    const fileId = searchParams.get('clientFile');
+    if (!fileId || clientFileHandled.current || loading || !hasAccess) return;
+    if (searchParams.get('quote') || searchParams.get('id')) return;
+    clientFileHandled.current = true;
+    (async () => {
+      await switchSurface('proof');
+      setSurfaceChosen(true);
+      setProofBusy('Getting the file from Client Files…');
+      let info: any;
+      try {
+        const res = await apiFetch(`/api/client-files/${encodeURIComponent(fileId)}?format=json`);
+        info = await res.json().catch(() => ({}));
+        if (!res.ok || !info?.url) throw new Error(info?.error || `HTTP ${res.status}`);
+      } catch (e: any) {
+        setProofBusy(null);
+        setProofNotes([`Couldn't open that client file (${e?.message || 'unknown error'}). Download it from Client Files and drop it on the proof instead.`]);
+        return;
+      }
+      setFromClientFile({ id: fileId, name: info.name, client: info.client?.name || null, customer: info.customer?.name || null });
+      if (info.customer?.id && !customerId) {
+        setCustomerId(info.customer.id);
+        const { data: cust } = await supabase
+          .from('customers')
+          .select('company_name, email, phone, address')
+          .eq('id', info.customer.id)
+          .maybeSingle();
+        setCustomer((prev: any) => ({
+          ...prev,
+          name: prev.name || cust?.company_name || info.customer.name || '',
+          email: prev.email || cust?.email || '',
+          phone: prev.phone || cust?.phone || '',
+          address: prev.address || cust?.address || '',
+        }));
+      } else if (!info.customer && info.client?.name) {
+        setCustomer((prev: any) => ({ ...prev, name: prev.name || info.client.name }));
+      }
+      let file: File;
+      try {
+        const got = await fetch(info.url, { credentials: 'omit' });
+        if (!got.ok) throw new Error(`HTTP ${got.status}`);
+        const blob = await got.blob();
+        // An Illustrator file is read through its PDF copy.
+        const type = /\.(pdf|ai)$/i.test(info.name) ? 'application/pdf' : (blob.type || 'application/octet-stream');
+        file = new File([blob], info.name, { type });
+      } catch (e: any) {
+        setProofBusy(null);
+        setProofNotes([`Couldn't download ${info.name} (${e?.message || 'network error'}). Download it from Client Files and drop it on the proof instead.`]);
+        return;
+      }
+      setProofBusy(null);
+      await readProofFiles([file], { clientFileId: fileId });
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot once the page has loaded
+  }, [searchParams, loading, hasAccess]);
 
   // ----- History: archive / delete -----
   // ── Follow-up actions on sent quotes ──
@@ -4105,6 +4176,29 @@ export default function WrapQuotePage() {
           Measure, draw the proof and price the graphics here — the customer gets it as an estimate.
         </div>
       </div>
+
+      {fromClientFile && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap',
+          padding: '10px 14px', borderRadius: '10px', marginBottom: '12px',
+          background: 'rgba(6,182,212,0.08)', border: '1px solid rgba(6,182,212,0.35)',
+        }}>
+          <div style={{ flex: 1, minWidth: '220px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 800, color: '#06b6d4', overflowWrap: 'anywhere' }}>
+              📁 From Client Files: {fromClientFile.name}
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+              {fromClientFile.customer || fromClientFile.client || 'No customer matched to this folder'}
+              {' — check the vehicle and the boxes, then Save & open estimate. The graphics job made from it links this file.'}
+            </div>
+          </div>
+          <a
+            href={`/api/client-files/${fromClientFile.id}?name=${encodeURIComponent(fromClientFile.name)}`}
+            target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: '12px', fontWeight: 800, color: '#06b6d4', textDecoration: 'none', whiteSpace: 'nowrap' }}
+          >Open the file ↗</a>
+        </div>
+      )}
 
       {/* Add Graphics round trip — pinned while pricing for an estimate */}
       {forEstimate && (
