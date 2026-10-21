@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { PRICING_REQUEST_PUSH_BLOCKED } from '@/lib/pricing-request';
 import { createSalesOrder, findLocation, closeNetSuiteEstimate } from '@/lib/netsuite';
 import { buildSoLineItems, soContentHash } from '@/lib/so-sync';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature, getProfileRoles } from '@/lib/api-auth';
 import { checkDiscountApproval } from '@/lib/discount-approval';
 import { validateBody, z } from '@/lib/validate';
@@ -36,10 +36,7 @@ export async function POST(req: NextRequest) {
   const { estimateId, overrideReason, skipGraphicsCheck } = parsed.data;
 
   try {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supabase = createServiceClient();
 
     // Load estimate with line items
     const { data: estimate, error: estError } = await supabase

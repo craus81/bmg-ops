@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { soContentHash } from '@/lib/so-sync';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import { isAdminRole } from '@/lib/features';
@@ -124,10 +124,7 @@ function stripApprovalSecrets<T extends Record<string, any>>(row: T | null): T |
 }
 
 function getSupabase() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  return createServiceClient();
 }
 
 

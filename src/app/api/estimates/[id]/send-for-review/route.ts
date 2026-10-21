@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import { sendEmailDetailed } from '@/lib/resend';
@@ -29,10 +29,7 @@ export const dynamic = 'force-dynamic';
 // it needs the same budget for a cold start with several assets.
 export const maxDuration = 60;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const SendForReviewSchema = z.object({
   // Standard compose fields (docs/customer-email-standard.md) — the same

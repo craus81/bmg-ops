@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { ensureR2Cors, r2Upload, r2PresignPut, r2PresignGet, r2Delete, r2PublicUrl } from '@/lib/r2';
 import { readRecordFileBody, ROUTE_UPLOAD_MAX_BYTES } from '@/lib/record-file-route';
@@ -30,7 +30,7 @@ export const dynamic = 'force-dynamic';
 const UUID_RE = /^[0-9a-f-]{36}$/i;
 
 function service() {
-  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+  return createServiceClient();
 }
 
 function safeFileName(name: string): string {

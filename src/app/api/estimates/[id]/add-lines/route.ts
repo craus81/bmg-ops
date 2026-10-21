@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { computeTotals, normalizeDiscount } from '@/lib/estimate-totals';
@@ -11,10 +11,7 @@ import { snapshotReviewedContent, clearReviewIfContentChanged } from '@/lib/esti
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 // Same line shape the estimates upsert accepts (api/estimates/route.ts) —
 // route files can only export handlers, so the schema is restated here.

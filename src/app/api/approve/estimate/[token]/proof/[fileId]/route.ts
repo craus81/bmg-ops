@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { validateExpiry } from '@/lib/magic-link-approval';
 import { r2GetBytes } from '@/lib/r2';
 import { isShrinkableImage, shrinkImageForEmail } from '@/lib/email-image';
@@ -9,10 +9,7 @@ import { sanitizeCopiedProofs } from '@/lib/estimate-copied-proofs';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const MAX_PROOF_BYTES = 10 * 1024 * 1024;
 

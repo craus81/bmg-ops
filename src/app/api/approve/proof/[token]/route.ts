@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import {
   validateExpiry, captureMetadata, checkRateLimit, uploadSignedDocument,
   getRequestIp, AGREEMENT_TEXT,
@@ -27,10 +27,7 @@ const ApprovalSchema = z.object({
   responder: z.string().trim().max(120).optional().nullable(),
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 /** The open round, so the approval page can say "Revision 2 —
  *  addressing: <what they asked for last time>". Best-effort: a job with

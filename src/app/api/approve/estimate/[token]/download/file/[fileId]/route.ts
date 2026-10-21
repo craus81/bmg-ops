@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { checkRateLimit, getRequestIp, validateExpiry } from '@/lib/magic-link-approval';
 import { r2GetBytes } from '@/lib/r2';
 import { ESTIMATE_FILE_PREFIX } from '@/lib/estimate-attachments';
@@ -7,10 +7,7 @@ import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
