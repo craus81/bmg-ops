@@ -433,9 +433,17 @@ export const deepLinks = {
   /** NetSuite's own PDF of one transaction, as bytes (same-origin, staff
    *  only). Feed it to `pdfViewer`. The top bar opens a NetSuite estimate
    *  this way (netsuite_estimates, migration 372); the Purchasing page a
-   *  vendor PO (netsuite_vendor_pos.netsuite_id). */
-  netsuitePdf: (type: 'salesOrder' | 'invoice' | 'estimate' | 'purchaseOrder', netsuiteId: string | number) =>
-    `/api/netsuite/pdf?type=${type}&id=${encodeURIComponent(String(netsuiteId))}&format=pdf`,
+   *  vendor PO (netsuite_vendor_pos.netsuite_id). `fileName` is what Save
+   *  calls it (build a PO's with `poPdfFileName`); without one NetSuite's
+   *  name is used, which for a PO is only its internal id. */
+  netsuitePdf: (type: 'salesOrder' | 'invoice' | 'estimate' | 'purchaseOrder', netsuiteId: string | number, fileName?: string | null) =>
+    `/api/netsuite/pdf?type=${type}&id=${encodeURIComponent(String(netsuiteId))}&format=pdf${fileName ? `&name=${encodeURIComponent(fileName)}` : ''}`,
+  /** A vendor PO's saved file name: its number, e.g. PO452.pdf (Craig,
+   *  2026-10-21; it used to save as PurchaseOrder_<internal id>.pdf). */
+  poPdfFileName: (poNumber: string | null | undefined, netsuiteId: string | number) => {
+    const n = String(poNumber || '').trim().replace(/^PO\s*#?\s*/i, '');
+    return n ? `PO${n}.pdf` : `PO-${netsuiteId}.pdf`;
+  },
   /** In-app PDF viewer tab. Use this instead of linking a new tab straight at
    *  PDF bytes: a raw-PDF tab has no app chrome and no working Back button,
    *  so it strands whoever opened it (field bug: opening a PO PDF mid-import).

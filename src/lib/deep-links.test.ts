@@ -167,3 +167,21 @@ describe('deepLinks.estimate / newEstimate fromCustomer', () => {
     expect(deepLinks.newEstimate('cust-1')).toBe('/estimates?new=1&customer=cust-1');
   });
 });
+
+describe('PO PDF file names', () => {
+  it('names a PO by its number, however the number is written', () => {
+    expect(deepLinks.poPdfFileName('PO452', '9876')).toBe('PO452.pdf');
+    expect(deepLinks.poPdfFileName('452', '9876')).toBe('PO452.pdf');
+    expect(deepLinks.poPdfFileName('PO #452', '9876')).toBe('PO452.pdf');
+  });
+
+  it('falls back to the internal id without a number', () => {
+    expect(deepLinks.poPdfFileName(null, 9876)).toBe('PO-9876.pdf');
+  });
+
+  it('sends the file name to the PDF route', () => {
+    expect(deepLinks.netsuitePdf('purchaseOrder', '9876', 'PO452.pdf'))
+      .toBe('/api/netsuite/pdf?type=purchaseOrder&id=9876&format=pdf&name=PO452.pdf');
+    expect(deepLinks.netsuitePdf('estimate', 12)).toBe('/api/netsuite/pdf?type=estimate&id=12&format=pdf');
+  });
+});

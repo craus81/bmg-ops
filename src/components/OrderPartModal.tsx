@@ -339,7 +339,7 @@ export default function OrderPartModal({ part, canCreatePo, onClose }: Props) {
               {step.po.netsuiteId && (
                 <>
                   {' '}
-                  <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', step.po.netsuiteId), { name: `PO ${step.po.number}.pdf` })}
+                  <a href={deepLinks.pdfViewer(deepLinks.netsuitePdf('purchaseOrder', step.po.netsuiteId, deepLinks.poPdfFileName(step.po.number, step.po.netsuiteId)), { name: deepLinks.poPdfFileName(step.po.number, step.po.netsuiteId) })}
                     target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', fontWeight: 700, marginLeft: '6px' }}>
                     📄 View PDF
                   </a>

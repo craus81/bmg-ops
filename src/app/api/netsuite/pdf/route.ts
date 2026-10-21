@@ -11,7 +11,7 @@ export const maxDuration = 60;
  * Answers JSON ({ success, pdfBase64 }) by default. `&format=pdf` answers
  * the PDF itself, inline, so the in-app viewer (deepLinks.netsuitePdf →
  * deepLinks.pdfViewer) can show it — the top bar opens a NetSuite estimate
- * that way, and the Purchasing page a PO.
+ * that way, and the Purchasing page a PO. `&name=` sets the saved file name.
  */
 export async function GET(request: NextRequest) {
   const auth = await requireStaff(request);
@@ -44,7 +44,11 @@ export async function GET(request: NextRequest) {
 
     if (searchParams.get('format') === 'pdf' && result.pdfBase64) {
       const bytes = Buffer.from(result.pdfBase64, 'base64');
-      const filename = (result.filename || `${type}-${id}.pdf`).replace(/[^A-Za-z0-9._-]+/g, '_');
+      // `name` is the caller's file name (a PO's number, PO452.pdf);
+      // NetSuite's own names a PO by its internal id only.
+      const asked = (searchParams.get('name') || '').trim();
+      let filename = (asked || result.filename || `${type}-${id}.pdf`).replace(/[^A-Za-z0-9._-]+/g, '_');
+      if (!/\.pdf$/i.test(filename)) filename += '.pdf';
       return new NextResponse(bytes, {
         headers: {
           'Content-Type': 'application/pdf',
