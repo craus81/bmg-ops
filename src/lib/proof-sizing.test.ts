@@ -217,7 +217,7 @@ describe('sanitizeProofRead', () => {
   });
 
   it('survives garbage', () => {
-    expect(sanitizeProofRead(null)).toEqual({ page_title: null, views: [], size_table: [], decals: [] });
+    expect(sanitizeProofRead(null)).toEqual({ page_title: null, views: [], size_table: [], decals: [], vehicle: null });
     expect(sanitizeProofRead('x').decals).toEqual([]);
   });
 });
