@@ -5,6 +5,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { weekWindows, countByWeek, type WeekWindows } from '@/lib/my-week';
 import { addDays } from '@/lib/shop-week';
 import { GRAPHICS_ACTIVE_STATUSES, GRAPHICS_AWAITING_STATUSES } from '@/lib/graphics-status';
+import { GRAPHICS_PRE_PRODUCTION_STATUSES, compareReadyJobs } from '@/lib/graphics-proof-state';
 
 export const dynamic = 'force-dynamic';
 
@@ -177,7 +178,7 @@ async function loadTech(me: string, w: WeekWindows, nextWeekEnd: string) {
 // ─── Graphics production ──────────────────────────────────────────
 async function loadGraphics(me: string, w: WeekWindows) {
   const since = w.lastStart.toISOString();
-  const [finished, sent, approved, assignedDirect, assignedVia, waiting] = await Promise.all([
+  const [finished, sent, approved, assignedDirect, assignedVia, waiting, ready] = await Promise.all([
     // A job is "done" for the print floor when it moves to Ready / Ready for
     // Pickup — that's when it leaves the board's Active tab.
     fetchAllRows<{ id: string; job_id: string; created_at: string }>((from, to) =>
@@ -201,8 +202,14 @@ async function loadGraphics(me: string, w: WeekWindows) {
       .select('id, job_id, round_number, sent_at, graphics_jobs(job_number, title, customer)')
       .eq('sent_by', me).eq('outcome', 'pending').not('sent_at', 'is', null)
       .order('sent_at').order('id').limit(10),
+    // Approved, ready to produce — the whole floor's, not just mine: anyone
+    // in graphics can pick these up. Same rule as isReadyToProduce().
+    service.from('graphics_jobs')
+      .select('id, job_number, title, customer, due_date, customer_approved_at, job_category')
+      .eq('customer_approved', true).in('status', GRAPHICS_PRE_PRODUCTION_STATUSES)
+      .limit(200),
   ]);
-  const err = firstError(finished, sent, approved, assignedDirect, assignedVia, waiting);
+  const err = firstError(finished, sent, approved, assignedDirect, assignedVia, waiting, ready);
   if (err) return { error: err.message };
 
   const jobs = new Map<string, any>();
@@ -229,6 +236,15 @@ async function loadGraphics(me: string, w: WeekWindows) {
     next: {
       graphicsJobs: myJobs,
       graphicsJobsTotal: jobs.size,
+      ...(() => {
+        const rows = (ready.data || []).filter(j => j.job_category !== 'proofing').sort(compareReadyJobs);
+        return {
+          graphicsReady: rows.slice(0, 8).map(j => ({
+            id: j.id, label: j.title || j.job_number, customer: j.customer, due: j.due_date, approvedAt: j.customer_approved_at,
+          })),
+          graphicsReadyTotal: rows.length,
+        };
+      })(),
       proofsWaiting: (waiting.data || []).map((p: any) => ({
         id: p.id,
         jobId: p.job_id,
