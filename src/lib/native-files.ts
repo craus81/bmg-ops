@@ -129,7 +129,9 @@ const escapeHtml = (s: string) => s.replace(/[&<>"']/g, c => (
  *    `name`, so Save keeps it, e.g. Invoice_INV1532.pdf.
  *  - On a computer a bare blob: tab saves as "unknown.pdf" (no browser can
  *    name one), so the tab gets a slim bar with a Save button that does,
- *    over the browser's own PDF view.
+ *    over the browser's own PDF view, and a Print button beside it that
+ *    prints the PDF itself rather than the page around it (Craig,
+ *    2026-10-21: separate, obvious buttons per action).
  *  - Phones and tablets in Safari keep the bare tab: an iframe there shows
  *    only the first page.
  */
@@ -150,11 +152,18 @@ export function openPdfBytes(w: Window | null, bytes: BlobPart, name: string | n
       body { display: flex; flex-direction: column; }
       .bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #1f2937; color: #fff; }
       .name { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      a.save { padding: 7px 14px; border-radius: 8px; background: #2563eb; color: #fff; font-size: 13px; font-weight: 700; text-decoration: none; }
+      a.save, button.print { padding: 7px 14px; border-radius: 8px; background: #2563eb; color: #fff; font: 700 13px -apple-system, Segoe UI, Helvetica, Arial, sans-serif; text-decoration: none; border: 0; cursor: pointer; }
+      button.print { background: #fff; color: #1f2937; }
       iframe { flex: 1; border: 0; width: 100%; }
     </style></head><body>
-      <div class="bar"><div class="name">${n}</div><a class="save" href="${url}" download="${n}">Save PDF</a></div>
-      <iframe src="${url}" title="${n}"></iframe>
+      <div class="bar"><div class="name">${n}</div><button class="print" type="button" onclick="printPdf()">Print</button><a class="save" href="${url}" download="${n}">Save PDF</a></div>
+      <iframe id="pdf" src="${url}" title="${n}"></iframe>
+      <script>
+        function printPdf() {
+          var f = document.getElementById('pdf');
+          try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { window.print(); }
+        }
+      </script>
     </body></html>`);
     w.document.close();
   } catch {
