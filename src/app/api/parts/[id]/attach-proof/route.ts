@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMessage, getAttachment, getProofAttachments, proofContentType } from '@/lib/google';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { r2Upload } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
@@ -30,10 +30,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const partId = params.id;
 
   try {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supabase = createServiceClient();
 
     const { data: part } = await supabase
       .from('netsuite_parts')

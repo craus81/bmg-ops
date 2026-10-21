@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature, requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
@@ -7,10 +7,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { createPurchaseOrder, resolveDefaultLocationId, transactionUrl } from '@/lib/netsuite';
 import { locationIdForName } from '@/lib/invoice-location';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;

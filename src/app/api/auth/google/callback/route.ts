@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff } from '@/lib/api-auth';
 import { exchangeCode } from '@/lib/google';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 
 export async function GET(req: NextRequest) {
   // The redirect back from Google rides the connecting staffer's own browser
@@ -29,10 +29,7 @@ export async function GET(req: NextRequest) {
     const tokens = await exchangeCode(code);
 
     // Store tokens in Supabase using service role
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supabase = createServiceClient();
 
     // Upsert - replace any existing token
     await supabase.from('google_tokens').delete().neq('id', '00000000-0000-0000-0000-000000000000'); // clear all

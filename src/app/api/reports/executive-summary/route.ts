@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFinancials } from '@/lib/api-auth';
 import { loadRevenuePeriods } from '@/lib/revenue-summary';
 import { loadOpenQuotes, loadPipeline, loadShopCounts, chicagoDay } from '@/lib/exec-metrics';
@@ -10,10 +10,7 @@ import { loadStageDwell, loadGraphicsPulse, loadNeverInvoicedCount, loadLeadingM
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * The CEO view's data (R4-4): one request feeds every band on the

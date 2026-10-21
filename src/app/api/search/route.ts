@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff, profileFeatures, getProfileRoles } from '@/lib/api-auth';
 import { isLedgerReader } from '@/lib/ledger/history';
 import { deepSearch, type DeepSearchResult } from '@/lib/deep-search';
@@ -8,10 +8,7 @@ import { orderSearchResults } from '@/lib/search-groups';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const MAX_PER_GROUP = 5;
 const ESTIMATE_COLS = 'id, estimate_number, netsuite_estimate_number, customer_id, prospect_id, customer_name, title, vin, unit_number, status, total, created_at';

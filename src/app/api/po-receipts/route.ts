@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
@@ -9,10 +9,7 @@ import { mapReceiptLines, type NsPoLine } from '@/lib/po-receiving';
 import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
 import { computePartsReadiness } from '@/lib/parts-readiness';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;

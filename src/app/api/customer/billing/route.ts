@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { loadPortalBilling } from '@/lib/portal-billing';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * GET /api/customer/billing (R5-14): the logged-in customer dashboard's

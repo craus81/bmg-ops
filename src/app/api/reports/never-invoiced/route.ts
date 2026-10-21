@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole } from '@/lib/api-auth';
 import { loadNeverInvoicedQueue, NEVER_INVOICED_WINDOW_DAYS } from '@/lib/never-invoiced';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 /**
  * GET /api/reports/never-invoiced (R6-12)

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
@@ -21,10 +21,7 @@ export const dynamic = 'force-dynamic';
  * on its own (src/lib/parts-demand.ts).
  */
 
-const service = () => createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = () => createServiceClient();
 
 const DismissSchema = z.object({
   itemNumber: z.string().min(1).max(120),

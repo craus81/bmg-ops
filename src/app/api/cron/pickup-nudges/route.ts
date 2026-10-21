@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { loadReadyForPickup, decideNudges } from '@/lib/ready-pickup';
 import { loadBookingSettings } from '@/lib/booking';
@@ -11,10 +11,7 @@ import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * Daily ready-for-pickup sweep (R5-17 part 2). Vehicles complete N+ days

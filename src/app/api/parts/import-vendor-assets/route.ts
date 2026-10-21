@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { r2Upload } from '@/lib/r2';
@@ -16,10 +16,7 @@ import { detectFitment } from '@/lib/vehicle-fitment';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 // URL that tolerates a missing scheme ("www.masterack.com" — people paste
 // hostnames as often as full URLs). Normalized to https:// before the

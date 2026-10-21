@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -11,10 +11,7 @@ export const dynamic = 'force-dynamic';
 // one, so a multi-role admin whose scalar `role` isn't literally 'admin' gets
 // silently blocked from reading OR writing them). Going through the service
 // role here sidesteps all of that — the same approach /api/cni/invite uses.
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 // Profiles that carry an installer role are the CNI installer population —
 // matches the membership rule used on the company detail page.

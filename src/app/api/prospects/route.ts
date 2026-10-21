@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff, requireAdmin } from '@/lib/api-auth';
 import { deleteCustomer, deactivateCustomer, updateCustomer, type CustomerUpdateFields } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
 import { validateBody, z } from '@/lib/validate';
 import { findCustomerDuplicates } from '@/lib/customer-dupes';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 // DELETE can make two sequential NetSuite calls (delete, then the
 // deactivate fallback), each with a 25s client timeout — give the function

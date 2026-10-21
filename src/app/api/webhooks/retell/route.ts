@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import {
   afterHoursCallSubject, buildAfterHoursCallEmail, parseRetellCall, prettyPhone, reasonLabel,
   verifyRetellSignature,
@@ -11,10 +11,7 @@ import { deepLinks } from '@/lib/deep-links';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * Retell AI webhook — the after-hours phone agent.

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -7,10 +7,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * Actual-consumption import (R6-1): the seam for reconciling what the roll

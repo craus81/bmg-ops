@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
@@ -26,10 +26,7 @@ const Schema = z.object({
   })).min(1).max(50),
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 /**
  * Admin: add a completed vehicle to a CNI job that was installed but never

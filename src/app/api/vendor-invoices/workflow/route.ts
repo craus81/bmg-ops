@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { createVendorBill, findLocation } from '@/lib/netsuite';
@@ -12,10 +12,7 @@ export const dynamic = 'force-dynamic';
 // NetSuite bill creation is slow.
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 // Same NetSuite internal ids as the CNI payout flow (docs/cni-vendor-bills.md):
 // Subcontractors GL #53000 and the BMG Fleet Installations subsidiary.

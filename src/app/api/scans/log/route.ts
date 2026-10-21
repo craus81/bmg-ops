@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth, isInternalStaffRole, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logScan, resolveScannerCompany } from '@/lib/scan-log';
@@ -28,10 +28,7 @@ const Schema = z.object({
   location_name: z.string().trim().max(200).optional().nullable(),
 });
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * Unified scan-logging endpoint. Every scan (admin, BMG field installer, CNI

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { financeUserIds } from '@/lib/ap';
@@ -8,10 +8,7 @@ import { bounceDetail, bounceNextStep, bounceIsAmbiguous, recipientsLabel, isQui
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 // Resend signs webhooks with the Svix scheme: HMAC-SHA256 over
 // "{svix-id}.{svix-timestamp}.{raw body}" using the base64 secret after the

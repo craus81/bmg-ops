@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 
@@ -17,10 +17,7 @@ export async function POST(req: NextRequest) {
   const auth = await requireStaff(req);
   if (auth.error) return auth.error;
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  const supabase = createServiceClient();
 
   let contactsSynced = 0;
   let contactsTotal = 0;

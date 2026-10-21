@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { Resend } from 'resend';
 import { requireAdmin } from '@/lib/api-auth';
 import { getGmailClient, getMessage, getPdfAttachments, getHeader } from '@/lib/google';
@@ -7,10 +7,7 @@ import { getGmailClient, getMessage, getPdfAttachments, getHeader } from '@/lib/
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 

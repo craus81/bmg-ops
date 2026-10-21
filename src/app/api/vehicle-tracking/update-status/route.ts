@@ -7,12 +7,9 @@ import { appendSoLineTasks } from '@/lib/so-line-tasks';
 import { closeShopShiftsForCheckin, followStageWithShopTimer } from '@/lib/shop-labor';
 import { isShopStage, vehicleRowKey, type ShopStage } from '@/lib/types';
 import { logAudit } from '@/lib/audit';
-import { createClient as createServiceClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 
-const serviceSupabase = createServiceClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const serviceSupabase = createServiceClient();
 
 // Legal transitions for fleet_checkins.status. The one-line status row
 // (owner layout 2026-10-02) dropped Stuck (Parts/Graphics) and plain In

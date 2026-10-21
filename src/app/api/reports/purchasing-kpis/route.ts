@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -8,10 +8,7 @@ import { computePurchasingKpis, type ReceiptRecord, type RequestRecord } from '@
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * Purchasing cycle-time KPIs (R6-7). Every timestamp already existed — a

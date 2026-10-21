@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireMoney } from '@/lib/api-auth';
 import { getNetSuitePdf } from '@/lib/netsuite';
 import { r2Upload } from '@/lib/r2';
@@ -12,10 +12,7 @@ const Schema = z.object({
 });
 
 function getSupabase() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  return createServiceClient();
 }
 
 /**

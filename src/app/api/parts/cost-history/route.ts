@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -8,10 +8,7 @@ import { buildCostHistory, computeDrift, staleCostWorklist, type Buy } from '@/l
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * Part cost book (R6-7). ?item= gives one part's buy history; no item

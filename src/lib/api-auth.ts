@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from './supabase-service';
 import { resolveFeatures, isAdminRole, INTERNAL_STAFF_ROLES, type FeatureKey } from '@/lib/features';
 import { loadRoleFeatureSettings } from '@/lib/role-feature-settings';
 
@@ -17,7 +18,6 @@ import { loadRoleFeatureSettings } from '@/lib/role-feature-settings';
 export { isAdminRole, loadRoleFeatureSettings };
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 interface AuthResult {
@@ -156,8 +156,13 @@ export async function requireAuth(req: NextRequest): Promise<AuthResult> {
     }
 
     // Verify the token
+    // no-store for the same reason as createServiceClient: a cached
+    // /auth/v1/user answer would keep accepting a revoked session.
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: `Bearer ${accessToken}` } },
+      global: {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        fetch: (input: any, init?: any) => fetch(input, { ...init, cache: 'no-store' }),
+      },
     });
 
     const { data: { user }, error } = await supabase.auth.getUser();
@@ -166,7 +171,7 @@ export async function requireAuth(req: NextRequest): Promise<AuthResult> {
       return { user: null, error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
     }
 
-    const service = createClient(supabaseUrl, supabaseServiceKey);
+    const service = createServiceClient();
     const { data: profile } = await service
       .from('profiles')
       // full_name rides along for the From line on customer emails
@@ -332,7 +337,7 @@ export async function profileHasFeature(userId: string, profile: any, key: Featu
  * otherwise read user_feature_overrides once per key.
  */
 export async function profileFeatures(userId: string, profile: any): Promise<Set<FeatureKey>> {
-  const service = createClient(supabaseUrl, supabaseServiceKey);
+  const service = createServiceClient();
   const [{ data: overrides }, roleSettings] = await Promise.all([
     service
       .from('user_feature_overrides')

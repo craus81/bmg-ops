@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { rewriteVehicleCredits, recomputeShiftCredits, backfillJobCredits, assignVehicleCredits } from '@/lib/pay-credits';
@@ -9,10 +9,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const GetSchema = z.object({
   cniJobId: z.string().uuid().optional(),

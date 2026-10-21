@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
@@ -9,10 +9,7 @@ import { orderChatLabel, orderChatRecipients, isFollowing, type OrderChatEstimat
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const ESTIMATE_COLS = 'id, estimate_number, title, customer_name, netsuite_so_number, netsuite_so_id, status, created_by, fleet_checkin_id';
 const MESSAGE_LIMIT = 300;

@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { checkRateLimit, getRequestIp } from '@/lib/magic-link-approval';
 import { isUuid } from '@/lib/qc-fixes';
 import { qcPhotoSignedUrl, resolveQcCustomer } from '@/lib/qc-fixes-server';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 /**
  * GET /api/qc/[token]/photo/[photoId] — one QC fix photo through the

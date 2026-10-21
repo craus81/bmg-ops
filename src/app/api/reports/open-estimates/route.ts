@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { shopWorkMs } from '@/lib/shop-hours';
@@ -8,10 +8,7 @@ import { summarizeOpenEstimates, type OpenEstimateSource } from '@/lib/open-esti
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 const ESTIMATE_COLUMNS =
   'id, estimate_number, netsuite_estimate_number, title, customer_name, grand_total, status, created_by, ' +

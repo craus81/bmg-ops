@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff, profileCanSeeMoney } from '@/lib/api-auth';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { weekWindows, countByWeek, type WeekWindows } from '@/lib/my-week';
@@ -8,10 +8,7 @@ import { GRAPHICS_ACTIVE_STATUSES, GRAPHICS_AWAITING_STATUSES } from '@/lib/grap
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const IN_SHOP = ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics'];
 const VIEWS = ['tech', 'graphics', 'sales'] as const;

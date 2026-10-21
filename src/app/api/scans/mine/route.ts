@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth, isInternalStaffRole, getProfileRoles } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { storageDownloadUrl } from '@/lib/storage';
@@ -8,10 +8,7 @@ import { groupMyScans, type MyScanPhotoRow, type MyScanRow } from '@/lib/my-scan
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 const Schema = z.object({
   days: z.coerce.number().int().refine(d => d === 1 || d === 7 || d === 30).optional(),

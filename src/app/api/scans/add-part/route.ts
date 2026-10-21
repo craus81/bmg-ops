@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logScan } from '@/lib/scan-log';
@@ -17,10 +17,7 @@ export const dynamic = 'force-dynamic';
 // platform kill page.
 export const maxDuration = 120;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const Schema = z.object({
   scanIds: z.array(z.string().uuid()).min(1).max(200),

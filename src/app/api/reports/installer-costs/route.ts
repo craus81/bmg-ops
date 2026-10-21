@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { suiteqlQuery } from '@/lib/netsuite';
@@ -11,10 +11,7 @@ import { loadShifts, summarizeHours } from '@/lib/crew-utilization';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const QuerySchema = z.object({
   start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

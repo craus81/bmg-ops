@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { blockedFromChecking, packProgress, packSummaryNote, type PackItem } from '@/lib/pack-checklist';
@@ -7,10 +7,7 @@ import { packingListFromJob } from '@/lib/packing-list-pdf';
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * Digital pack & ship checklist (R6-4). Built from the SAME lines the

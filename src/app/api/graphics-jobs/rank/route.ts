@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { isOffTheFloor } from '@/lib/graphics-status';
@@ -45,10 +45,7 @@ export async function POST(req: NextRequest) {
   // De-dupe defensively: a double-drop in the UI must not rank a job twice.
   const requested = [...new Set(parsed.data.order)];
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+  const supabase = createServiceClient();
 
   // Two reads, merged: the jobs being ranked (to check they exist and can
   // still be worked) and the jobs ranked right now (to clear the ones this

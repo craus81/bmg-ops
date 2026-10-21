@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { recordHeartbeat } from '@/lib/system-health';
 import { notifyMany } from '@/lib/notify';
@@ -32,10 +32,7 @@ export async function GET(req: NextRequest) {
     if (admin.error) return admin.error;
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+  const supabase = createServiceClient();
 
   try {
     const staleCutoff = new Date(Date.now() - FIELD_SHIFT_STALE_HOURS * 3_600_000).toISOString();

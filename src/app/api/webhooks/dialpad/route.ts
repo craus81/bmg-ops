@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import {
   FINISHED_STATES, RINGING_STATES, parseDialpadCall, phoneDigits, verifyDialpadJwt,
 } from '@/lib/dialpad';
@@ -9,10 +9,7 @@ import { deepLinks } from '@/lib/deep-links';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * Dialpad Event Subscription webhook (R6-3) — the caller-ID screen-pop.

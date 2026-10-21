@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature, outsideStaff } from '@/lib/api-auth';
 import { loadQuoteListItems, type QuoteListStatus } from '@/lib/quote-list';
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const STATUSES: QuoteListStatus[] = ['working', 'sent', 'won', 'lost', 'all'];
 

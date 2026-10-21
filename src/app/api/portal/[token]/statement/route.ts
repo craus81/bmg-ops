@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { checkRateLimit, getRequestIp } from '@/lib/magic-link-approval';
 import { resolvePortalCustomer } from '@/lib/portal-token';
 import { loadPortalBilling } from '@/lib/portal-billing';
@@ -11,10 +11,7 @@ import { sendEmail } from '@/lib/resend';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 // Fewer invoice PDFs than the staff route's 10 — the portal shares the same
 // 60s budget but has no human watching a spinner explain itself.

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { downloadFile } from '@/lib/dropbox';
 import { r2Upload, sameOriginStorageUrl } from '@/lib/r2';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
@@ -41,10 +41,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Update the vehicle record with the proof URL and dropbox source path
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supabase = createServiceClient();
 
     // R3-22: store the auth-gated app URL — the raw public-domain URL goes
     // dark for the proofs prefix at the flip (legacy rows are rewritten at

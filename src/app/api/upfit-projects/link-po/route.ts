@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { findPoByNumber } from '@/lib/parts-email-scan';
@@ -27,10 +27,7 @@ const LinkSchema = z.object({
   poNumber: z.string().trim().min(1).max(60).optional(),
 }).refine(b => b.poId || b.poNumber, { message: 'Send poId or poNumber.' });
 
-const service = () => createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = () => createServiceClient();
 
 export async function POST(req: NextRequest) {
   const auth = await requireStaff(req);

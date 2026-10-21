@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { screenPhoto, MAX_IMAGE_BYTES, PRESCREEN_MODEL, type PrescreenResult } from '@/lib/photo-prescreen';
@@ -14,10 +14,7 @@ export const dynamic = 'force-dynamic';
 // job would be faster to return and useless to the person who could fix it.
 export const maxDuration = 60;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 const PHOTO_TYPES = ['front', 'back', 'driver_side', 'passenger_side', 'vin_plate', 'detail', 'other'] as const;
 

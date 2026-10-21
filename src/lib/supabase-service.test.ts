@@ -11,18 +11,15 @@ import { join, relative } from 'path';
  * deleted and the rest reordered, the builder showed the save, and Print
  * and Estimate PDF kept rendering the lines from an earlier read.
  *
- * Folders listed here are fully converted; a new route in them that builds
- * its own service client fails this test. Widen the list as more of
- * src/app/api is converted.
+ * Every server file is converted; one that builds its own service client
+ * (createClient with the service key, or a variable holding it) fails.
  */
 
 const repoRoot = join(__dirname, '..', '..');
 
-const CONVERTED_DIRS = [
-  'src/app/api/estimates',
-  'src/app/api/approve',
-  'src/app/api/quotes/follow-up/email',
-];
+// createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY...) or
+// createClient(url, someServiceKeyVariable).
+const OWN_SERVICE_CLIENT = /createClient\(\s*[^,()]+,\s*(process\.env\.SUPABASE_SERVICE_ROLE_KEY|\w*[sS]ervice\w*[kK]ey\w*|key)\b/;
 
 function tsFiles(dir: string): string[] {
   const out: string[] = [];
@@ -35,12 +32,11 @@ function tsFiles(dir: string): string[] {
 }
 
 describe('service-role Supabase clients bypass the fetch cache', () => {
-  for (const dir of CONVERTED_DIRS) {
-    it(`${dir} builds no service client of its own`, () => {
-      const offenders = tsFiles(join(repoRoot, dir))
-        .filter(f => readFileSync(f, 'utf8').includes('SUPABASE_SERVICE_ROLE_KEY'))
-        .map(f => relative(repoRoot, f));
-      expect(offenders).toEqual([]);
-    });
-  }
+  it('no file under src builds a service client of its own', () => {
+    const offenders = tsFiles(join(repoRoot, 'src'))
+      .filter(f => !f.endsWith('supabase-service.ts'))
+      .filter(f => OWN_SERVICE_CLIENT.test(readFileSync(f, 'utf8')))
+      .map(f => relative(repoRoot, f));
+    expect(offenders).toEqual([]);
+  });
 });

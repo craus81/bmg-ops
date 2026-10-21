@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { sendPoConfirmation, isApMailbox } from '@/lib/po-confirmation';
@@ -36,10 +36,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'That is not a valid email address.' }, { status: 400 });
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+  const supabase = createServiceClient();
 
   // Save the corrected buyer first, so the record matches what went out
   // even if the send itself fails.

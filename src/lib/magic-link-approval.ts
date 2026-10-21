@@ -7,7 +7,7 @@
 
 import crypto from 'crypto';
 import { NextRequest } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { r2Upload } from '@/lib/r2';
 
 const DEFAULT_EXPIRY_DAYS = 30;
@@ -15,10 +15,7 @@ const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const RATE_LIMIT_MAX_ATTEMPTS = 20;
 
 function getServiceClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  return createServiceClient();
 }
 
 export interface ApprovalMetadata {

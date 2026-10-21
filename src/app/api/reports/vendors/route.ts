@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { loadVendorScorecards, vendorChipText } from '@/lib/vendor-scorecards';
@@ -7,10 +7,7 @@ import { loadVendorScorecards, vendorChipText } from '@/lib/vendor-scorecards';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * GET /api/reports/vendors (R5-11):
