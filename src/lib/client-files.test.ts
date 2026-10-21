@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   extOf, kindOf, isCopyable, MAX_COPY_BYTES, locateUnderRoot, clientFolderPathLower,
   matchWords, folderNameVariants, prepareCustomers, matchFolder, nameSimilarity,
-  copyKeyFor, thumbKeyFor, formatBytes,
+  copyKeyFor, thumbKeyFor, formatBytes, opensInGraphicsBuilder, MAX_BUILDER_BYTES,
 } from './client-files';
 
 describe('file kinds', () => {
@@ -145,5 +145,15 @@ describe('matchFolder', () => {
 
   it('leaves unknown folders unmatched', () => {
     expect(matchFolder('Lindenwood 2022 Hole Sponsor Signs', customers)).toMatchObject({ status: 'unmatched', customerId: null, candidates: [] });
+  });
+});
+
+describe('opensInGraphicsBuilder', () => {
+  it('takes PDFs, pictures and Illustrator files the browser can draw', () => {
+    for (const ext of ['pdf', 'PDF', 'ai', 'jpg', 'png', 'heic']) expect(opensInGraphicsBuilder({ ext, size: 1000 })).toBe(true);
+  });
+  it('leaves out EPS and other print files, and files too big for a phone', () => {
+    for (const ext of ['eps', 'tif', 'psd', 'zip', '']) expect(opensInGraphicsBuilder({ ext, size: 1000 })).toBe(false);
+    expect(opensInGraphicsBuilder({ ext: 'pdf', size: MAX_BUILDER_BYTES + 1 })).toBe(false);
   });
 });

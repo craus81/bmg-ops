@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateJobPo, estimateVehicleLine, joinBlocks, wrapQuoteJobFields } from './graphics-links';
+import { estimateJobPo, estimateVehicleLine, joinBlocks, linkQuoteClientFiles, proofClientFileIds, wrapQuoteJobFields } from './graphics-links';
 
 describe('estimateVehicleLine', () => {
   it('names year, model, unit and the full VIN', () => {
@@ -51,5 +51,50 @@ describe('joinBlocks', () => {
   it('skips empty blocks and separates the rest with a blank line', () => {
     expect(joinBlocks('a', null, '  ', 'b')).toBe('a\n\nb');
     expect(joinBlocks(null, '')).toBeNull();
+  });
+});
+
+describe('client files from a worksheet\'s proof pages', () => {
+  const A = '0b5c3a2e-1f4d-4c8e-9a7b-2d6e8f1a3c5b';
+  const B = '7e1d2c3b-4a5f-4e6d-8c7b-9a0f1e2d3c4b';
+
+  it('collects each page\'s client file once and ignores pages without one', () => {
+    expect(proofClientFileIds([
+      { path: 'a', client_file_id: A }, { path: 'b', client_file_id: A }, { path: 'c' }, { path: 'd', client_file_id: B }, { client_file_id: 'junk' },
+    ])).toEqual([A, B]);
+    expect(proofClientFileIds(null)).toEqual([]);
+    expect(proofClientFileIds('x')).toEqual([]);
+  });
+
+  const fakeSupabase = (photoProofs: any, upsertError: any = null) => {
+    const upserts: any[] = [];
+    const client: any = {
+      from: (table: string) => {
+        if (table === 'wrap_quotes') {
+          return { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { photo_proofs: photoProofs } }) }) }) };
+        }
+        return { upsert: async (rows: any, opts: any) => { upserts.push({ table, rows, opts }); return { error: upsertError }; } };
+      },
+    };
+    return { client, upserts };
+  };
+
+  it('links the worksheet\'s client files onto the job without duplicating', async () => {
+    const { client, upserts } = fakeSupabase([{ path: 'a', client_file_id: A }]);
+    expect(await linkQuoteClientFiles(client, 'job-1', 'wq-1', 'user-1')).toBe(1);
+    expect(upserts).toEqual([{
+      table: 'graphics_job_client_files',
+      rows: [{ job_id: 'job-1', client_file_id: A, added_by: 'user-1' }],
+      opts: { onConflict: 'job_id,client_file_id', ignoreDuplicates: true },
+    }]);
+  });
+
+  it('does nothing with no worksheet or no client files, and never throws', async () => {
+    const empty = fakeSupabase([{ path: 'a' }]);
+    expect(await linkQuoteClientFiles(empty.client, 'job-1', null)).toBe(0);
+    expect(await linkQuoteClientFiles(empty.client, 'job-1', 'wq-1')).toBe(0);
+    expect(empty.upserts).toEqual([]);
+    const failing = fakeSupabase([{ path: 'a', client_file_id: A }], { message: 'boom' });
+    expect(await linkQuoteClientFiles(failing.client, 'job-1', 'wq-1')).toBe(0);
   });
 });

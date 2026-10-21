@@ -90,6 +90,9 @@ export interface PhotoProof {
   /** Where the proof reader found the two wheel centres, so a change of
    *  vehicle (wheelbase) can re-scale the page without re-reading it. */
   wheel_line?: { x1: number; y1: number; x2: number; y2: number } | null;
+  /** The Client Files file (dropbox_client_files.id) this page was opened
+   *  from, so the worksheet's graphics job links the same file. */
+  client_file_id?: string | null;
 }
 
 /** Same palette the estimator gives films, so proofs read like the diagrams. */
@@ -452,6 +455,7 @@ export function sanitizePhotoProofs(raw: any, legacy?: { path?: string | null; b
       source: p?.source === 'customer_proof' ? 'customer_proof' : null,
       legend: sanitizeLegendRows(p?.legend),
       wheel_line: sanitizeWheelLine(p?.wheel_line),
+      ...(typeof p?.client_file_id === 'string' && /^[0-9a-f-]{36}$/i.test(p.client_file_id) ? { client_file_id: p.client_file_id } : {}),
     });
     if (proofs.length >= MAX_PHOTO_PROOFS) break;
   }

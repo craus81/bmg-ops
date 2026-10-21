@@ -59,6 +59,21 @@ export function isCopyable(kind: ClientFileKind, sizeBytes: number): boolean {
   return (kind === 'pdf' || kind === 'photo') && sizeBytes > 0 && sizeBytes <= MAX_COPY_BYTES;
 }
 
+/**
+ * Files the Graphics Builder can read as a customer proof (Craig,
+ * 2026-10-21: "open it in the graphics builder to measure it"). The browser
+ * draws PDFs and pictures; an Illustrator file saved PDF-compatible (its
+ * default) carries a PDF inside, so .ai is tried too. EPS and other print
+ * files can't be drawn in a browser. Bigger than MAX_BUILDER_BYTES and a
+ * phone runs out of memory drawing it.
+ */
+export const BUILDER_EXTS: ReadonlySet<string> = new Set(['pdf', 'ai', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif']);
+export const MAX_BUILDER_BYTES = 80 * 1024 * 1024;
+
+export function opensInGraphicsBuilder(f: { ext: string; size: number }): boolean {
+  return BUILDER_EXTS.has((f.ext || '').toLowerCase()) && (!f.size || f.size <= MAX_BUILDER_BYTES);
+}
+
 /** Content type for a copy, so a browser shows it inline. */
 export function contentTypeFor(ext: string): string {
   switch (ext) {
