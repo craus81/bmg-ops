@@ -41,6 +41,7 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
 import { poCreatedBy } from '@/lib/created-by';
 import PoPricingRequestLink from '@/components/PoPricingRequestLink';
+import PoAttentionFlag from '@/components/PoAttentionFlag';
 
 type ShipTo = NonNullable<PurchaseOrder['ship_to']>;
 
@@ -1035,6 +1036,18 @@ export default function PoRecordPage() {
           {po.netsuite_so_number && <span style={{ color: '#a78bfa', marginLeft: '6px' }}>NS SO #{po.netsuite_so_number}</span>}
         </div>
         <CreatedBy {...poCreatedBy(po)} at={po.created_at} style={{ display: 'block', marginTop: '2px' }} />
+
+        {/* Needs attention flag — the list's ⚑ opens this page with ?flag=1 */}
+        <div style={{ marginTop: '12px' }}>
+          <PoAttentionFlag
+            key={po.id}
+            po={po}
+            user={{ id: user?.id || null, name: profile?.full_name || user?.email || null }}
+            initialOpen={typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('flag') === '1'}
+            onSaved={fields => setPo(prev => prev ? { ...prev, ...fields } : prev)}
+            onNoteAdded={note => setPoNotes(prev => [...prev, note as PoNoteRow])}
+          />
+        </div>
 
         {/* Actions */}
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '12px' }}>

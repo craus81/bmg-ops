@@ -23,8 +23,8 @@ export const deepLinks = {
    *  recipient can open the note's record. Every mention notification lands
    *  here, so nobody is left with only the excerpt. */
   mention: (mentionId: string) => `/mentions/${mentionId}`,
-  /** Dedicated PO record page. */
-  po: (poId: string) => `/admin/pos/${poId}`,
+  /** Dedicated PO record page. `flag` opens its "needs attention" form. */
+  po: (poId: string, opts?: { flag?: boolean }) => `/admin/pos/${poId}${opts?.flag ? '?flag=1' : ''}`,
   /** Dedicated graphics job record page. */
   graphicsJob: (jobId: string) => `/graphics/${jobId}`,
   /** The graphics board. `mine` opens it on the My Jobs tab — only ever for
