@@ -34,6 +34,7 @@ import { apiErrorMessage } from '@/lib/api-error-message';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { openJobOrder } from '@/lib/job-order-pdf';
+import FulfillInvoiceModal from '@/components/FulfillInvoiceModal';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import { discountLabel, discountSplit, jobDiscountShare, lineMoney, netUnitPrice, normalizeDiscount, normalizeDiscountDescription, roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
 import { DEFAULT_DISCOUNT_APPROVAL_PCT } from '@/lib/discount-approval';
@@ -2548,6 +2549,8 @@ export default function EstimatesPage() {
 
   // ── Print the same sales order as a Job Order pick ticket (no pricing) ──
   const [printingJobOrder, setPrintingJobOrder] = useState(false);
+  // Fulfill & Invoice window for the open estimate's sales order (admins).
+  const [fulfillInvoiceFor, setFulfillInvoiceFor] = useState<{ id: string; soLabel: string } | null>(null);
   // Open job (2026-10-20, retiring the Upfit tab): the sold estimate's job
   // page — found by estimate first, then by its sales order.
   const [openingJob, setOpeningJob] = useState(false);
@@ -6898,6 +6901,15 @@ export default function EstimatesPage() {
               >
                 {printingJobOrder ? 'Opening Job Order…' : '🖨 Print Job Order'}
               </button>
+              {isAdmin && (
+                <button
+                  onClick={() => setFulfillInvoiceFor({ id: est.id, soLabel: `SO #${est.netsuite_so_number || est.netsuite_so_id}` })}
+                  title="Ship this sales order's parts from O'Fallon and invoice them in NetSuite (part of the order is fine)"
+                  style={{ padding: '5px 10px', borderRadius: '7px', border: '1px solid rgba(245,158,11,0.6)', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  Fulfill &amp; Invoice
+                </button>
+              )}
               <button
                 onClick={() => router.push(deepLinks.salesOrder(String(est.netsuite_so_id)))}
                 title="Open the sales order in FleetSuite: lines, shipped and billed, invoices. Admins can edit it there."
@@ -7302,6 +7314,13 @@ export default function EstimatesPage() {
         })}
       />
 
+      {fulfillInvoiceFor && (
+        <FulfillInvoiceModal
+          estimateId={fulfillInvoiceFor.id}
+          soLabel={fulfillInvoiceFor.soLabel}
+          onClose={() => setFulfillInvoiceFor(null)}
+        />
+      )}
       {partsRequest && editingId && (
         <EstimatePartsRequestModal
           estimateId={editingId}
