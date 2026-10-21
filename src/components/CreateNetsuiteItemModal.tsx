@@ -68,6 +68,28 @@ export function CreateNetsuiteItemModal({
   const [price, setPrice] = useState(initialPrice != null ? String(initialPrice) : '');
   const [recordType, setRecordType] = useState(ITEM_TYPES[0].value);
   const [cost, setCost] = useState('');
+  // NetSuite item class — required (Craig 2026-10-21), starts blank. The list
+  // is NetSuite's active classes, copied every two hours. If it can't load,
+  // the part can still be created without one rather than blocking the form.
+  const [itemClass, setItemClass] = useState('');
+  const [classes, setClasses] = useState<{ id: string; name: string }[] | null>(null);
+  const [classesError, setClassesError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/netsuite/item-classes');
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) { setClassesError(data.error || `Failed (${res.status})`); setClasses([]); return; }
+        setClasses(data.classes || []);
+      } catch (e: any) {
+        if (!cancelled) { setClassesError(e?.message || 'Failed to load'); setClasses([]); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const classRequired = !!classes && classes.length > 0;
   // Preferred vendor, picked from the NetSuite vendor master (synced nightly
   // into netsuite_vendors) so it carries NetSuite's internal id.
   const [vendor, setVendor] = useState<{ id: string; name: string } | null>(null);
@@ -203,6 +225,10 @@ export function CreateNetsuiteItemModal({
 
   const submit = async () => {
     if (submitting || !partNumber.trim()) return;
+    if (classRequired && !itemClass) {
+      setError('Pick a Class. Every new part needs one in NetSuite.');
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
@@ -218,6 +244,7 @@ export function CreateNetsuiteItemModal({
           purchasePrice: cost.trim() ? Number(cost) : null,
           vendorId: vendor?.id || null,
           vendorName: vendor?.name || null,
+          classId: itemClass || null,
           catalog: cat,
           billableCustomer: billableCustomer || null,
           existingPartId: existingPartId || null,
@@ -354,6 +381,23 @@ export function CreateNetsuiteItemModal({
             <select value={recordType} onChange={e => setRecordType(e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }}>
               {ITEM_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
             </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Class{classRequired ? ' *' : ''}</label>
+            <select
+              value={itemClass}
+              onChange={e => { setItemClass(e.target.value); if (e.target.value) setError(null); }}
+              disabled={classes === null || !classRequired}
+              style={{ ...inputStyle, cursor: 'pointer', ...(error && classRequired && !itemClass ? { borderColor: '#f87171' } : {}) }}
+            >
+              <option value="">{classes === null ? 'Loading classes…' : classRequired ? 'Pick a class' : 'No classes available'}</option>
+              {(classes || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            {classes !== null && !classRequired && (
+              <div style={{ fontSize: '10px', color: '#fbbf24', marginTop: '4px' }}>
+                Couldn&apos;t load NetSuite&apos;s classes{classesError ? ` (${classesError})` : ''}. The part will be created without one; set it in NetSuite.
+              </div>
+            )}
           </div>
           {chooseCatalog && (
             <div>

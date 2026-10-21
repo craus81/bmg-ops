@@ -728,6 +728,8 @@ export async function createItem(payload: {
   recordType: string; // e.g. 'serviceSaleItem', 'nonInventoryResaleItem', 'inventoryItem'
   displayName?: string;
   description?: string;
+  /** NetSuite class (classification) internal id. */
+  classId?: string | null;
 }): Promise<{
   success: boolean;
   internalId?: string;
@@ -746,6 +748,7 @@ export async function createItem(payload: {
   const body: any = { itemId: payload.itemId };
   if (payload.displayName) body.displayName = payload.displayName;
   if (payload.description) body.salesDescription = payload.description;
+  if (payload.classId) body.class = { id: payload.classId };
   // Items must belong to the "Parent Company : BMG Fleet Installations"
   // subsidiary (internal id 2) or downstream transactions reject them
   // ("Invalid Field Value … for the following field: item" on invoices/SOs).

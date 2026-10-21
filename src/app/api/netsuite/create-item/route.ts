@@ -33,6 +33,9 @@ const Schema = z.object({
   purchasePrice: z.number().nonnegative().optional().nullable(),
   vendorId: z.string().regex(/^\d+$/).max(20).optional().nullable(),
   vendorName: z.string().trim().max(200).optional().nullable(),
+  // NetSuite class internal id. The Create Part form requires one; the PO
+  // pricing-request link creates items without it.
+  classId: z.string().regex(/^\d+$/).max(20).optional().nullable(),
   catalog: z.enum(['upfit', 'graphics']).optional().nullable(),
   billableCustomer: z.string().max(200).optional().nullable(),
   // Local netsuite_parts row to link to the new NetSuite record (catalog flow:
@@ -52,7 +55,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { partNumber, recordType, displayName, description, salesPrice, purchasePrice, vendorId, vendorName, catalog, billableCustomer, existingPartId } = parsed.data;
+  const { partNumber, recordType, displayName, description, salesPrice, purchasePrice, vendorId, vendorName, classId, catalog, billableCustomer, existingPartId } = parsed.data;
 
   const supabase = createServiceClient();
 
@@ -155,6 +158,7 @@ export async function POST(req: NextRequest) {
     recordType,
     displayName: displayName || partNumber,
     description: description || undefined,
+    classId,
   });
 
   if (!result.success) {
