@@ -7,7 +7,7 @@
  * or unknown one gets nothing.
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { numberedFileNames, type CompletionPhotoRow } from './completion-photos';
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{20,64}$/;
@@ -33,10 +33,7 @@ export async function loadPhotoShare(token: string): Promise<SharedPhotoSet> {
 
   // Built per call, not at module scope: a module-scope client throws at
   // build time when Supabase env vars are absent.
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+  const supabase = createServiceClient();
 
   const { data: share } = await supabase
     .from('photo_shares')

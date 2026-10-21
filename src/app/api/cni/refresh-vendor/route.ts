@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { getVendorContact } from '@/lib/netsuite';
@@ -7,10 +7,7 @@ import { getVendorContact } from '@/lib/netsuite';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const Schema = z.object({ companyId: z.string().uuid() });
 

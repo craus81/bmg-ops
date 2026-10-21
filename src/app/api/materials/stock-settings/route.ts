@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff, requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
@@ -7,10 +7,7 @@ import { materialKey } from '@/lib/roll-stock';
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * Reorder policy per material (R6-2). Reading is staff — the printer

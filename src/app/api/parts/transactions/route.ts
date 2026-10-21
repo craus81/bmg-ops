@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { requireStaff } from '@/lib/api-auth';
 
@@ -73,10 +73,7 @@ export async function GET(req: NextRequest) {
     // directly (graphics_jobs.netsuite_invoice_id); estimates and sales
     // orders link through the FleetSuite estimate the job came from.
     try {
-      const supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      );
+      const supabase = createServiceClient();
       const jobByTxId = new Map<string, { id: string; jobNumber: string | null; title: string | null }>();
 
       const invoiceIds = transactions.filter(t => t.type === 'CustInvc').map(t => t.id);

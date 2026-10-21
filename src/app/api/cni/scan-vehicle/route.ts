@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { isVerizonRfidPart, validateSerial, validateImei, validateIccid } from '@/lib/rfid';
@@ -20,10 +20,7 @@ const Schema = z.object({
   iccid: z.string().trim().max(32).optional().nullable(),
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 /**
  * Installer (or admin) scans a vehicle straight onto a CNI job and completes

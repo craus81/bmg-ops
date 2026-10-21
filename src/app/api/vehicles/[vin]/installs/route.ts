@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { storageDownloadUrl } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 /** A VIN is never scanned hundreds of times; this is a sanity bound, not paging. */
 const MAX_INSTALLS = 100;

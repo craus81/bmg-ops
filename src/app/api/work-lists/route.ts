@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth, requireAdmin, isAdminRole, getProfileRoles } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { GRAPHICS_ACTIVE_STATUSES } from '@/lib/graphics-status';
@@ -52,7 +53,7 @@ const ASSIGNMENT_JOB_TYPE: Record<WorkListType, string> = {
 type Db = SupabaseClient;
 
 function service(): Db {
-  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+  return createServiceClient();
 }
 
 interface GraphicsRow {

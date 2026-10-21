@@ -1,13 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { notify, notifyMany } from '@/lib/notify';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const NotifySchema = z.object({
   userIds: z.array(z.string().uuid()).min(1).max(500),

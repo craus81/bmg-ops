@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { MATCH_FIELDS, MATCH_TYPES, MAX_PATTERN_LENGTH, patternError } from '@/lib/part-category-rules';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 /**
  * Part category tagging rules (migration 209) — CRUD. The sweep that

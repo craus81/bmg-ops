@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { checkRateLimit, getRequestIp } from '@/lib/magic-link-approval';
 import { resolvePortalCustomer } from '@/lib/portal-token';
 import { invoiceBelongsToCustomer } from '@/lib/portal-billing';
@@ -8,10 +8,7 @@ import { z, validateBody } from '@/lib/validate';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const AskSchema = z.object({
   invoiceId: z.string().regex(/^\d{1,15}$/),

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { recordHeartbeat } from '@/lib/system-health';
 import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
@@ -37,10 +37,7 @@ export async function GET(req: NextRequest) {
     if (admin.error) return admin.error;
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+  const supabase = createServiceClient();
 
   // Quiet weekends: insurance warnings, invite re-pings and budget notes
   // wait for Monday (each pass stamps what it sent, so nothing is lost).

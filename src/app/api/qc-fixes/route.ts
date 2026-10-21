@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
@@ -8,10 +8,7 @@ import { qcPhotoSignedUrl } from '@/lib/qc-fixes-server';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 const COLUMNS = 'id, customer_id, vin_last6, vin, checkin_id, vehicle_label, reported_by_name, comments, status, fix_by, note_to_customer, fixed_at, fixed_by, fixed_email_sent_at, created_at, updated_at';
 

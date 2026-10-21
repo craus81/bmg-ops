@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { rankForJob } from '@/lib/cni-match-inputs';
@@ -8,10 +8,7 @@ import { loadComplianceOverview } from '@/lib/cni-compliance';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * Ranked invite picker (R6-5). The aggregation lives in cni-match-inputs so

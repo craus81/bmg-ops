@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole } from '@/lib/api-auth';
 import { safeIntId, SqlSafeError } from '@/lib/sql-safe';
 import { fetchStatementInvoices, type StatementInvoice, type StatementScope } from '@/lib/financials-data';
@@ -187,7 +187,7 @@ export async function POST(req: NextRequest) {
       .sort((a, b) => b.daysPastDue - a.daysPastDue || (a.date || '').localeCompare(b.date || ''));
     const toAttach = attachInvoices ? attachable.slice(0, combine ? MAX_COMBINED : MAX_ATTACH) : [];
     const combinedFilename = `Invoices_${customerName.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'Customer'}.pdf`;
-    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabase = createServiceClient();
     const statementFilename = statementPdfFilename(customerName);
     const attachments: { filename: string; content: Buffer; contentType: string }[] = [];
     let combinedCount = 0;

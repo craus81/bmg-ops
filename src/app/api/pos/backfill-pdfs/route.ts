@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { getGmailClient, getMessage, getHeader, getPdfAttachments, getAttachment, isGoogleTokenError } from '@/lib/google';
@@ -17,10 +17,7 @@ const Schema = z.object({
   skipPoIds: z.array(z.string().uuid()).max(2000).optional(),
 });
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 // Stop starting new POs when this much of the function budget is spent, so
 // the batch in flight can finish and return a real report instead of a 504.

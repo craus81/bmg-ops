@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { deleteContact } from '@/lib/netsuite';
 import { pushProspectContactToNetsuite } from '@/lib/prospect-contact-netsuite';
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
     is_decision_maker: !!body?.is_decision_maker,
   };
 
-  const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+  const supabase = createServiceClient();
 
   const { data: prospect } = await supabase.from('prospects').select('id, netsuite_id').eq('id', prospectId).maybeSingle();
   if (!prospect) return NextResponse.json({ error: 'Customer not found' }, { status: 404 });
@@ -100,7 +100,7 @@ export async function DELETE(req: NextRequest) {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return NextResponse.json({ error: 'id required' }, { status: 400 });
   const skipNetsuite = req.nextUrl.searchParams.get('netsuite') === '0';
 
-  const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+  const supabase = createServiceClient();
   const { data: contact } = await supabase.from('prospect_contacts')
     .select('id, name, netsuite_contact_id').eq('id', id).maybeSingle();
   if (!contact) return NextResponse.json({ error: 'Contact not found' }, { status: 404 });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { r2Upload, r2Delete, sameOriginStorageUrl } from '@/lib/r2';
 import { requireAdmin } from '@/lib/api-auth';
 import { z } from '@/lib/validate';
@@ -61,10 +61,7 @@ async function extractXlsxText(buffer: Buffer): Promise<string> {
   return sheets.join('\n\n');
 }
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 function extractCsvText(buffer: Buffer): string {
   return buffer.toString('utf-8');

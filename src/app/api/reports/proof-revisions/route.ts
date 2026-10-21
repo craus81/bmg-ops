@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { customerRevisionStats, type JobRoundCount } from '@/lib/proof-rounds';
@@ -7,10 +7,7 @@ import { customerRevisionStats, type JobRoundCount } from '@/lib/proof-rounds';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 /**
  * GET /api/reports/proof-revisions (R6-10) — how many proof rounds each

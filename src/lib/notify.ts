@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { sendSMS } from '@/lib/twilio';
 import { sendEmail, buildNotificationEmail } from '@/lib/resend';
 import { apnsConfigured, sendApnsNotification } from '@/lib/apns';
@@ -6,10 +6,7 @@ import webpush from 'web-push';
 import { channelsForType, isRegistered, emailsImmediately, parseOverrides } from './notification-registry';
 import { fetchAllRows } from './fetch-all';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 // Configure web-push VAPID keys (only if configured)
 if (process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {

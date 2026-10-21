@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
 import { refreshPoInvoiceLinks } from '@/lib/po-invoice-sync';
@@ -9,10 +9,7 @@ export const dynamic = 'force-dynamic';
 // inside 60s today, but well past the default ceiling on big PO books.
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * POST /api/pos/verify-invoices — manual trigger for the invoiced-quantity

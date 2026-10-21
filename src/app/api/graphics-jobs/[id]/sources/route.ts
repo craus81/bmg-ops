@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { coveragePictures } from '@/lib/estimate-graphics';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
@@ -7,10 +7,7 @@ import { estimateVehicleLine } from '@/lib/graphics-links';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 /**
  * GET /api/graphics-jobs/[id]/sources

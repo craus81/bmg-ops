@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature, outsideStaff } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 const CALL_COLUMNS = 'id, created_at, started_at, duration_seconds, from_number, callback_number, caller_name, caller_company, caller_email, call_reason, caller_reference, urgent, summary, transcript, recording_url, matched_prospect_id, called_back_at, called_back_by, external_digits, spam';
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { deepLinks, inviteLinkFrom } from '@/lib/deep-links';
@@ -12,10 +12,7 @@ const ResendInviteSchema = z.object({
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
 

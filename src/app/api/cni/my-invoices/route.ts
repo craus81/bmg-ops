@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { recordVendorInvoice } from '@/lib/vendor-invoice-record';
@@ -12,10 +12,7 @@ export const dynamic = 'force-dynamic';
 // Scan matching + VIN decoding on submit can take a while for big invoices.
 export const maxDuration = 120;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 // Columns installers may see on their own company's invoices — no internal
 // actor ids and no staff notes.

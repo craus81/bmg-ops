@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { rolesOf } from '@/lib/cni-access';
@@ -8,10 +8,7 @@ import { canonicalizePartNumber } from '@/lib/part-number';
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const Schema = z.object({
   shiftId: z.string().uuid(),

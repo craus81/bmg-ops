@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { loadQuietLeads, QUIET_DAYS } from '@/lib/quiet-leads';
@@ -7,10 +7,7 @@ import { loadQuietLeads, QUIET_DAYS } from '@/lib/quiet-leads';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * GET /api/leads/quiet — active leads nobody has touched in `days` or more,

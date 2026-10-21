@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { computePartsReadinessBoard } from '@/lib/parts-readiness';
@@ -24,10 +24,7 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
 
-  const service = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+  const service = createServiceClient();
 
   try {
     const readiness = await computePartsReadinessBoard(service, parsed.data.ids);

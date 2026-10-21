@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth } from '@/lib/api-auth';
 import { logAudit } from '@/lib/audit';
 import {
@@ -45,10 +45,7 @@ const Schema = z.object({
   // closes.
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const SYSTEM_PROMPT = `You are FleetSuite AI, a business data assistant for BMG Fleet, a vehicle upfitting and fleet services company. You can query both NetSuite ERP data (SuiteQL) and the BMG Fleet app database (Supabase/PostgreSQL). You can also take actions like creating graphics jobs, sending messages, and updating records.
 

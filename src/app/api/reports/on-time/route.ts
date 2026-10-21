@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole } from '@/lib/api-auth';
 import { loadCompletions, loadOpenCommitments, summarizeOnTime } from '@/lib/on-time';
 import { chicagoDay } from '@/lib/exec-metrics';
@@ -7,10 +7,7 @@ import { chicagoDay } from '@/lib/exec-metrics';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 /**
  * GET /api/reports/on-time (R4-6): did we deliver by the promised-back date?

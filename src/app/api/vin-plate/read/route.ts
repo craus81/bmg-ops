@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { callAnthropicWithRetry } from '@/lib/anthropic';
@@ -12,10 +12,7 @@ export const maxDuration = 60;
 // Overridable so another vision model can be tried without a deploy.
 const MODEL = process.env.VIN_READER_MODEL || 'claude-sonnet-5-5';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const Schema = z.object({
   // Base64 JPEG of one photo, downscaled client-side. The cap refuses

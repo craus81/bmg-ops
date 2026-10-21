@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireMoney } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { resolveCustomerNsId, deriveProposedLines, deriveWrapQuoteLines } from '@/lib/graphics-invoice';
@@ -9,10 +9,7 @@ export const dynamic = 'force-dynamic';
 const Schema = z.object({ jobId: z.string().uuid() });
 
 function getSupabase() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+  return createServiceClient();
 }
 
 /**

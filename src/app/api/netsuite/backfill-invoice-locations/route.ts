@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { suiteqlQuery, suiteqlQueryAll, updateInvoiceLocation } from '@/lib/netsuite';
 import { resolveInvoiceLocation, getActiveLocations } from '@/lib/invoice-location';
@@ -164,7 +165,7 @@ export async function POST(req: NextRequest) {
     if (dryRun) {
       return NextResponse.json({ dryRun: true, summary: { processed: 0, applied: 0, failed: 0, closedPeriodSkips: 0 } });
     }
-    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabase = createServiceClient();
     const idToName = new Map((await getActiveLocations()).map((l) => [l.id, l.name]));
     let applied = 0;
     let failed = 0;
@@ -211,10 +212,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supabase = createServiceClient();
 
     // NetSuite locations — for the picker options and for naming the current
     // location of each invoice (the invoice query gives us only its id).

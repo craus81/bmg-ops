@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { computePartsDemand } from '@/lib/parts-demand';
 
@@ -22,10 +22,7 @@ export async function GET(req: NextRequest) {
   if (auth.error) return auth.error;
 
   try {
-    const result = await computePartsDemand(createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    ));
+    const result = await computePartsDemand(createServiceClient());
     return NextResponse.json({ success: true, ...result });
   } catch (err: any) {
     // A partial read would understate a number somebody orders against, so

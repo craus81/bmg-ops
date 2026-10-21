@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
 import { sendEmailDetailed, buildInvoiceEmail } from '@/lib/resend';
 import { getEmailSignature } from '@/lib/email-signature';
@@ -25,10 +25,7 @@ async function buildVinCsv(invoiceNumbers: string[]): Promise<string | null> {
     return null;
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY
-  );
+  const supabase = createServiceClient();
 
   const { data, error } = await supabase
     .from('scan_logs')
@@ -184,7 +181,7 @@ export async function POST(req: NextRequest) {
 
     const signature = process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
       ? await getEmailSignature(
-          createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY),
+          createServiceClient(),
           auth.user?.id,
         )
       : null;
@@ -212,7 +209,7 @@ export async function POST(req: NextRequest) {
     let historyCustomerId: string | null = null;
     if (customerName && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
       try {
-        const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+        const svc = createServiceClient();
         const { data: cust } = await svc.from('customers').select('id').ilike('company_name', customerName).limit(2);
         if (cust?.length === 1) historyCustomerId = cust[0].id;
       } catch { /* history linkage is best-effort */ }
@@ -238,10 +235,7 @@ export async function POST(req: NextRequest) {
     // error.
     if (!testSend && process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
       try {
-        const service = createClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL,
-          process.env.SUPABASE_SERVICE_ROLE_KEY
-        );
+        const service = createServiceClient();
         await service.from('invoice_emails').insert(
           results.filter(r => r.status === 'ok').map(r => ({
             invoice_number: r.invoiceNumber,

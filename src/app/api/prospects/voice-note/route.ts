@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { pushProspectNotes } from '@/lib/prospect-notes-sync';
@@ -24,10 +25,7 @@ const Schema = z.object({
   userId: z.string().uuid().optional().nullable(),
 });
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 

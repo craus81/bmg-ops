@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { sha256Hex } from '@/lib/magic-link-approval';
 import { r2GetBytes, r2PresignGet } from '@/lib/r2';
 import type { FeatureKey } from '@/lib/features';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 /**
  * GET /api/signed-documents?type=estimate|wrap_quote|proof&id=<uuid>

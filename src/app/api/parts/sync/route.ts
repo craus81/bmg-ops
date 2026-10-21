@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQueryAll } from '@/lib/netsuite';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -15,10 +15,7 @@ const Schema = z.object({
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120; // Allow up to 2 minutes for large syncs
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 export async function POST(req: NextRequest) {
   const auth = await requireAdmin(req);

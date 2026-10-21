@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { ensureR2Cors, r2Upload, r2PresignPut, r2Delete, r2Get } from '@/lib/r2';
 import { readRecordFileBody, ROUTE_UPLOAD_MAX_BYTES } from '@/lib/record-file-route';
@@ -28,7 +28,7 @@ const MAX_BYTES = 25 * 1024 * 1024;
 const R2_PREFIX = 'customer-files';
 
 function service() {
-  return createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+  return createServiceClient();
 }
 
 function safeFileName(name: string): string {

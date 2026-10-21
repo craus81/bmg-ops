@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { normalizeEmail, unknownRecipients } from '@/lib/new-recipients';
@@ -7,10 +7,7 @@ import { pushProspectContactToNetsuite, type NetsuiteContactPush } from '@/lib/p
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const UUID = /^[0-9a-f-]{36}$/i;
 

@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFinancials } from '@/lib/api-auth';
 import { loadArTrends } from '@/lib/ar-trends';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * GET /api/reports/financials/ar-trends (R5-6): DSO now (live A/R ÷ daily

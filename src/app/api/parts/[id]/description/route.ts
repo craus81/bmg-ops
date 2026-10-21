@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { updateItemDescription } from '@/lib/netsuite';
@@ -23,10 +23,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const partId = params.id;
 
   try {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supabase = createServiceClient();
 
     const { data: part } = await supabase
       .from('netsuite_parts')

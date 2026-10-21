@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createItem, findItems, itemUrl, isPurchasableItemType, setItemPurchaseInfo, updateItemFields } from '@/lib/netsuite';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { partNumberPattern } from '@/lib/part-number';
@@ -54,10 +54,7 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const { partNumber, recordType, displayName, description, salesPrice, purchasePrice, vendorId, vendorName, catalog, billableCustomer, existingPartId } = parsed.data;
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
+  const supabase = createServiceClient();
 
   // Figure out whether this part already exists locally, and in what form.
   // A row with a real NetSuite id means the item is already in NetSuite — bail.

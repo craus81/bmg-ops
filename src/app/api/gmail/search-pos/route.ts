@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { searchPOEmails, getMessage, getPdfAttachments, getHeader } from '@/lib/google';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { fetchAllRows } from '@/lib/fetch-all';
 
@@ -16,10 +16,7 @@ export async function GET(req: NextRequest) {
   if (auth.error) return auth.error;
 
   try {
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supabase = createServiceClient();
 
     // Get days parameter (default 90 for manual search, cron uses 1)
     const days = parseInt(req.nextUrl.searchParams.get('days') || '90');

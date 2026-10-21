@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { r2Get } from '@/lib/r2';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -7,10 +7,7 @@ import { validateBody, z } from '@/lib/validate';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const Schema = z.object({ docId: z.string().uuid() });
 

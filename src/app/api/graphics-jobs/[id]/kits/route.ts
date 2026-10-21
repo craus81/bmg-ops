@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { loadJobKits, linkFleetCheckins } from '@/lib/graphics-fleet';
@@ -7,10 +7,7 @@ import { isFinishedStatus } from '@/lib/graphics-status';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const supabase = createServiceClient();
 
 async function readJob(id: string) {
   const { data } = await supabase.from('graphics_jobs').select('id, job_number, status, fleet_group_id').eq('id', id).maybeSingle();

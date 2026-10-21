@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature, outsideStaff } from '@/lib/api-auth';
 import { sendEmail } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
@@ -15,10 +15,7 @@ import { enforceCustomerHold } from '@/lib/customer-hold-server';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 const SendSchema = z.object({
   quoteId: z.string().uuid(),

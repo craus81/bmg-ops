@@ -1,14 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth, isAdminRole } from '@/lib/api-auth';
 import { buildPoPortalData } from '@/lib/po-portal';
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 // Customer-friendly status language — no internal jargon.
 const VEHICLE_STATUS: Record<string, { label: string; color: string }> = {

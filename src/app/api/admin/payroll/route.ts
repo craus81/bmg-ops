@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { fromDateString } from '@/lib/payroll';
@@ -7,10 +7,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 

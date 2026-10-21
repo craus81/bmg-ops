@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff, getProfileRoles } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { canSeeFinancials } from '@/lib/ai-agent-access';
@@ -9,10 +9,7 @@ import { BRIEF_SYSTEM_PROMPT, buildBriefPrompt, factLines, unknownSections } fro
 
 export const dynamic = 'force-dynamic';
 
-const service = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!,
-);
+const service = createServiceClient();
 
 /**
  * POST /api/customers/brief — the pre-call rundown (R6-13, audit line 415b).

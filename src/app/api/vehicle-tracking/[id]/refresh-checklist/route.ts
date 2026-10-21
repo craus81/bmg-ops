@@ -2,14 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff, isAdminRole } from '@/lib/api-auth';
 import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
 import { appendSoLineTasks } from '@/lib/so-line-tasks';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 
 export const dynamic = 'force-dynamic';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+const supabase = createServiceClient();
 
 /**
  * POST /api/vehicle-tracking/[id]/refresh-checklist

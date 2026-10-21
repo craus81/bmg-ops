@@ -4,7 +4,7 @@
  * Tokens are stored in Supabase `app_settings` table.
  */
 
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 
 interface DropboxTokens {
   access_token: string;
@@ -22,10 +22,7 @@ function getDropboxConfig() {
 }
 
 function getSupabaseAdmin() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  return createServiceClient();
 }
 
 // ── Token Storage ──

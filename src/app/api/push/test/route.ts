@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth } from '@/lib/api-auth';
 import { apnsConfigured, sendApnsNotificationDetailed } from '@/lib/apns';
 import webpush from 'web-push';
@@ -20,10 +20,7 @@ export async function POST(req: NextRequest) {
   const auth = await requireAuth(req);
   if (auth.error) return auth.error;
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  const supabase = createServiceClient();
 
   const payload = {
     title: 'Test notification',

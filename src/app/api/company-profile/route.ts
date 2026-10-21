@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth } from '@/lib/api-auth';
 import { r2Get, r2PublicUrl } from '@/lib/r2';
 
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
   if (auth.error) return auth.error;
 
   try {
-    const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+    const supabase = createServiceClient();
     const { data } = await supabase.from('wrap_quote_settings').select('company').eq('id', 1).maybeSingle();
     const c: any = data?.company || {};
 

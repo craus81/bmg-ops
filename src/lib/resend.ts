@@ -1,5 +1,5 @@
 import { Resend } from 'resend';
-import { createClient } from '@supabase/supabase-js';
+import { createServiceClient } from './supabase-service';
 import { renderSignatureHtml, type EmailSignature } from './email-signature';
 import { resolveCustomerLinkage } from './customer-linkage';
 
@@ -95,11 +95,9 @@ async function logEmailSend(
   html?: string,
   copies?: string[],
 ): Promise<void> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) return;
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return;
   try {
-    const service = createClient(url, key);
+    const service = createServiceClient();
 
     // Resolve the customer behind the send from whichever id the flow
     // passed — customers.id and prospects.id bridge via netsuite_id (the
