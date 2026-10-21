@@ -3105,6 +3105,12 @@ export default function CustomerRecordPage() {
                         <td style={{ ...docTd, textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{usd2(t.total)}</td>
                         <td style={{ ...docTd, textAlign: 'right', whiteSpace: 'nowrap' }}>
                           <span style={{ display: 'inline-flex', gap: '6px', justifyContent: 'flex-end' }}>
+                            {/* The sales order page: open it, and edit it as an admin. */}
+                            {t.nsId && t.nsPdfType === 'salesOrder' && (
+                              <button onClick={() => router.push(deepLinks.salesOrder(t.nsId!))} title="Open this sales order in FleetSuite" style={{ ...btnSm, padding: '4px 10px' }}>
+                                Open
+                              </button>
+                            )}
                             {t.nsId && t.nsPdfType && (
                               <button onClick={() => viewPdf(t)} disabled={pdfBusy === t.key} title="Open NetSuite's PDF — the document of record" style={{ ...btnSm, padding: '4px 10px', opacity: pdfBusy === t.key ? 0.6 : 1 }}>
                                 {pdfBusy === t.key ? '…' : 'NetSuite PDF'}

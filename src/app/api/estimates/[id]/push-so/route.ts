@@ -90,7 +90,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const now = new Date().toISOString();
   await supabase
     .from('estimates')
-    .update({ so_pushed_hash: hash, so_synced_at: now, so_out_of_date: false })
+    .update({ so_pushed_hash: hash, so_synced_at: now, so_out_of_date: false, so_changed_at: null, so_changed_by: null })
     .eq('id', params.id);
 
   await logAudit(supabase, {

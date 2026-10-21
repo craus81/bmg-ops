@@ -432,6 +432,10 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/netsuite/lookup-transaction/route.ts': staff(),
   'src/app/api/netsuite/pdf/route.ts': staff(),
   'src/app/api/netsuite/sales-order-lines/[id]/route.ts': staff(),
+  // The sales order page: anyone on staff opens it (prices only with See
+  // prices), only an admin edits it.
+  'src/app/api/sales-orders/[id]/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin(', 'profileCanSeeMoney('] },
+  'src/app/api/sales-orders/items/route.ts': admin(),
   'src/app/api/netsuite/sales-orders/route.ts': staff(),
   'src/app/api/netsuite/so-invoices/route.ts': staff(),
   'src/app/api/netsuite/transaction-packing/[id]/route.ts': staff(),

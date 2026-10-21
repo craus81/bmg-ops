@@ -355,15 +355,16 @@ export function deepResultUrl(group: string, item: any, backTo?: string | null):
     case 'ns_transactions':
     case 'notes':
       return item.url || null;
+    // The sales order page (read live from NetSuite; admins edit there).
+    case 'ns_sales_orders':
+      return item.netsuite_id ? deepLinks.salesOrder(item.netsuite_id) : null;
     // NetSuite's PDF in the app's viewer; ← goes to the customer when we
     // know them, else back to the search.
-    case 'ns_estimates':
-    case 'ns_sales_orders': {
+    case 'ns_estimates': {
       const back = item.customer_netsuite_id ? deepLinks.customerByNetsuiteId(item.customer_netsuite_id) : (backTo || null);
-      const so = group === 'ns_sales_orders';
       return item.netsuite_id
-        ? deepLinks.pdfViewer(deepLinks.netsuitePdf(so ? 'salesOrder' : 'estimate', item.netsuite_id), {
-            name: `NetSuite ${so ? 'sales order' : 'estimate'} ${item.tranid || item.netsuite_id}`,
+        ? deepLinks.pdfViewer(deepLinks.netsuitePdf('estimate', item.netsuite_id), {
+            name: `NetSuite estimate ${item.tranid || item.netsuite_id}`,
             back, backLabel: item.customer_netsuite_id ? (item.customer_name || 'Customer') : (back ? 'Search' : null),
           })
         : null;

@@ -316,6 +316,9 @@ interface Estimate {
   /** Migration 259: the SO no longer matches the estimate (set on save). */
   so_out_of_date?: boolean | null;
   so_pushed_hash?: string | null;
+  /** Migration 421: the sales order was edited on the sales order page. */
+  so_changed_at?: string | null;
+  so_changed_by?: string | null;
   netsuite_so_id: string | null;
   netsuite_so_number: string | null;
   // Delivery state of the LATEST approval email (Resend webhook — same
@@ -6896,6 +6899,13 @@ export default function EstimatesPage() {
                 {printingJobOrder ? 'Opening Job Order…' : '🖨 Print Job Order'}
               </button>
               <button
+                onClick={() => router.push(deepLinks.salesOrder(String(est.netsuite_so_id)))}
+                title="Open the sales order in FleetSuite: lines, shipped and billed, invoices. Admins can edit it there."
+                style={{ padding: '5px 10px', borderRadius: '7px', border: '1px solid rgba(168,85,247,0.5)', background: 'rgba(168,85,247,0.12)', color: '#a855f7', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+              >
+                Open sales order
+              </button>
+              <button
                 onClick={() => openJob(est.id, String(est.netsuite_so_id))}
                 disabled={openingJob}
                 title="Open this job: parts readiness, POs, vehicles, graphics, tasks and notes"
@@ -6903,6 +6913,13 @@ export default function EstimatesPage() {
               >
                 {openingJob ? 'Opening…' : 'Open job →'}
               </button>
+              {est.so_changed_at && (
+                <span style={{ width: '100%', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                  Sales order changed in FleetSuite on {new Date(est.so_changed_at).toLocaleDateString('en-US')}
+                  {est.so_changed_by ? ` by ${est.so_changed_by}` : ''}. This estimate was not changed
+                  {stale ? ', and Push changes would replace those edits' : ''}.
+                </span>
+              )}
               {stale && <span>— out of date with this estimate</span>}
               {stale && (
                 <button
