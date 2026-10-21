@@ -93,6 +93,12 @@ export interface PurchaseOrder {
   /** NULL = made by hand; 'email' / 'email_unattributed' = Gmail import (migration 358). */
   created_source?: string | null;
   created_at: string;
+  /** "Needs attention" flag (migration 423): set = something on this PO
+   *  still needs doing. See src/lib/po-attention.ts. */
+  attention_at?: string | null;
+  attention_note?: string | null;
+  attention_by?: string | null;
+  attention_by_name?: string | null;
   line_items?: POLineItem[];
   /** Invoiced-quantity check verdict (null = unchecked). */
   invoice_check_status?: 'ok' | 'attention' | 'no_invoices' | null;
