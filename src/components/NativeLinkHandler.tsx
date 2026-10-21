@@ -27,7 +27,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import ProofViewer from '@/components/ProofViewer';
-import { isNativeApp, ensureFreshSession } from '@/lib/native-files';
+import { isNativeApp, ensureFreshSession, blobUrlName, withFileExtension } from '@/lib/native-files';
 
 type Opened =
   | { kind: 'loading'; url: string; name: string }
@@ -63,6 +63,10 @@ function nameFromDisposition(header: string | null): string | null {
 }
 
 function nameHint(url: string, fallback?: string | null): string {
+  if (url.startsWith('blob:')) {
+    const given = blobUrlName(url);
+    if (given) return given;
+  }
   if (fallback && /\.[a-z0-9]{2,5}$/i.test(fallback.trim())) return fallback.trim();
   try {
     const u = new URL(url, window.location.href);
@@ -103,7 +107,15 @@ export default function NativeLinkHandler() {
         }
         const blob = await res.blob();
         if (run !== runRef.current) return;
-        const realName = nameFromDisposition(res.headers.get('content-disposition')) || name;
+        // Always a name with an ending: Save to Files on a PDF called just
+        // "File" saved something the phone couldn't open (Craig, 2026-10-21).
+        const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+        if (run !== runRef.current) return;
+        const realName = withFileExtension(
+          nameFromDisposition(res.headers.get('content-disposition')) || name,
+          blob.type || type,
+          head,
+        );
         setOpened({ kind: 'file', url, name: realName, blob });
       } catch (e: any) {
         if (run !== runRef.current) return;

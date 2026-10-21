@@ -18,6 +18,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { loadBccSelfPref, saveBccSelfPref } from '@/components/EmailComposeModal';
 import { useDialog } from '@/components/DialogProvider';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { openPdfBytes } from '@/lib/native-files';
 
 export interface EmailableInvoice {
   invoiceId?: string;
@@ -197,9 +198,7 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
       const data = await res.json();
       if (!data.success || !data.pdfBase64) throw new Error(data.error || 'PDF fetch failed');
       const bytes = Uint8Array.from(atob(data.pdfBase64), c => c.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-      if (w) w.location.href = url;
-      else window.open(url, '_blank');
+      openPdfBytes(w, bytes, data.filename || `Invoice_${inv.invoiceNumber}.pdf`);
     } catch (e: any) {
       w?.close();
       await dialog.alert(`Could not open the PDF: ${e.message}`);
