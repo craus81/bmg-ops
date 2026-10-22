@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { checkRateLimit, getRequestIp, validateExpiry } from '@/lib/magic-link-approval';
+import { checkRateLimit, getRequestIp } from '@/lib/magic-link-approval';
 import { r2GetBytes } from '@/lib/r2';
 import { ESTIMATE_FILE_PREFIX } from '@/lib/estimate-attachments';
-import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
+import { attachmentDisposition, resolveDownloadToken } from '@/lib/estimate-approval-downloads';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,16 +25,12 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     return NextResponse.json({ error: 'Too many downloads, please wait and retry.' }, { status: 429 });
   }
 
-  // The approval token is the credential, as on the approval page, and an
-  // expired link gets nothing.
-  const { data: estimate } = await supabase
-    .from('estimates')
-    .select('id, approval_token_expires_at, approval_file_ids')
-    .eq('approval_token', params.token)
-    .maybeSingle();
-  if (!estimate) return new NextResponse(null, { status: 404 });
-  if (!validateExpiry(estimate.approval_token_expires_at).ok) return new NextResponse(null, { status: 410 });
-  const pinned: string[] = estimate.approval_file_ids || [];
+  // The send's token is the credential, good for a year
+  // (resolveDownloadToken), with the files that send carried.
+  const found = await resolveDownloadToken(supabase, params.token, '');
+  if (!found.ok) return new NextResponse(null, { status: found.status });
+  const { estimate } = found;
+  const pinned: string[] = found.fileIds;
   if (!pinned.includes(params.fileId)) return new NextResponse(null, { status: 404 });
 
   const { data: file } = await supabase

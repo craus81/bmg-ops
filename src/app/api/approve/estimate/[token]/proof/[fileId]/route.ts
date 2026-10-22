@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { validateExpiry } from '@/lib/magic-link-approval';
 import { r2GetBytes } from '@/lib/r2';
 import { isShrinkableImage, shrinkImageForEmail } from '@/lib/email-image';
-import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
+import { attachmentDisposition, resolveDownloadToken } from '@/lib/estimate-approval-downloads';
 import { jobCoversEstimate } from '@/lib/graphics-fleet';
 import { sanitizeCopiedProofs } from '@/lib/estimate-copied-proofs';
 
@@ -31,15 +30,12 @@ const MAX_PROOF_BYTES = 10 * 1024 * 1024;
 export async function GET(req: NextRequest, { params }: { params: { token: string; fileId: string } }) {
   const download = req.nextUrl.searchParams.get('download') === '1';
 
-  // The approval token is the credential, as on the approval page, and an
-  // expired link gets nothing.
-  const { data: estimate } = await supabase
-    .from('estimates')
-    .select('id, fleet_group_id, approval_token_expires_at, copied_graphics_proofs')
-    .eq('approval_token', params.token)
-    .maybeSingle();
-  if (!estimate) return new NextResponse(null, { status: 404 });
-  if (!validateExpiry(estimate.approval_token_expires_at).ok) return new NextResponse(null, { status: 410 });
+  // The send's token is the credential, good for a year
+  // (resolveDownloadToken): the email's pictures and download links stay
+  // the customer's copy after the Approve button expires.
+  const found = await resolveDownloadToken(supabase, params.token, 'fleet_group_id, copied_graphics_proofs');
+  if (!found.ok) return new NextResponse(null, { status: found.status });
+  const { estimate } = found;
 
   const { data: file } = await supabase
     .from('graphics_job_files')

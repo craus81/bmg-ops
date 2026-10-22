@@ -361,6 +361,8 @@ interface Estimate {
   customer_approved: boolean | null;
   customer_approved_at: string | null;
   customer_approved_via: string | null;
+  /** Who answered (migration 424): the person's own link, or the name a forwarded reader typed. */
+  customer_responder?: string | null;
   customer_rejected_at: string | null;
   customer_rejection_reason: string | null;
   // Internal (BMG-side) review before the customer send — migration 316.
@@ -2910,7 +2912,8 @@ export default function EstimatesPage() {
         // Linked wrap quotes → the send auto-attaches the merged estimate
         // PDF; the server names it so the compose screen can say so. A
         // fleet send names one PDF per vehicle.
-        setApprovalPdfName((Array.isArray(data.attachments) && data.attachments.join(', ')) || null);
+        // The approval email links its PDF(s) instead of attaching them.
+        setApprovalPdfName((Array.isArray(data.pdfLinks) && data.pdfLinks.join(', ')) || null);
         return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
       }
       return { error: data.error || 'Unknown error' };
@@ -6743,7 +6746,7 @@ export default function EstimatesPage() {
                 background: 'rgba(248,113,113,0.08)', border: '1px solid rgba(248,113,113,0.25)',
                 fontSize: '12px', color: '#f87171',
               }}>
-                <div style={{ fontWeight: 800 }}>✗ Customer declined {new Date(est.customer_rejected_at).toLocaleDateString()}</div>
+                <div style={{ fontWeight: 800 }}>✗ {est.customer_responder ? `${est.customer_responder} asked for changes` : 'Customer declined'} {new Date(est.customer_rejected_at).toLocaleDateString()}</div>
                 <div style={{ marginTop: '3px', fontWeight: 500, color: 'var(--text-body)' }}>
                   “{est.customer_rejection_reason || 'No reason given'}”
                 </div>
@@ -6792,7 +6795,7 @@ export default function EstimatesPage() {
                 background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)',
                 fontSize: '11px', fontWeight: 700, color: '#22c55e',
               }}>
-                ✓ Approved by the customer {new Date(est.customer_approved_at).toLocaleString()}
+                ✓ Approved {est.customer_responder ? `by ${est.customer_responder}` : 'by the customer'} {new Date(est.customer_approved_at).toLocaleString()}
                 {est.customer_approved_via ? ` via ${est.customer_approved_via === 'sms_link' ? 'SMS link' : 'email link'}` : ''}
               </div>
             );
@@ -7113,24 +7116,25 @@ export default function EstimatesPage() {
                     ))}
                   </div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '6px' }}>
-                    Checked files appear in the email, on the approval page, and in the attached PDF.
+                    Checked files appear in the email, on the approval page, and in the PDF.
                     When the customer accepts, the proof is approved for production too — no separate proof send needed.
                   </div>
                 </div>
               )}
               {approvalPdfName && (
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  📎 <b style={{ color: 'var(--text-secondary)' }}>{approvalPdfName}</b> {approvalFleetOn
-                    ? 'are attached automatically — one PDF per vehicle the customer can save or forward, with any linked coverage pictures, proofs, and vinyl details merged in.'
-                    : 'is attached automatically — a PDF copy of this estimate the customer can save or forward, with any linked coverage pictures, proofs, and vinyl details merged in.'}
+                  🔗 Nothing is attached, so the email stays small and lands in the inbox. A <b style={{ color: 'var(--text-secondary)' }}>Download PDF</b> link
+                  {approvalFleetOn ? ' for each vehicle' : ''} sits under the Review &amp; Approve button ({approvalPdfName}), with any linked coverage pictures, proofs, and vinyl details merged in.
+                  {' '}Each person in To and Cc gets their own email and link, so FleetSuite records who approved. Download links keep working for a year.
                 </div>
               )}
             </div>
           ) : undefined}
           attachments={estimateFiles}
+          filesAsLinks
           onUploadAttachment={f => uploadEstimateFile(editingId!, f)}
           onRemoveAttachment={id => removeEstimateFile(editingId!, id)}
-          uploadHint="Pictures, spec sheets, anything the customer needs with the estimate. Files stay on the estimate for later emails."
+          uploadHint="Pictures, spec sheets, anything the customer needs with the estimate. They go out as download links, not attachments. Files stay on the estimate for later emails."
           fetchPreview={fetchApprovalPreview}
           onSend={confirmSendApproval}
           onClose={() => setApprovalModal(false)}

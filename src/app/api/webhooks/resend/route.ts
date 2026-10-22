@@ -153,7 +153,12 @@ export async function POST(req: NextRequest) {
     const { data: estRows } = await service
       .from('estimates')
       .select('id, estimate_number, customer_name, customer_id, created_by, sent_for_approval_by, approval_email_status, approval_email_to, approval_email_copies')
-      .eq('approval_email_id', emailId);
+      // One email per person since 2026-10-21 (approval_email_ids); older
+      // sends carry the single approval_email_id. Resend ids are UUIDs, so
+      // the filter only takes a plain id.
+      .or(/^[\w-]+$/.test(emailId)
+        ? `approval_email_id.eq.${emailId},approval_email_ids.cs.{${emailId}}`
+        : 'id.is.null');
 
     const estToUpdate = (estRows || []).filter(r =>
       (STATUS_RANK[status] ?? 0) >= (STATUS_RANK[r.approval_email_status] ?? 0)

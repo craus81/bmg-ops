@@ -29,6 +29,7 @@ import { r2GetBytes, r2Upload } from '@/lib/r2';
 import { recordQuoteView } from '@/lib/quote-view-recorder';
 import { loadApprovalDownloads } from '@/lib/estimate-approval-downloads';
 import { jobCoversEstimate } from '@/lib/graphics-fleet';
+import { resolveProofResponder } from '@/lib/proof-responder';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,6 +40,10 @@ const ApprovalSchema = z.object({
   timeOnPageSeconds: z.number().int().nonnegative().max(86_400).optional().nullable(),
   deliveryChannel: z.enum(['sms_link', 'email_link']).optional().nullable(),
   deliveryTarget: z.string().max(254).optional().nullable(),
+  // A per-person link (?own=1, migration 424) and, when the email was
+  // forwarded, the name the reader typed under "Not you?".
+  ownLink: z.boolean().optional().nullable(),
+  responder: z.string().trim().max(120).optional().nullable(),
 });
 
 const supabase = createServiceClient();
@@ -147,6 +152,13 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   if (estimate.customer_rejected_at) return NextResponse.json({ error: 'Already rejected' }, { status: 409 });
 
   const metadata = captureMetadata(req, body);
+  // Who is answering: the person's own link, or who a forwarded reader says
+  // they are. Older shared links can't say and record nobody.
+  const responder = await resolveProofResponder(supabase, {
+    ownLink: body.ownLink,
+    deliveryTarget: metadata.deliveryTarget,
+    typedName: body.responder,
+  });
 
   // The proof blocks this approval covers (graphics_jobs.estimate_attach —
   // the same loader every other surface uses). Loaded once here: they pick
@@ -168,6 +180,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
         customer_approved_via: metadata.deliveryChannel,
         customer_approved_delivery_target: metadata.deliveryTarget,
         customer_approved_time_on_page_seconds: metadata.timeOnPageSeconds,
+        customer_responder: responder,
         status: 'rejected',
         updated_at: new Date().toISOString(),
       })
@@ -184,7 +197,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
     // made (Stage 3 finding). Quotes separately accepted keep standing.
     await reconcileLinkedWrapQuotes(supabase, estimate.id, 'rejected', new Date().toISOString());
 
-    await notifySalesRep(estimate, 'rejected', reason, metadata.deliveryTarget);
+    await notifySalesRep(estimate, 'rejected', reason, metadata.deliveryTarget, responder);
     return NextResponse.json({ status: 'submitted_rejected' });
   }
 
@@ -211,7 +224,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   // the page displays these exact canonical strings, so nothing changes for
   // real customers).
   const agreement = proofBlocks.length > 0 ? COMBINED_AGREEMENT_TEXT : AGREEMENT_TEXT;
-  const snapshotHtml = await renderSignedSnapshot(estimate, lines, metadata, agreement, proofBlocks);
+  const snapshotHtml = await renderSignedSnapshot(estimate, lines, { ...metadata, responder }, agreement, proofBlocks);
   let signedPath: string | null = null;
   let signedHash: string | null = null;
   try {
@@ -241,6 +254,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
       customer_approved_via: metadata.deliveryChannel,
       customer_approved_delivery_target: metadata.deliveryTarget,
       customer_approved_time_on_page_seconds: metadata.timeOnPageSeconds,
+      customer_responder: responder,
       signed_document_storage_path: signedPath,
       signed_document_hash: signedHash,
       status: 'accepted',
@@ -256,14 +270,14 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   // One click approved design + price: propagate the acceptance onto the
   // graphics jobs whose proofs were part of this document, so the printing
   // proof-gate opens without a second customer round-trip.
-  await approveLinkedGraphicsJobs(estimate, proofBlocks, metadata, approvedAt, signedPath, signedHash);
+  await approveLinkedGraphicsJobs(estimate, proofBlocks, { ...metadata, responder }, approvedAt, signedPath, signedHash);
 
   // Folded wrap quotes ride the same acceptance: the estimate's grand total
   // already carries their money, and leaving them 'sent' kept them in the
   // follow-up queue and the open pipeline forever (Stage 3 finding).
   await reconcileLinkedWrapQuotes(supabase, estimate.id, 'accepted', approvedAt);
 
-  await notifySalesRep(estimate, 'accepted', undefined, metadata.deliveryTarget);
+  await notifySalesRep(estimate, 'accepted', undefined, metadata.deliveryTarget, responder);
   return NextResponse.json({ status: 'submitted_accepted' });
 }
 
@@ -324,6 +338,8 @@ async function approveLinkedGraphicsJobs(
         customer_approved_ip: metadata.ip,
         customer_approved_user_agent: metadata.userAgent,
         customer_approved_via: metadata.deliveryChannel,
+        // Who answered (migration 388 on jobs), when the link could say.
+        ...(metadata.responder ? { customer_responder: metadata.responder } : {}),
         customer_approved_delivery_target: metadata.deliveryTarget,
         customer_approved_time_on_page_seconds: metadata.timeOnPageSeconds,
         // A prior revision request is superseded by this approval.
@@ -349,7 +365,7 @@ async function approveLinkedGraphicsJobs(
         job_id: job.id,
         from_status: job.status,
         to_status: job.status,
-        note: `Customer approved proof together with Estimate #${estimate.estimate_number} via magic link`,
+        note: `${metadata.responder ? metadata.responder : 'Customer'} approved proof together with Estimate #${estimate.estimate_number} via magic link`,
       });
 
       await notifyGraphicsTeamCombined(job, estimate);
@@ -411,7 +427,7 @@ async function noteRejectionOnLinkedJobs(estimate: any, proofBlocks: EstimatePro
   }
 }
 
-async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', reason?: string, answeredFrom?: string | null) {
+async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', reason?: string, answeredFrom?: string | null, responder?: string | null) {
   // The customer's answer belongs on their account history too — the
   // timeline showed the estimate going out (the email row) but never what
   // came back. Best-effort; the approval itself already succeeded.
@@ -458,7 +474,9 @@ async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', r
   // the customer so the inbox line alone says what happened.
   const customer = estimate.customer_name || 'The customer';
   const label = `Estimate #${estimate.estimate_number}${estimate.title ? ` (${estimate.title})` : ''}`;
-  const from = answeredFrom ? ` from ${answeredFrom}` : '';
+  // A per-person link names who answered; an older shared link only says
+  // which address it was sent to.
+  const from = responder ? ` (${verdict === 'accepted' ? 'approved' : 'answered'} by ${responder})` : answeredFrom ? ` from ${answeredFrom}` : '';
   const total = Number(estimate.grand_total || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
   const title = verdict === 'accepted'
     ? `Approved: Estimate #${estimate.estimate_number}, ${estimate.customer_name || 'customer'}`
@@ -527,6 +545,7 @@ async function renderSignedSnapshot(est: any, lines: any[], meta: any, agreement
       <div>Approved at: ${escHtml(approvedAt)}</div>
       <div>IP: ${escHtml(meta.ip)}</div>
       <div>User agent: ${escHtml(meta.userAgent)}</div>
+      ${meta.responder ? `<div>Approved by: ${escHtml(meta.responder)}</div>` : ''}
       ${meta.deliveryChannel ? `<div>Delivered via: ${escHtml(meta.deliveryChannel)}${meta.deliveryTarget ? ' to ' + escHtml(meta.deliveryTarget) : ''}</div>` : ''}
       ${typeof meta.timeOnPageSeconds === 'number' ? `<div>Time on page: ${meta.timeOnPageSeconds}s</div>` : ''}
     </div>

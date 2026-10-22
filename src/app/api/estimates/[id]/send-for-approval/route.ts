@@ -12,11 +12,10 @@ import { getEmailSignature } from '@/lib/email-signature';
 import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { loadEstimateGraphics, loadEstimateProofs, proofBlocksForEmail, type EstimateProofBlock } from '@/lib/estimate-graphics';
 import { r2PublicUrl } from '@/lib/r2';
-import { loadEstimateAttachmentRows, fetchEstimateAttachments } from '@/lib/estimate-attachments';
-import { approvalDownloadUrls } from '@/lib/estimate-approval-downloads';
+import { loadEstimateAttachmentRows } from '@/lib/estimate-attachments';
+import { approvalDownloadUrls, downloadLinkExpiry } from '@/lib/estimate-approval-downloads';
+import { approvalCtaNote, approvalEmailExtras } from '@/lib/estimate-approval-email';
 import { resolveEstimateEmail, resolveEstimatePhone } from '@/lib/estimate-recipients';
-import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
-import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { validateBody, z } from '@/lib/validate';
 import { computeQuotedMargin, estimateDiscountRatio, getMarginFloorPct } from '@/lib/quoted-margin';
@@ -36,10 +35,8 @@ import { randomUUID } from 'crypto';
 const EMAIL_PRESIGN_SECONDS = 7 * 24 * 3600;
 
 export const dynamic = 'force-dynamic';
-// Every send generates the estimate PDF (catalog photo fetches, and R2 +
-// pdf-lib when linked wrap quotes / proofs merge on) — same budget as the
-// other generateEstimatePdf routes (/pdf, /email-pdf); the platform default
-// is too tight for a cold start with several assets.
+// A send renders the document and sends one email per recipient; the
+// platform default is tight for a cold start with several recipients.
 export const maxDuration = 60;
 
 const supabase = createServiceClient();
@@ -75,7 +72,7 @@ const SendForApprovalSchema = z.object({
     fileIds: z.array(z.string().uuid()).max(10),
   })).max(10).optional(),
   // Files the rep picked off the estimate (estimate_files) — pictures,
-  // spec sheets. Attached to the email alongside the estimate document.
+  // spec sheets. Linked from the email as downloads (nothing is attached).
   attachmentFileIds: z.array(z.string().uuid()).max(20).optional(),
   // A fleet order (migration 410) in ONE email (migration 412, Craig
   // 2026-10-19): this estimate plus every other vehicle of its order that
@@ -248,12 +245,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const picked = await loadEstimateAttachmentRows(supabase, estimate.id, body.attachmentFileIds);
   if (!picked.ok) return NextResponse.json({ error: picked.error }, { status: picked.status });
 
-  // Every transaction email carries a PDF copy of the transaction (CLAUDE.md
-  // domain note): the estimate PDF — the same bytes as the Estimate PDF /
-  // Email PDF buttons, with any linked wrap assets and proofs merged on —
-  // rides first on every approval send, so the customer can save or
-  // forward the estimate without digging through the original email. It is
-  // named in the document's Attached section alongside the rep's picks.
+  // The approval email attaches NOTHING (Craig, 2026-10-21): with the PDF
+  // attached, customers opened it and replied "approved" instead of pressing
+  // Review & Approve. The estimate PDF — the same bytes as the Estimate PDF
+  // / Email PDF buttons, with any linked wrap assets and proofs merged on —
+  // is a Download PDF link under the button at the top, and it and the
+  // rep's picks are listed as downloads. Those links last a year
+  // (estimate_download_tokens, migration 424), so the email stays the
+  // customer's copy to save or forward.
   const pdfFilename = estimatePdfFilename(estimate);
 
   // The other vehicles of a fleet order going in this same email, and every
@@ -264,8 +263,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (fleetSend) {
     subject = `[BMG Fleet] Estimates for ${orderEstimates.length} vehicles (${orderEstimates.map(e => `#${e.estimate_number}`).join(', ')}) — Ready for your approval`;
   }
-  // Every vehicle's PDF rides (each is that vehicle's transaction), then
-  // the rep's picks.
+  // Every vehicle's PDF is listed (each is that vehicle's transaction),
+  // then the rep's picks.
   const pdfNames = orderEstimates.map(e => estimatePdfFilename(e));
   const attachmentNames = [...(fleetSend ? pdfNames : [pdfFilename]), ...picked.rows.map(r => r.file_name)];
   const fleetVehicles = (urls?: Map<string, { reviewUrl: string; pdfUrl: string }>): { vehicles: FleetDocVehicle[] } | null => (fleetSend
@@ -293,7 +292,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       message,
       ctaUrl: `${appUrl}/approve/${fleetSend ? 'fleet' : 'estimate'}/`,
       ctaLabel: fleetSend ? `Review & approve all ${orderEstimates.length}` : 'Review & Approve',
-      ctaNote: `A unique, secure link is generated when you send. It expires in ${expiryDays} days.`,
+      ctaNote: `A unique, secure link is generated for each person when you send. It expires in ${expiryDays} days.`,
+      ...approvalEmailExtras(fleetSend, `${appUrl}/approve/estimate/`),
       signature,
       graphics: approvalGraphics,
       proofs: proofBlocks,
@@ -302,7 +302,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     });
     return NextResponse.json({
       preview: true, to: emailList.join(', ') || null, subject, html,
-      attachments: fleetSend ? pdfNames : [pdfFilename],
+      // Nothing is attached; the compose screen names the linked PDF(s).
+      attachments: [],
+      pdfLinks: fleetSend ? pdfNames : [pdfFilename],
       // The compose screen says which vehicles this one email covers.
       fleet: fleetSend ? orderEstimates.map(e => ({ id: e.id, estimateNumber: e.estimate_number, unitNumber: e.unit_number || null })) : null,
     });
@@ -347,51 +349,6 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }, { status: 409 });
   }
 
-  // Attachments are assembled BEFORE the token is minted or the estimate is
-  // stamped sent (docs/customer-email-standard.md): a storage failure must
-  // fail the whole send, not leave a rotated link on a record that already
-  // claims it went out.
-  //
-  // The estimate PDF rides first and takes its share of the budget; the
-  // rep's picked files get what's left. Both are hard errors when they
-  // can't be produced: the document's Attached section names them, so an
-  // email that promises a PDF and arrives without one is worse than asking
-  // the sender to try again.
-  const approvalAttachments: { filename: string; content: Buffer; contentType: string }[] = [];
-  if (emailList.length > 0) {
-    // The PDF copy of the estimate — with any linked wrap-quote assets
-    // (estimate_attach: coverage diagram, attachments, vinyl details) and
-    // graphics-job proofs merged on, so the customer approves ONE document
-    // carrying all of it.
-    //
-    // A fleet send attaches every vehicle's PDF, in unit order. A PDF that
-    // won't fit the size cap still reaches the customer: its vehicle row
-    // in the email links it behind that vehicle's token.
-    for (const e of fleetSend ? orderEstimates : [estimate]) {
-      let pdf: Awaited<ReturnType<typeof generateEstimatePdf>>;
-      try {
-        pdf = await generateEstimatePdf(supabase, e.id);
-      } catch (err: any) {
-        console.error('[send-for-approval] estimate PDF failed:', err?.message || err);
-        pdf = { ok: false, status: 500, error: err?.message || 'PDF render failed' };
-      }
-      if (!pdf.ok) {
-        const which = fleetSend ? `the PDF for estimate #${e.estimate_number}` : 'the estimate PDF';
-        return NextResponse.json({ error: `Could not generate ${which} (${pdf.error}). Nothing was sent — try again.` }, { status: pdf.status === 404 ? 404 : 502 });
-      }
-      const used = approvalAttachments.reduce((sum, a) => sum + a.content.byteLength, 0);
-      if (e.id !== estimate.id && used + pdf.buffer.byteLength > MAX_ATTACHMENT_BYTES) continue;
-      approvalAttachments.push({ filename: pdf.filename, content: pdf.buffer, contentType: 'application/pdf' });
-    }
-
-    const usedBytes = approvalAttachments.reduce((sum, a) => sum + a.content.byteLength, 0);
-    const extras = await fetchEstimateAttachments(picked.rows, Math.max(0, MAX_ATTACHMENT_BYTES - usedBytes));
-    if (!extras.ok) return NextResponse.json({ error: extras.error }, { status: extras.status });
-    for (const a of extras.attachments) {
-      approvalAttachments.push({ filename: a.filename, content: a.content, contentType: a.contentType || 'application/octet-stream' });
-    }
-  }
-
   // Mint a fresh token — rotating on resend invalidates prior links. A
   // fleet send mints one per vehicle, all sharing a batch id the order's
   // approval page finds them by; the other vehicles first, so a failure
@@ -413,78 +370,123 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
   const token = tokens.get(estimate.id)!;
 
+  // Every send's download links last a year, past the approval link's
+  // expiry and any later resend (migration 424) — the email attaches
+  // nothing, so these links are the customer's copy. Best-effort: a failed
+  // record still leaves the links working for the approval link's life.
+  {
+    const downloadsUntil = downloadLinkExpiry();
+    const { error: dlErr } = await supabase.from('estimate_download_tokens').insert(
+      [...siblings, estimate].map(e => ({
+        token: tokens.get(e.id)!,
+        estimate_id: e.id,
+        file_ids: e.id === estimate.id ? picked.rows.map(r => r.id) : [],
+        expires_at: downloadsUntil,
+      })),
+    );
+    if (dlErr) console.error('[send-for-approval] download token record failed:', dlErr.message);
+  }
+
   for (const e of orderEstimates) await afterSendCommitted(e, margins.get(e.id)!, floorReason, auth.user.id);
 
   const dispatch: Record<string, any> = { email: null, sms: null };
 
   if (emailList.length > 0) {
-    const via = `?via=email&to=${encodeURIComponent(emailList[0])}`;
-    const link = fleetSend ? `${appUrl}/approve/fleet/${token}${via}` : `${appUrl}/approve/estimate/${token}${via}`;
-    const downloadUrls = approvalDownloadUrls(appUrl, token);
-    const vehicleUrls = new Map(orderEstimates.map(e => [e.id, {
-      reviewUrl: `${appUrl}/approve/estimate/${tokens.get(e.id)}${via}`,
-      pdfUrl: approvalDownloadUrls(appUrl, tokens.get(e.id)!).pdf,
-    }]));
-    // The real estimate document, not a notification card: the old email
-    // carried a one-line summary and no quantities, rates, or line totals
-    // at all — the fields customers kept asking about.
-    const html = renderEstimateDocument(estimate, lineItems || [], {
-      company,
-      logoUrl,
-      message,
-      ctaUrl: link,
-      ctaLabel: fleetSend ? `Review & approve all ${orderEstimates.length}` : 'Review & Approve',
-      ctaNote: `This link expires in ${expiryDays} days.`,
-      fleet: fleetVehicles(vehicleUrls),
-      signature,
-      graphics: approvalGraphics,
-      proofs: proofBlocksForEmail(proofBlocks, appUrl, token),
-      // Each attachment doubles as a download link behind this token, for
-      // the customer whose mail system stripped it and for whoever they
-      // forward the email to.
-      attachmentNames: [
-        ...(fleetSend
-          ? orderEstimates.map((e, i) => ({ name: pdfNames[i], url: vehicleUrls.get(e.id)!.pdfUrl }))
-          : [{ name: pdfFilename, url: downloadUrls.pdf }]),
-        ...picked.rows.map(r => ({ name: r.file_name, url: downloadUrls.file(r.id) })),
-      ],
-    });
+    // One email per person, each link naming its reader (?to=…&own=1), so
+    // the estimate records WHO approved or asked for changes — the way
+    // proof emails work since 2026-10-16. One shared link named only the
+    // first address, whoever clicked. The compose screen's Cc teammates get
+    // their own copies too; each email lists everyone else it went to, and
+    // the sender's Bcc rides on the first one only.
+    const cc = (body.cc || []).map(e => e.trim()).filter(Boolean);
+    const people = [...new Set([...emailList, ...cc].map(e => e.toLowerCase()))]
+      .map(lower => [...emailList, ...cc].find(e => e.toLowerCase() === lower)!);
     const bcc = body.bccSelf && auth.user?.email ? [auth.user.email] : undefined;
-
-    try {
-      const { ok, id: resendId } = await sendEmailDetailed(
-        emailList, subject, html, undefined,
-        approvalAttachments.length > 0 ? approvalAttachments : undefined,
-        auth.user?.email || undefined, bcc,
-        { kind: 'estimate_approval', cc: body.cc, sentBy: auth.user?.id, fromName: repFromName((auth.profile as any)?.full_name), contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
-      );
-      dispatch.email = { target: emailList.join(', '), ok, bcc: bcc ? bcc.join(', ') : undefined };
-      // Delivery tracking (same scheme as invoice emails): store the Resend
-      // message id so the webhook can update this estimate's delivery state,
-      // and reset the state for this fresh send. A failed hand-off to Resend
-      // is recorded as 'failed' immediately — no webhook will ever come.
-      // Best-effort: a logging failure never turns a sent email into an error.
-      const { error: trackErr } = await supabase
-        .from('estimates')
-        .update({
-          approval_email_id: ok ? resendId : null,
-          approval_email_to: emailList,
-          // Everyone else on the email (CC, BCC) — the bounce webhook can't
-          // tell which address bounced, so the alert must know them all.
-          approval_email_copies: [...(body.cc || []), ...(bcc || [])],
-          approval_email_status: ok ? 'sent' : 'failed',
-          approval_email_detail: ok ? null : 'The email could not be handed to the delivery service',
-          approval_email_updated_at: new Date().toISOString(),
-        })
-        .in('id', orderEstimates.map(e => e.id));
-      if (trackErr) console.error('estimate email tracking update failed:', trackErr.message);
-    } catch (err: any) {
-      dispatch.email = { target: emailList.join(', '), ok: false, error: err?.message };
+    const downloadUrls = approvalDownloadUrls(appUrl, token);
+    const vehiclePdfUrls = new Map(orderEstimates.map(e => [e.id, approvalDownloadUrls(appUrl, tokens.get(e.id)!).pdf]));
+    const sent: string[] = [];
+    const failed: string[] = [];
+    const resendIds: string[] = [];
+    let lastError: string | undefined;
+    for (const [i, person] of people.entries()) {
+      const via = `?via=email&to=${encodeURIComponent(person)}&own=1`;
+      const link = fleetSend ? `${appUrl}/approve/fleet/${token}${via}` : `${appUrl}/approve/estimate/${token}${via}`;
+      const vehicleUrls = new Map(orderEstimates.map(e => [e.id, {
+        reviewUrl: `${appUrl}/approve/estimate/${tokens.get(e.id)}${via}`,
+        pdfUrl: vehiclePdfUrls.get(e.id)!,
+      }]));
+      // The real estimate document, not a notification card: the old email
+      // carried a one-line summary and no quantities, rates, or line totals
+      // at all — the fields customers kept asking about.
+      const html = renderEstimateDocument(estimate, lineItems || [], {
+        company,
+        logoUrl,
+        message,
+        ctaUrl: link,
+        ctaLabel: fleetSend ? `Review & approve all ${orderEstimates.length}` : 'Review & Approve',
+        ctaNote: approvalCtaNote(expiryDays, people.filter(p => p !== person)),
+        ...approvalEmailExtras(fleetSend, downloadUrls.pdf),
+        fleet: fleetVehicles(vehicleUrls),
+        signature,
+        graphics: approvalGraphics,
+        proofs: proofBlocksForEmail(proofBlocks, appUrl, token),
+        // Download links behind this send's token, for the customer and
+        // whoever they forward the email to.
+        attachmentNames: [
+          ...(fleetSend
+            ? orderEstimates.map((e, n) => ({ name: pdfNames[n], url: vehiclePdfUrls.get(e.id)! }))
+            : [{ name: pdfFilename, url: downloadUrls.pdf }]),
+          ...picked.rows.map(r => ({ name: r.file_name, url: downloadUrls.file(r.id) })),
+        ],
+      });
+      try {
+        const { ok, id: resendId } = await sendEmailDetailed(
+          person, subject, html, undefined, undefined,
+          auth.user?.email || undefined,
+          i === 0 ? bcc : undefined,
+          { kind: 'estimate_approval', cc: null, sentBy: auth.user?.id, fromName: repFromName((auth.profile as any)?.full_name), contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
+        );
+        (ok ? sent : failed).push(person);
+        if (ok && resendId) resendIds.push(resendId);
+      } catch (err: any) {
+        failed.push(person);
+        lastError = err?.message;
+      }
     }
+    const ok = sent.length > 0;
+    dispatch.email = {
+      target: ok
+        ? `${sent.join(', ')}${failed.length > 0 ? ` (not sent to ${failed.join(', ')})` : ''}`
+        : people.join(', '),
+      ok,
+      bcc: bcc ? bcc.join(', ') : undefined,
+      ...(!ok && lastError ? { error: lastError } : {}),
+    };
+    // Delivery tracking (same scheme as invoice emails): store the Resend
+    // message ids so the webhook can update this estimate's delivery state
+    // — every person's email, since any of them can bounce — and reset the
+    // state for this fresh send. A failed hand-off to Resend is recorded as
+    // 'failed' immediately — no webhook will ever come. Best-effort: a
+    // logging failure never turns a sent email into an error.
+    const { error: trackErr } = await supabase
+      .from('estimates')
+      .update({
+        approval_email_id: resendIds[0] || null,
+        approval_email_ids: resendIds,
+        approval_email_to: emailList,
+        // Everyone else on the send (Cc teammates, Bcc) — the bounce alert
+        // must know them all.
+        approval_email_copies: [...cc, ...(bcc || [])],
+        approval_email_status: ok ? 'sent' : 'failed',
+        approval_email_detail: ok ? null : 'The email could not be handed to the delivery service',
+        approval_email_updated_at: new Date().toISOString(),
+      })
+      .in('id', orderEstimates.map(e => e.id));
+    if (trackErr) console.error('estimate email tracking update failed:', trackErr.message);
   }
 
   if (phone) {
-    const link = `${appUrl}/approve/${fleetSend ? 'fleet' : 'estimate'}/${token}?via=sms${phone ? `&to=${encodeURIComponent(phone)}` : ''}`;
+    const link = `${appUrl}/approve/${fleetSend ? 'fleet' : 'estimate'}/${token}?via=sms&to=${encodeURIComponent(phone)}&own=1`;
     const smsBody = fleetSend
       ? `[BMG Fleet] Estimates for ${orderEstimates.length} vehicles ready for approval. ${link}`
       : `[BMG Fleet] Estimate #${estimate.estimate_number} ready for approval. ${link}`;
@@ -622,6 +624,8 @@ function approvalPatch(
     } : {}),
     customer_rejected_at: null,
     customer_rejection_reason: null,
+    // Who answered the last link (migration 424) — this send asks again.
+    customer_responder: null,
     // Frozen quoted-margin snapshot (R5-3): header-level so the line
     // save path's delete+reinsert can't wipe it; a re-send overwrites —
     // the snapshot always describes the version the customer last got.
@@ -714,3 +718,4 @@ async function settleInternalReview(estimate: any, auth: { user: { id: string; e
     }).catch(err => console.error('review-sent notify failed:', err));
   }
 }
+
