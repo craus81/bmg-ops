@@ -5,7 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { sendEmailDetailed, repFromName, buildNotificationEmail } from '@/lib/resend';
 import { getEmailSignature } from '@/lib/email-signature';
 import { deepLinks } from '@/lib/deep-links';
-import { loadEstimateAttachmentRows, fetchEstimateAttachments, type EstimateFileRow } from '@/lib/estimate-attachments';
+import { loadEstimateAttachmentRows, fetchEstimateAttachments, recordEstimateFilesSent, type EstimateFileRow } from '@/lib/estimate-attachments';
 import { resolveEstimateEmail } from '@/lib/estimate-recipients';
 import { MAX_ATTACHMENT_BYTES, type EmailAttachment } from '@/lib/email-attachments';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
@@ -199,6 +199,7 @@ export async function POST(req: NextRequest) {
   if (!ok) {
     return NextResponse.json({ error: 'Email failed to send — check Resend configuration and try again.' }, { status: 502 });
   }
+  if (isEstimate) await recordEstimateFilesSent(service, picked.rows.map(r => r.id), 'follow_up');
 
   // The email IS a follow-up touch — reset the quiet-days clock and leave
   // a history row, exactly like Log Follow-Up. Best-effort past the

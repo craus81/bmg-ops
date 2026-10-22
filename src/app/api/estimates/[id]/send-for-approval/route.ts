@@ -12,7 +12,7 @@ import { getEmailSignature } from '@/lib/email-signature';
 import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { loadEstimateGraphics, loadEstimateProofs, proofBlocksForEmail, type EstimateProofBlock } from '@/lib/estimate-graphics';
 import { r2PublicUrl } from '@/lib/r2';
-import { loadEstimateAttachmentRows } from '@/lib/estimate-attachments';
+import { loadEstimateAttachmentRows, recordEstimateFilesSent } from '@/lib/estimate-attachments';
 import { approvalDownloadUrls, downloadLinkExpiry } from '@/lib/estimate-approval-downloads';
 import { approvalCtaNote, approvalEmailExtras } from '@/lib/estimate-approval-email';
 import { resolveEstimateEmail, resolveEstimatePhone } from '@/lib/estimate-recipients';
@@ -386,6 +386,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     );
     if (dlErr) console.error('[send-for-approval] download token record failed:', dlErr.message);
   }
+  // The estimate's Pictures & files tags ("Sent for approval 10/21").
+  await recordEstimateFilesSent(supabase, picked.rows.map(r => r.id), 'approval');
 
   for (const e of orderEstimates) await afterSendCommitted(e, margins.get(e.id)!, floorReason, auth.user.id);
 

@@ -250,6 +250,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/client-files/route.ts': staff(),
   'src/app/api/client-files/[id]/route.ts': staff(),
   'src/app/api/client-files/tree/route.ts': staff(),
+  'src/app/api/client-files/fleetsuite/route.ts': { kind: 'staff', contains: ['requireStaff(', 'profileHasFeature('] },
   'src/app/api/client-files/folders/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin('] },
   'src/app/api/completion-photos/route.ts': feature('completion_photos'),
   'src/app/api/completion-photos/share/route.ts': staff(),

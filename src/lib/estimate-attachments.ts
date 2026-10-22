@@ -16,6 +16,7 @@ import {
   fetchEmailAttachments,
   type EmailAttachment,
 } from './email-attachments';
+import type { EstimateFileSendKind } from './estimate-file-tags';
 
 export const ESTIMATE_FILE_PREFIX = 'estimate-files';
 
@@ -102,4 +103,29 @@ export async function fetchEstimateAttachments(
       : a);
   }
   return { ok: true, attachments };
+}
+
+/**
+ * Note on each file that it went out (estimate_files.sent_on, migration
+ * 425), after the email was accepted. Best effort: a failed note never
+ * fails a send that already reached the customer.
+ */
+export async function recordEstimateFilesSent(
+  supabase: SupabaseClient<any, any, any>,
+  fileIds: string[],
+  kind: EstimateFileSendKind,
+): Promise<void> {
+  const ids = [...new Set(fileIds.filter(Boolean))];
+  if (ids.length === 0) return;
+  try {
+    const { data, error } = await supabase.from('estimate_files').select('id, sent_on').in('id', ids);
+    if (error) throw new Error(error.message);
+    const at = new Date().toISOString();
+    for (const r of (data || []) as { id: string; sent_on: unknown }[]) {
+      const prev = Array.isArray(r.sent_on) ? r.sent_on : [];
+      await supabase.from('estimate_files').update({ sent_on: [...prev, { kind, at }] }).eq('id', r.id);
+    }
+  } catch (e: any) {
+    console.error('[estimate-attachments] could not note the send on its files:', e?.message || e);
+  }
 }

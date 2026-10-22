@@ -390,3 +390,46 @@ export async function getTemporaryLink(path: string): Promise<string> {
   if (!data?.link) throw new Error('Dropbox returned no link');
   return data.link as string;
 }
+
+// ── Upload File ──
+
+/**
+ * Dropbox-API-Arg is an HTTP header, so anything outside ASCII must go as a
+ * JSON \u escape (Dropbox's documented rule) or the request is refused.
+ */
+export function dropboxApiArg(arg: unknown): string {
+  return JSON.stringify(arg).replace(/[\u007f-￿]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+}
+
+/** A Dropbox error body in plain words for staff (missing write permission is the likely one). */
+export function dropboxUploadErrorText(status: number, body: string): string {
+  if (/missing_scope/.test(body)) {
+    return "FleetSuite isn't allowed to save into Dropbox yet. The Dropbox connection needs write permission (files.content.write), then reconnect it.";
+  }
+  if (/insufficient_space/.test(body)) return 'The Dropbox account is out of space.';
+  if (/disallowed_name|malformed_path/.test(body)) return 'Dropbox would not accept that file name.';
+  return `Dropbox upload failed (${status}): ${body.slice(0, 200)}`;
+}
+
+/**
+ * Save a new file into Dropbox (files/upload, up to 150 MB). Never
+ * overwrites: a name already taken gets Dropbox's "(1)" rename. Folders on
+ * the way are created as needed. Returns the path Dropbox saved it under.
+ */
+export async function uploadFile(path: string, bytes: Buffer | Uint8Array): Promise<{ pathDisplay: string; id: string }> {
+  const res = await dropboxFetch('https://content.dropboxapi.com/2/files/upload', (token) => ({
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/octet-stream',
+      'Dropbox-API-Arg': dropboxApiArg({ path, mode: 'add', autorename: true, mute: true }),
+    },
+    body: bytes as any,
+  }));
+
+  if (!res.ok) {
+    throw new Error(dropboxUploadErrorText(res.status, await res.text()));
+  }
+  const meta = await res.json();
+  return { pathDisplay: meta.path_display || path, id: meta.id };
+}

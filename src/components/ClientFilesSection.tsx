@@ -20,6 +20,10 @@
  *
  * With no folder linked yet it says so, shows any folder the matcher thinks
  * might be this customer, and lets an admin link one.
+ *
+ * Above the Dropbox folders sit FleetSuite's own two, From Estimates and
+ * Completion Photos (FleetSuiteClientFolders; Craig, 2026-10-22), on every
+ * customer whether or not a Dropbox folder is linked.
  */
 
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
@@ -30,6 +34,7 @@ import ClientFileRow, { type ClientFile } from '@/components/ClientFileRow';
 import { setFolderMatch, type ClientFolder } from '@/components/ClientFolderMatches';
 import { ZipBar, FolderZipList } from '@/components/ClientFilesDownload';
 import ClientFolderBrowser from '@/components/ClientFolderBrowser';
+import FleetSuiteClientFolders from '@/components/FleetSuiteClientFolders';
 
 const SHOW = 8;
 /** Rows added by "Show more" (and shown at once when picking files for a zip). */
@@ -156,6 +161,7 @@ export default function ClientFilesSection({ customerId, customerName }: Props) 
 
   return (
     <div>
+      <FleetSuiteClientFolders customerId={customerId} />
       {linked === null ? (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading…</div>
       ) : linked.length > 0 ? (

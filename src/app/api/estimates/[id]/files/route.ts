@@ -5,6 +5,8 @@ import { ensureR2Cors, r2Upload, r2PresignPut, r2PresignGet, r2Delete, r2PublicU
 import { readRecordFileBody, ROUTE_UPLOAD_MAX_BYTES } from '@/lib/record-file-route';
 import { MAX_ATTACHMENT_BYTES, attachmentLimitMb } from '@/lib/email-attachments';
 import { ESTIMATE_FILE_PREFIX } from '@/lib/estimate-attachments';
+import { storageDownloadUrl } from '@/lib/storage';
+import { copyEstimateFileToDropbox } from '@/lib/estimate-file-dropbox';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,6 +27,12 @@ export const dynamic = 'force-dynamic';
  *     → { success, file }          (saves metadata after the PUT succeeds)
  *   GET                            → { success, files }
  *   DELETE ?fileId=<uuid>          → { success }  (removes R2 object + row)
+ *
+ * The estimate's Pictures & files section reads the same list (Craig,
+ * 2026-10-22), so each row also says which emails it went out on (sent_on)
+ * and whether its copy reached the customer's Dropbox folder
+ * (src/lib/estimate-file-dropbox.ts, tried right after the upload is
+ * recorded). Removing a file leaves the Dropbox copy alone.
  */
 
 const UUID_RE = /^[0-9a-f-]{36}$/i;
@@ -37,7 +45,7 @@ function safeFileName(name: string): string {
   return name.replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'file';
 }
 
-const publicFields = 'id, file_name, content_type, size_bytes, public_url, storage_path, created_at';
+const publicFields = 'id, file_name, content_type, size_bytes, public_url, storage_path, created_at, sent_on, dropbox_path, dropbox_error, uploader:profiles!estimate_files_uploaded_by_fkey(full_name)';
 
 /**
  * R3-22: estimate-files live on a private prefix, so every URL handed out is
@@ -52,7 +60,8 @@ async function presignRow<T extends { file_name: string; storage_path?: string |
   const url = await r2PresignGet(ESTIMATE_FILE_PREFIX, path, {
     filename: row.file_name, disposition: 'inline', expiresIn: 3600,
   });
-  return { ...row, public_url: url };
+  // Same-origin download link: works in the iPhone app, carries the real name.
+  return { ...row, public_url: url, download_url: storageDownloadUrl(ESTIMATE_FILE_PREFIX, path, row.file_name, 'attachment') };
 }
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -121,7 +130,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (error || !data) {
       return NextResponse.json({ error: error?.message || 'Failed to save file record' }, { status: 500 });
     }
-    return NextResponse.json({ success: true, file: await presignRow(data) });
+    // Best effort: a failure is saved on the row (shown on the estimate) and
+    // the Client Files cron tries again; the upload itself already worked.
+    const copy = await copyEstimateFileToDropbox(supabase, data.id);
+    let row: any = data;
+    if (copy !== 'no_folder') {
+      const { data: fresh } = await supabase.from('estimate_files').select(publicFields).eq('id', data.id).maybeSingle();
+      if (fresh) row = fresh;
+    }
+    return NextResponse.json({ success: true, file: await presignRow(row) });
   }
 
   return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
