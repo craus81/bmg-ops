@@ -15,6 +15,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { trackingUrl } from '@/lib/tracking-url';
+import NewVendorPoModal from '@/components/NewVendorPoModal';
 
 interface LineRequest {
   id: string;
@@ -119,6 +120,7 @@ export default function VendorPosTab({ isAdmin, onChanged }: { isAdmin: boolean;
   const [error, setError] = useState<string | null>(null);
   const [busyLine, setBusyLine] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   // Search waits for a pause in typing.
   useEffect(() => {
@@ -172,10 +174,24 @@ export default function VendorPosTab({ isAdmin, onChanged }: { isAdmin: boolean;
 
   return (
     <div>
-      <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
-        Every vendor PO, newest first: the ones made here and the ones keyed straight into NetSuite.
-        {isAdmin && ' A part put on the wrong PO with Create PO has an Undo on its line.'}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' }}>
+        <div style={{ flex: '1 1 260px', fontSize: '12px', color: theme.textSecondary }}>
+          Every vendor PO, newest first: the ones made here and the ones keyed straight into NetSuite.
+          {isAdmin && ' A part put on the wrong PO with Create PO has an Undo on its line.'}
+        </div>
+        {isAdmin && (
+          <button onClick={() => setCreating(true)}
+            style={{ padding: '7px 13px', borderRadius: '8px', background: 'rgba(74,222,128,0.12)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80', fontSize: '12px', fontWeight: 800, cursor: 'pointer' }}>
+            + New vendor PO
+          </button>
+        )}
       </div>
+      {creating && (
+        <NewVendorPoModal
+          onClose={() => setCreating(false)}
+          onCreated={() => { onChanged(); load(); }}
+        />
+      )}
 
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '14px' }}>
         {FILTERS.map(([key, label]) => (

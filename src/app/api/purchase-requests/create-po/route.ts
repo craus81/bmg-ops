@@ -4,7 +4,8 @@ import { requireFeature, requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
-import { createPurchaseOrder, resolveDefaultLocationId, transactionUrl } from '@/lib/netsuite';
+import { createPurchaseOrder, resolveDefaultLocationId, setPurchaseOrderNumber, transactionUrl } from '@/lib/netsuite';
+import { cleanPoSuffix, withPoSuffix } from '@/lib/po-number';
 import { locationIdForName } from '@/lib/invoice-location';
 
 const supabase = createServiceClient();
@@ -50,6 +51,9 @@ const Schema = z.object({
   /** Which plant the PO is for — one PO is always one location. Omitted =
    *  the default location. */
   locationName: z.enum(["O'Fallon", 'Wentzville', 'Kansas City', 'Social Circle']).optional().nullable(),
+  /** Added after a dash to NetSuite's own number: PO453 → PO453-ACME
+   *  (po-number.ts). Blank = NetSuite's number as is. */
+  poSuffix: z.string().max(40).optional().nullable(),
 });
 
 export async function POST(req: NextRequest) {
@@ -196,6 +200,21 @@ export async function POST(req: NextRequest) {
   if (!po.success) {
     await releaseClaim();
     return NextResponse.json({ error: po.error || 'NetSuite rejected the purchase order.' }, { status: 502 });
+  }
+
+  // The customer ending goes on once NetSuite has numbered the PO, so the
+  // sequence never skips. A refusal leaves NetSuite's number and says why.
+  let suffixError: string | null = null;
+  const suffix = cleanPoSuffix(body.poSuffix);
+  if (suffix && po.purchaseOrderId && po.purchaseOrderNumber) {
+    const wanted = withPoSuffix(po.purchaseOrderNumber, suffix);
+    try {
+      const renamed = await setPurchaseOrderNumber(po.purchaseOrderId, wanted);
+      if (renamed.success) po.purchaseOrderNumber = wanted;
+      else suffixError = `NetSuite kept the number ${po.purchaseOrderNumber} instead of ${wanted} (${renamed.error}). In NetSuite, tick Allow Override for Purchase Order under Setup → Company → Auto-Generated Numbers, or change the number on the PO by hand.`;
+    } catch (err: any) {
+      suffixError = `NetSuite kept the number ${po.purchaseOrderNumber} instead of ${wanted}: ${String(err?.message || err).slice(0, 200)}`;
+    }
   }
 
   // ── The PO exists in NetSuite from here on. Everything below is
@@ -381,5 +400,6 @@ export async function POST(req: NextRequest) {
     mirrored: !!mirrorRowId,
     stamped,
     lines: lines.length,
+    suffixError,
   });
 }

@@ -2211,6 +2211,26 @@ export async function patchSalesOrder(
 }
 
 /**
+ * Rename a PO (PO453 → PO453-ACME, po-number.ts). NetSuite only keeps a
+ * typed number when Setup → Company → Auto-Generated Numbers has Allow
+ * Override ticked for Purchase Order, and may otherwise ignore it without
+ * an error, so the number is read back and compared.
+ */
+export async function setPurchaseOrderNumber(
+  purchaseOrderId: string | number,
+  tranId: string,
+): Promise<{ success: true } | { success: false; error: string; actual?: string }> {
+  const res = await purchaseOrderRecordCall(String(purchaseOrderId), 'PATCH', { tranId });
+  if (!res.ok) return { success: false, error: res.error };
+  try {
+    const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${Number(purchaseOrderId)}`);
+    const actual = String(lookup?.items?.[0]?.tranid || '');
+    if (actual && actual !== tranId) return { success: false, error: 'NetSuite kept its own number', actual };
+  } catch { /* the PATCH said yes; trust it */ }
+  return { success: true };
+}
+
+/**
  * Look up a NetSuite customer by name (partial match)
  */
 export async function findCustomer(name: string): Promise<{

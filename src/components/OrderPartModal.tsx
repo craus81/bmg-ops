@@ -331,6 +331,7 @@ export default function OrderPartModal({ part, canCreatePo, onClose }: Props) {
           {step.kind === 'ordered' && (
             <div style={{ fontSize: '13px', color: theme.textPrimary, lineHeight: 1.6 }}>
               PO <b>{step.po.number}</b> created in NetSuite for {part.item_number}.{' '}
+              {step.po.suffixError && <span style={{ display: 'block', color: '#f59e0b', fontWeight: 700 }}>{step.po.suffixError}</span>}
               {step.po.url && (
                 <a href={step.po.url} target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', fontWeight: 700 }}>
                   Open in NetSuite ↗
