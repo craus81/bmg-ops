@@ -39,6 +39,10 @@ const CreateSchema = z.object({
   /** When set, the response carries recomputed readiness for this project —
    *  the allocations-route pattern: mutate + refresh in one round trip. */
   returnReadiness: z.boolean().optional().default(false),
+  /** The New vendor PO form: always new rows (never folded into a pending
+   *  ask for the same part), and no "parts requested" alert, because the
+   *  PO is created right after. */
+  fresh: z.boolean().optional().default(false),
 });
 
 const UpdateSchema = z.object({
@@ -68,7 +72,7 @@ export async function GET(req: NextRequest) {
     }
     const { data, error } = await supabase
       .from('purchase_requests')
-      .select(`*, upfit_projects(id, project_name, netsuite_so_number), estimates(id, estimate_number, customer_name), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
+      .select(`*, upfit_projects(id, project_name, netsuite_so_number, customer_name), estimates(id, estimate_number, customer_name), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
       .eq('id', id)
       .maybeSingle();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -81,7 +85,7 @@ export async function GET(req: NextRequest) {
   if (searchParams.get('view') === 'on_order') {
     const { data, error } = await supabase
       .from('purchase_requests')
-      .select(`*, upfit_projects(id, project_name, netsuite_so_number), estimates(id, estimate_number, customer_name), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
+      .select(`*, upfit_projects(id, project_name, netsuite_so_number, customer_name), estimates(id, estimate_number, customer_name), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
       .eq('status', 'ordered')
       .order('ordered_at', { ascending: false, nullsFirst: false })
       .limit(500);
@@ -94,7 +98,7 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await supabase
     .from('purchase_requests')
-    .select('*, upfit_projects(id, project_name, netsuite_so_number), estimates(id, estimate_number, customer_name), requester:profiles!purchase_requests_requested_by_fkey(full_name)')
+    .select('*, upfit_projects(id, project_name, netsuite_so_number, customer_name), estimates(id, estimate_number, customer_name), requester:profiles!purchase_requests_requested_by_fkey(full_name)')
     .eq('status', status)
     .order('vendor_name', { ascending: true, nullsFirst: true })
     .order('created_at')
@@ -228,7 +232,7 @@ export async function POST(req: NextRequest) {
     const key = normalizeItemNumber(item.itemNumber);
     if (!key) continue;
     const cat = catalog.get(key);
-    const dup: any = pendingByItem.get(key);
+    const dup: any = body.fresh ? undefined : pendingByItem.get(key);
     if (dup) {
       // The estimate's button asks for what is still uncovered AFTER its
       // pending requests, so its quantity adds to the open row. Every other
@@ -262,7 +266,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Purchasing (admins) hears about new asks — one digest per call.
-  if (created.length > 0) {
+  if (created.length > 0 && !body.fresh) {
     try {
       const { data: staff } = await supabase
         .from('profiles')
