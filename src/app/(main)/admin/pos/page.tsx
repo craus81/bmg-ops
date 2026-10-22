@@ -33,6 +33,7 @@ import { poCreatedBy } from '@/lib/created-by';
 import { looseMatcher } from '@/lib/loose-search';
 import { needsAttention } from '@/lib/po-attention';
 import { diffAgainstExisting, describeChanges, pendingExtractions } from '@/lib/pending-po-existing';
+import { MapLink } from '@/components/MapLink';
 
 interface ImportLine extends ParsedPOLine {
   catalog_match: CatalogItem | null;
@@ -3229,7 +3230,7 @@ export default function POsPage() {
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-body)' }}>{loc.name}</div>
                     <div style={{ fontSize: '11px', color: 'var(--text-label)' }}>
-                      {[loc.address, [loc.city, loc.state].filter(Boolean).join(', '), loc.zip].filter(Boolean).join(' · ') || '—'}
+                      <MapLink address={loc}>{[loc.address, [loc.city, loc.state].filter(Boolean).join(', '), loc.zip].filter(Boolean).join(' · ') || '—'}</MapLink>
                     </div>
                   </div>
                   <div style={{ display: 'flex', gap: '4px' }}>

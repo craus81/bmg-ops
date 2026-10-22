@@ -18,6 +18,7 @@ import NumberInput from '@/components/NumberInput';
 import { deepLinks } from '@/lib/deep-links';
 import { closeOnEscape } from '@/lib/modal-escape';
 import CreatedBy from '@/components/CreatedBy';
+import { MapLink } from '@/components/MapLink';
 
 interface CniJob {
   id: string;
@@ -1374,7 +1375,7 @@ export default function CniJobDetailPage() {
           <div style={{ marginTop: '10px' }}>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Location</div>
             <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '2px' }}>
-              {[addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(', ')}
+              <MapLink address={addr}>{[addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(', ')}</MapLink>
             </div>
           </div>
         )}

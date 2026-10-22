@@ -62,6 +62,7 @@ import { uploadRecordFile } from '@/lib/record-file-upload';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { looseMatcher, looseSearchRegex } from '@/lib/loose-search';
 import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
+import { MapLink } from '@/components/MapLink';
 
 interface Prospect {
   id: string;
@@ -2400,7 +2401,7 @@ export default function CustomerRecordPage() {
             ].filter(r => r.v).map(r => (
               <div key={r.l} style={infoRow}>
                 <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{r.l}</span>
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, textAlign: 'right', overflowWrap: 'anywhere' }}>{r.v}</span>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, textAlign: 'right', overflowWrap: 'anywhere' }}>{r.l === 'Address' ? <MapLink address={r.v} /> : r.v}</span>
               </div>
             ))}
             {customer && (

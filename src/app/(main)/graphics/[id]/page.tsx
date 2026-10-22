@@ -63,6 +63,7 @@ import { DeliveryPicker, DeliverySummary } from '@/components/DeliveryPicker';
 import { deliveryFromRow, deliveryProblem, deliveryRowRaw, deliveryToRow, installLocationForDelivery, sameDelivery } from '@/lib/delivery';
 import { requiresReason, proofGateApplies, isOffTheFloor } from '@/lib/graphics-status';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { MapLink } from '@/components/MapLink';
 
 // ── Date helpers (same behavior as the board — avoid UTC shift) ──────────
 function parseLocalDate(dateStr: string | null | undefined): Date | null {
@@ -1219,7 +1220,7 @@ export default function GraphicsJobRecordPage() {
           )}
           {job.ship_to && (
             <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '340px' }} title={job.ship_to}>
-              Ship to: {job.ship_to.split('\n').map(s => s.trim()).filter(Boolean).join(', ')}
+              Ship to: <MapLink address={job.ship_to}>{job.ship_to.split('\n').map(s => s.trim()).filter(Boolean).join(', ')}</MapLink>
             </span>
           )}
         </div>
@@ -1404,7 +1405,7 @@ export default function GraphicsJobRecordPage() {
                 )}
                 {job.ship_to && (
                   <div style={{ color: 'var(--text-label)', whiteSpace: 'pre-wrap', marginTop: '4px', padding: '4px 6px', borderRadius: '4px', background: 'var(--bg)', lineHeight: 1.4 }}>
-                    {job.ship_to}
+                    <MapLink address={job.ship_to} />
                   </div>
                 )}
               </div>

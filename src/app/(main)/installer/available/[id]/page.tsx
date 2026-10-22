@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import InstallerPreviewBanner from '@/components/InstallerPreviewBanner';
 import { getInstallerPreview } from '@/lib/installer-preview';
+import { MapButtons, MapLink } from '@/components/MapLink';
 
 export default function AvailableJobDetailPage() {
   const router = useRouter();
@@ -240,8 +241,9 @@ export default function AvailableJobDetailPage() {
         <div style={sectionStyle}>
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '6px' }}>INSTALL LOCATION</div>
           <div style={{ fontSize: '13px', color: 'var(--text-primary)' }}>
-            {[addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(', ')}
+            <MapLink address={addr}>{[addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(', ')}</MapLink>
           </div>
+          <MapButtons address={addr} style={{ marginTop: '8px' }} />
           {job.site_contact_name && (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px' }}>
               Contact: {job.site_contact_name} {job.site_contact_phone ? `• ${job.site_contact_phone}` : ''}
@@ -259,7 +261,7 @@ export default function AvailableJobDetailPage() {
           </div>
           {(shipAddr.street || shipAddr.city) && (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Ship to: {[shipAddr.street, shipAddr.city, shipAddr.state, shipAddr.zip].filter(Boolean).join(', ')}
+              Ship to: <MapLink address={shipAddr}>{[shipAddr.street, shipAddr.city, shipAddr.state, shipAddr.zip].filter(Boolean).join(', ')}</MapLink>
             </div>
           )}
         </div>

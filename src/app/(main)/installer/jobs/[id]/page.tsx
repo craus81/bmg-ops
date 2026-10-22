@@ -23,6 +23,7 @@ interface InstallTask {
 }
 import JobAttachments from '@/components/JobAttachments';
 import NumberInput from '@/components/NumberInput';
+import { MapButtons, MapLink } from '@/components/MapLink';
 
 const STATUS_LABELS: Record<string, string> = {
   assigned_awaiting_scheduling: 'Awaiting Schedule from BMG',
@@ -572,8 +573,9 @@ export default function InstallerJobDetailPage() {
           <div style={{ marginBottom: '10px' }}>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Install Location</div>
             <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginTop: '2px' }}>
-              {[addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(', ')}
+              <MapLink address={addr}>{[addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(', ')}</MapLink>
             </div>
+            <MapButtons address={addr} style={{ marginTop: '8px' }} />
           </div>
         )}
         {job.site_contact_name && (
@@ -623,7 +625,7 @@ export default function InstallerJobDetailPage() {
           </div>
           {(shipAddr.street || shipAddr.city) && (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              Ship to: {[shipAddr.street, shipAddr.city, shipAddr.state, shipAddr.zip].filter(Boolean).join(', ')}
+              Ship to: <MapLink address={shipAddr}>{[shipAddr.street, shipAddr.city, shipAddr.state, shipAddr.zip].filter(Boolean).join(', ')}</MapLink>
             </div>
           )}
           {!job.material_delivered && job.tracking_number && (
