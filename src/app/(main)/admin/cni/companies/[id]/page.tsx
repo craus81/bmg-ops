@@ -11,6 +11,7 @@ import NetsuiteVendorLinker from '@/components/NetsuiteVendorLinker';
 import { deepLinks } from '@/lib/deep-links';
 import PhoneInput from '@/components/PhoneInput';
 import { apiFetch } from '@/lib/api-client';
+import { MapLink } from '@/components/MapLink';
 
 interface CniCompany {
   id: string;
@@ -624,7 +625,10 @@ export default function CniCompanyDetailPage() {
           </div>
         </div>
         <div style={{ marginBottom: '10px' }}>
-          <label style={labelStyle}>Mailing Address</label>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <label style={labelStyle}>Mailing Address</label>
+            {address.trim() && <MapLink address={address} style={{ fontSize: '11px', fontWeight: 700 }}>Open in Maps</MapLink>}
+          </div>
           <textarea
             value={address}
             onChange={e => setAddress(e.target.value)}

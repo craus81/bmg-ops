@@ -22,6 +22,7 @@ import { holdAwareFetch } from '@/lib/hold-aware-fetch';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { resolvePoCustomer } from '@/lib/customer-match';
 import { formatShipTo, shipToCityLabel } from '@/lib/graphics-job-from-po';
+import { MapLink } from '@/components/MapLink';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import CustomerPicker from '@/components/CustomerPicker';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
@@ -1213,7 +1214,7 @@ export default function PoRecordPage() {
         <div style={{ marginTop: '12px' }}>
           <div style={labelStyle}>Ship to</div>
           {shipToText ? (
-            <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}>{shipToText}</div>
+            <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}><MapLink address={po.ship_to}>{shipToText}</MapLink></div>
           ) : (
             <div style={{ fontSize: '12px', color: '#fbbf24', fontWeight: 600 }}>No location on this PO — set one via Edit PO.</div>
           )}

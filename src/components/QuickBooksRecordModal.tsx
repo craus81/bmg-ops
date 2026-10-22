@@ -16,6 +16,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { useAuth } from '@/components/AuthProvider';
 import type { HistoryDetail } from '@/lib/ledger/history';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { MapLink } from '@/components/MapLink';
 
 interface Props {
   recordId: string;
@@ -175,8 +176,8 @@ export default function QuickBooksRecordModal({ recordId, onClose, backHref, bac
 
             {(record.shipAddress || record.billAddress || record.terms || record.dueDate || record.shipDate) && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginTop: '14px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                {record.billAddress && <div><div style={{ ...th, border: 'none', padding: '0 0 3px' }}>Bill to</div><div style={{ whiteSpace: 'pre-wrap' }}>{record.billAddress}</div></div>}
-                {record.shipAddress && <div><div style={{ ...th, border: 'none', padding: '0 0 3px' }}>Ship to</div><div style={{ whiteSpace: 'pre-wrap' }}>{record.shipAddress}</div></div>}
+                {record.billAddress && <div><div style={{ ...th, border: 'none', padding: '0 0 3px' }}>Bill to</div><div style={{ whiteSpace: 'pre-wrap' }}><MapLink address={record.billAddress} /></div></div>}
+                {record.shipAddress && <div><div style={{ ...th, border: 'none', padding: '0 0 3px' }}>Ship to</div><div style={{ whiteSpace: 'pre-wrap' }}><MapLink address={record.shipAddress} /></div></div>}
                 {(record.terms || record.dueDate) && <div><div style={{ ...th, border: 'none', padding: '0 0 3px' }}>Terms</div><div>{record.terms || '—'}{record.dueDate ? ` · due ${fmtDate(record.dueDate)}` : ''}</div></div>}
                 {record.shipDate && <div><div style={{ ...th, border: 'none', padding: '0 0 3px' }}>Ship date</div><div>{fmtDate(record.shipDate)}</div></div>}
               </div>

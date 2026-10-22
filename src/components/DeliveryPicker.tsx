@@ -7,6 +7,7 @@
  */
 import { useState } from 'react';
 import { createClient } from '@/lib/supabase-browser';
+import { MapLink } from '@/components/MapLink';
 import {
   DELIVERY_METHOD_OPTIONS, DELIVERY_SHIP_SPEED_OPTIONS, DELIVERY_INSTALLER_OPTIONS,
   deliveryChipColor, deliveryChipLabel, deliveryLines, deliveryProblem, formatShipToBlock,
@@ -117,7 +118,10 @@ export function DeliveryPicker({
             <input style={inputStyle} value={value.contactPhone || ''} onChange={e => set({ contactPhone: e.target.value })} placeholder="Optional" />
           </div>
           <div style={{ gridColumn: '1 / -1' }}>
-            <div style={labelStyle}>Ship-to Address{req}</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+              <div style={labelStyle}>Ship-to Address{req}</div>
+              {value.address?.trim() && <MapLink address={value.address} style={{ fontSize: '11px', fontWeight: 700 }}>Open in Maps</MapLink>}
+            </div>
             <textarea style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }} value={value.address || ''} onChange={e => set({ address: e.target.value })}
               placeholder={filling ? 'Filling from the customer…' : 'Company Name\n123 Street Address\nCity, State ZIP'} />
           </div>
@@ -131,7 +135,10 @@ export function DeliveryPicker({
       {m === 'onsite_install' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px' }}>
           <div style={{ gridColumn: '1 / -1' }}>
-            <div style={labelStyle}>Install Address{req}</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px' }}>
+              <div style={labelStyle}>Install Address{req}</div>
+              {value.address?.trim() && <MapLink address={value.address} style={{ fontSize: '11px', fontWeight: 700 }}>Open in Maps</MapLink>}
+            </div>
             <textarea style={{ ...inputStyle, minHeight: '60px', resize: 'vertical' }} value={value.address || ''} onChange={e => set({ address: e.target.value })}
               placeholder={filling ? 'Filling from the customer…' : 'Site name\nStreet address\nCity, State ZIP'} />
           </div>
@@ -214,7 +221,9 @@ export function DeliverySummary({ value, emptyText = 'No delivery method set.' }
         {lines.slice(1).map(l => (
           <div key={l.label} style={{ display: 'contents' }}>
             <div style={{ color: 'var(--text-muted)' }}>{l.label}</div>
-            <div style={{ color: 'var(--text-body)', whiteSpace: 'pre-wrap', minWidth: 0, overflowWrap: 'anywhere' }}>{l.value}</div>
+            <div style={{ color: 'var(--text-body)', whiteSpace: 'pre-wrap', minWidth: 0, overflowWrap: 'anywhere' }}>
+              {l.label === 'Ship to' || l.label === 'Install at' ? <MapLink address={l.value} /> : l.value}
+            </div>
           </div>
         ))}
       </div>

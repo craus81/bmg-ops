@@ -10,6 +10,7 @@ import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { flashNote } from '@/lib/focus-note';
 import Link from 'next/link';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { MapLink } from '@/components/MapLink';
 
 /**
  * Credit application review queue (audit Stage 1 CRITICAL: the public form
@@ -302,7 +303,7 @@ export default function CreditApplicationsPage() {
                   <F label="Contact" value={[detail.contact_name, detail.contact_title].filter(Boolean).join(' — ')} />
                   <F label="Email" value={detail.contact_email} />
                   <F label="Phone" value={detail.contact_phone} />
-                  <F label="Address" value={[detail.address, detail.city, detail.state, detail.zip].filter(Boolean).join(', ')} />
+                  <F label="Address" value={(() => { const a = [detail.address, detail.city, detail.state, detail.zip].filter(Boolean).join(', '); return a ? <MapLink address={a} /> : null; })()} />
                   <F label="AP contact" value={[detail.ap_contact_name, detail.ap_contact_email, detail.ap_contact_phone].filter(Boolean).join(' · ')} />
                   <F label="Bank reference" value={[detail.bank_name, detail.bank_contact, detail.bank_phone, detail.bank_account_type].filter(Boolean).join(' · ')} />
                   {[1, 2, 3].map(n => {
