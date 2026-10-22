@@ -21,6 +21,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import RecentActivity from '@/components/RecentActivity';
+import BusinessPulseCard from '@/components/BusinessPulseCard';
 import type { GraphicsJobStatus } from '@/lib/types';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { customerRequiresPo, loadBillableCustomers } from '@/lib/billable-customers';
@@ -157,7 +158,7 @@ function ShopLoadStrip({ onOpen }: { onOpen: () => void }) {
 
 export default function OpsDashboard() {
   const router = useRouter();
-  const { user, isAdmin, hasFeature, canSeeMoney } = useAuth();
+  const { user, isAdmin, hasFeature, canSeeMoney, hasRole } = useAuth();
   const supabase = createClient();
 
   // The dashboard renders for every role that lands on /home (sales, finance,
@@ -1103,6 +1104,8 @@ export default function OpsDashboard() {
 
   const rightRail = (
     <div style={{ display: 'grid', gap: '12px', alignContent: 'start' }}>
+      {/* Super admins only (owner, 2026-10-22) — replaces the Business Pulse alert. */}
+      {hasRole('super_admin') && <BusinessPulseCard onOpen={go} />}
       <div style={card}>
         <div style={cardHead}>
           <h2 style={headTitle}>Next 7 days</h2>

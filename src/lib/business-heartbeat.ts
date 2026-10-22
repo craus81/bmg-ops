@@ -60,6 +60,8 @@ export interface ShortfallInput {
   dropFraction: number;
   /** Rendered into the message, e.g. 'scans' or 'quotes sent'. */
   noun: string;
+  /** Which day the figure is for, as the message says it ('today', 'on Fri'). */
+  dayWord?: string;
 }
 
 /**
@@ -68,6 +70,7 @@ export interface ShortfallInput {
  */
 export function evaluateShortfall(input: ShortfallInput): PulseCheck {
   const { mean, points } = baselineOf(input.history);
+  const day = input.dayWord || 'today';
   const base: Omit<PulseCheck, 'status' | 'detail'> = {
     key: input.key,
     label: input.label,
@@ -77,7 +80,7 @@ export function evaluateShortfall(input: ShortfallInput): PulseCheck {
   };
 
   if (input.today == null) {
-    return { ...base, status: 'unknown', detail: `Could not measure ${input.noun} today.` };
+    return { ...base, status: 'unknown', detail: `Could not measure ${input.noun} ${day}.` };
   }
   if (points < MIN_BASELINE_POINTS) {
     return {
@@ -96,13 +99,13 @@ export function evaluateShortfall(input: ShortfallInput): PulseCheck {
     return {
       ...base,
       status: 'tripped',
-      detail: `${input.today} ${input.noun} today against a same-weekday average of ${mean.toFixed(1)} — ${Math.round(drop * 100)}% down.`,
+      detail: `${input.today} ${input.noun} ${day} against a same-weekday average of ${mean.toFixed(1)} — ${Math.round(drop * 100)}% down.`,
     };
   }
   return {
     ...base,
     status: 'ok',
-    detail: `${input.today} ${input.noun} today, same-weekday average ${mean.toFixed(1)}.`,
+    detail: `${input.today} ${input.noun} ${day}, same-weekday average ${mean.toFixed(1)}.`,
   };
 }
 
@@ -117,12 +120,15 @@ export interface RiseInput {
   minAbsolute: number;
   noun: string;
   format?: (n: number) => string;
+  /** Which day the figure is for, as the message says it ('today', 'on Fri'). */
+  dayWord?: string;
 }
 
 /** "Today is far ABOVE the same weekday recently" — for A/R and bounces. */
 export function evaluateRise(input: RiseInput): PulseCheck {
   const fmt = input.format || ((n: number) => String(Math.round(n)));
   const { mean, points } = baselineOf(input.history);
+  const day = input.dayWord || 'today';
   const base: Omit<PulseCheck, 'status' | 'detail'> = {
     key: input.key,
     label: input.label,
@@ -132,7 +138,7 @@ export function evaluateRise(input: RiseInput): PulseCheck {
   };
 
   if (input.today == null) {
-    return { ...base, status: 'unknown', detail: `Could not measure ${input.noun} today.` };
+    return { ...base, status: 'unknown', detail: `Could not measure ${input.noun} ${day}.` };
   }
   if (points < MIN_BASELINE_POINTS) {
     return { ...base, status: 'unknown', detail: `Not enough history yet — ${points} comparable ${points === 1 ? 'day' : 'days'} on file, ${MIN_BASELINE_POINTS} needed.` };
@@ -140,9 +146,9 @@ export function evaluateRise(input: RiseInput): PulseCheck {
   if (mean == null || mean <= 0) {
     // Rising from nothing is only news if the absolute figure is material.
     if (input.today >= input.minAbsolute) {
-      return { ...base, status: 'tripped', detail: `${fmt(input.today)} ${input.noun} today, against none on this weekday in the last ${BASELINE_WEEKS} weeks.` };
+      return { ...base, status: 'tripped', detail: `${fmt(input.today)} ${input.noun} ${day}, against none on this weekday in the last ${BASELINE_WEEKS} weeks.` };
     }
-    return { ...base, status: 'ok', detail: `${fmt(input.today)} ${input.noun} today — below the ${fmt(input.minAbsolute)} worth reporting.` };
+    return { ...base, status: 'ok', detail: `${fmt(input.today)} ${input.noun} ${day} — below the ${fmt(input.minAbsolute)} worth reporting.` };
   }
 
   const rise = (input.today - mean) / mean;
@@ -151,10 +157,10 @@ export function evaluateRise(input: RiseInput): PulseCheck {
     return {
       ...base,
       status: 'tripped',
-      detail: `${fmt(input.today)} ${input.noun} today against a same-weekday average of ${fmt(mean)} — up ${Math.round(rise * 100)}%.`,
+      detail: `${fmt(input.today)} ${input.noun} ${day} against a same-weekday average of ${fmt(mean)} — up ${Math.round(rise * 100)}%.`,
     };
   }
-  return { ...base, status: 'ok', detail: `${fmt(input.today)} ${input.noun} today, same-weekday average ${fmt(mean)}.` };
+  return { ...base, status: 'ok', detail: `${fmt(input.today)} ${input.noun} ${day}, same-weekday average ${fmt(mean)}.` };
 }
 
 /** The same weekday as `from`, going back `weeks` weeks (nearest first). */
@@ -165,6 +171,36 @@ export function sameWeekdayDates(from: Date, weeks = BASELINE_WEEKS): string[] {
     out.push(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(d));
   }
   return out;
+}
+
+/** The same weekday as a shop-day key, going back `weeks` weeks (nearest first). */
+export function sameWeekdayKeys(dateKey: string, weeks = BASELINE_WEEKS): string[] {
+  // Noon UTC keeps the arithmetic clear of any timezone boundary.
+  const noon = new Date(`${dateKey}T12:00:00Z`).getTime();
+  const out: string[] = [];
+  for (let i = 1; i <= weeks; i++) out.push(new Date(noon - i * 7 * 86_400_000).toISOString().slice(0, 10));
+  return out;
+}
+
+/**
+ * The most recent business day that has fully ended, as a shop-day key.
+ * The dashboard pulse judges a whole day, never the morning so far: the old
+ * 11 AM alert compared midnight-to-11 against whole-day averages, so an
+ * ordinary morning read as a 70-100% drop.
+ */
+export function lastCompletedBusinessDay(at: Date): string {
+  let key = shopDay(at);
+  for (let i = 0; i < 7; i++) {
+    const noon = new Date(`${key}T12:00:00Z`).getTime();
+    key = new Date(noon - 86_400_000).toISOString().slice(0, 10);
+    if (isBusinessDay(key)) return key;
+  }
+  return key;
+}
+
+/** 'Fri' for a shop-day key — how the card names the judged day. */
+export function weekdayShort(dateKey: string): string {
+  return new Date(`${dateKey}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
 }
 
 /** The shop-calendar date for an instant — the same key every other report uses. */
