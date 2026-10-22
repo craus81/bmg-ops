@@ -54,7 +54,7 @@ behind one at `/admin/books/balances/party`, FleetSuite's own invoices at
 `/admin/books/own-invoices` and one's check at
 `/admin/books/own-invoices/invoice`, and its own fulfillments at
 `/admin/books/own-fulfillments` and one's check at
-`/admin/books/own-fulfillments/fulfillment`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
+`/admin/books/own-fulfillments/fulfillment`, and sales by location at `/admin/books/sales`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there.
 
 | Piece | Where |
@@ -112,6 +112,7 @@ the accounts page; the others are linked from there.
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
+| Sales by location and class, with returns, discounts and transportation apart (made for the insurance premium audit) | `migrations/426-books-sales-report.sql`, `src/lib/books/sales-report.ts`, `src/app/(main)/admin/books/sales/page.tsx`, `src/app/api/admin/books/sales/route.ts`; tests `src/lib/books/sales-report.test.ts`, `src/lib/books/sales-report-sql.test.ts` |
 | NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `migrations/403-books-stock-item-setup.sql` (items set up wrong), `migrations/404-books-stock-ledger-parts.sql` (the ledger account by account), `migrations/405-books-stock-account-items.sql` (the items behind each account), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
 | Stock by item and an item's moves, and their APIs | `src/app/(main)/admin/books/stock/page.tsx`, `src/app/(main)/admin/books/stock/item/page.tsx`, `src/app/api/admin/books/stock/route.ts`, `src/app/api/admin/books/stock/item/route.ts` |
 | Stock by item tests | `src/lib/books/netsuite-stock.test.ts`, `src/lib/books/stock-items.test.ts`, `src/lib/books/stock-items-sql.test.ts`; the daily check's are in its test files |
