@@ -9,6 +9,7 @@ import { useDialog } from '@/components/DialogProvider';
 import HistoryButton from '@/components/HistoryButton';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
+import { staffTaxExemptPatch } from '@/lib/customer-tax-exempt';
 import PartCatalogBrowser, { type BrowsePart } from '@/components/PartCatalogBrowser';
 import { RackKitBrowserModal } from '@/components/RackKitBrowser';
 import { kitEstimateLines, loadKits, normItem, type KitLineFields, type KitWithMembers } from '@/lib/part-kits';
@@ -3836,6 +3837,9 @@ export default function EstimatesPage() {
         ap_email: defaults.ap_email || null,
         internal_notes: defaults.internal_notes || null,
         tax_exempt: !!defaults.tax_exempt,
+        // A change here is staff's call, which the NetSuite copy then
+        // leaves alone (migration 427).
+        ...(!!defaults.tax_exempt !== !!customerDefaults?.tax_exempt ? staffTaxExemptPatch(!!defaults.tax_exempt) : {}),
         tax_exempt_cert_number: defaults.tax_exempt_cert_number || null,
         tax_exempt_expires_at: defaults.tax_exempt_expires_at || null,
       })

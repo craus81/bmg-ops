@@ -15,6 +15,7 @@ import { syncVehicleInvoices } from '@/lib/so-invoices';
 import { recordHeartbeat } from '@/lib/system-health';
 import { syncVendors } from '@/lib/vendor-master';
 import { syncNetsuiteCreators } from '@/lib/netsuite-creators';
+import { syncNetsuiteTaxExempt } from '@/lib/customer-tax-exempt-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -308,6 +309,17 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] Spend refresh error:', err.message);
     results.spendRefresh = { error: err.message };
+  }
+
+  // ═══════════ 1c. TAX EXEMPT FROM NETSUITE ═══════════
+  // NetSuite's customer Taxable box, copied every run (it's one small
+  // query), and a customer NetSuite doesn't tax is marked tax exempt here
+  // unless staff set it themselves (owner, 2026-10-22; migration 427).
+  try {
+    results.taxExempt = await syncNetsuiteTaxExempt(supabase);
+  } catch (err: any) {
+    console.error('[cron] Tax exempt sync error:', err.message);
+    results.taxExempt = { error: err.message };
   }
 
   // ═══════════ 2. INCREMENTAL CONTACT SYNC ═══════════
