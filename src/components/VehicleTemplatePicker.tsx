@@ -107,18 +107,21 @@ export default function VehicleTemplatePicker({
   }, [searchSeed]);
 
   // A template picked from outside the picker (a reopened worksheet, the
-  // Templates grid, an estimate's vehicle) syncs the Year / Make filters to
+  // Templates grid, an estimate's vehicle) syncs the Make / Model filters to
   // it, so the browse <select> shows the pick instead of rendering blank
-  // when a filter excludes it. The narrower filters stay only where the
-  // pick satisfies them.
+  // when a filter excludes it. The other filters stay only where the pick
+  // satisfies them. The year is never set from the pick: template years are
+  // the library's own strings ("2018-2024"), and a year filter copied from a
+  // Jeep template left Ford out of the Make list (Craig 2026-10-21: "still
+  // chooses jeep when i select ford").
   useEffect(() => {
     if (!template) return;
     const t = template;
     const keep = (v: string, tv: string | null | undefined) => (v && normText(v) !== normText(tv) ? '' : v);
     const next: TemplateFilters = {
-      year: (t.year || '').trim(),
+      year: keep(filterValues.year, t.year),
       make: t.make.trim(),
-      model: keep(filterValues.model, t.model),
+      model: t.model.trim(),
       body: keep(filterValues.body, t.facet_body),
       wheelbase: keep(filterValues.wheelbase, t.facet_wheelbase),
       roof: keep(filterValues.roof, t.facet_roof),
@@ -138,17 +141,18 @@ export default function VehicleTemplatePicker({
   useEffect(() => {
     let stale = false;
     (async () => {
-      // Make and model read top-down: the makes for the year, the models for
-      // the year and make, so picking a model never hides the other makes
-      // (Craig 2026-10-20: with a Wrangler picked, Ford wasn't in the Make
-      // list and the pick fell back to Jeep). The body details below them
-      // narrow by everything.
+      // Make and model read top-down: every make, then the models for the
+      // make, so no other pick ever hides a make (Craig 2026-10-20/21: with a
+      // Wrangler or a Jeep template's year picked, Ford wasn't in the Make
+      // list and the pick fell back to Jeep). Year and the body details
+      // narrow by everything; a year the new make doesn't come in is
+      // dropped by the stranded-filter check below.
       const ask = (filters: Partial<TemplateFilters>) => supabase.rpc('vehicle_template_filter_options', { p_filters: filters });
-      const { year, make } = filterValues;
+      const { make } = filterValues;
       const [all, makes, models] = await Promise.all([
         ask(filterValues),
-        ask({ year }),
-        ask({ year, make }),
+        ask({}),
+        ask({ make }),
       ]);
       if (stale || all.error || !all.data || makes.error || models.error) return;
       setRawFilterOptions({
