@@ -8,7 +8,7 @@ import { sendEmailDetailed, repFromName, buildNotificationEmail } from '@/lib/re
 import { getEmailSignature } from '@/lib/email-signature';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { deepLinks } from '@/lib/deep-links';
-import { loadEstimateAttachmentRows, fetchEstimateAttachments } from '@/lib/estimate-attachments';
+import { loadEstimateAttachmentRows, fetchEstimateAttachments, recordEstimateFilesSent } from '@/lib/estimate-attachments';
 import { resolveEstimateEmail } from '@/lib/estimate-recipients';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
 
@@ -175,6 +175,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!ok) {
     return NextResponse.json({ error: 'Email failed to send — check Resend configuration and try again.' }, { status: 502 });
   }
+  await recordEstimateFilesSent(supabase, picked.rows.map(r => r.id), 'email_pdf');
 
   return NextResponse.json({
     success: true,

@@ -48,6 +48,7 @@ import { CreateNetsuiteItemModal, type CreatedPart } from '@/components/CreateNe
 import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from '@/lib/estimate-number';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { uploadRecordFile } from '@/lib/record-file-upload';
+import EstimateFilesSection from '@/components/EstimateFilesSection';
 import { bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
 import EstimatePartsRequestModal from '@/components/EstimatePartsRequestModal';
 import { closeOnEscape } from '@/lib/modal-escape';
@@ -4685,6 +4686,10 @@ export default function EstimatesPage() {
           <OrderTeamChat estimateId={editingId} />
         </div>
       )}
+
+      {/* Pictures & files kept on the estimate (Craig, 2026-10-22): what
+          went out on its emails, visible without opening an email screen. */}
+      {editingId && <EstimateFilesSection estimateId={editingId} labelStyle={labelStyle} />}
 
       {/* Customer defaults modal */}
       {editingCustomerDefaults && customerId && (

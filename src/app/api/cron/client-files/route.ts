@@ -5,6 +5,7 @@ import { syncClientFiles, type ClientFilesSyncResult } from '@/lib/client-files-
 import {
   acquireClientFilesLease, releaseClientFilesLease, requestClientFilesRun, clientFilesRunRequestedAt,
 } from '@/lib/client-files-lease';
+import { copyPendingEstimateFiles } from '@/lib/estimate-file-dropbox';
 
 export const dynamic = 'force-dynamic';
 // 300 is the platform backstop; the sync's own budget is 240 s below.
@@ -28,6 +29,10 @@ const MIN_EXTRA_PASS_MS = 30_000;
  * moment something changes. One run at a time holds a lease
  * (src/lib/client-files-lease.ts); a call that finds it held leaves a
  * request instead, and the running sync does one more pass for it.
+ *
+ * Each run then copies estimate files into their customer's Dropbox folder
+ * (src/lib/estimate-file-dropbox.ts): files whose customer had no folder
+ * when they were uploaded, and copies that failed an hour or more ago.
  */
 export async function GET(req: NextRequest) {
   // Vercel Cron with the shared secret; anyone else needs an admin session.
@@ -49,6 +54,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ clientFiles: { skipped: 'another sync is running; it will pick this up' } });
     }
     const passes: ClientFilesSyncResult[] = [];
+    let estimateFiles: Awaited<ReturnType<typeof copyPendingEstimateFiles>> | { error: string } | undefined;
     try {
       for (;;) {
         const passStart = Date.now();
@@ -56,10 +62,15 @@ export async function GET(req: NextRequest) {
         const requested = await clientFilesRunRequestedAt(service);
         if (!requested || requested < passStart || Date.now() > deadline - MIN_EXTRA_PASS_MS) break;
       }
+      try {
+        estimateFiles = await copyPendingEstimateFiles(service, { deadline });
+      } catch (e: any) {
+        estimateFiles = { error: e?.message || 'estimate file copies failed' };
+      }
     } finally {
       await releaseClientFilesLease(service);
     }
-    return NextResponse.json({ clientFiles: passes.length === 1 ? passes[0] : passes });
+    return NextResponse.json({ clientFiles: passes.length === 1 ? passes[0] : passes, estimateFiles });
   } catch (e: any) {
     // The sync records its own outcome; this is the last resort for a thrown bug.
     console.error('[client-files] sync threw:', e?.message || e);

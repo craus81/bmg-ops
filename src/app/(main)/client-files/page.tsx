@@ -28,6 +28,7 @@ import ClientFileRow, { FileTile, CopiedBadge, clientFileUrl, fmtFileDate, type 
 import ClientFolderMatches from '@/components/ClientFolderMatches';
 import { ZipBar, FolderZipList } from '@/components/ClientFilesDownload';
 import ClientFolderBrowser, { type BrowserRoot } from '@/components/ClientFolderBrowser';
+import FleetSuiteClientFolders from '@/components/FleetSuiteClientFolders';
 
 const PAGE_SIZE = 50;
 
@@ -374,6 +375,9 @@ function ClientFilesInner() {
           color: 'var(--error)', fontSize: '13px', fontWeight: 600,
         }}>Could not load files: {error}</div>
       )}
+
+      {/* FleetSuite's own folders for the customer (Craig, 2026-10-22). */}
+      {customer && !folder && <FleetSuiteClientFolders customerId={customer.id} compact={false} />}
 
       {browsing && browserRoots ? (
         <div style={{ display: 'grid', gridTemplateColumns: wide && preview ? 'minmax(0, 1fr) 360px' : 'minmax(0, 1fr)', gap: '16px' }}>
