@@ -47,7 +47,13 @@ export default function FleetApprovalPage() {
   const token = params?.token || '';
   const via = searchParams?.get('via') === 'sms' ? 'sms' : 'email';
   const deliveryTarget = searchParams?.get('to') || null;
-  const linkQuery = `?via=${via}${deliveryTarget ? `&to=${encodeURIComponent(deliveryTarget)}` : ''}`;
+  // One email per person since 2026-10-21 (?own=1): the link's ?to is the
+  // reader, and a forwarded reader can say who they are, as on a single
+  // estimate's page (ApprovalPageShell).
+  const ownLink = searchParams?.get('own') === '1' && !!deliveryTarget;
+  const linkQuery = `?via=${via}${deliveryTarget ? `&to=${encodeURIComponent(deliveryTarget)}` : ''}${ownLink ? '&own=1' : ''}`;
+  const [notMe, setNotMe] = useState(false);
+  const [typedName, setTypedName] = useState('');
 
   const [status, setStatus] = useState<'loading' | 'ready' | 'invalid' | 'expired' | 'error'>('loading');
   const [data, setData] = useState<Payload | null>(null);
@@ -120,6 +126,8 @@ export default function FleetApprovalPage() {
             timeOnPageSeconds: Math.round((Date.now() - pageLoadedAt.current) / 1000),
             deliveryChannel: via === 'sms' ? 'sms_link' : 'email_link',
             deliveryTarget,
+            ownLink,
+            responder: ownLink && notMe && typedName.trim() ? typedName.trim() : undefined,
             agreementText: agreement,
           }),
         });
@@ -195,6 +203,32 @@ export default function FleetApprovalPage() {
           </tr>
         </tbody>
       </table>
+
+      {open.length > 0 && ownLink && (
+        <div style={{ marginTop: '16px', fontSize: '12px', color: '#475569' }}>
+          {notMe ? (
+            <label style={{ display: 'block' }}>
+              <span style={{ fontWeight: 700, color: '#0f172a' }}>Your name</span>
+              <input
+                value={typedName}
+                onChange={e => setTypedName(e.target.value)}
+                placeholder="So BMG knows who is responding"
+                maxLength={120}
+                style={{ display: 'block', width: '100%', marginTop: '4px', padding: '8px 10px', borderRadius: '8px', border: '1px solid #cbd5e1', fontSize: '13px', fontFamily: 'inherit' }}
+              />
+            </label>
+          ) : (
+            <>
+              Responding as <strong style={{ color: '#0f172a', overflowWrap: 'anywhere' }}>{deliveryTarget}</strong>
+              {' · '}
+              <button
+                onClick={() => setNotMe(true)}
+                style={{ padding: 0, border: 'none', background: 'none', color: '#1d4ed8', fontSize: '12px', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
+              >Not you?</button>
+            </>
+          )}
+        </div>
+      )}
 
       {open.length > 0 && (
         <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '14px', marginTop: '16px' }}>

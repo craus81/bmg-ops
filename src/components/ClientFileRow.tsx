@@ -1,6 +1,8 @@
 'use client';
 
-import { formatBytes } from '@/lib/client-files';
+import { formatBytes, opensInGraphicsBuilder } from '@/lib/client-files';
+import { deepLinks } from '@/lib/deep-links';
+import { useAuth } from '@/components/AuthProvider';
 
 /** One file as /api/client-files returns it (ClientFileItem there). */
 export interface ClientFile {
@@ -90,6 +92,10 @@ interface RowProps {
 
 export default function ClientFileRow({ file, selected, onSelect, onClient, hideClient, onFolder, compact, checked, onCheck }: RowProps) {
   const picking = !!onCheck;
+  const { hasFeature } = useAuth();
+  // A proof or picture opens in the Graphics Builder to be measured (not
+  // while ticking files for a zip or a job: the tap there picks the file).
+  const builder = !picking && hasFeature('graphics_builder') && opensInGraphicsBuilder(file);
   return (
     <div
       onClick={e => {
@@ -145,6 +151,18 @@ export default function ClientFileRow({ file, selected, onSelect, onClient, hide
           <CopiedBadge copied={file.copied} />
         </div>
       </div>
+      {builder && (
+        <a
+          href={deepLinks.graphicsBuilderFromClientFile(file.id)}
+          title="Open in the Graphics Builder to measure it, then make the estimate"
+          aria-label={`Open ${file.name} in the Graphics Builder`}
+          style={{
+            flexShrink: 0, padding: compact ? '6px 10px' : '8px 12px', borderRadius: '8px', fontSize: '13px', fontWeight: 800,
+            background: 'rgba(6,182,212,0.12)', color: '#06b6d4', border: '1px solid rgba(6,182,212,0.4)',
+            textDecoration: 'none', whiteSpace: 'nowrap',
+          }}
+        >🎨 Builder</a>
+      )}
       <a
         href={clientFileUrl(file)}
         target="_blank"

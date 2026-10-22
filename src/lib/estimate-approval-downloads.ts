@@ -14,6 +14,12 @@
  * estimate_files ids on estimates.approval_file_ids (migration 368), so a
  * file added to the estimate later never appears on a link the customer
  * already holds.
+ *
+ * Since the approval email stopped attaching the PDF (Craig, 2026-10-21)
+ * these links are the customer's only copy, so they outlive the approval
+ * link: every send records its token in estimate_download_tokens (migration
+ * 424), good for downloads for DOWNLOAD_LINK_DAYS even after the Approve
+ * button expires or a resend rotates the approval token.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { estimatePdfFilename } from './estimate-pdf';
@@ -72,6 +78,58 @@ export async function loadApprovalDownloads(
     for (const f of block.files) out.push({ name: f.name, url: urls.proof(f.id), kind: 'proof' });
   }
   return out;
+}
+
+/** How long an approval email's download links keep working. */
+export const DOWNLOAD_LINK_DAYS = 365;
+
+/** When a send's download links stop working. */
+export function downloadLinkExpiry(from: Date = new Date()): string {
+  return new Date(from.getTime() + DOWNLOAD_LINK_DAYS * 86_400_000).toISOString();
+}
+
+/**
+ * Resolve a download link's token to its estimate and the files that send
+ * carried. A token recorded at send time (estimate_download_tokens) lasts
+ * a year and survives resends; a link from before that table falls back to
+ * the estimate's current approval token, also good for a year from its
+ * send (the approval expiry minus its 30 days, plus DOWNLOAD_LINK_DAYS).
+ * `columns` are extra estimates columns the caller needs.
+ */
+export async function resolveDownloadToken(
+  service: SupabaseClient<any, any, any>,
+  token: string,
+  columns: string,
+): Promise<{ ok: true; estimate: any; fileIds: string[] } | { ok: false; status: 404 | 410 }> {
+  const select = ['id', 'approval_file_ids', columns].filter(Boolean).join(', ');
+  const { data: row } = await service
+    .from('estimate_download_tokens')
+    .select('estimate_id, file_ids, expires_at')
+    .eq('token', token)
+    .maybeSingle();
+  if (row) {
+    if (new Date(row.expires_at).getTime() < Date.now()) return { ok: false, status: 410 };
+    const { data: estimate } = await service.from('estimates').select(select).eq('id', row.estimate_id).maybeSingle();
+    if (!estimate) return { ok: false, status: 404 };
+    return { ok: true, estimate, fileIds: row.file_ids || [] };
+  }
+  const { data: estimate } = await service
+    .from('estimates')
+    .select(`${select}, approval_token_expires_at`)
+    .eq('approval_token', token)
+    .maybeSingle();
+  if (!estimate) return { ok: false, status: 404 };
+  const until = legacyDownloadUntil((estimate as any).approval_token_expires_at);
+  if (!until || until.getTime() < Date.now()) return { ok: false, status: 410 };
+  return { ok: true, estimate, fileIds: (estimate as any).approval_file_ids || [] };
+}
+
+/** A pre-424 link's download cutoff: a year from its (30-day) send. */
+export function legacyDownloadUntil(approvalExpiresAt: string | null | undefined): Date | null {
+  if (!approvalExpiresAt) return null;
+  const t = new Date(approvalExpiresAt).getTime();
+  if (!Number.isFinite(t)) return null;
+  return new Date(t + (DOWNLOAD_LINK_DAYS - 30) * 86_400_000);
 }
 
 /**

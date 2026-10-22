@@ -130,6 +130,18 @@ describe('sanitizePhotoProofs', () => {
     expect(allProofBoxes(proofs)).toHaveLength(1);
   });
 
+  it('keeps the Client Files file a proof page was opened from, and only a real id', () => {
+    const id = '0b5c3a2e-1f4d-4c8e-9a7b-2d6e8f1a3c5b';
+    const [kept, junk, none] = sanitizePhotoProofs([
+      { path: 'quote-proofs/a.jpg', client_file_id: id },
+      { path: 'quote-proofs/b.jpg', client_file_id: 'not an id' },
+      { path: 'quote-proofs/c.jpg' },
+    ]);
+    expect(kept.client_file_id).toBe(id);
+    expect(junk).not.toHaveProperty('client_file_id');
+    expect(none).not.toHaveProperty('client_file_id');
+  });
+
   it('drops entries with no photo behind them', () => {
     expect(sanitizePhotoProofs([{ label: 'ghost', boxes: [] }, { path: '   ' }])).toEqual([]);
   });

@@ -8,7 +8,7 @@
  * checkbox, Accept, Request Changes with a required reason — including
  * the audit fields the routes record (time on page, delivery channel and
  * target from the link's ?via/?to params). A link minted for one person
- * (?own=1, proofs only) says "Responding as <them>" with a "Not you?"
+ * (?own=1, proofs and estimates) says "Responding as <them>" with a "Not you?"
  * box, so staff can see which recipient answered.
  *
  * Each page supplies only its DOCUMENT body and copy, so the flows can't
@@ -99,10 +99,10 @@ export default function ApprovalPageShell({
   const token = params?.token || '';
   const deliveryChannel = searchParams?.get('via') === 'sms' ? 'sms_link' : 'email_link';
   const deliveryTarget = searchParams?.get('to') || null;
-  // Proof emails go one per recipient (?own=1), so the link's ?to IS the
-  // person reading it. Older shared links named only the first recipient
-  // and must not claim to know who is responding.
-  const ownLink = kind === 'proof' && searchParams?.get('own') === '1' && !!deliveryTarget;
+  // Proof and estimate emails go one per recipient (?own=1), so the link's
+  // ?to IS the person reading it. Older shared links named only the first
+  // recipient and must not claim to know who is responding.
+  const ownLink = (kind === 'proof' || kind === 'estimate') && searchParams?.get('own') === '1' && !!deliveryTarget;
   const [notMe, setNotMe] = useState(false);
   const [typedName, setTypedName] = useState('');
 

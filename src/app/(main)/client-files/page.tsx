@@ -22,7 +22,8 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
-import { CLIENT_FILE_KINDS, KIND_LABELS, formatBytes, type ClientFileKind } from '@/lib/client-files';
+import { CLIENT_FILE_KINDS, KIND_LABELS, formatBytes, opensInGraphicsBuilder, type ClientFileKind } from '@/lib/client-files';
+import { deepLinks } from '@/lib/deep-links';
 import ClientFileRow, { FileTile, CopiedBadge, clientFileUrl, fmtFileDate, type ClientFile } from '@/components/ClientFileRow';
 import ClientFolderMatches from '@/components/ClientFolderMatches';
 import { ZipBar, FolderZipList } from '@/components/ClientFilesDownload';
@@ -286,6 +287,9 @@ function ClientFilesInner() {
       </div>
       <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
         <a href={clientFileUrl(selected)} target="_blank" rel="noopener noreferrer" style={btn(true)}>Open</a>
+        {hasFeature('graphics_builder') && opensInGraphicsBuilder(selected) && (
+          <a href={deepLinks.graphicsBuilderFromClientFile(selected.id)} style={btn()} title="Measure this proof, then make the estimate and the graphics job">🎨 Open in Graphics Builder</a>
+        )}
         <a href={clientFileUrl(selected, true)} download={selected.name} style={btn()}>⬇ Download</a>
         <button onClick={() => copyLink(selected)} style={btn()}>🔗 Copy link</button>
       </div>

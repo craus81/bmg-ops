@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { flashNote } from '@/lib/focus-note';
 import { createClient } from '@/lib/supabase-browser';
 import { fetchAllRows } from '@/lib/fetch-all';
@@ -30,6 +31,7 @@ import { pickPrice } from '@/lib/part-suggest';
 import CreatedBy from '@/components/CreatedBy';
 import { poCreatedBy } from '@/lib/created-by';
 import { looseMatcher } from '@/lib/loose-search';
+import { needsAttention } from '@/lib/po-attention';
 import { diffAgainstExisting, describeChanges, pendingExtractions } from '@/lib/pending-po-existing';
 
 interface ImportLine extends ParsedPOLine {
@@ -231,7 +233,7 @@ export default function POsPage() {
   }, []);
   // List filters: attribute filter (billing issues, notes, graphics jobs)
   // and a date window on the PO date (imported date when none on record).
-  type PoFilter = 'all' | 'billing' | 'not_invoiced' | 'notes' | 'has_gfx' | 'no_gfx';
+  type PoFilter = 'all' | 'attention' | 'billing' | 'not_invoiced' | 'notes' | 'has_gfx' | 'no_gfx';
   const [poFilter, setPoFilter] = useState<PoFilter>('all');
   const [poCustomerFilter, setPoCustomerFilter] = useState<string>('all');
   const [poDateRange, setPoDateRange] = useState<'all' | '30' | '90' | 'month' | 'lastmonth'>('all');
@@ -1791,6 +1793,7 @@ export default function POsPage() {
 
   const matchesPoFilter = (po: PurchaseOrder & { line_items: POLineItem[] }, filter: PoFilter): boolean => {
     switch (filter) {
+      case 'attention': return needsAttention(po);
       case 'billing': return (po as any).invoice_check_status === 'attention';
       case 'not_invoiced': return po.status === 'complete' && (po as any).invoice_check_status === 'no_invoices';
       case 'notes': return ((po as any).po_notes || []).length > 0;
@@ -1817,11 +1820,14 @@ export default function POsPage() {
       && d < new Date(now.getFullYear(), now.getMonth(), 1);
   };
 
-  const tabPos = poTab === 'closed' ? closedPos : poTab === 'fulfilled' ? fulfilledPos : openPos;
+  // ⚑ Needs attention spans every tab: a flagged PO is listed wherever it sits.
+  const attentionCount = pos.filter(needsAttention).length;
+  const tabPos = poFilter === 'attention' ? pos.filter(needsAttention) : poTab === 'closed' ? closedPos : poTab === 'fulfilled' ? fulfilledPos : openPos;
   // Counts shown in the filter dropdown, computed on the current tab before
   // the attribute/date/search narrowing so the menu reads as "what's here".
   const poFilterCounts: Record<PoFilter, number> = {
     all: tabPos.length,
+    attention: tabPos.filter(p => matchesPoFilter(p, 'attention')).length,
     billing: tabPos.filter(p => matchesPoFilter(p, 'billing')).length,
     not_invoiced: tabPos.filter(p => matchesPoFilter(p, 'not_invoiced')).length,
     notes: tabPos.filter(p => matchesPoFilter(p, 'notes')).length,
@@ -2059,24 +2065,34 @@ export default function POsPage() {
 
       {/* Open / Fulfilled / Closed tabs */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '10px' }}>
-        <button onClick={() => setPoTab('open')} style={{
+        <button onClick={() => { setPoTab('open'); if (poFilter === 'attention') setPoFilter('all'); }} style={{
           padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-          background: poTab === 'open' ? 'var(--tab-active-bg)' : 'transparent',
-          border: poTab === 'open' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-          color: poTab === 'open' ? '#60a5fa' : 'var(--text-muted)',
+          background: poTab === 'open' && poFilter !== 'attention' ? 'var(--tab-active-bg)' : 'transparent',
+          border: poTab === 'open' && poFilter !== 'attention' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+          color: poTab === 'open' && poFilter !== 'attention' ? '#60a5fa' : 'var(--text-muted)',
         }}>Open ({openPos.length})</button>
-        <button onClick={() => setPoTab('fulfilled')} style={{
+        <button onClick={() => { setPoTab('fulfilled'); if (poFilter === 'attention') setPoFilter('all'); }} style={{
           padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-          background: poTab === 'fulfilled' ? 'var(--tab-active-bg)' : 'transparent',
-          border: poTab === 'fulfilled' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-          color: poTab === 'fulfilled' ? '#4ade80' : 'var(--text-muted)',
+          background: poTab === 'fulfilled' && poFilter !== 'attention' ? 'var(--tab-active-bg)' : 'transparent',
+          border: poTab === 'fulfilled' && poFilter !== 'attention' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+          color: poTab === 'fulfilled' && poFilter !== 'attention' ? '#4ade80' : 'var(--text-muted)',
         }}>Fulfilled ({fulfilledPos.length})</button>
-        <button onClick={() => setPoTab('closed')} style={{
+        <button onClick={() => { setPoTab('closed'); if (poFilter === 'attention') setPoFilter('all'); }} style={{
           padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-          background: poTab === 'closed' ? 'var(--tab-active-bg)' : 'transparent',
-          border: poTab === 'closed' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-          color: poTab === 'closed' ? '#94a3b8' : 'var(--text-muted)',
+          background: poTab === 'closed' && poFilter !== 'attention' ? 'var(--tab-active-bg)' : 'transparent',
+          border: poTab === 'closed' && poFilter !== 'attention' ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
+          color: poTab === 'closed' && poFilter !== 'attention' ? '#94a3b8' : 'var(--text-muted)',
         }}>Closed ({closedPos.length})</button>
+        <button
+          onClick={() => setPoFilter(poFilter === 'attention' ? 'all' : 'attention')}
+          title="Show only POs flagged as needing attention, from every tab"
+          style={{
+            padding: '6px 14px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+            background: poFilter === 'attention' ? 'rgba(251,146,60,0.12)' : 'transparent',
+            border: `1px solid ${poFilter === 'attention' ? '#fb923c' : attentionCount > 0 ? 'rgba(251,146,60,0.45)' : 'var(--border)'}`,
+            color: attentionCount > 0 || poFilter === 'attention' ? '#fb923c' : 'var(--text-muted)',
+          }}
+        >⚑ Needs attention ({attentionCount})</button>
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -2264,6 +2280,7 @@ export default function POsPage() {
                 style={filterSelectStyle}
               >
                 <option value="all">All ({poFilterCounts.all})</option>
+                <option value="attention">⚑ Needs attention ({poFilterCounts.attention})</option>
                 <option value="billing">⚠ Billing needs attention ({poFilterCounts.billing})</option>
                 <option value="not_invoiced">⚠ Fulfilled, not invoiced ({poFilterCounts.not_invoiced})</option>
                 <option value="notes">Has notes ({poFilterCounts.notes})</option>
@@ -3490,14 +3507,36 @@ export default function POsPage() {
                     const jobs = gfxJobsByPo[po.id] || [];
                     const noteCount = ((po as any).po_notes || []).length;
                     const checkStatus = (po as any).invoice_check_status;
-                    const hasFlags = jobs.length > 0 || noteCount > 0 || checkStatus === 'attention'
+                    const flagged = needsAttention(po);
+                    const hasFlags = flagged || jobs.length > 0 || noteCount > 0 || checkStatus === 'attention'
                       || (checkStatus === 'no_invoices' && po.status === 'complete')
                       || !!(po as any).netsuite_invoice_number;
+                    // Outside edit mode each cell's content is a real link to the PO,
+                    // so right-click "Open in new tab" and Cmd/Ctrl-click work
+                    // anywhere on the row. The link takes the cell's padding so the
+                    // whole cell is clickable, not just the text.
+                    const poHref = deepLinks.po(po.id);
+                    const linkCell = (style: React.CSSProperties, children: React.ReactNode, title?: string) => editMode
+                      ? <td style={style} title={title}>{children}</td>
+                      : (
+                        <td style={{ ...style, padding: 0 }} title={title}>
+                          <Link href={poHref} prefetch={false} style={{ display: 'block', padding: style.padding, color: 'inherit', textDecoration: 'none' }}>
+                            {children}
+                          </Link>
+                        </td>
+                      );
                     return (
                       <tr
                         key={po.id}
                         className="table-row-link"
-                        onClick={() => editMode ? toggleDeleteSelection(po.id) : router.push(`/admin/pos/${po.id}`)}
+                        style={flagged ? { background: 'rgba(251,146,60,0.08)' } : undefined}
+                        onClick={(e) => {
+                          if (editMode) { toggleDeleteSelection(po.id); return; }
+                          // Clicks on a cell link navigate on their own (and keep
+                          // Cmd/Ctrl-click opening a new tab); the Flags cell isn't a link.
+                          if ((e.target as HTMLElement).closest('a')) return;
+                          router.push(poHref);
+                        }}
                       >
                         {editMode && (
                           <td style={tdStyle} onClick={(e) => e.stopPropagation()}>
@@ -3509,34 +3548,52 @@ export default function POsPage() {
                             />
                           </td>
                         )}
-                        <td style={tdStyle}>
+                        {linkCell(flagged ? { ...tdStyle, boxShadow: 'inset 4px 0 0 #fb923c' } : tdStyle, <>
                           <span style={{ fontWeight: 800, color: '#60a5fa' }}>{po.po_number}</span>
                           <CreatedBy compact {...poCreatedBy(po)} at={po.created_at} style={{ display: 'block', fontSize: '10px', fontWeight: 500 }} />
-                        </td>
-                        <td style={{ ...tdStyle, color: 'var(--text-secondary)' }}>{po.customer}</td>
-                        <td style={{ ...tdStyle, color: loc ? 'var(--text-secondary)' : 'var(--text-muted)' }} title={formatShipTo(po.ship_to) || undefined}>
-                          {loc || '—'}
-                        </td>
-                        <td style={{ ...tdStyle, color: 'var(--text-secondary)' }} title={po.ordered_date ? 'PO date' : 'Imported date (no PO date on record)'}>
-                          {displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
-                        </td>
-                        <td style={numStyle} title={`${billed <= 0 ? '$0' : fmt(billed)} billed of ${fmt(totalValue)}`}>
-                          <span style={{ fontWeight: 700, color: billedColor }}>{billed <= 0 ? '$0' : fmt(billed)}</span>
-                        </td>
-                        <td style={numStyle}>
-                          <span style={{ fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</span>
-                        </td>
-                        <td style={tdStyle}>
+                        </>)}
+                        {linkCell({ ...tdStyle, color: 'var(--text-secondary)' }, po.customer)}
+                        {linkCell({ ...tdStyle, color: loc ? 'var(--text-secondary)' : 'var(--text-muted)' }, loc || '—', formatShipTo(po.ship_to) || undefined)}
+                        {linkCell(
+                          { ...tdStyle, color: 'var(--text-secondary)' },
+                          displayDate.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }),
+                          po.ordered_date ? 'PO date' : 'Imported date (no PO date on record)',
+                        )}
+                        {linkCell(
+                          numStyle,
+                          <span style={{ fontWeight: 700, color: billedColor }}>{billed <= 0 ? '$0' : fmt(billed)}</span>,
+                          `${billed <= 0 ? '$0' : fmt(billed)} billed of ${fmt(totalValue)}`,
+                        )}
+                        {linkCell(numStyle, <span style={{ fontWeight: 800, color: '#60a5fa' }}>{fmt(totalValue)}</span>)}
+                        {linkCell(tdStyle, (
                           <span style={{
                             fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '999px',
                             background: `${statusMeta.color}15`, border: `1px solid ${statusMeta.color}33`, color: statusMeta.color,
                           }}>
                             {statusMeta.label}
                           </span>
-                        </td>
+                        ))}
                         <td style={tdStyle}>
-                          {hasFlags ? (
+                          {hasFlags || !editMode ? (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              {flagged ? (
+                                <span
+                                  title={[po.attention_note, po.attention_by_name ? `Flagged by ${po.attention_by_name}` : null].filter(Boolean).join('\n') || 'Needs attention'}
+                                  style={{ color: '#fb923c', fontWeight: 800, fontSize: '11px', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', verticalAlign: 'middle' }}
+                                >
+                                  ⚑ {po.attention_note || 'Needs attention'}
+                                </span>
+                              ) : !editMode && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); router.push(deepLinks.po(po.id, { flag: true })); }}
+                                  title="Flag: something on this PO still needs to be done"
+                                  aria-label={`Flag PO ${po.po_number} as needing attention`}
+                                  style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px', padding: '1px 6px', lineHeight: 1.4 }}
+                                >
+                                  ⚑
+                                </button>
+                              )}
                               {jobs.length > 0 && (
                                 <span
                                   onClick={(e) => { e.stopPropagation(); router.push(`/graphics?editJob=${jobs[0].id}`); }}

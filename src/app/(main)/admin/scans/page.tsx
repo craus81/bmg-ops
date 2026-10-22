@@ -26,6 +26,7 @@ import { storage, storageDownloadUrl } from '@/lib/storage';
 import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
 import { deepLinks } from '@/lib/deep-links';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { archiveWindowStart, fetchByIdChunks, isHistoryTab } from '@/lib/scan-log-load';
 import { type EmailedInfo, fetchEmailedByNumber, isBadDelivery } from '@/lib/invoice-emails';
 import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
 import { closeOnEscape } from '@/lib/modal-escape';
@@ -78,8 +79,9 @@ type ViewTab = 'all' | 'ready' | 'waiting' | 'exported' | 'archived' | 'invoices
 
 // Local calendar date (YYYY-MM-DD) — scan date filters work in the user's day,
 // matching how the dashboard counts "scans today".
-const ARCHIVE_WINDOW_DAYS = 365;
-const archiveWindowStart = () => new Date(Date.now() - ARCHIVE_WINDOW_DAYS * 86_400_000).toISOString();
+
+// PO fields the picker and line matching use.
+const PO_SELECT = 'id, po_number, customer, ship_to, line_items:po_line_items(id, part_number, quantity, installed)';
 
 const toLocalDateStr = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -106,6 +108,14 @@ export default function AdminScansPage() {
   const [archivedAllHistory, setArchivedAllHistory] = useState(false);
   const archivedAllHistoryRef = useRef(false);
   archivedAllHistoryRef.current = archivedAllHistory;
+  // Exported + archived scans (the history tabs) load the first time one of
+  // those tabs opens; until then the tab counts come from a quick tally.
+  const historyRequestedRef = useRef(false);
+  const [historyReady, setHistoryReady] = useState(false);
+  const [historyCounts, setHistoryCounts] = useState<{ exported: number; archived: number } | null>(null);
+  // Only the newest loadAll may write state — an older one finishing late
+  // (say, the first load racing a history-tab open) would undo it.
+  const loadSeqRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<ViewTab>('ready');
   // Waiting for PO grouping. By part is how POs get matched (select every VIN
@@ -171,7 +181,11 @@ export default function AdminScansPage() {
   // ?from=YYYY-MM-DD&to=YYYY-MM-DD.
   useEffect(() => {
     const t = searchParams.get('tab');
-    if (t && ['all', 'ready', 'waiting', 'exported', 'archived', 'invoices', 'bulk', 'vendor'].includes(t)) setTab(t as ViewTab);
+    if (t && ['all', 'ready', 'waiting', 'exported', 'archived', 'invoices', 'bulk', 'vendor'].includes(t)) {
+      setTab(t as ViewTab);
+      // A link straight into a history tab loads it with the first read.
+      if (isHistoryTab(t)) historyRequestedRef.current = true;
+    }
     const range = searchParams.get('range');
     if (range === 'today' || range === '7d' || range === '30d') {
       const today = new Date();
@@ -253,6 +267,15 @@ export default function AdminScansPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { loadAll(); }, []);
 
+  // Opening a history tab for the first time pulls in exported + archived
+  // scans, behind a small loading line instead of the full-page spinner.
+  useEffect(() => {
+    if (!isHistoryTab(tab) || historyRequestedRef.current) return;
+    historyRequestedRef.current = true;
+    loadAll({ quiet: true });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- loadAll reads current state via refs
+  }, [tab]);
+
   // Picking a date range that reaches past the archive window pulls in the
   // older history it needs.
   useEffect(() => {
@@ -260,7 +283,9 @@ export default function AdminScansPage() {
     if (dateFrom < archiveWindowStart().slice(0, 10)) {
       archivedAllHistoryRef.current = true;
       setArchivedAllHistory(true);
-      loadAll();
+      // Before history has loaded there's nothing older to fetch yet; the
+      // flag makes the history read include it.
+      if (historyRequestedRef.current) loadAll({ quiet: true });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- loadAll reads current state via refs
   }, [dateFrom]);
@@ -284,29 +309,48 @@ export default function AdminScansPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- supabase client is a stable singleton
   }, [bulkCustomer]);
 
-  const loadAll = async () => {
-    setLoading(true);
+  const loadAll = async (opts: { quiet?: boolean } = {}) => {
+    const seq = ++loadSeqRef.current;
+    const withHistory = historyRequestedRef.current;
+    const allHistory = archivedAllHistoryRef.current;
+    if (!opts.quiet) setLoading(true);
     loadBillableCustomers(supabase).then(setBillableCustomers);
-    const [scansRes, archivedRes, profilesRes, partsRes, locsRes, posRes, cniVinsRes, companiesRes, creditsRes] = await Promise.all([
-      // Paginated — the active log can exceed the 1000-row cap (.limit doesn't
-      // lift it), which silently hid older un-archived scans from every tab.
+    // Archived reads stop at the window unless "Load older" lifted it.
+    const archivedQuery = (q: any) => allHistory ? q : q.gte('archived_at', archiveWindowStart());
+    const none = Promise.resolve({ data: [] as any[], error: null });
+    const [pendingRes, exportedRes, archivedRes, countsRes, profilesRes, partsRes, locsRes, openPosRes, companiesRes] = await Promise.all([
+      // Work still waiting to be exported — what Ready / Waiting show.
+      // Paginated: the 1000-row cap silently hid scans before (.limit doesn't lift it).
       fetchAllRows<any>((from, to) => supabase
         .from('scan_logs').select('*')
         .is('archived_at', null)
+        .is('exported_at', null)
         .order('scanned_at', { ascending: false })
         .order('id')
         .range(from, to)),
-      // Paginate archived scans — Supabase caps responses at 1000 rows by default
-      fetchAllRows<any>((from, to) => {
-        let q = supabase
-          .from('scan_logs').select('*')
-          .not('archived_at', 'is', null);
-        if (!archivedAllHistoryRef.current) q = q.gte('archived_at', archiveWindowStart());
-        return q
-          .order('archived_at', { ascending: false })
-          .order('id')
-          .range(from, to);
-      }),
+      // History (Exported / Archived / Invoices / All) — only once one of
+      // those tabs has been opened.
+      withHistory ? fetchAllRows<any>((from, to) => supabase
+        .from('scan_logs').select('*')
+        .is('archived_at', null)
+        .not('exported_at', 'is', null)
+        .order('scanned_at', { ascending: false })
+        .order('id')
+        .range(from, to)) : none,
+      withHistory ? fetchAllRows<any>((from, to) => archivedQuery(supabase
+        .from('scan_logs').select('*')
+        .not('archived_at', 'is', null))
+        .order('archived_at', { ascending: false })
+        .order('id')
+        .range(from, to)) : none,
+      // Without history, the history tabs still show their counts — a
+      // tally, no rows.
+      withHistory ? Promise.resolve(null) : Promise.all([
+        supabase.from('scan_logs').select('id', { count: 'exact', head: true })
+          .is('archived_at', null).not('exported_at', 'is', null),
+        archivedQuery(supabase.from('scan_logs').select('id', { count: 'exact', head: true })
+          .not('archived_at', 'is', null)),
+      ]),
       supabase.from('profiles').select('id, full_name, role, roles, is_field_installer, company_id'),
       // One catalog read serves both the PO-required map (every part, so a
       // scan of an inactive part still resolves) and the active-part picker.
@@ -319,49 +363,80 @@ export default function AdminScansPage() {
         .order('id')
         .range(from, to)),
       supabase.from('work_locations').select('id, name').eq('is_active', true).order('name'),
-      // Paginated — the open/complete PO book outgrows the 1000-row cap, and a
-      // truncated read here made scans read "Waiting on PO" for POs that exist.
+      // Open POs for the PO picker. Completed ones join below only when a
+      // loaded scan points at one — the completed book grows forever.
       fetchAllRows<any>((from, to) => supabase
         .from('purchase_orders')
-        .select('id, po_number, customer, ship_to, line_items:po_line_items(id, part_number, quantity, installed)')
-        .in('status', ['open', 'complete'])
+        .select(PO_SELECT)
+        .eq('status', 'open')
         .order('po_number')
-        .order('id')
-        .range(from, to)),
-      // CNI job VINs that produced a scan — maps scan_log_id → job number so the
-      // Scan Log can flag CNI work and filter to it (§3.4). Paginated like the
-      // archived scans, since this grows with every CNI vehicle completed.
-      fetchAllRows<any>((from, to) => supabase
-        .from('cni_job_vins')
-        .select('id, scan_log_id, completed_by, cni_jobs(job_number, assigned_company_id)')
-        .not('scan_log_id', 'is', null)
         .order('id')
         .range(from, to)),
       // Vendor companies for the bulk tab's vendor picker (same list the
       // vendor-invoice flow uses).
       supabase.from('companies').select('id, name, netsuite_vendor_id').order('name'),
+    ]);
+
+    const liveScans = [...(pendingRes.data || []), ...(exportedRes.data || [])] as ScanLog[];
+    const archivedRows = (archivedRes.data || []) as ScanLog[];
+    const loadedScans = [...liveScans, ...archivedRows];
+    const scanIds = loadedScans.map(s => s.id);
+
+    // Per-scan lookups, read for just the scans on hand.
+    const openPoIds = new Set((openPosRes.data || []).map((p: any) => p.id));
+    const [otherPosRes, cniVinsRes, scanCreditsRes] = await Promise.all([
+      // POs the loaded scans already carry that aren't open (completed ones).
+      fetchByIdChunks<any>(loadedScans.map(s => s.po_id || '').filter(id => id && !openPoIds.has(id)), (ids, from, to) => supabase
+        .from('purchase_orders')
+        .select(PO_SELECT)
+        .in('id', ids)
+        .order('id')
+        .range(from, to)),
+      // CNI job VINs that produced a scan — maps scan_log_id → job number so
+      // the Scan Log can flag CNI work and filter to it (§3.4).
+      fetchByIdChunks<any>(scanIds, (ids, from, to) => supabase
+        .from('cni_job_vins')
+        .select('id, scan_log_id, completed_by, cni_jobs(job_number, assigned_company_id)')
+        .in('scan_log_id', ids)
+        .order('id')
+        .range(from, to)),
       // Live pay credits — who was actually credited for each scanned vehicle.
-      // Ordered so the pagination is stable; paginated like the other
-      // per-vehicle tables since this grows with every completed install.
-      fetchAllRows<any>((from, to) => supabase
+      fetchByIdChunks<any>(scanIds, (ids, from, to) => supabase
         .from('install_credits')
-        .select('scan_log_id, cni_job_vin_id, profile_id')
+        .select('id, scan_log_id, cni_job_vin_id, profile_id')
         .is('voided_at', null)
-        .order('created_at', { ascending: true })
+        .in('scan_log_id', ids)
         .order('id')
         .range(from, to)),
     ]);
+    // Credits keyed only on the CNI VIN row (pre-scan-linkage history).
+    const vinCreditsRes = await fetchByIdChunks<any>((cniVinsRes.data || []).map((r: any) => r.id), (ids, from, to) => supabase
+      .from('install_credits')
+      .select('id, scan_log_id, cni_job_vin_id, profile_id')
+      .is('voided_at', null)
+      .is('scan_log_id', null)
+      .in('cni_job_vin_id', ids)
+      .order('id')
+      .range(from, to));
+
+    if (seq !== loadSeqRef.current) return;
+
     setAllParts((partsRes.data || [])
       .filter((p: any) => p.is_active === true)
       .map(({ requires_po_match: _r, is_active: _a, ...p }: any) => p) as typeof allParts);
     setAllLocations((locsRes.data || []) as typeof allLocations);
-    setAllPOs((posRes.data || []) as typeof allPOs);
+    setAllPOs([...(openPosRes.data || []), ...(otherPosRes.data || [])] as typeof allPOs);
     setVendorCompanies((companiesRes.data || []) as VendorCompanyOption[]);
 
-    setScans((scansRes.data || []) as ScanLog[]);
-    setArchivedScans((archivedRes.data || []) as ScanLog[]);
+    setScans(liveScans);
+    setArchivedScans(archivedRows);
+    if (withHistory) {
+      setHistoryReady(true);
+    } else if (countsRes) {
+      setHistoryCounts({ exported: countsRes[0].count ?? 0, archived: countsRes[1].count ?? 0 });
+    }
     // Non-blocking: the ✉ emailed badges fill in once the email log arrives.
-    refreshEmailedInvoices([...(scansRes.data || []), ...(archivedRes.data || [])] as ScanLog[]);
+    refreshEmailedInvoices(loadedScans);
 
     const pMap: Record<string, string> = {};
     const metaMap: Record<string, { companyId: string | null; installer: boolean }> = {};
@@ -402,7 +477,7 @@ export default function AdminScansPage() {
     setCniCompletedByScanId(cniCompletedMap);
 
     const crewMap: Record<string, string[]> = {};
-    (creditsRes.data || []).forEach((c: any) => {
+    [...(scanCreditsRes.data || []), ...(vinCreditsRes.data || [])].forEach((c: any) => {
       const scanId = c.scan_log_id || scanIdByVinRowId[c.cni_job_vin_id || ''];
       if (!scanId || !c.profile_id) return;
       const arr = crewMap[scanId] || (crewMap[scanId] = []);
@@ -410,28 +485,30 @@ export default function AdminScansPage() {
     });
     setCrewByScanId(crewMap);
 
-    setSelectedScans(new Set());
+    if (!opts.quiet) setSelectedScans(new Set());
     setLoading(false);
 
     // Completion photos (K8) — chunked .in() over the loaded scans; non-fatal
     // and loaded after the list renders so the log itself never waits on it.
     try {
-      const allIds = [...(scansRes.data || []), ...(archivedRes.data || [])].map((s: any) => s.id);
+      const { data: photoRows } = await fetchByIdChunks<any>(scanIds, (ids, from, to) => supabase
+        .from('scan_photos')
+        .select('id, scan_log_id, storage_path, created_at, taken_by')
+        // Oldest first so the viewer pages through in the order they were
+        // shot, and so the chip's first photo is stable between loads.
+        .in('scan_log_id', ids)
+        .order('created_at')
+        .order('id')
+        .range(from, to));
+      if (seq !== loadSeqRef.current) return;
       const photoMap: Record<string, ScanPhoto[]> = {};
-      for (let i = 0; i < allIds.length; i += 200) {
-        const { data: photoRows } = await supabase
-          .from('scan_photos')
-          .select('id, scan_log_id, storage_path, created_at, taken_by')
-          // Oldest first so the viewer pages through in the order they were
-          // shot, and so the chip's first photo is stable between loads.
-          .order('created_at')
-          .in('scan_log_id', allIds.slice(i, i + 200));
-        for (const p of photoRows || []) {
-          (photoMap[p.scan_log_id] || (photoMap[p.scan_log_id] = [])).push({
-            id: p.id, storage_path: p.storage_path, created_at: p.created_at, taken_by: p.taken_by,
-          });
-        }
+      for (const p of photoRows) {
+        (photoMap[p.scan_log_id] || (photoMap[p.scan_log_id] = [])).push({
+          id: p.id, storage_path: p.storage_path, created_at: p.created_at, taken_by: p.taken_by,
+        });
       }
+      // Chunks arrive in any order; keep each scan's photos oldest first.
+      for (const list of Object.values(photoMap)) list.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
       setPhotosByScanId(photoMap);
     } catch { /* photos are an enhancement, not required for the log */ }
   };
@@ -453,6 +530,9 @@ export default function AdminScansPage() {
   const readyToExport = pending.filter(s => s.po_id || !needsPO(s));
   const waitingForPO = pending.filter(s => !s.po_id && needsPO(s));
   const exported = scans.filter(s => s.exported_at);
+  // Tab counts: the loaded rows once history is in, the tally before that.
+  const exportedCount = historyReady ? exported.length : (historyCounts?.exported ?? 0);
+  const archivedCount = historyReady ? archivedScans.length : (historyCounts?.archived ?? 0);
 
   // Every scan regardless of lifecycle state — the All Scans tab is the raw
   // scan history (ready, waiting, exported, archived, invoiced) in one list.
@@ -490,7 +570,10 @@ export default function AdminScansPage() {
   // The scan-list chrome (search, filters, empty state, grouped list) applies
   // to every tab except the self-contained upload tabs and the Invoices tab
   // (which lists invoices, not scans, and carries its own search).
-  const isScanListTab = tab !== 'bulk' && tab !== 'vendor' && tab !== 'invoices';
+  // A history tab opened before its scans have arrived shows a loading line
+  // in place of the list, so it never reads "No exported scans" meanwhile.
+  const historyPending = isHistoryTab(tab) && !historyReady;
+  const isScanListTab = tab !== 'bulk' && tab !== 'vendor' && tab !== 'invoices' && !historyPending;
 
   // ── Installer attribution ─────────────────────────────────────────────
   // A scan's "installer" is whoever was CREDITED for the install (the live
@@ -1577,10 +1660,10 @@ export default function AdminScansPage() {
         {([
           { id: 'ready' as ViewTab, label: `Ready to Export (${readyToExport.length})` },
           { id: 'waiting' as ViewTab, label: `Waiting for PO (${waitingForPO.length})` },
-          { id: 'exported' as ViewTab, label: `Exported (${exported.length})` },
-          { id: 'archived' as ViewTab, label: `Archived (${archivedScans.length})` },
-          { id: 'invoices' as ViewTab, label: `Invoices (${invoiceRows.length})` },
-          { id: 'all' as ViewTab, label: `All Scans (${allScans.length})` },
+          { id: 'exported' as ViewTab, label: `Exported (${exportedCount})` },
+          { id: 'archived' as ViewTab, label: `Archived (${archivedCount})` },
+          { id: 'invoices' as ViewTab, label: historyReady ? `Invoices (${invoiceRows.length})` : 'Invoices' },
+          { id: 'all' as ViewTab, label: `All Scans (${pending.length + exportedCount + archivedCount})` },
           { id: 'bulk' as ViewTab, label: 'Bulk Upload' },
           { id: 'vendor' as ViewTab, label: 'Vendor Invoices' },
         ]).map(t => (
@@ -1593,10 +1676,16 @@ export default function AdminScansPage() {
         ))}
       </div>
 
-      {(tab === 'archived' || tab === 'invoices' || tab === 'all') && !archivedAllHistory && (
+      {historyPending && (
+        <div role="status" style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>
+          Loading {tab === 'all' ? 'all scans' : tab === 'invoices' ? 'invoices' : `${tab} scans`}…
+        </div>
+      )}
+
+      {(tab === 'archived' || tab === 'invoices' || tab === 'all') && !archivedAllHistory && !historyPending && (
         <div style={{ fontSize: '12px', color: theme.textMuted, marginBottom: '10px' }}>
-          Showing archived scans from the last 12 months.{' '}
-          <button onClick={() => { setArchivedAllHistory(true); archivedAllHistoryRef.current = true; loadAll(); }}
+          Showing archived scans from the last 3 months.{' '}
+          <button onClick={() => { setArchivedAllHistory(true); archivedAllHistoryRef.current = true; loadAll({ quiet: true }); }}
             style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent, #60a5fa)', fontWeight: 700, fontSize: '12px', cursor: 'pointer', textDecoration: 'underline' }}>
             Load older
           </button>
@@ -2898,7 +2987,7 @@ export default function AdminScansPage() {
           allLocations={allLocations}
           poRequired={poRequired}
           billableCustomers={billableCustomers}
-          onCommitted={loadAll}
+          onCommitted={() => loadAll()}
           onPartAdded={p => setAllParts(prev => prev.some(x => x.id === p.id) ? prev.map(x => x.id === p.id ? p : x) : [p, ...prev])}
         />
       )}
@@ -2999,7 +3088,7 @@ export default function AdminScansPage() {
       {/* Invoices tab — the log by invoice, not by scan: every distinct
           invoice number, grouped by customer, with whether/when it was
           emailed and one-click (re)send. */}
-      {tab === 'invoices' && (() => {
+      {tab === 'invoices' && !historyPending && (() => {
         const filtered = visibleInvoiceRows;
         const byCustomer = new Map<string, InvoiceListRow[]>();
         for (const r of filtered) {

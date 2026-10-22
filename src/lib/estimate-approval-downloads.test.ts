@@ -54,3 +54,69 @@ describe('attachmentDisposition', () => {
     expect(attachmentDisposition('Déjà "vu"\r\n.png')).toMatch(/^attachment; filename="D_j_ _vu_ \.png"; filename\*=UTF-8''D%C3%A9j%C3%A0%20%22vu%22%20.png$/);
   });
 });
+
+describe('download link life', () => {
+  it('a pre-424 link downloads for a year from its 30-day send', async () => {
+    const { legacyDownloadUntil, DOWNLOAD_LINK_DAYS } = await import('./estimate-approval-downloads');
+    const expires = '2026-11-20T00:00:00.000Z';
+    const until = legacyDownloadUntil(expires)!;
+    expect((until.getTime() - new Date(expires).getTime()) / 86_400_000).toBe(DOWNLOAD_LINK_DAYS - 30);
+    expect(legacyDownloadUntil(null)).toBeNull();
+    expect(legacyDownloadUntil('nonsense')).toBeNull();
+  });
+
+  it('a new send downloads for DOWNLOAD_LINK_DAYS', async () => {
+    const { downloadLinkExpiry, DOWNLOAD_LINK_DAYS } = await import('./estimate-approval-downloads');
+    const from = new Date('2026-10-22T00:00:00.000Z');
+    expect(new Date(downloadLinkExpiry(from)).getTime() - from.getTime()).toBe(DOWNLOAD_LINK_DAYS * 86_400_000);
+  });
+});
+
+describe('resolveDownloadToken', () => {
+  // A tiny two-table fake: estimate_download_tokens by token, estimates by
+  // id or approval_token.
+  function db(tokens: any[], estimates: any[]) {
+    return {
+      from(table: string) {
+        const filters: [string, any][] = [];
+        const q: any = {
+          select: () => q,
+          eq: (col: string, v: any) => { filters.push([col, v]); return q; },
+          maybeSingle: async () => {
+            const rows = table === 'estimate_download_tokens' ? tokens : estimates;
+            return { data: rows.find(r => filters.every(([c, v]) => r[c] === v)) || null, error: null };
+          },
+        };
+        return q;
+      },
+    } as any;
+  }
+  const future = new Date(Date.now() + 86_400_000).toISOString();
+  const past = new Date(Date.now() - 86_400_000).toISOString();
+
+  it('a recorded send serves its own files, after a resend rotated the approval token', async () => {
+    const { resolveDownloadToken } = await import('./estimate-approval-downloads');
+    const r = await resolveDownloadToken(
+      db([{ token: 'old', estimate_id: 'e1', file_ids: ['f1'], expires_at: future }], [{ id: 'e1', approval_token: 'new', approval_file_ids: ['f2'] }]),
+      'old', '',
+    );
+    expect(r).toMatchObject({ ok: true, estimate: { id: 'e1' }, fileIds: ['f1'] });
+  });
+
+  it('a recorded send past its year is gone', async () => {
+    const { resolveDownloadToken } = await import('./estimate-approval-downloads');
+    const r = await resolveDownloadToken(db([{ token: 't', estimate_id: 'e1', file_ids: [], expires_at: past }], [{ id: 'e1' }]), 't', '');
+    expect(r).toEqual({ ok: false, status: 410 });
+  });
+
+  it('an older link still works after its approval link expired', async () => {
+    const { resolveDownloadToken } = await import('./estimate-approval-downloads');
+    const r = await resolveDownloadToken(db([], [{ id: 'e1', approval_token: 't', approval_token_expires_at: past, approval_file_ids: ['f1'] }]), 't', '');
+    expect(r).toMatchObject({ ok: true, fileIds: ['f1'] });
+  });
+
+  it('an unknown token is not found', async () => {
+    const { resolveDownloadToken } = await import('./estimate-approval-downloads');
+    expect(await resolveDownloadToken(db([], []), 'nope', '')).toEqual({ ok: false, status: 404 });
+  });
+});

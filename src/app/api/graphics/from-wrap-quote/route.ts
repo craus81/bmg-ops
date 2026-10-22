@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import {
   ESTIMATE_LINK_COLUMNS, WRAP_QUOTE_LINK_COLUMNS,
   estimateJobPo, estimateVehicleLine, joinBlocks, wrapQuoteJobFields,
+  linkQuoteClientFiles,
 } from '@/lib/graphics-links';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 
@@ -112,6 +113,7 @@ export async function POST(req: NextRequest) {
       });
 
       await markQuoteWon(supabase, quoteId);
+      await linkQuoteClientFiles(supabase, existing.id, quoteId, userId || auth.user.id);
 
       return NextResponse.json({
         success: true,
@@ -223,6 +225,7 @@ export async function POST(req: NextRequest) {
     });
 
     await markQuoteWon(supabase, quoteId);
+    await linkQuoteClientFiles(supabase, newJob.id, quoteId, userId || auth.user.id);
 
     return NextResponse.json({
       success: true,

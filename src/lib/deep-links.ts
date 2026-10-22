@@ -23,14 +23,15 @@ export const deepLinks = {
    *  recipient can open the note's record. Every mention notification lands
    *  here, so nobody is left with only the excerpt. */
   mention: (mentionId: string) => `/mentions/${mentionId}`,
-  /** Dedicated PO record page. */
-  po: (poId: string) => `/admin/pos/${poId}`,
+  /** Dedicated PO record page. `flag` opens its "needs attention" form. */
+  po: (poId: string, opts?: { flag?: boolean }) => `/admin/pos/${poId}${opts?.flag ? '?flag=1' : ''}`,
   /** Dedicated graphics job record page. */
   graphicsJob: (jobId: string) => `/graphics/${jobId}`,
   /** The graphics board. `mine` opens it on the My Jobs tab — only ever for
    *  a digest of the recipient's OWN jobs: sent to anyone else it lands on
    *  an empty board, which is a dead click with extra steps. */
-  graphicsBoard: (opts?: { mine?: boolean }) => `/graphics${opts?.mine ? '?mine=1' : ''}`,
+  graphicsBoard: (opts?: { mine?: boolean; approved?: boolean }) =>
+    `/graphics${opts?.mine ? '?mine=1' : opts?.approved ? '?approved=1' : ''}`,
   /** The graphics board's New Job form, filled in from an existing job (Duplicate). */
   graphicsDuplicate: (jobId: string) => `/graphics?new=1&copyFrom=${jobId}`,
   /** In-Shop board — opens the vehicle's detail modal (optionally flashing one note). */
@@ -61,6 +62,8 @@ export const deepLinks = {
     task.vehicleId
       ? `/tracking?vehicle=${task.vehicleId}`
       : `/upfit?id=${task.projectId}&task=${task.taskId}`,
+  /** The FleetSuite sales order page (read live from NetSuite; admins edit). */
+  salesOrder: (netsuiteId: string | number) => `/sales-orders/${encodeURIComponent(String(netsuiteId))}`,
   /** Upfit board — opens the project detail (optionally flashing a note or task). */
   upfitProject: (projectId: string, opts?: { noteId?: string | null; taskId?: string | null }) =>
     `/upfit?id=${projectId}${opts?.noteId ? `&note=${opts.noteId}` : ''}${opts?.taskId ? `&task=${opts.taskId}` : ''}`,
@@ -114,6 +117,8 @@ export const deepLinks = {
   estimatePdf: (estimateId: string) => `/api/estimates/${estimateId}/pdf`,
   /** The FleetSuite copy of a wrap quote as PDF bytes (server-rendered from
    *  the shared quote-document model). Feed it to `pdfViewer`. */
+  /** Graphics Builder opened on a Client Files proof (customer filled in from its folder). */
+  graphicsBuilderFromClientFile: (clientFileId: string) => `/admin/wrap-quote?clientFile=${clientFileId}`,
   wrapQuotePdf: (quoteId: string) => `/api/wrap-quote/${quoteId}/pdf`,
   /** Install guide editor — the dimensioned placement guide record page. */
   installGuide: (guideId: string) => `/graphics/install-guides/${guideId}`,

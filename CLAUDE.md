@@ -171,7 +171,7 @@ they tell you to go back to auto-shipping.
 
 - **Every transaction email carries a PDF copy of the transaction.** When
   staff email an estimate, quote, invoice, or statement to a customer, the
-  send auto-attaches a PDF of that record (estimate approval + Email PDF +
+  send auto-attaches a PDF of that record (estimate Email PDF +
   follow-up → `generateEstimatePdf`; wrap quote send + follow-up →
   `generateWrapQuotePdf`, or NetSuite's own PDF when that box is checked;
   invoices → NetSuite PDFs; statement → `generateStatementPdf` plus the
@@ -181,7 +181,10 @@ they tell you to go back to auto-shipping.
   it (`attachments`) so the compose screen can say so, and a render
   failure fails the send before any side effect. When adding a new
   transaction email flow, wire this in — see the "PDF copy" bullet in
-  `docs/customer-email-standard.md`.
+  `docs/customer-email-standard.md`. **Exception: the estimate approval
+  email (Send for Approval) attaches nothing** since 2026-10-21 — a
+  Download PDF link under a top Review & Approve button instead, one email
+  per person, links good for a year (same bullet).
 
 - **Labor reaches NetSuite as ONE line on ONE item — resolve it through
   `src/lib/labor-item.ts`.** Estimate/SO labor is `labor_hours_override ??

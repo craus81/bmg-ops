@@ -728,6 +728,8 @@ export async function createItem(payload: {
   recordType: string; // e.g. 'serviceSaleItem', 'nonInventoryResaleItem', 'inventoryItem'
   displayName?: string;
   description?: string;
+  /** NetSuite class (classification) internal id. */
+  classId?: string | null;
 }): Promise<{
   success: boolean;
   internalId?: string;
@@ -746,6 +748,7 @@ export async function createItem(payload: {
   const body: any = { itemId: payload.itemId };
   if (payload.displayName) body.displayName = payload.displayName;
   if (payload.description) body.salesDescription = payload.description;
+  if (payload.classId) body.class = { id: payload.classId };
   // Items must belong to the "Parent Company : BMG Fleet Installations"
   // subsidiary (internal id 2) or downstream transactions reject them
   // ("Invalid Field Value … for the following field: item" on invoices/SOs).
@@ -2131,6 +2134,82 @@ export async function updatePurchaseOrderItemLines(
   return res.ok ? { success: true } : { success: false, error: res.error };
 }
 
+/** GET/PATCH a salesOrder record — the same envelope as purchaseOrderRecordCall. */
+async function salesOrderRecordCall(
+  path: string,
+  method: 'GET' | 'PATCH',
+  body?: unknown,
+): Promise<{ ok: true; data: any } | { ok: false; error: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/salesOrder/${path}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { ok: false, error: `NetSuite ${response.status}: ${detail}` };
+    }
+    const text = await response.text();
+    return { ok: true, data: text ? JSON.parse(text) : {} };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * A sales order record read live, item sublist included — the sales order
+ * page (src/lib/sales-order-edit.ts parses it). Live because the mirror can
+ * be two hours old and an edit must be planned against what NetSuite has now.
+ */
+export async function getSalesOrderRecord(
+  salesOrderId: string | number,
+): Promise<{ success: true; record: any } | { success: false; error: string }> {
+  const res = await salesOrderRecordCall(`${salesOrderId}?expandSubResources=true`, 'GET');
+  return res.ok ? { success: true, record: res.data } : { success: false, error: res.error };
+}
+
+/**
+ * Edit a sales order from the sales order page. Lines are keyed by their
+ * `line`, never rebuilt from an estimate, so shipped and billed lines are
+ * left alone. `replace` (only when a line is removed) makes the item sublist
+ * exactly the lines sent: every kept line goes with its `line` key, the same
+ * way the purchasing Undo removes a PO line.
+ */
+export async function patchSalesOrder(
+  salesOrderId: string | number,
+  body: Record<string, unknown>,
+  opts: { replace: boolean },
+): Promise<{ success: boolean; error?: string }> {
+  const res = await salesOrderRecordCall(
+    `${salesOrderId}${opts.replace ? '?replace=item' : ''}`,
+    'PATCH',
+    body,
+  );
+  return res.ok ? { success: true } : { success: false, error: res.error };
+}
+
 /**
  * Rename a PO (PO453 → PO453-ACME, po-number.ts). NetSuite only keeps a
  * typed number when Setup → Company → Auto-Generated Numbers has Allow
@@ -3015,6 +3094,113 @@ export async function fulfillSalesOrder(salesOrderId: string): Promise<{
     return { success: true, status, fulfillmentId, fulfillmentNumber };
   } catch (e: any) {
     return { success: false, status, error: `Failed to fulfil the sales order: ${e.message}` };
+  }
+}
+
+/**
+ * Fulfil PART of a sales order — the lines and quantities given, shipped
+ * from one location — via the same itemFulfillment transform as
+ * fulfillSalesOrder. Like createItemReceiptFromPo, the transform's default
+ * is to ship every open line in full, so the body lists every line: the
+ * shipped ones with quantity + itemReceive:true, the rest itemReceive:false.
+ * orderLine is the SO line's linesequencenumber.
+ *
+ * Used by the estimate's Fulfill & Invoice (parts-only orders, partial
+ * shipments allowed — Craig, 2026-10-21). Status rules match
+ * fulfillSalesOrder, except an order already past fulfillment is refused:
+ * the caller asked to ship specific units and none can be.
+ */
+export async function fulfillSalesOrderLines(payload: {
+  salesOrderId: string;
+  shipLines: { orderLine: number; quantity: number }[];
+  excludeOrderLines: number[];
+  locationId?: string | number;
+  memo?: string;
+}): Promise<{ success: boolean; fulfillmentId?: string; fulfillmentNumber?: string; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const soId = parseInt(payload.salesOrderId, 10);
+
+  let status = '';
+  try {
+    const lookup = await suiteqlQuery(`SELECT status FROM transaction WHERE id = ${soId} AND type = 'SalesOrd'`);
+    status = String(lookup?.items?.[0]?.status ?? '');
+  } catch (e: any) {
+    return { success: false, error: `Could not read the sales order's status: ${e?.message || e}` };
+  }
+  if (!status) return { success: false, error: `Sales order ${payload.salesOrderId} was not found in NetSuite` };
+  if (status === SO_STATUS.pendingApproval) {
+    return { success: false, error: 'The sales order is Pending Approval in NetSuite — approve it there first, then invoice.' };
+  }
+  if (status === SO_STATUS.cancelled) return { success: false, error: 'The sales order is cancelled in NetSuite.' };
+  if (status === SO_STATUS.billed || status === SO_STATUS.closed) {
+    return { success: false, error: 'The sales order is already billed or closed in NetSuite.' };
+  }
+  if (payload.shipLines.length === 0) return { success: false, error: 'Nothing to ship' };
+
+  const transformUrl = `${baseUrl}/services/rest/record/v1/salesOrder/${soId}/!transform/itemFulfillment`;
+  const { oauth, token } = createOAuth(config);
+  const location = payload.locationId ? { location: { id: String(payload.locationId) } } : {};
+  const lines = [
+    ...payload.shipLines.map(l => ({ orderLine: l.orderLine, quantity: l.quantity, itemReceive: true, ...location })),
+    ...payload.excludeOrderLines.map(seq => ({ orderLine: seq, itemReceive: false })),
+  ];
+
+  const attempt = async (body: Record<string, unknown>) => {
+    const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
+    return fetch(transformUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+  };
+
+  try {
+    const base = { item: { items: lines }, ...(payload.memo ? { memo: payload.memo } : {}) };
+    // Shipped ('C') so the fulfillment posts; retry without it where the
+    // account has no Pick/Pack/Ship (as fulfillSalesOrder does).
+    let response = await attempt({ ...base, shipStatus: { id: 'C' } });
+    if (!response.ok) {
+      const text = await response.text();
+      if (response.status === 400 && /shipStatus/i.test(text)) {
+        response = await attempt(base);
+        if (!response.ok) {
+          const text2 = await response.text();
+          console.error('NetSuite partial item fulfillment error:', text2, '\nrequest body:', JSON.stringify(base));
+          return { success: false, error: `NetSuite error (${response.status}): ${text2}` };
+        }
+      } else {
+        console.error('NetSuite partial item fulfillment error:', text, '\nrequest body:', JSON.stringify(base));
+        return { success: false, error: `NetSuite error (${response.status}): ${text}` };
+      }
+    }
+
+    let fulfillmentId = '';
+    const loc = response.headers.get('Location');
+    if (loc) fulfillmentId = loc.match(/\/(\d+)$/)?.[1] || '';
+    let fulfillmentNumber = '';
+    try {
+      const result = await response.json();
+      fulfillmentId = fulfillmentId || result.id?.toString() || '';
+      fulfillmentNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content
+    }
+    if (fulfillmentId && !fulfillmentNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${fulfillmentId}`);
+        fulfillmentNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical
+      }
+    }
+    return { success: true, fulfillmentId, fulfillmentNumber };
+  } catch (e: any) {
+    return { success: false, error: `Failed to fulfil the sales order: ${e.message}` };
   }
 }
 
