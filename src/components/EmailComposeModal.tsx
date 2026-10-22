@@ -92,6 +92,12 @@ interface Props {
   onRemoveAttachment?: (id: string) => Promise<{ ok: boolean }>;
   /** Total attachment budget; checking a file past it is blocked. */
   maxAttachmentBytes?: number;
+  /**
+   * The picked files go out as download links in the email, not as
+   * attachments (the estimate approval email, 2026-10-21): the section is
+   * labelled for that and no size budget applies.
+   */
+  filesAsLinks?: boolean;
   messagePlaceholder?: string;
   sendLabel?: string;
   /**
@@ -260,7 +266,8 @@ export default function EmailComposeModal({
   uploadAccept,
   uploadHint,
   onRemoveAttachment,
-  maxAttachmentBytes = DEFAULT_MAX_ATTACHMENT_BYTES,
+  maxAttachmentBytes: maxAttachmentBytesProp = DEFAULT_MAX_ATTACHMENT_BYTES,
+  filesAsLinks = false,
   messagePlaceholder,
   sendLabel = 'Send',
   allowSendWithoutTo = false,
@@ -272,6 +279,8 @@ export default function EmailComposeModal({
 }: Props) {
   const { user } = useAuth();
   const dialog = useDialog();
+  // Linked files cost the email nothing, so no budget applies to them.
+  const maxAttachmentBytes = filesAsLinks ? Number.POSITIVE_INFINITY : maxAttachmentBytesProp;
 
   // Read once per mount: a rebuild after an attachment (or anything else)
   // picks the sender's own text back up instead of starting empty.
@@ -825,12 +834,12 @@ export default function EmailComposeModal({
         {(attachments || onUploadAttachment) && (
           <div>
             <div style={labelStyle}>
-              Attachments — {attachmentIds.length} selected
-              {attachmentIds.length > 0 && ` (${formatBytes(selectedBytes)} of ${formatBytes(maxAttachmentBytes)} max)`}
+              {filesAsLinks ? 'Download links in the email' : 'Attachments'} — {attachmentIds.length} selected
+              {!filesAsLinks && attachmentIds.length > 0 && ` (${formatBytes(selectedBytes)} of ${formatBytes(maxAttachmentBytes)} max)`}
             </div>
             {(attachments || []).length === 0 ? (
               <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                {onUploadAttachment ? 'Nothing attached yet — add a picture or spec sheet below.' : 'No files available to attach.'}
+                {onUploadAttachment ? (filesAsLinks ? 'No files yet — add a picture or spec sheet below.' : 'Nothing attached yet — add a picture or spec sheet below.') : 'No files available to attach.'}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '140px', overflowY: 'auto' }}>

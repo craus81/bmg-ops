@@ -128,6 +128,13 @@ export interface QuoteDocRenderOptions {
   /** Render the CTA as the wrap-style green panel (button + helper copy)
    *  instead of the plain centered button. */
   ctaPanel?: boolean;
+  /** Repeat the CTA at the TOP of the document, under the personal note,
+   *  with an optional download link under the button. Customers replied
+   *  to the estimate email instead of pressing a button that sat under
+   *  every line and total (Craig, 2026-10-21). */
+  ctaTop?: { downloadUrl?: string | null; downloadLabel?: string | null } | null;
+  /** A short line after the bottom CTA, e.g. how to forward the email. */
+  forwardNote?: string | null;
   /** Pre-built trusted HTML appended after the signature (the signed/audit
    *  block on acceptance snapshots). Caller escapes its own interpolations. */
   signedBlockHtml?: string | null;
@@ -135,7 +142,7 @@ export interface QuoteDocRenderOptions {
 }
 
 export function renderQuoteDocument(model: QuoteDocModel, opts: QuoteDocRenderOptions = {}): string {
-  const { company, logoUrl, message, ctaUrl, ctaLabel, ctaNote, ctaPanel, signedBlockHtml, signature } = opts;
+  const { company, logoUrl, message, ctaUrl, ctaLabel, ctaNote, ctaPanel, ctaTop, forwardNote, signedBlockHtml, signature } = opts;
 
   const companyLines = [
     company?.name, company?.address,
@@ -169,6 +176,19 @@ export function renderQuoteDocument(model: QuoteDocModel, opts: QuoteDocRenderOp
     </div>`)
     : '';
 
+  const topCta = ctaUrl && ctaTop
+    ? `
+    <div style="margin:0 0 16px;padding:16px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;text-align:center;">
+      <a href="${escHtml(ctaUrl)}" style="display:inline-block;background:#16a34a;color:#ffffff;font-size:15px;font-weight:700;padding:13px 28px;border-radius:10px;text-decoration:none;">${escHtml(ctaLabel || 'Review & Approve')}</a>
+      ${ctaTop.downloadUrl ? `<div style="margin-top:10px;"><a href="${escHtml(ctaTop.downloadUrl)}" style="font-size:13px;font-weight:600;color:#1d4ed8;text-decoration:underline;">${escHtml(ctaTop.downloadLabel || 'Download PDF')}</a></div>` : ''}
+      ${ctaNote ? `<div style="font-size:12px;color:#374151;margin-top:8px;line-height:1.5;">${escHtml(ctaNote)}</div>` : ''}
+    </div>`
+    : '';
+  const forward = forwardNote
+    ? `
+    <div style="margin-top:16px;padding:10px 12px;background:#f9fafb;border:1px dashed #cbd5e1;border-radius:10px;font-size:12px;color:#374151;line-height:1.5;">${escHtml(forwardNote)}</div>`
+    : '';
+
   return `<!doctype html>
 <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>${escHtml(model.docTitle)}</title></head>
 <body style="margin:0;padding:24px 12px;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
@@ -190,6 +210,8 @@ export function renderQuoteDocument(model: QuoteDocModel, opts: QuoteDocRenderOp
     </tr></table>` : ''}
 
     ${message ? `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:13px;color:#1e3a8a;white-space:pre-wrap;">${escHtml(message)}</div>` : ''}
+
+    ${topCta}
 
     ${model.noteHtml ? `<div style="font-size:13px;color:#374151;margin:0 0 14px;">${model.noteHtml}</div>` : ''}
 
@@ -239,6 +261,7 @@ export function renderQuoteDocument(model: QuoteDocModel, opts: QuoteDocRenderOp
     </div>`).join('')}
 
     ${cta}
+    ${forward}
 
     ${renderSignatureHtml(signature, 'light')}
     ${signedBlockHtml || ''}

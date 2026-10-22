@@ -112,6 +112,10 @@ export interface EstimateDocumentOptions {
   ctaLabel?: string | null;
   /** Small print under the CTA (e.g. link expiry). */
   ctaNote?: string | null;
+  /** The approval email's top button and Download PDF link, and its
+   *  forwarding line (quote-document.ts ctaTop / forwardNote). */
+  ctaTop?: { downloadUrl?: string | null; downloadLabel?: string | null } | null;
+  forwardNote?: string | null;
   /** Pre-built trusted HTML appended after the totals (the signed/audit
    *  block on acceptance snapshots). Caller escapes its own interpolations. */
   signedBlockHtml?: string | null;
@@ -138,6 +142,9 @@ export interface EstimateDocumentOptions {
    *  stripped or forwarded-without-attachments email still delivers the
    *  files; the compose preview passes bare names since no token exists yet. */
   attachmentNames?: Array<string | { name: string; url?: string | null }> | null;
+  /** Heading for that section ('Attached' by default; the approval email,
+   *  which attaches nothing since 2026-10-21, says 'Downloads'). */
+  attachmentsTitle?: string | null;
   /** A fleet order sent in one email (Craig, 2026-10-19): the document is
    *  titled for the whole order, lists every vehicle with its own estimate,
    *  total and Review link, and shows the items once as "each vehicle".
@@ -253,13 +260,13 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
     const items = opts.attachmentNames.map(a => (typeof a === 'string' ? { name: a, url: null } : a));
     const linked = items.some(a => a.url);
     sections.push({
-      title: 'Attached',
+      title: opts.attachmentsTitle || 'Attached',
       bodyHtml: items
         .map(a => (a.url
           ? `<a href="${escHtml(a.url)}" style="color:#1d4ed8;font-weight:600;text-decoration:underline;">${escHtml(a.name)}</a>`
           : escHtml(a.name)))
         .join(' &middot; ')
-        + (linked ? `<div style="margin-top:6px;font-size:11px;color:#64748b;">Click a name to download a full-size copy. The links work as long as your approval link does.</div>` : ''),
+        + (linked ? `<div style="margin-top:6px;font-size:11px;color:#64748b;">Click a name to download a full-size copy. These links keep working for a year.</div>` : ''),
     });
   }
 
@@ -286,6 +293,8 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
       ctaUrl: opts.ctaUrl,
       ctaLabel: opts.ctaLabel,
       ctaNote: opts.ctaNote,
+      ctaTop: opts.ctaTop,
+      forwardNote: opts.forwardNote,
       signedBlockHtml: opts.signedBlockHtml,
       signature: opts.signature,
     },
