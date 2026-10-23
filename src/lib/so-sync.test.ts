@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { soContentHash, untaxedFlag } from './so-sync';
+import { soContentHash, untaxedFlag, zeroPriceLines, zeroPriceLinesError } from './so-sync';
 
 describe('soContentHash and line taxability', () => {
   const estimate = { labor_hours: 2, labor_rate: 115, estimate_number: 'EST-1', vin: '1FT' };
@@ -48,5 +48,28 @@ describe('soContentHash and line discounts (migration 350)', () => {
   });
   it('adding a line discount marks the sales order out of date', () => {
     expect(soContentHash(estimate, [{ ...line, discount_type: 'percent', discount_value: 5 }])).not.toBe(soContentHash(estimate, [line]));
+  });
+});
+
+describe('zeroPriceLines (Convert to SO / Push to SO stop on these)', () => {
+  it('names priced-at-$0 lines with nothing behind them, in estimate order', () => {
+    expect(zeroPriceLines([
+      { sort_order: 2, item_number: 'N5-RS48', description: 'Shelf', quantity: 1, unit_price: '0' },
+      { sort_order: 1, item_number: 'CC600', description: 'Cab', quantity: 1, unit_price: 125 },
+      { sort_order: 0, item_number: '', description: 'Custom bracket', quantity: 2, unit_price: null },
+    ])).toEqual(['Custom bracket', 'N5-RS48 — Shelf']);
+  });
+
+  it('lets through qty-0 "included" lines and $0 lines carrying labor hours', () => {
+    expect(zeroPriceLines([
+      { item_number: 'X', quantity: 0, unit_price: 0 },
+      { description: 'Rack — assembly labor', quantity: 1, unit_price: 0, labor_hours: 1.5 },
+    ])).toEqual([]);
+  });
+
+  it('reads plainly for one line or several', () => {
+    expect(zeroPriceLinesError(['A'], 'No sales order was created.'))
+      .toBe('This line has no price: A. Set a price on the estimate (or remove the line), then try again. No sales order was created.');
+    expect(zeroPriceLinesError(['A', 'B'], 'x')).toMatch(/^These lines have no price: A; B\./);
   });
 });

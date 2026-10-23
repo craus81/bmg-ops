@@ -2297,7 +2297,7 @@ export default function EstimatesPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success) {
-        await dialog.alert(`Sales order not updated: ${data.error || `HTTP ${res.status}`}`);
+        await dialog.alert(`Sales order not updated: ${data.error || `HTTP ${res.status}`}`, { error: true });
         return;
       }
       await loadEstimates(true);
@@ -3303,7 +3303,7 @@ export default function EstimatesPage() {
         if (fix) await linkExistingSalesOrder(data.salesOrderNumber || '');
         return;
       } else {
-        await dialog.alert('Failed: ' + (data.error || 'Unknown error'));
+        await dialog.alert('Failed: ' + (data.error || 'Unknown error'), { error: true });
       }
     } catch {
       await dialog.alert('Network error — please try again');
