@@ -3881,3 +3881,42 @@ export async function updateItemFields(
     return { success: false, error: e?.message || 'NetSuite update failed' };
   }
 }
+
+/**
+ * Make the drop ship PO for a sales order's Drop Ship lines with one vendor,
+ * through the item RESTlet (scripts/netsuite-item-restlet.js, action
+ * createDropShipPo). NetSuite makes these by itself only when an order is
+ * first approved, and the REST Record API can't ask for one (SO1177,
+ * 2026-10-23). An item RESTlet older than 2026-10-23.1 answers "Missing
+ * parameter: itemId", which comes back as a re-upload message.
+ */
+export async function createDropShipPoViaRestlet(payload: {
+  salesOrderId: string;
+  vendorId: string;
+  customerId?: string | null;
+  rates?: Record<string, number>;
+}): Promise<{ success: true; purchaseOrderId: string; tranId: string } | { success: false; error: string }> {
+  const restletUrl = process.env.NETSUITE_ITEM_RESTLET_URL;
+  if (!restletUrl) {
+    return { success: false, error: 'Item RESTlet not configured. Set NETSUITE_ITEM_RESTLET_URL (deploy scripts/netsuite-item-restlet.js).' };
+  }
+  try {
+    const result = await callRestlet(restletUrl, 'POST', undefined, {
+      action: 'createDropShipPo',
+      salesOrderId: payload.salesOrderId,
+      vendorId: payload.vendorId,
+      ...(payload.customerId ? { customerId: payload.customerId } : {}),
+      ...(payload.rates ? { rates: payload.rates } : {}),
+    });
+    if (result?.success && result.purchaseOrderId) {
+      return { success: true, purchaseOrderId: String(result.purchaseOrderId), tranId: String(result.tranId || '') };
+    }
+    const error = String(result?.error || 'NetSuite did not make the PO');
+    if (/Missing parameter: itemId/i.test(error)) {
+      return { success: false, error: 'The item script in NetSuite is the old copy, so it cannot make drop ship POs yet. Replace scripts/netsuite-item-restlet.js in the NetSuite File Cabinet with the new one, then try again.' };
+    }
+    return { success: false, error };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'NetSuite did not make the PO' };
+  }
+}

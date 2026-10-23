@@ -47,7 +47,7 @@ define(['N/search', 'N/record'], function (search, record) {
   // Bump on every functional edit — see the note in
   // scripts/netsuite-financials-restlet.js. Expected value lives in
   // src/lib/restlet-versions.ts and is asserted by a test.
-  var SCRIPT_VERSION = '2026-09-10.1';
+  var SCRIPT_VERSION = '2026-10-23.1';
 
   function isProvided(v) {
     return v !== undefined && v !== null && v !== '';
@@ -59,6 +59,9 @@ define(['N/search', 'N/record'], function (search, record) {
     // itemId requirement so a ping never looks like a bad update call.
     if (body.action === 'ping') {
       return { success: true, mode: 'ping', version: SCRIPT_VERSION };
+    }
+    if (body.action === 'createDropShipPo') {
+      return createDropShipPo(body);
     }
     var itemId = body.itemId;
 
@@ -154,6 +157,56 @@ define(['N/search', 'N/record'], function (search, record) {
       rec.save({ enableSourcing: false, ignoreMandatoryFields: true });
 
       return { success: true, itemId: itemId, recordType: recordType, fieldsSet: fieldsSet };
+    } catch (e) {
+      return { success: false, error: (e && e.message) ? e.message : String(e) };
+    }
+  }
+
+  /**
+   * Drop ship from vendor (FleetSuite, 2026-10-23): makes the purchase order
+   * linked to a sales order's Drop Ship lines for one vendor, the same as the
+   * Drop Ship link on the order's line in NetSuite. NetSuite only makes these
+   * on its own when an order is first approved, and the REST Record API has
+   * no way to ask for one, so FleetSuite marks the lines (createPo = Drop
+   * Ship, poVendor) and then calls this.
+   *
+   * POST body: { action: 'createDropShipPo', salesOrderId, vendorId,
+   *              customerId?, rates?: { <item internal id>: <cost> } }
+   * Returns: { success: true, purchaseOrderId, tranId } or { success: false, error }
+   */
+  function createDropShipPo(body) {
+    if (!body.salesOrderId || !body.vendorId) {
+      return { success: false, error: 'Missing parameter: salesOrderId and vendorId are required' };
+    }
+    try {
+      var defaults = {
+        soid: String(body.salesOrderId),
+        dropship: 'T',
+        entity: String(body.vendorId),
+        poentity: String(body.vendorId),
+      };
+      if (body.customerId) defaults.custid = String(body.customerId);
+      var po = record.create({ type: record.Type.PURCHASE_ORDER, isDynamic: true, defaultValues: defaults });
+
+      var lines = po.getLineCount({ sublistId: 'item' });
+      if (lines < 1) {
+        return { success: false, error: 'NetSuite found no Drop Ship lines for this vendor on sales order ' + body.salesOrderId };
+      }
+      var rates = body.rates || {};
+      for (var i = 0; i < lines; i++) {
+        po.selectLine({ sublistId: 'item', line: i });
+        var item = String(po.getCurrentSublistValue({ sublistId: 'item', fieldId: 'item' }));
+        if (isProvided(rates[item]) && parseFloat(rates[item]) > 0) {
+          po.setCurrentSublistValue({ sublistId: 'item', fieldId: 'rate', value: parseFloat(rates[item]) });
+          po.commitLine({ sublistId: 'item' });
+        }
+      }
+      var id = po.save({ enableSourcing: true, ignoreMandatoryFields: true });
+      var tranId = '';
+      try {
+        tranId = String(search.lookupFields({ type: search.Type.PURCHASE_ORDER, id: id, columns: ['tranid'] }).tranid || '');
+      } catch (e2) { /* the id is enough */ }
+      return { success: true, purchaseOrderId: String(id), tranId: tranId, lines: lines };
     } catch (e) {
       return { success: false, error: (e && e.message) ? e.message : String(e) };
     }
