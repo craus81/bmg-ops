@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import CollapsibleCard from '@/components/CollapsibleCard';
 import TaxExemptCertFiles from '@/components/TaxExemptCertFiles';
-import { certWarning, taxMismatch, MISMATCH_TEXT, staffTaxExemptPatch } from '@/lib/customer-tax-exempt';
+import { certWarning, taxMismatch, MISMATCH_TEXT } from '@/lib/customer-tax-exempt';
 
 interface TaxRow {
   tax_exempt: boolean;
@@ -24,7 +24,8 @@ const note = (color: string): CSSProperties => ({ fontSize: '11.5px', color, lin
  * customer is permanently tax exempt, with the certificate, where the
  * setting came from, and warnings when the certificate has expired or
  * NetSuite disagrees. The same flag the estimate's Edit defaults sets;
- * estimates, Graphics Builder and FleetSuite's own invoices all honor it.
+ * estimates, Graphics Builder and FleetSuite's own invoices all honor it,
+ * and the buttons change Taxable on the NetSuite customer too.
  */
 export default function CustomerTaxCard({ page, customerId }: { page: string; customerId: string }) {
   const supabase = createClient();
@@ -57,7 +58,24 @@ export default function CustomerTaxCard({ page, customerId }: { page: string; cu
     await load();
   };
 
-  const setExempt = (exempt: boolean) => save(staffTaxExemptPatch(exempt));
+  // Through the server: it changes Taxable on the NetSuite customer first
+  // and saves here only if NetSuite took it.
+  const setExempt = async (exempt: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/customers/tax-exempt', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerId, taxExempt: exempt }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) setError(body.error || `Couldn't save (HTTP ${res.status}).`);
+    } catch (e: any) {
+      setError(`Couldn't save: ${e?.message || 'network error'}`);
+    }
+    setBusy(false);
+    await load();
+  };
   const certDirty = !!row && (cert.trim() !== (row.tax_exempt_cert_number || '') || expires !== (row.tax_exempt_expires_at || ''));
   const saveCert = () => save({ tax_exempt_cert_number: cert.trim() || null, tax_exempt_expires_at: expires || null });
 
@@ -67,7 +85,7 @@ export default function CustomerTaxCard({ page, customerId }: { page: string; cu
   const when = row?.tax_exempt_changed_at ? new Date(row.tax_exempt_changed_at).toLocaleDateString() : null;
   const source = !row ? null
     : row.tax_exempt_source === 'netsuite' ? `Copied from NetSuite (Taxable is off there)${when ? ` on ${when}` : ''}.`
-      : row.tax_exempt_source === 'staff' ? `Set here by staff${when ? ` on ${when}` : ''}. NetSuite's sync won't change it.`
+      : row.tax_exempt_source === 'staff' ? `Set here by staff${when ? ` on ${when}` : ''}, and in NetSuite too.`
         : null;
 
   const segBtn = (on: boolean, color: string): CSSProperties => ({

@@ -1481,6 +1481,21 @@ async function customerRecordCall(
 }
 
 /**
+ * Tick or untick Taxable on a NetSuite customer, the write-back behind the
+ * customer page's Sales tax buttons (owner, 2026-10-22). Fail closed: the
+ * caller saves FleetSuite's tax_exempt only when this succeeds, so the two
+ * systems agree. Needs Edit on Customers for the integration role.
+ */
+export async function setCustomerTaxable(
+  customerId: string,
+  taxable: boolean,
+): Promise<{ success: boolean; error?: string }> {
+  if (!/^\d+$/.test(customerId)) return { success: false, error: `"${customerId}" isn't a NetSuite customer id.` };
+  const res = await customerRecordCall(customerId, 'PATCH', { taxable });
+  return res.ok ? { success: true } : { success: false, error: res.error };
+}
+
+/**
  * The address sub-record on an addressBook line. REST has spelled this key
  * three ways across versions and this account's exact casing is only
  * observable against the live account, so read all three and write the

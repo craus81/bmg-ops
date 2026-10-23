@@ -9,7 +9,6 @@ import { useDialog } from '@/components/DialogProvider';
 import HistoryButton from '@/components/HistoryButton';
 import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
-import { staffTaxExemptPatch } from '@/lib/customer-tax-exempt';
 import PartCatalogBrowser, { type BrowsePart } from '@/components/PartCatalogBrowser';
 import { RackKitBrowserModal } from '@/components/RackKitBrowser';
 import { kitEstimateLines, loadKits, normItem, type KitLineFields, type KitWithMembers } from '@/lib/part-kits';
@@ -3828,6 +3827,21 @@ export default function EstimatesPage() {
   const saveCustomerDefaults = async (defaults: typeof customerDefaults) => {
     if (!customerId || !defaults) return;
     setSavingCustomerDefaults(true);
+    // A change to the exemption goes through the server, which changes
+    // Taxable on the NetSuite customer first (migration 427); it saves
+    // nothing if NetSuite refuses, and neither does the rest of this form.
+    if (!!defaults.tax_exempt !== !!customerDefaults?.tax_exempt) {
+      const res = await fetch('/api/customers/tax-exempt', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerId, taxExempt: !!defaults.tax_exempt }),
+      }).catch(() => null);
+      const body = res ? await res.json().catch(() => ({})) : {};
+      if (!res || !res.ok) {
+        setSavingCustomerDefaults(false);
+        await dialog.alert('Failed to save customer defaults: ' + (body.error || 'network error'));
+        return;
+      }
+    }
     const { error } = await supabase
       .from('customers')
       .update({
@@ -3836,10 +3850,6 @@ export default function EstimatesPage() {
         billing_contact_email: defaults.billing_contact_email || null,
         ap_email: defaults.ap_email || null,
         internal_notes: defaults.internal_notes || null,
-        tax_exempt: !!defaults.tax_exempt,
-        // A change here is staff's call, which the NetSuite copy then
-        // leaves alone (migration 427).
-        ...(!!defaults.tax_exempt !== !!customerDefaults?.tax_exempt ? staffTaxExemptPatch(!!defaults.tax_exempt) : {}),
         tax_exempt_cert_number: defaults.tax_exempt_cert_number || null,
         tax_exempt_expires_at: defaults.tax_exempt_expires_at || null,
       })
