@@ -47,6 +47,32 @@ export interface SoLineBuild {
   /** The estimate has a discount but NetSuite has no discount item to carry it. */
   discountSkipped: boolean;
   discountAmount: number;
+  /** Lines going to the SO at $0 with no labor behind them (see zeroPriceLines). */
+  zeroPriceLines: string[];
+}
+
+/**
+ * Estimate lines that would reach the sales order at $0 with nothing behind
+ * them: quantity above 0, no price, no labor hours. Convert to SO and Push
+ * to SO stop on these (Craig 2026-10-23, after a $0 line failed a convert
+ * with NetSuite's "Please enter a value for Amount"): a missed price should
+ * be fixed on the estimate, not billed as free. A $0 line WITH labor hours
+ * (a rack kit's assembly labor, an install-only line) is fine: its money
+ * rides on the labor line.
+ */
+export function zeroPriceLines(lines: any[]): string[] {
+  return [...(lines || [])]
+    .sort((a: any, b: any) => (a.sort_order || 0) - (b.sort_order || 0))
+    .filter((li: any) =>
+      (parseFloat(li.quantity) || 0) > 0
+      && !(parseFloat(li.unit_price) || 0)
+      && !((parseFloat(li.labor_hours) || 0) > 0))
+    .map((li: any) => [li.item_number, li.description].filter(Boolean).join(' — ') || 'Unnamed line');
+}
+
+/** The red message both routes show for zeroPriceLines. */
+export function zeroPriceLinesError(labels: string[], nothingDone: string): string {
+  return `${labels.length === 1 ? 'This line has' : 'These lines have'} no price: ${labels.join('; ')}. Set a price on the estimate (or remove the line), then try again. ${nothingDone}`;
 }
 
 /**
@@ -175,7 +201,7 @@ export async function buildSoLineItems(
 
   return {
     soLineItems, customLineDescriptions, unmappedLineDescriptions, laborSkipped, laborItemNumber, laborHours, laborRate,
-    discountSkipped, discountAmount,
+    discountSkipped, discountAmount, zeroPriceLines: zeroPriceLines(sorted),
   };
 }
 

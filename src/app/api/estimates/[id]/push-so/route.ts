@@ -5,7 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { updateSalesOrderLines } from '@/lib/netsuite';
 import { estimateContextMemo } from '@/lib/estimate-document';
-import { buildSoLineItems, soContentHash } from '@/lib/so-sync';
+import { buildSoLineItems, soContentHash, zeroPriceLinesError } from '@/lib/so-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -66,6 +66,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({
       error: `The estimate has a $${build.discountAmount.toFixed(2)} discount but NetSuite has no discount item (Settings → NetSuite Discount Item). Pushing now would bill the full price — nothing was changed.`,
       step: 'discount_item',
+    }, { status: 409 });
+  }
+  if (build.zeroPriceLines.length > 0) {
+    return NextResponse.json({
+      error: zeroPriceLinesError(build.zeroPriceLines, 'Nothing was changed on the sales order.'),
+      step: 'zero_price',
+      zeroPriceLines: build.zeroPriceLines,
     }, { status: 409 });
   }
   if (build.unmappedLineDescriptions.length > 0) {
