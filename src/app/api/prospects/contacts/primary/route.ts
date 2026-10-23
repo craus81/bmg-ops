@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { setPrimaryContact } from '@/lib/primary-contact';
+import { syncCompanyEmailToPrimary } from '@/lib/company-email-sync';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,7 +28,12 @@ function getSupabase() {
  * to. The flag itself lives on external_contacts (see src/lib/primary-
  * contact.ts); this route resolves the customer, then promotes.
  *
- * Body: { contactId }  →  { success, externalContactId, created }
+ * Body: { contactId }  →  { success, externalContactId, created, companyEmail }
+ *
+ * The company email then follows the new primary (src/lib/company-email-
+ * sync.ts): pushed to NetSuite first, local copies only on success. A
+ * NetSuite refusal does NOT undo the promotion — notifications still move —
+ * it comes back as companyEmail.status 'failed' for the page to show red.
  *
  * The customer is resolved server-side from the contact's own prospect, so
  * a caller can't point a promotion at someone else's customer row.
@@ -77,9 +83,19 @@ export async function POST(req: NextRequest) {
   });
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });
 
+  // The merged row, not the CRM one: a promote keeps an email learned
+  // elsewhere when the CRM card has none.
+  const { data: primary } = await supabase
+    .from('external_contacts')
+    .select('email')
+    .eq('id', result.externalContactId)
+    .maybeSingle();
+  const companyEmail = await syncCompanyEmailToPrimary(supabase, customer.id, primary?.email || contact.email);
+
   return NextResponse.json({
     success: true,
     externalContactId: result.externalContactId,
     created: result.created,
+    companyEmail,
   });
 }

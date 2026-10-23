@@ -59,10 +59,13 @@ describe('nsItemLine', () => {
   it('leaves ordinary lines exactly as before', () => {
     expect(nsItemLine({ itemId: '5', quantity: 2, rate: 10, description: 'x' }, { pinPrice: true }))
       .toEqual({ item: { id: '5' }, quantity: 2, price: { id: '-1' }, rate: 10, description: 'x' });
-    expect(nsItemLine({ itemId: '5', quantity: 2, rate: 0 }, { pinPrice: true }))
-      .toEqual({ item: { id: '5' }, quantity: 2 });
     expect(nsItemLine({ itemId: '5', quantity: 2, rate: 10, taxable: false }, { pinPrice: false }))
       .toEqual({ item: { id: '5' }, quantity: 2, rate: 10, isTaxable: false });
+  });
+
+  it('keeps a $0 sales order line at $0 instead of the item\'s own price', () => {
+    expect(nsItemLine({ itemId: '5', quantity: 2, rate: 0 }, { pinPrice: true }))
+      .toEqual({ item: { id: '5' }, quantity: 2, price: { id: '-1' }, rate: 0, amount: 0 });
   });
 
   it('keeps a negative discount rate on a sales order, pinned to the Custom price level', () => {

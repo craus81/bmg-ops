@@ -199,6 +199,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       fulfillmentNumber,
       units: plan.units,
       customerName: so.customerName || estimate.customer_name || '',
+      customerNetsuiteId: estimate.customer_netsuite_id || null,
       poNumber: so.poNumber || estimate.po_number || null,
       ...(invoice.invoiceId ? {} : { warning: 'NetSuite did not return the invoice id — find the new invoice in NetSuite' }),
     });

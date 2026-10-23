@@ -4,7 +4,11 @@ import { createContext, useContext, useState, useCallback, useMemo, ReactNode } 
 import { closeOnEscape } from '@/lib/modal-escape';
 
 interface ConfirmOptions { confirmLabel?: string; cancelLabel?: string; destructive?: boolean; title?: string }
-interface AlertOptions { confirmLabel?: string; title?: string }
+interface AlertOptions {
+  confirmLabel?: string; title?: string;
+  /** Show the message in red: something failed and nothing was done. */
+  error?: boolean;
+}
 interface PromptOptions {
   confirmLabel?: string; placeholder?: string; title?: string;
   /** A box that grows with the text, for notes (Craig, 2026-10-23: a long
@@ -98,7 +102,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
             {request.options.title && (
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>{request.options.title}</div>
             )}
-            <div style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: 1.5, whiteSpace: 'pre-line' }}>{request.message}</div>
+            <div style={{ fontSize: '13px', color: request.kind === 'alert' && request.options.error ? '#ef4444' : 'var(--text-primary)', fontWeight: request.kind === 'alert' && request.options.error ? 600 : undefined, lineHeight: 1.5, whiteSpace: 'pre-line' }}>{request.message}</div>
             {request.kind === 'prompt' && request.options.multiline && (
               <textarea
                 autoFocus
