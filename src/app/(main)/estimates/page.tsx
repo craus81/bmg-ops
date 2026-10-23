@@ -57,7 +57,7 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import EstimateFleetGroup from '@/components/EstimateFleetGroup';
 import CreatedBy from '@/components/CreatedBy';
 import OrderTeamChat from '@/components/OrderTeamChat';
-import { looseMatcher, looseOrFilter, looseSearchRegex } from '@/lib/loose-search';
+import { looseMatcher, looseOrFilter, looseSearchRegex, partNumberIncludes, partNumberKey, partSearchOrFilter } from '@/lib/loose-search';
 import { holdAwareFetch } from '@/lib/hold-aware-fetch';
 import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
 import { DeliveryPicker } from '@/components/DeliveryPicker';
@@ -1485,12 +1485,12 @@ export default function EstimatesPage() {
     const needle = normItem(q);
     const kits = await rackKitsRef.current;
     setKitResults(kits
-      .filter(k => normItem(k.item_number).includes(needle) || normItem(k.name).includes(needle))
-      // Exact part number first, then by part number.
-      .sort((a, b) => Number(normItem(b.item_number) === needle) - Number(normItem(a.item_number) === needle)
+      .filter(k => partNumberIncludes(k.item_number, q) || normItem(k.name).includes(needle))
+      // Exact part number (dashes aside) first, then by part number.
+      .sort((a, b) => Number(partNumberKey(b.item_number) === partNumberKey(q)) - Number(partNumberKey(a.item_number) === partNumberKey(q))
         || String(a.item_number).localeCompare(String(b.item_number)))
       .slice(0, 8));
-    const partFilter = looseOrFilter(['item_number', 'display_name', 'description'], q);
+    const partFilter = partSearchOrFilter(['item_number'], ['display_name', 'description'], q);
     const { data } = partFilter ? await supabase
       .from('netsuite_parts')
       .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost')
@@ -1510,7 +1510,7 @@ export default function EstimatesPage() {
 
   // ── Match a custom line to a real NetSuite item ──
   const searchLineMatch = useCallback(async (q: string) => {
-    const filter = looseOrFilter(['item_number', 'display_name', 'description'], q);
+    const filter = partSearchOrFilter(['item_number'], ['display_name', 'description'], q);
     if (q.length < 2 || !filter) { setLineMatchResults([]); return; }
     const { data } = await supabase
       .from('netsuite_parts')

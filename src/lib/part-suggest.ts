@@ -4,6 +4,8 @@
  * filter, ranking hits, and picking the customer's last PO price per part.
  */
 
+import { partNumberKey, partNumberRegex } from './loose-search';
+
 export interface PartSuggestion {
   id: string;
   item_number: string;
@@ -20,8 +22,9 @@ export interface LastPoPrice {
   date: string | null;
 }
 
-// Part numbers visually conflate O/0 (mirrors PartPicker / CatalogPartSearch).
-const norm = (s: string | null | undefined) => (s || '').toLowerCase().replace(/o/g, '0');
+// Part numbers visually conflate O/0 (mirrors PartPicker / CatalogPartSearch),
+// and dashes don't count ("ar2000" ranks AR-2000 as exact).
+const norm = (s: string | null | undefined) => partNumberKey(s).replace(/o/g, '0');
 
 /** Free text → safe for a PostgREST .or() ilike filter ('' = too short to search). */
 export function cleanPartQuery(q: string): string {
@@ -31,12 +34,17 @@ export function cleanPartQuery(q: string): string {
 
 /**
  * The .or() filter for a cleaned query. Adds the O→0 variant of the item
- * number so typing "O2-" still finds "02-" parts.
+ * number so typing "O2-" still finds "02-" parts, and the part number with
+ * its dashes ignored (partNumberRegex) so "ar2000" finds AR-2000.
  */
 export function partSearchFilter(cleaned: string): string {
   const clauses = [`item_number.ilike.%${cleaned}%`, `display_name.ilike.%${cleaned}%`];
   const zeroed = cleaned.replace(/[oO]/g, '0');
   if (zeroed !== cleaned) clauses.push(`item_number.ilike.%${zeroed}%`);
+  for (const v of zeroed !== cleaned ? [cleaned, zeroed] : [cleaned]) {
+    const re = partNumberRegex(v);
+    if (re) clauses.push(`item_number.imatch."${re}"`);
+  }
   return clauses.join(',');
 }
 

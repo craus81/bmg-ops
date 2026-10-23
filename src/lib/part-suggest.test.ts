@@ -14,8 +14,12 @@ describe('cleanPartQuery', () => {
 
 describe('partSearchFilter', () => {
   it('adds the O→0 variant only when it differs', () => {
-    expect(partSearchFilter('02-1')).toBe('item_number.ilike.%02-1%,display_name.ilike.%02-1%');
+    expect(partSearchFilter('02-1')).toBe('item_number.ilike.%02-1%,display_name.ilike.%02-1%,item_number.imatch."0[^[:alnum:]]*2[^[:alnum:]]*1"');
     expect(partSearchFilter('O2-1')).toContain('item_number.ilike.%02-1%');
+  });
+  it('matches the part number with its dashes ignored', () => {
+    const f = partSearchFilter('ar2000');
+    expect(f).toContain('item_number.imatch."a[^[:alnum:]]*r[^[:alnum:]]*2[^[:alnum:]]*0[^[:alnum:]]*0[^[:alnum:]]*0"');
   });
 });
 

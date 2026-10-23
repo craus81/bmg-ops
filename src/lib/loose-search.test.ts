@@ -3,6 +3,7 @@ import { PGlite } from '@electric-sql/pglite';
 import {
   searchWords, looseMatcher, looseIncludes, looseSearchRegex, looseOrFilter,
   looseNumberRegex, looseNumberIncludes, looseOrFilterWithNumbers,
+  partNumberIncludes, partNumberRegex, partSearchOrFilter,
 } from './loose-search';
 
 // [query, text, should match]
@@ -133,5 +134,44 @@ describe('looseNumberRegex (record numbers)', () => {
       `estimate_number.imatch."${words}",title.imatch."${words}",estimate_number.imatch."${num}"`,
     );
     expect(looseOrFilterWithNumbers(['estimate_number'], ['title'], 'acme')).toBe(looseOrFilter(['estimate_number', 'title'], 'acme'));
+  });
+});
+
+// Craig's examples (2026-10-22): [query, part number, should match]
+const PART_CASES: Array<[string, string, boolean]> = [
+  ['AR2000', 'AR-2000', true],
+  ['ar-2000', 'AR2000', true],
+  ['n5rs48-3', 'N5-RS48-3', true],
+  ['n5rs48', 'N5-RS48-E', true],
+  ['n5 rs48', 'N5-RS48-3', true],
+  ['AR2000', 'XAR 2000-B', true],
+  ['n5rs483', 'N5-RS48-E', false],
+  ['AR2000', 'AR-3000', false],
+  ['abcd', 'AB-CD', true],
+];
+
+describe('part numbers with dashes ignored', () => {
+  let db: PGlite;
+  beforeAll(async () => { db = new PGlite(); });
+  afterAll(async () => { await db.close(); });
+
+  it.each(PART_CASES)('%j in %j → %s', async (q, text, want) => {
+    const re = partNumberRegex(q)!;
+    const { rows } = await db.query<{ m: boolean }>('SELECT $1 ~* $2 AS m', [text, re]);
+    expect(rows[0].m).toBe(want);
+    expect(partNumberIncludes(text, q)).toBe(want);
+  });
+
+  it('matches nothing for a query with no letters or digits', () => {
+    expect(partNumberRegex(' - ')).toBeNull();
+    expect(partNumberIncludes('AR-2000', '')).toBe(false);
+  });
+
+  it('adds the dash-free match to the part number columns only', () => {
+    const words = looseSearchRegex('n5rs48');
+    expect(partSearchOrFilter(['item_number'], ['display_name'], 'n5rs48')).toBe(
+      `item_number.imatch."${words}",display_name.imatch."${words}",item_number.imatch."${partNumberRegex('n5rs48')}"`,
+    );
+    expect(partSearchOrFilter(['item_number'], ['display_name'], '')).toBeNull();
   });
 });

@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff, profileFeatures, getProfileRoles } from '@/lib/api-auth';
 import { isLedgerReader } from '@/lib/ledger/history';
 import { deepSearch, type DeepSearchResult } from '@/lib/deep-search';
-import { looseOrFilter, looseOrFilterWithNumbers, looseSearchRegex } from '@/lib/loose-search';
+import { looseOrFilter, looseOrFilterWithNumbers, looseSearchRegex, partSearchOrFilter } from '@/lib/loose-search';
 import { orderSearchResults } from '@/lib/search-groups';
 
 export const dynamic = 'force-dynamic';
@@ -152,7 +152,8 @@ export async function GET(req: NextRequest) {
       .from('netsuite_parts')
       .select('id, item_number, display_name, billable_customer, vehicle_type, graphic_package, sales_price, catalog', { count: 'exact' })
       .eq('is_active', true)
-      .or(anyOf(['item_number', 'display_name', 'billable_customer', 'vehicle_type', 'graphic_package']))
+      // Part numbers also match with their dashes ignored ("ar2000" → AR-2000).
+      .or(partSearchOrFilter(['item_number'], ['display_name', 'billable_customer', 'vehicle_type', 'graphic_package'], q)!)
       .limit(MAX_PER_GROUP * 4),
 
     // Customers — search by company name, contact, email; phone-shaped

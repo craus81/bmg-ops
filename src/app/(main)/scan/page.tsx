@@ -19,6 +19,7 @@ import NumberInput from '@/components/NumberInput';
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/components/AddToCatalog';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { partNumberKey } from '@/lib/loose-search';
 
 interface Part {
   id: string;
@@ -812,8 +813,11 @@ export default function ScanPage() {
   const filteredParts = partSearch
     ? (() => {
         const s = normalizePartSearch(partSearch);
+        // Part numbers also match with their dashes ignored ("ar2000" → AR-2000).
+        const pn = normalizePartSearch(partNumberKey(partSearch));
         return customerParts.filter(p =>
           normalizePartSearch(p.item_number || '').includes(s) ||
+          (!!pn && normalizePartSearch(partNumberKey(p.item_number)).includes(pn)) ||
           normalizePartSearch(p.display_name || '').includes(s) ||
           normalizePartSearch(p.description || '').includes(s) ||
           normalizePartSearch(p.billable_customer || '').includes(s)

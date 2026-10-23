@@ -25,7 +25,7 @@ import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
 import CreatedBy from '@/components/CreatedBy';
-import { looseMatcher } from '@/lib/loose-search';
+import { looseMatcher, partNumberIncludes } from '@/lib/loose-search';
 
 interface PoRow {
   id: string;
@@ -256,7 +256,8 @@ export default function ReceivingPage() {
   };
 
   const match = looseMatcher(search);
-  const visible = pos.filter(p => match(p.tranid, p.vendor_name, (linesByPo.get(p.id) || []).map(l => l.item_number)));
+  const visible = pos.filter(p => match(p.tranid, p.vendor_name, (linesByPo.get(p.id) || []).map(l => l.item_number))
+    || (linesByPo.get(p.id) || []).some(l => partNumberIncludes(l.item_number, search)));
 
   const localFor = (poId: string, item: string) => {
     let posted = 0, manual = 0;
