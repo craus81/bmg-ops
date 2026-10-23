@@ -86,3 +86,42 @@ export async function readSoBillingLines(salesOrderId: string, locationId: strin
     lines,
   };
 }
+
+/**
+ * Marks the lines on a FleetSuite drop ship PO (drop_ship_orders, migration
+ * 429) so Fulfill & Invoice never ships them from O'Fallon. Matched through
+ * NetSuite's own link from the line to its PO; where that read fails, by the
+ * line key saved when the PO was made.
+ */
+export async function markDropShipLines(
+  supabase: { from: (t: string) => any },
+  salesOrderId: string,
+  read: SoBillingRead,
+): Promise<SoBillingRead> {
+  const { data } = await supabase
+    .from('drop_ship_orders')
+    .select('purchase_order_id, purchase_order_number, lines')
+    .eq('sales_order_id', salesOrderId);
+  const rows = ((data || []) as any[]).filter(r => r.purchase_order_id);
+  if (rows.length === 0) return read;
+
+  const label = new Map(rows.map(r => [String(r.purchase_order_id), String(r.purchase_order_number || r.purchase_order_id)]));
+  const bySeq = new Map<number, string>();
+  try {
+    const res = await suiteqlQuery(`
+      SELECT linesequencenumber, createdpo FROM transactionline
+      WHERE transaction = ${parseInt(salesOrderId, 10)} AND createdpo IS NOT NULL
+    `);
+    for (const r of res?.items || []) {
+      const po = label.get(String(r.createdpo));
+      if (po) bySeq.set(parseInt(r.linesequencenumber, 10), po);
+    }
+  } catch {
+    for (const r of rows) {
+      for (const l of (r.lines || []) as any[]) {
+        if (Number.isFinite(Number(l.soLine))) bySeq.set(Number(l.soLine), label.get(String(r.purchase_order_id))!);
+      }
+    }
+  }
+  return { ...read, lines: read.lines.map(l => (bySeq.has(l.lineSeq) ? { ...l, dropShipPo: bySeq.get(l.lineSeq)! } : l)) };
+}

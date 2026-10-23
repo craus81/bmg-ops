@@ -113,6 +113,7 @@ export default function ReceivingPage() {
         fetchAllRows<PoRow>((from, to) => supabase
           .from('netsuite_vendor_pos')
           .select('id, netsuite_id, tranid, vendor_name, trandate, status, status_label, eta_date, created_by_name')
+          .eq('drop_ship', false) // the vendor ships these to the customer (migration 429)
           .order('trandate', { ascending: false })
           .order('id')
           .range(from, to)),

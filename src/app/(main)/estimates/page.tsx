@@ -35,6 +35,7 @@ import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { openJobOrder } from '@/lib/job-order-pdf';
 import FulfillInvoiceModal from '@/components/FulfillInvoiceModal';
+import DropShipModal from '@/components/DropShipModal';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import { discountLabel, discountSplit, jobDiscountShare, lineMoney, netUnitPrice, normalizeDiscount, normalizeDiscountDescription, roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
 import { DEFAULT_DISCOUNT_APPROVAL_PCT } from '@/lib/discount-approval';
@@ -2559,6 +2560,8 @@ export default function EstimatesPage() {
   const [printingJobOrder, setPrintingJobOrder] = useState(false);
   // Fulfill & Invoice window for the open estimate's sales order (admins).
   const [fulfillInvoiceFor, setFulfillInvoiceFor] = useState<{ id: string; soLabel: string } | null>(null);
+  // Drop ship from vendor (Craig, 2026-10-23): the vendor ships parts straight to the customer.
+  const [dropShipFor, setDropShipFor] = useState<{ id: string; soLabel: string } | null>(null);
   // Open job (2026-10-20, retiring the Upfit tab): the sold estimate's job
   // page — found by estimate first, then by its sales order.
   const [openingJob, setOpeningJob] = useState(false);
@@ -3201,8 +3204,12 @@ export default function EstimatesPage() {
     }
   };
 
-  const convertToSalesOrder = async () => {
+  // `thenDropShip`: the Drop ship from vendor button on an estimate with no
+  // sales order yet (Craig, 2026-10-23, option 2B) converts first, then
+  // opens the drop ship window instead of the Request parts prompt.
+  const convertToSalesOrder = async (opts?: { thenDropShip?: boolean }) => {
     if (!editingId) return;
+    const thenDropShip = opts?.thenDropShip === true;
     const est = estimates.find(e => e.id === editingId);
     if (est?.netsuite_so_id) {
       await dialog.alert(`This estimate already has a Sales Order: SO #${est.netsuite_so_number || est.netsuite_so_id}`);
@@ -3276,9 +3283,11 @@ export default function EstimatesPage() {
         await dialog.alert(`Sales Order created!\nSO #: ${data.salesOrderNumber || data.salesOrderId}\nLine items: ${data.lineItemCount}${warnings ? '\n\n' + warnings : ''}`);
         // Stay in the estimate so the new SO number is visible in context.
         await loadEstimates(true);
-        // The sale is real now: offer to order whatever is still short, so
-        // nobody finds out at install time that the parts were never bought.
-        if (canRequestParts) {
+        if (thenDropShip) {
+          setDropShipFor({ id: editingId, soLabel: `SO #${data.salesOrderNumber || data.salesOrderId}` });
+        } else if (canRequestParts) {
+          // The sale is real now: offer to order whatever is still short, so
+          // nobody finds out at install time that the parts were never bought.
           const fresh = await checkStock();
           const due = fresh?.summary.toRequest || 0;
           if (fresh && due > 0) {
@@ -6852,7 +6861,7 @@ export default function EstimatesPage() {
           return (
             <>
             <button
-              onClick={convertToSalesOrder}
+              onClick={() => convertToSalesOrder()}
               disabled={convertingToSO || locked}
               title={locked ? 'Waiting on customer approval — send the estimate for approval, or ask an admin to override.' : undefined}
               style={{
@@ -6873,6 +6882,21 @@ export default function EstimatesPage() {
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', marginTop: '4px' }}>
                 Creates {customerName || 'this prospect'} as a NetSuite customer first.
               </div>
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => convertToSalesOrder({ thenDropShip: true })}
+                disabled={convertingToSO}
+                title="Make the sales order, then order parts from a vendor who ships them straight to the customer"
+                style={{
+                  width: '100%', padding: '9px', borderRadius: '10px', marginTop: '8px',
+                  background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.4)',
+                  color: '#60a5fa', fontWeight: 700, fontSize: '12px',
+                  cursor: convertingToSO ? 'not-allowed' : 'pointer', opacity: convertingToSO ? 0.5 : 1,
+                }}
+              >
+                🚚 Convert to Sales Order, then drop ship from vendor
+              </button>
             )}
             </>
           );
@@ -6938,6 +6962,15 @@ export default function EstimatesPage() {
                   style={{ padding: '5px 10px', borderRadius: '7px', border: '1px solid rgba(245,158,11,0.6)', background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
                 >
                   Fulfill &amp; Invoice
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  onClick={() => setDropShipFor({ id: est.id, soLabel: `SO #${est.netsuite_so_number || est.netsuite_so_id}` })}
+                  title="Order parts from a vendor who ships them straight to the customer (works for parts we have in stock too)"
+                  style={{ padding: '5px 10px', borderRadius: '7px', border: '1px solid rgba(96,165,250,0.5)', background: 'rgba(96,165,250,0.12)', color: '#60a5fa', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  🚚 Drop ship from vendor
                 </button>
               )}
               <button
@@ -7345,6 +7378,13 @@ export default function EstimatesPage() {
         })}
       />
 
+      {dropShipFor && (
+        <DropShipModal
+          estimateId={dropShipFor.id}
+          soLabel={dropShipFor.soLabel}
+          onClose={() => setDropShipFor(null)}
+        />
+      )}
       {fulfillInvoiceFor && (
         <FulfillInvoiceModal
           estimateId={fulfillInvoiceFor.id}

@@ -5,7 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { createInvoiceFromSO, fulfillSalesOrderLines, SO_STATUS } from '@/lib/netsuite';
 import { KNOWN_LOCATION_IDS } from '@/lib/invoice-location';
 import { planFulfillInvoice } from '@/lib/so-fulfill-invoice';
-import { readSoBillingLines } from '@/lib/so-fulfill-invoice-read';
+import { markDropShipLines, readSoBillingLines } from '@/lib/so-fulfill-invoice-read';
 import { saveOwnFulfillment } from '@/lib/books/own-fulfillments';
 import { saveOwnInvoice } from '@/lib/books/own-invoices';
 import { notifyPortalInvoice } from '@/lib/portal-invoice-notify';
@@ -45,10 +45,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   const auth = await requireAdmin(req);
   if (auth.error) return auth.error;
   try {
-    const { estimate } = await loadEstimate(params.id);
+    const { supabase, estimate } = await loadEstimate(params.id);
     if (!estimate) return NextResponse.json({ error: 'Estimate not found' }, { status: 404 });
     if (!estimate.netsuite_so_id) return NextResponse.json({ error: 'This estimate has no sales order yet' }, { status: 409 });
-    const so = await readSoBillingLines(String(estimate.netsuite_so_id), OFALLON);
+    const so = await markDropShipLines(supabase, String(estimate.netsuite_so_id), await readSoBillingLines(String(estimate.netsuite_so_id), OFALLON));
     return NextResponse.json({ salesOrderId: String(estimate.netsuite_so_id), ...so });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message || 'Could not read the sales order from NetSuite' }, { status: 502 });
@@ -93,7 +93,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   try {
     // Plan against the order as NetSuite has it now, not as the window last saw it.
-    const so = await readSoBillingLines(soId, OFALLON);
+    const so = await markDropShipLines(supabase, soId, await readSoBillingLines(soId, OFALLON));
     if (so.status === SO_STATUS.pendingApproval) {
       await release();
       return NextResponse.json({ error: 'The sales order is Pending Approval in NetSuite — approve it there first, then invoice.' }, { status: 409 });

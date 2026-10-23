@@ -197,6 +197,8 @@ export async function autoMatchPurchaseRequests(service: SupabaseClient): Promis
     const { data: pos, error: poErr } = await fetchAllRows<MatchPo>((from, to) =>
       service.from('netsuite_vendor_pos')
         .select('id, netsuite_id, tranid, vendor_name, vendor_netsuite_id, trandate, status')
+        // A drop ship PO buys for one customer's order, not the queue (migration 429).
+        .eq('drop_ship', false)
         .gte('trandate', minDate)
         .order('id')
         .range(from, to),

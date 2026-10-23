@@ -200,6 +200,7 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
   const { data: poLines } = await fetchAllRows<any>((from, to) => service
     .from('netsuite_vendor_po_lines')
     .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(tranid, vendor_name, trandate, status, status_label, eta_date)')
+    .eq('netsuite_vendor_pos.drop_ship', false) // drop ship POs never come in (migration 429)
     .in('item_number', [...parts.keys()])
     .order('id')
     .range(from, to));
@@ -383,6 +384,7 @@ export async function computePartsReadinessBoard(
   const { data: poLines } = await fetchAllRows<any>((from, to) => service
     .from('netsuite_vendor_po_lines')
     .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(status, eta_date)')
+    .eq('netsuite_vendor_pos.drop_ship', false) // drop ship POs never come in (migration 429)
     .in('item_number', items)
     .order('id')
     .range(from, to));

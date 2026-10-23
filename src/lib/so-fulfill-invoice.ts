@@ -37,6 +37,10 @@ export interface SoBillingLine {
   /** On hand at O'Fallon; null when NetSuite couldn't say. Shipped lines only. */
   onHand: number | null;
   closed: boolean;
+  /** The drop ship PO this line is on (Drop ship from vendor, 2026-10-23):
+   *  the vendor ships it to the customer, so it is never shipped from
+   *  O'Fallon here, only billed once NetSuite shows it fulfilled. */
+  dropShipPo?: string | null;
 }
 
 export interface SoBillingRead {
@@ -49,20 +53,29 @@ export interface SoBillingRead {
 
 const four = (x: number) => Math.round(x * 10_000) / 10_000;
 
-/** What's still open on a line: to bill, and (for stock lines) to ship. */
-export function openOn(line: SoBillingLine): { toBill: number; toShip: number; shippedNotBilled: number } {
-  if (line.closed || ADJUSTMENT_TYPES.has(line.itemType)) return { toBill: 0, toShip: 0, shippedNotBilled: 0 };
+/**
+ * What's still open on a line: to bill, and (for stock lines) to ship.
+ * A drop ship line bills only what the vendor has shipped (NetSuite's
+ * fulfilled quantity); the rest is `vendorWaiting`.
+ */
+export function openOn(line: SoBillingLine): { toBill: number; toShip: number; shippedNotBilled: number; vendorWaiting: number } {
+  if (line.closed || ADJUSTMENT_TYPES.has(line.itemType)) return { toBill: 0, toShip: 0, shippedNotBilled: 0, vendorWaiting: 0 };
+  if (line.dropShipPo) {
+    const shippedNotBilled = Math.max(0, four(line.fulfilled - line.billed));
+    const vendorWaiting = Math.max(0, four(line.ordered - Math.max(line.fulfilled, line.billed)));
+    return { toBill: shippedNotBilled, toShip: 0, shippedNotBilled, vendorWaiting };
+  }
   const toBill = Math.max(0, four(line.ordered - line.billed));
-  if (!SHIPPED_TYPES.has(line.itemType)) return { toBill, toShip: 0, shippedNotBilled: 0 };
+  if (!SHIPPED_TYPES.has(line.itemType)) return { toBill, toShip: 0, shippedNotBilled: 0, vendorWaiting: 0 };
   const toShip = Math.max(0, four(line.ordered - line.fulfilled));
   const shippedNotBilled = Math.max(0, four(line.fulfilled - line.billed));
-  return { toBill, toShip, shippedNotBilled };
+  return { toBill, toShip, shippedNotBilled, vendorWaiting: 0 };
 }
 
 /** The quantity the window starts each line at: everything open, a stock line capped at what's on hand. */
 export function defaultBillNow(line: SoBillingLine): number {
   const { toBill, toShip, shippedNotBilled } = openOn(line);
-  if (!SHIPPED_TYPES.has(line.itemType)) return toBill;
+  if (line.dropShipPo || !SHIPPED_TYPES.has(line.itemType)) return toBill;
   const canShip = line.onHand === null ? toShip : Math.min(toShip, Math.max(0, line.onHand));
   return Math.min(toBill, four(shippedNotBilled + canShip));
 }
@@ -106,11 +119,14 @@ export function planFulfillInvoice(lines: SoBillingLine[], billNow: Record<numbe
     const label = line.itemNumber || `line ${seq}`;
     if (line.closed) return { ok: false, error: `${label} is closed on the sales order` };
     if (ADJUSTMENT_TYPES.has(line.itemType)) return { ok: false, error: `${label} is a ${line.itemType.toLowerCase()} line; it goes on the invoice that bills the rest of the order` };
-    const { toBill, shippedNotBilled } = openOn(line);
+    const { toBill, shippedNotBilled, vendorWaiting } = openOn(line);
+    if (line.dropShipPo && qty > toBill + 1e-9) {
+      return { ok: false, error: `${label} is drop shipped by the vendor on PO ${line.dropShipPo}${vendorWaiting > 0 ? `, and ${vendorWaiting} hasn't shipped yet` : ''}. Mark the PO shipped in NetSuite first, then bill it here.` };
+    }
     if (qty > toBill + 1e-9) return { ok: false, error: `${label}: billing ${qty} but only ${toBill} is still open` };
     billLines[seq] = qty;
     units += qty;
-    if (SHIPPED_TYPES.has(line.itemType)) {
+    if (SHIPPED_TYPES.has(line.itemType) && !line.dropShipPo) {
       const ship = four(qty - shippedNotBilled);
       if (ship > 0) {
         shipLines.push({ orderLine: seq, quantity: ship });
@@ -120,9 +136,10 @@ export function planFulfillInvoice(lines: SoBillingLine[], billNow: Record<numbe
   }
   if (units === 0) return { ok: false, error: 'Nothing to invoice: every quantity is 0' };
 
+  // A drop ship line the vendor hasn't shipped yet keeps the order open.
   const wholeRest = lines.every(l => {
-    const { toBill } = openOn(l);
-    return toBill === 0 || (billLines[l.lineSeq] ?? 0) >= toBill - 1e-9;
+    const { toBill, vendorWaiting } = openOn(l);
+    return vendorWaiting === 0 && (toBill === 0 || (billLines[l.lineSeq] ?? 0) >= toBill - 1e-9);
   });
   const hasAdjustment = lines.some(l => ADJUSTMENT_TYPES.has(l.itemType) && !l.closed);
   if (hasAdjustment && !wholeRest) {
@@ -131,7 +148,7 @@ export function planFulfillInvoice(lines: SoBillingLine[], billNow: Record<numbe
 
   const shipping = new Set(shipLines.map(l => l.orderLine));
   const excludeOrderLines = lines
-    .filter(l => SHIPPED_TYPES.has(l.itemType) && !shipping.has(l.lineSeq) && openOn(l).toShip > 0)
+    .filter(l => SHIPPED_TYPES.has(l.itemType) && !shipping.has(l.lineSeq) && (openOn(l).toShip > 0 || openOn(l).vendorWaiting > 0))
     .map(l => l.lineSeq)
     .sort((a, b) => a - b);
 
