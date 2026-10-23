@@ -254,7 +254,7 @@ export default function PoRecordPage() {
   // Invoicing hub and Scans page use). The Invoices list below opens the same
   // screen for invoices linked earlier, so a PO's invoices can be sent (or
   // re-sent) without going hunting for them on another page.
-  const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
+  const [emailTarget, setEmailTarget] = useState<{ customerName: string; customerNetsuiteId?: string | null; invoices: EmailableInvoice[] } | null>(null);
 
   // ── Per-line catalog state (ported from the PO list) ─────────────────────
   const [catalogParts, setCatalogParts] = useState<CatalogPartRow[]>([]);
@@ -898,6 +898,7 @@ export default function PoRecordPage() {
         if (result.invoiceNumber) {
           setEmailTarget({
             customerName: po.customer,
+            customerNetsuiteId: po.customer_netsuite_id || null,
             invoices: [{
               invoiceId: result.invoiceId != null ? String(result.invoiceId) : undefined,
               invoiceNumber: result.invoiceNumber,
@@ -1492,7 +1493,7 @@ export default function PoRecordPage() {
                 second selection UI here. */}
             {emailableInvoices.length > 0 && (
               <button
-                onClick={() => setEmailTarget({ customerName: po.customer, invoices: emailableInvoices })}
+                onClick={() => setEmailTarget({ customerName: po.customer, customerNetsuiteId: po.customer_netsuite_id || null, invoices: emailableInvoices })}
                 title={`Email ${emailableInvoices.length === 1 ? 'this invoice' : `these ${emailableInvoices.length} invoices`} to ${po.customer}`}
                 style={{ ...btnSm, color: '#34d399' }}
               >
@@ -1582,6 +1583,7 @@ export default function PoRecordPage() {
                     <button
                       onClick={() => setEmailTarget({
                         customerName: po.customer,
+                        customerNetsuiteId: po.customer_netsuite_id || null,
                         invoices: [{
                           invoiceId: inv.netsuite_invoice_id ? String(inv.netsuite_invoice_id) : undefined,
                           invoiceNumber: inv.netsuite_invoice_number!,
@@ -1913,6 +1915,7 @@ export default function PoRecordPage() {
       {emailTarget && (
         <EmailInvoicesModal
           customerName={emailTarget.customerName}
+          customerNetsuiteId={emailTarget.customerNetsuiteId}
           invoices={emailTarget.invoices}
           onClose={() => setEmailTarget(null)}
         />
