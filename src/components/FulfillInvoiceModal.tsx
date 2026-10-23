@@ -28,6 +28,7 @@ interface Done {
   fulfillmentNumber: string | null;
   units: number;
   customerName: string;
+  customerNetsuiteId: string | null;
   poNumber: string | null;
   warning?: string;
 }
@@ -278,6 +279,7 @@ export default function FulfillInvoiceModal({ estimateId, soLabel, onClose }: Pr
       {emailing && done?.invoiceNumber && (
         <EmailInvoicesModal
           customerName={done.customerName}
+          customerNetsuiteId={done.customerNetsuiteId}
           invoices={[{ invoiceId: done.invoiceId || undefined, invoiceNumber: done.invoiceNumber, po: done.poNumber || undefined }]}
           onClose={() => setEmailing(false)}
         />

@@ -1814,8 +1814,8 @@ export interface NsPushLine {
  * Map a line to NetSuite's item sublist shape. `pinPrice` (sales orders):
  * a line with a rate pins the price level to "Custom" (internal id -1) so
  * NetSuite keeps our rate instead of re-sourcing it from the item's or the
- * customer's price level; lines with no rate fall through to NetSuite's own
- * sourcing. A discount line always carries its (negative) rate, and a
+ * customer's price level, including a $0 line, which keeps its zero price
+ * rather than picking up the item's own. A discount line always carries its (negative) rate, and a
  * Discount-type item gets the rate alone, since it has neither a quantity
  * nor price levels.
  */
@@ -1824,7 +1824,13 @@ export function nsItemLine(li: NsPushLine, opts: { pinPrice: boolean }) {
     ? { rate: li.rate }
     : !opts.pinPrice
       ? { rate: li.rate }
-      : (li.rate > 0 || li.discount) ? { price: { id: '-1' }, rate: li.rate } : {};
+      : li.rate === 0 && !li.discount
+        // A $0 line (no charge) is pinned to Custom with a zero amount too:
+        // left to NetSuite's sourcing it takes the item's base price, and an
+        // item with none fails the whole order with "Please enter a value
+        // for Amount".
+        ? { price: { id: '-1' }, rate: 0, amount: 0 }
+        : { price: { id: '-1' }, rate: li.rate };
   return {
     item: { id: li.itemId },
     ...(li.discountItem ? {} : { quantity: li.quantity }),

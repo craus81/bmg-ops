@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { PRICING_REQUEST_PUSH_BLOCKED } from '@/lib/pricing-request';
 import { createSalesOrder, findLocation, closeNetSuiteEstimate } from '@/lib/netsuite';
-import { buildSoLineItems, soContentHash } from '@/lib/so-sync';
+import { buildSoLineItems, soContentHash, zeroPriceLinesError } from '@/lib/so-sync';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature, getProfileRoles } from '@/lib/api-auth';
 import { checkDiscountApproval } from '@/lib/discount-approval';
@@ -163,8 +163,18 @@ export async function POST(req: NextRequest) {
     const {
       soLineItems, customLineDescriptions, unmappedLineDescriptions,
       laborSkipped, laborItemNumber, laborHours, laborRate,
-      discountSkipped, discountAmount,
+      discountSkipped, discountAmount, zeroPriceLines,
     } = await buildSoLineItems(supabase, estimate, lineItems);
+
+    // A $0 line is usually a missed price: stop before NetSuite rather than
+    // bill it as free (or have NetSuite reject the order over it).
+    if (zeroPriceLines.length > 0) {
+      return NextResponse.json({
+        error: zeroPriceLinesError(zeroPriceLines, 'No sales order was created.'),
+        step: 'zero_price',
+        zeroPriceLines,
+      }, { status: 409 });
+    }
 
     // A sales order without the discount line bills more than the customer
     // signed for, so this stops before anything is created in NetSuite.

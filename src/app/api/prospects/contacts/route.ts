@@ -59,7 +59,13 @@ export async function POST(req: NextRequest) {
   if (!prospect) return NextResponse.json({ error: 'Customer not found' }, { status: 404 });
 
   let contact: any;
+  let previousName: string | null = null;
   if (contactId) {
+    // The name NetSuite still has, so a rename of an unlinked contact can
+    // find and update it rather than create a duplicate.
+    const { data: before } = await supabase.from('prospect_contacts')
+      .select('name').eq('id', contactId).eq('prospect_id', prospectId).maybeSingle();
+    previousName = before?.name || null;
     const { data, error } = await supabase.from('prospect_contacts')
       .update(fields).eq('id', contactId).eq('prospect_id', prospectId).select().single();
     if (error || !data) return NextResponse.json({ error: error?.message || 'Contact not found' }, { status: 400 });
@@ -76,7 +82,7 @@ export async function POST(req: NextRequest) {
   // ── NetSuite push (best effort, never rolls back the local save) ────────
   let netsuite: { pushed: boolean; error: string | null } = { pushed: false, error: null };
   if (body?.syncNetsuite !== false && prospect.netsuite_id) {
-    netsuite = await pushProspectContactToNetsuite(supabase, String(prospect.netsuite_id), contact);
+    netsuite = await pushProspectContactToNetsuite(supabase, String(prospect.netsuite_id), contact, previousName);
   }
 
   return NextResponse.json({ success: true, contact, netsuite });
