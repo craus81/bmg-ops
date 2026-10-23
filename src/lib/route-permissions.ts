@@ -114,6 +114,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/discount-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/labor-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/link-customer/route.ts': admin(),
+  // One-time display-name fill (/admin/part-display-names): writes NetSuite
+  // item display names, same wall as the single-part edit.
+  'src/app/api/admin/part-display-names/route.ts': admin(),
   // The QuickBooks ledger import (migration 314 / R8-2). Driven from OUTSIDE
   // the app by scripts/import-quickbooks.mjs with CRON_SECRET, because the
   // deployment is unreachable from a session container; the admin page drives
