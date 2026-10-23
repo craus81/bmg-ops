@@ -14,6 +14,7 @@ import { DropZone } from '@/components/DropZone';
 import PartCatalogBrowser from '@/components/PartCatalogBrowser';
 import CatalogHealthPanel from '@/components/CatalogHealthPanel';
 import InstalledPhotosGrid from '@/components/InstalledPhotosGrid';
+import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
 import PartTransactionsModal from '@/components/PartTransactionsModal';
 import PartPosModal from '@/components/PartPosModal';
 import OrderPartModal from '@/components/OrderPartModal';
@@ -145,6 +146,8 @@ export default function PartsPage() {
   const [syncMessage, setSyncMessage] = useState('');
   const [lastSync, setLastSync] = useState<SyncLog | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // The record's catalog picture, enlarged (Craig, 2026-10-23).
+  const [photoZoom, setPhotoZoom] = useState<LightboxPhoto | null>(null);
   // Transactions modal: every invoice/SO/estimate the part appears on.
   const [txPart, setTxPart] = useState<Part | null>(null);
   // "Order this part": the Purchasing queue for anyone who orders parts,
@@ -1412,7 +1415,14 @@ export default function PartsPage() {
                           <img
                             src={storage.from('photos').getPublicUrl(part.image_path).data.publicUrl}
                             alt={part.item_number}
-                            style={{ width: '132px', height: '99px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border)', flexShrink: 0 }}
+                            onClick={() => setPhotoZoom({
+                              id: part.id,
+                              url: storage.from('photos').getPublicUrl(part.image_path!).data.publicUrl,
+                              title: part.item_number,
+                              subtitle: part.display_name || null,
+                            })}
+                            title="Tap to enlarge the picture"
+                            style={{ width: '132px', height: '99px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border)', flexShrink: 0, cursor: 'zoom-in' }}
                           />
                         )}
                         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1771,6 +1781,13 @@ export default function PartsPage() {
           onClose={() => setOrderPart(null)}
         />
       )}
+      <PhotoLightbox
+        photos={photoZoom ? [photoZoom] : []}
+        index={photoZoom ? 0 : null}
+        onClose={() => setPhotoZoom(null)}
+        onIndex={() => {}}
+        printHeading={photoZoom ? `Part ${photoZoom.title}` : undefined}
+      />
       {txPart && (
         <PartTransactionsModal
           partNumber={txPart.item_number}

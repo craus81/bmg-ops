@@ -19,6 +19,7 @@ import { useRouter } from 'next/navigation';
 import { useRequireFeature } from '@/components/AuthProvider';
 import InstalledPhotosGrid from '@/components/InstalledPhotosGrid';
 import ProofViewer from '@/components/ProofViewer';
+import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
 import { apiFetch } from '@/lib/api-client';
 import { storage } from '@/lib/storage';
 import { theme } from '@/lib/theme';
@@ -62,6 +63,8 @@ export default function InstallerPartsPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [files, setFiles] = useState<Record<string, PartFile[] | 'loading' | { error: string }>>({});
   const [viewing, setViewing] = useState<PartFile | null>(null);
+  // The part's picture, enlarged (Craig, 2026-10-23).
+  const [photoZoom, setPhotoZoom] = useState<LightboxPhoto | null>(null);
 
   useEffect(() => {
     if (!allowed) return;
@@ -185,7 +188,13 @@ export default function InstallerPartsPage() {
                 <div style={{ padding: '0 0 14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   {img && (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={img} alt={p.item_number} style={{ maxWidth: '100%', maxHeight: '320px', objectFit: 'contain', borderRadius: '10px', alignSelf: 'flex-start', background: 'var(--subtle-bg)' }} />
+                    <img
+                      src={img}
+                      alt={p.item_number}
+                      onClick={() => setPhotoZoom({ id: p.id, url: img, title: p.item_number, subtitle: p.display_name || null })}
+                      title="Tap to enlarge the picture"
+                      style={{ maxWidth: '100%', maxHeight: '320px', objectFit: 'contain', borderRadius: '10px', alignSelf: 'flex-start', background: 'var(--subtle-bg)', cursor: 'zoom-in' }}
+                    />
                   )}
                   {(p.marketing_description || p.description) && (
                     <div style={{ fontSize: '13px', color: theme.textSecondary, whiteSpace: 'pre-wrap' }}>
@@ -230,6 +239,13 @@ export default function InstallerPartsPage() {
         </div>
       )}
 
+      <PhotoLightbox
+        photos={photoZoom ? [photoZoom] : []}
+        index={photoZoom ? 0 : null}
+        onClose={() => setPhotoZoom(null)}
+        onIndex={() => {}}
+        printHeading={photoZoom ? `Part ${photoZoom.title}` : undefined}
+      />
       {viewing && (
         <ProofViewer url={viewing.url} filename={viewing.fileName} noun="file" onClose={() => setViewing(null)} />
       )}

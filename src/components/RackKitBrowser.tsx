@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { storage } from '@/lib/storage';
 import { createClient } from '@/lib/supabase-browser';
 import { closeOnEscape } from '@/lib/modal-escape';
+import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
 import { kitBuildableFor, loadKits, loadKitStock, type KitStock, type KitWithMembers } from '@/lib/part-kits';
 import { rackBaseNumber, rackFacets, rackMatchesSearch, type RackFacets } from '@/lib/rack-kit-facets';
 
@@ -43,6 +44,8 @@ export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice
   const [style, setStyle] = useState('');
   const [inStockOnly, setInStockOnly] = useState(false);
   const [limit, setLimit] = useState(PAGE);
+  // Tap a rack picture to see it big; swipe moves through the kits shown.
+  const [zoomIdx, setZoomIdx] = useState<number | null>(null);
   const [openParts, setOpenParts] = useState<Record<string, boolean>>({});
   const [added, setAdded] = useState<Record<string, number>>({});
 
@@ -94,6 +97,16 @@ export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice
     && (!style || r.facets.style === style)
     && (!inStockOnly || (buildable.get(r.kit.id) || 0) > 0)
     && rackMatchesSearch(r.kit, r.facets, search));
+  const zoomPhotos: LightboxPhoto[] = visible.slice(0, limit).filter(r => r.photo).map(r => ({
+    id: r.kit.id,
+    url: imageUrl(r.photo!),
+    title: r.kit.item_number || r.kit.name,
+    subtitle: r.kit.item_number ? r.kit.name : null,
+  }));
+  const openPhoto = (kitId: string) => {
+    const i = zoomPhotos.findIndex(p => p.id === kitId);
+    if (i >= 0) setZoomIdx(i);
+  };
 
   // Any filter change starts the list from the top again.
   useEffect(() => { setLimit(PAGE); }, [search, vehicle, line, finish, style, inStockOnly]);
@@ -166,7 +179,14 @@ export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice
               <div style={{ height: '120px', background: 'var(--subtle-bg, rgba(128,128,128,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 {photo ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={imageUrl(photo)} alt={kit.item_number || kit.name} loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  <img
+                    src={imageUrl(photo)}
+                    alt={kit.item_number || kit.name}
+                    loading="lazy"
+                    onClick={() => openPhoto(kit.id)}
+                    title="Tap to enlarge the picture"
+                    style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: 'zoom-in' }}
+                  />
                 ) : (
                   <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', opacity: 0.7 }}>No photo yet</span>
                 )}
@@ -232,6 +252,13 @@ export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice
           </button>
         </div>
       )}
+      <PhotoLightbox
+        photos={zoomPhotos}
+        index={zoomIdx}
+        onClose={() => setZoomIdx(null)}
+        onIndex={setZoomIdx}
+        printHeading="Rack kits"
+      />
     </div>
   );
 }
