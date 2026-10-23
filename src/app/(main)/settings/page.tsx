@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import GraphicsReminderSettingsCard from '@/components/GraphicsReminderSettingsCard';
+import TaxExemptCustomersList from '@/components/TaxExemptCustomersList';
 import PhoneInput from '@/components/PhoneInput';
 import TextSizeToggle from '@/components/TextSizeToggle';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_ORDER, GRAPHICS_STATUS_COLORS } from '@/lib/types';
@@ -936,6 +937,10 @@ export default function SettingsPage() {
             {taxError && (
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{taxError}</div>
             )}
+          </div>
+
+          <div style={sectionStyle}>
+            <TaxExemptCustomersList />
           </div>
 
           <div style={sectionStyle}>

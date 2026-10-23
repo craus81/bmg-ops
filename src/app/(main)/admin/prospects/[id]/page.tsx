@@ -38,6 +38,7 @@ import DropboxProofSearch from '@/components/DropboxProofSearch';
 import ClientFilesSection from '@/components/ClientFilesSection';
 import CollapsibleCard from '@/components/CollapsibleCard';
 import CustomerJobsCard from '@/components/CustomerJobsCard';
+import CustomerTaxCard from '@/components/CustomerTaxCard';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import PhoneInput from '@/components/PhoneInput';
@@ -2471,6 +2472,9 @@ export default function CustomerRecordPage() {
               </div>
             </CollapsibleCard>
           )}
+
+          {/* Sales tax — the customer's permanent exemption (migration 427). */}
+          {customer && !isVendor && <CustomerTaxCard page={PAGE} customerId={customer.id} />}
 
           {/* PO-status portal (migration 260) — the shared, no-login link
               where this customer sees where each PO they sent us stands. */}
