@@ -90,6 +90,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/stock/route.ts': superAdmin(),
   'src/app/api/admin/books/stock/item/route.ts': superAdmin(),
   'src/app/api/admin/books/trial-balance/route.ts': superAdmin(),
+  'src/app/api/admin/business-pulse/route.ts': superAdmin(),
   'src/app/api/cron/books-netsuite-gl/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-invoice-posting/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-daily-check/route.ts': cron('requireSuperAdmin('),

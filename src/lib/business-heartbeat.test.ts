@@ -8,6 +8,9 @@ import {
   summarize,
   MIN_BASELINE_POINTS,
   BASELINE_WEEKS,
+  lastCompletedBusinessDay,
+  sameWeekdayKeys,
+  weekdayShort,
 } from './business-heartbeat';
 
 describe('baselineOf', () => {
@@ -127,5 +130,29 @@ describe('summarize', () => {
     ]);
     expect(r.tripped.map(c => c.key)).toEqual(['b']);
     expect(r.unknown.map(c => c.key)).toEqual(['c']);
+  });
+});
+
+describe('dashboard pulse day helpers', () => {
+  it('judges the last full business day, skipping the weekend', () => {
+    // Thu 2026-10-22 17:00 CT → Wed
+    expect(lastCompletedBusinessDay(new Date('2026-10-22T22:00:00Z'))).toBe('2026-10-21');
+    // Mon 2026-10-26 09:00 CT → Fri
+    expect(lastCompletedBusinessDay(new Date('2026-10-26T14:00:00Z'))).toBe('2026-10-23');
+    // Sun 2026-10-25 → Fri
+    expect(lastCompletedBusinessDay(new Date('2026-10-25T18:00:00Z'))).toBe('2026-10-23');
+    // 11 PM CT Thursday is still Thursday in the shop → Wed
+    expect(lastCompletedBusinessDay(new Date('2026-10-23T04:00:00Z'))).toBe('2026-10-21');
+  });
+
+  it('lists the same weekday for the previous four weeks', () => {
+    expect(sameWeekdayKeys('2026-10-21')).toEqual(['2026-10-14', '2026-10-07', '2026-09-30', '2026-09-23']);
+    expect(weekdayShort('2026-10-23')).toBe('Fri');
+  });
+
+  it('names the judged day in the message', () => {
+    const c = evaluateShortfall({ key: 's', label: 'S', today: 2, history: [10, 10, 10, 10], dropFraction: 0.7, noun: 'scans', dayWord: 'on Wed' });
+    expect(c.status).toBe('tripped');
+    expect(c.detail).toContain('2 scans on Wed');
   });
 });
