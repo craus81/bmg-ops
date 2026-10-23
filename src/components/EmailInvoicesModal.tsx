@@ -19,6 +19,7 @@ import { loadBccSelfPref, saveBccSelfPref } from '@/components/EmailComposeModal
 import { useDialog } from '@/components/DialogProvider';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { openPdfBytes } from '@/lib/native-files';
+import { invoiceRecipients, type RecipientSuggestion } from '@/lib/invoice-recipients';
 
 export interface EmailableInvoice {
   invoiceId?: string;
@@ -34,6 +35,8 @@ interface InvoiceRow extends EmailableInvoice {
 
 interface Props {
   customerName: string;
+  /** The customer's NetSuite id, when the screen has it: finds the customer even when names differ ("Hosemate" vs "Hosemate, LLC"). */
+  customerNetsuiteId?: string | null;
   invoices: EmailableInvoice[];
   onClose: () => void;
 }
@@ -41,7 +44,7 @@ interface Props {
 const parseEmails = (input: string): string[] =>
   input.split(/[,;\s]+/).map(e => e.trim()).filter(e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
 
-export default function EmailInvoicesModal({ customerName, invoices: initialInvoices, onClose }: Props) {
+export default function EmailInvoicesModal({ customerName, customerNetsuiteId, invoices: initialInvoices, onClose }: Props) {
   const { user } = useAuth();
   const dialog = useDialog();
   const supabase = createClient();
@@ -100,43 +103,68 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
   const [billing, setBilling] = useState<{ workflow: string | null; portal: string | null; notes: string | null } | null>(null);
   const [portalOverride, setPortalOverride] = useState(false);
 
-  // Prefill the recipient field with the customer's saved billing emails,
-  // falling back to the customer profile's AP / billing-contact emails
-  // (migration 080 — finally read by the invoice path).
+  // Who this can go to (src/lib/invoice-recipients.ts): the customer's saved
+  // billing emails and AP/billing contact (migration 080), its contacts (the
+  // same list the estimate email offers), and whoever got its earlier
+  // invoices. The best of them prefill To; all of them are chips to tap.
+  // The customer is found by NetSuite id when the screen passes one, else by
+  // name — exact first, then "starts with", so "Hosemate" finds "Hosemate, LLC".
+  const [suggestions, setSuggestions] = useState<RecipientSuggestion[]>([]);
   useEffect(() => {
-    if (!customerName) return;
+    if (!customerName && !customerNetsuiteId) return;
     let cancelled = false;
     (async () => {
-      const [prospectRes, customerRes] = await Promise.all([
-        supabase
-          .from('prospects')
-          .select('billing_emails')
-          .ilike('company_name', customerName)
-          .limit(1)
-          .maybeSingle(),
-        supabase
-          .from('customers')
-          .select('billing_workflow, billing_portal, billing_notes, ap_email, billing_contact_email')
-          .ilike('company_name', customerName)
-          .limit(1)
-          .maybeSingle(),
+      const custCols = 'id, netsuite_id, billing_workflow, billing_portal, billing_notes, ap_email, billing_contact_email';
+      const findCustomer = async () => {
+        if (customerNetsuiteId) {
+          const { data } = await supabase.from('customers').select(custCols).eq('netsuite_id', customerNetsuiteId).limit(1).maybeSingle();
+          if (data) return data as any;
+        }
+        if (!customerName) return null;
+        const exact = await supabase.from('customers').select(custCols).ilike('company_name', customerName).limit(1).maybeSingle();
+        if (exact.data) return exact.data as any;
+        const like = await supabase.from('customers').select(custCols)
+          .ilike('company_name', `${customerName.replace(/[%_]/g, '')}%`).order('company_name').limit(1).maybeSingle();
+        return (like.data as any) || null;
+      };
+      const [cust, recentRes] = await Promise.all([
+        findCustomer(),
+        customerName
+          ? supabase.from('invoice_emails').select('recipients').ilike('customer_name', customerName).order('sent_at', { ascending: false }).limit(20)
+          : Promise.resolve({ data: [] as any[] }),
       ]);
       if (cancelled) return;
-      const cust = customerRes.data as any;
       if (cust) {
         setBilling({ workflow: cust.billing_workflow || null, portal: cust.billing_portal || null, notes: cust.billing_notes || null });
       }
-      const saved: string[] = (prospectRes.data as any)?.billing_emails || [];
-      const profileEmails = [cust?.ap_email, cust?.billing_contact_email]
-        .filter((e: any): e is string => !!e && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
-      const prefill = saved.length > 0 ? saved : [...new Set(profileEmails)];
-      if (prefill.length > 0) {
-        setEmail(prev => prev || prefill.join(', '));
-      }
+      const nsId = customerNetsuiteId || cust?.netsuite_id || null;
+      const prospectQuery = supabase.from('prospects').select('billing_emails');
+      const [prospectRes, contactsRes] = await Promise.all([
+        (nsId ? prospectQuery.eq('netsuite_id', nsId) : prospectQuery.ilike('company_name', customerName)).limit(1).maybeSingle(),
+        cust?.id
+          ? fetch(`/api/external-contacts?customerId=${encodeURIComponent(cust.id)}`).then(r => (r.ok ? r.json() : {})).catch(() => ({}))
+          : Promise.resolve({}),
+      ]);
+      if (cancelled) return;
+      const { prefill, suggestions: found } = invoiceRecipients({
+        billingEmails: (prospectRes.data as any)?.billing_emails || [],
+        apEmail: cust?.ap_email,
+        billingContactEmail: cust?.billing_contact_email,
+        contacts: Array.isArray((contactsRes as any).contacts) ? (contactsRes as any).contacts : [],
+        recent: ((recentRes.data as any[]) || []).flatMap(r => r.recipients || []),
+      });
+      setSuggestions(found);
+      if (prefill.length > 0) setEmail(prev => prev || prefill.join(', '));
     })();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once per customer
-  }, [customerName]);
+  }, [customerName, customerNetsuiteId]);
+
+  const inTo = new Set(parseEmails(email).map(e => e.toLowerCase()));
+  const addRecipient = (address: string) => {
+    if (inTo.has(address)) return;
+    setEmail(prev => (prev.trim() ? `${prev.trim().replace(/[,;\s]+$/, '')}, ${address}` : address));
+  };
 
   // Merge successful recipients back into the matching prospect record.
   const saveBillingEmails = async (newEmails: string[]) => {
@@ -404,7 +432,7 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             type="text"
-            placeholder="Customer email(s) — separate multiple with commas"
+            placeholder="Customer email(s) — type, or tap one below"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             style={{ flex: 1, minWidth: '180px', padding: '8px 10px', borderRadius: '6px', fontSize: '12px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)' }}
@@ -424,6 +452,37 @@ export default function EmailInvoicesModal({ customerName, invoices: initialInvo
             );
           })()}
         </div>
+
+        {/* Tap to add: everyone FleetSuite knows for this customer. */}
+        {suggestions.length > 0 && (
+          <div style={{ marginTop: '8px' }}>
+            <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>Tap to add</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+              {suggestions.map(sg => {
+                const added = inTo.has(sg.email);
+                return (
+                  <button
+                    key={sg.email}
+                    onClick={() => addRecipient(sg.email)}
+                    disabled={added}
+                    title={added ? 'Already on the To line' : `Add ${sg.email}`}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '6px 10px', minHeight: '32px', borderRadius: '999px',
+                      fontSize: '11px', fontWeight: 600, cursor: added ? 'default' : 'pointer',
+                      background: added ? 'rgba(34,197,94,0.1)' : 'rgba(96,165,250,0.08)',
+                      border: `1px solid ${added ? 'rgba(34,197,94,0.3)' : 'rgba(96,165,250,0.3)'}`,
+                      color: added ? '#22c55e' : 'var(--text-secondary)',
+                    }}
+                  >
+                    <span>{added ? '✓' : '+'}</span>
+                    <span>{sg.email}</span>
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>{sg.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Bcc me + test send */}
         {user?.email && (
