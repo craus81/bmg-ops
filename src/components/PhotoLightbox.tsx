@@ -79,12 +79,15 @@ export default function PhotoLightbox({ photos, index, onClose, onIndex, printHe
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      // Esc closes this viewer only. Capture phase + preventDefault so a
+      // pop-out window underneath (closeOnEscape) stays open — the part
+      // record in the catalog opens this viewer over itself.
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
       else if (e.key === 'ArrowLeft') go(-1);
       else if (e.key === 'ArrowRight') go(1);
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [open, onClose, go]);
 
   // The scroll box's size, so a zoomed photo can be laid out at an exact
@@ -252,8 +255,10 @@ export default function PhotoLightbox({ photos, index, onClose, onIndex, printHe
             {printing === 4 ? 'Preparing…' : `Print all (${photos.length})`}
           </button>
         )}
+        {/* A white pill, not a bare ✕: easy to find and hit on an iPhone
+            (Craig, 2026-10-23). */}
         <button type="button" onClick={onClose} aria-label="Close"
-          style={{ background: 'transparent', border: 'none', color: '#fff', fontSize: '28px', lineHeight: 1, cursor: 'pointer', padding: '0 4px' }}>✕</button>
+          style={{ background: '#fff', border: 'none', color: '#111', fontSize: '15px', fontWeight: 800, lineHeight: 1, cursor: 'pointer', padding: '10px 16px', borderRadius: '10px', flexShrink: 0 }}>✕ Close</button>
       </div>
       {printNote && (
         <div onClick={e => e.stopPropagation()} style={{ margin: '0 16px 8px', padding: '8px 12px', borderRadius: '8px', background: 'rgba(239,68,68,0.2)', color: '#fecaca', fontSize: '12px', fontWeight: 600 }}>

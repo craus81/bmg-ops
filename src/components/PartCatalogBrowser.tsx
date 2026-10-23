@@ -9,6 +9,7 @@ import { loadKits, normItem, type KitWithMembers } from '@/lib/part-kits';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { useImageDrop } from '@/lib/use-image-drop';
 import RackKitBrowser from '@/components/RackKitBrowser';
+import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
 
 /**
  * The Ranger-Design-style catalog browser (roadmap N4-A): a faceted,
@@ -120,6 +121,10 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   const [busyPart, setBusyPart] = useState<string | null>(null);
   // The part whose record modal is open (click a card to view it).
   const [detail, setDetail] = useState<BrowsePart | null>(null);
+  // Tap a part picture to see it big (Craig, 2026-10-23). The grid opens the
+  // viewer over every part on the page that has a picture, so a swipe moves
+  // to the next one; the record and the package strip open a single picture.
+  const [zoom, setZoom] = useState<{ photos: LightboxPhoto[]; index: number } | null>(null);
   // Fitment tags on the open part record (N4-B2): everyone sees them;
   // admins prune bad auto-tags and add manual ones (source='manual').
   const [fitment, setFitment] = useState<FitmentRow[] | null>(null);
@@ -253,6 +258,17 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   };
 
   const imageUrl = (path: string) => storage.from('photos').getPublicUrl(path).data.publicUrl;
+  const partPhoto = (p: BrowsePart): LightboxPhoto => ({
+    id: p.id,
+    url: imageUrl(p.image_path!),
+    title: p.item_number,
+    subtitle: p.display_name && p.display_name !== p.item_number ? p.display_name : null,
+  });
+  const openGridPhoto = (partId: string) => {
+    const withPhotos = parts.filter(x => x.image_path);
+    const index = withPhotos.findIndex(x => x.id === partId);
+    if (index >= 0) setZoom({ photos: withPhotos.map(partPhoto), index });
+  };
 
   const setPartCategory = async (partId: string, id: string | null) => {
     setBusyPart(partId);
@@ -615,7 +631,13 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                       <div style={{ height: '110px', background: 'var(--subtle-bg, rgba(128,128,128,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                         {photo ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={imageUrl(photo)} alt={k.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          <img
+                            src={imageUrl(photo)}
+                            alt={k.name}
+                            onClick={() => setZoom({ photos: [{ id: k.id, url: imageUrl(photo), title: k.item_number || k.name, subtitle: k.item_number ? k.name : null }], index: 0 })}
+                            title="Tap to enlarge the picture"
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', cursor: 'zoom-in' }}
+                          />
                         ) : (
                           <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', opacity: 0.7 }}>No photo</span>
                         )}
@@ -677,9 +699,9 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
             {parts.map(p => (
               <div key={p.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 <div
-                  onClick={() => setDetail(p)}
-                  title="View part record"
-                  style={{ aspectRatio: '4/3', background: 'var(--subtle-bg, rgba(128,128,128,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', cursor: 'pointer' }}
+                  onClick={() => (p.image_path ? openGridPhoto(p.id) : setDetail(p))}
+                  title={p.image_path ? 'Tap to enlarge the picture' : 'View part record'}
+                  style={{ aspectRatio: '4/3', background: 'var(--subtle-bg, rgba(128,128,128,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', cursor: p.image_path ? 'zoom-in' : 'pointer' }}
                 >
                   {p.image_path ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -836,7 +858,13 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
                 )}
                 {detail.image_path ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={imageUrl(detail.image_path)} alt={detail.display_name || detail.item_number} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                  <img
+                    src={imageUrl(detail.image_path)}
+                    alt={detail.display_name || detail.item_number}
+                    onClick={() => setZoom({ photos: [partPhoto(detail)], index: 0 })}
+                    title="Tap to enlarge the picture"
+                    style={{ width: '100%', height: '100%', objectFit: 'contain', cursor: 'zoom-in' }}
+                  />
                 ) : (
                   <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', opacity: 0.7 }}>No photo</span>
                 )}
@@ -997,6 +1025,14 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           </div>
         </div>
       )}
+
+      <PhotoLightbox
+        photos={zoom?.photos ?? []}
+        index={zoom ? zoom.index : null}
+        onClose={() => setZoom(null)}
+        onIndex={i => setZoom(z => (z ? { ...z, index: i } : z))}
+        printHeading={zoom?.photos.length === 1 ? `Part ${zoom.photos[0].title}` : 'Parts catalog'}
+      />
 
       {/* Standalone add-to-estimate chooser (renders above the record modal). */}
       {addTarget && (
