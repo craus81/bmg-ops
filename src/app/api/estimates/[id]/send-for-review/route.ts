@@ -9,7 +9,7 @@ import { getEmailSignature } from '@/lib/email-signature';
 import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { loadEstimateGraphics, loadEstimateProofs } from '@/lib/estimate-graphics';
 import { r2PublicUrl } from '@/lib/r2';
-import { loadEstimateAttachmentRows, fetchEstimateAttachments } from '@/lib/estimate-attachments';
+import { loadEstimateAttachmentRows, fetchEstimateAttachments, recordEstimateFilesSent } from '@/lib/estimate-attachments';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
@@ -17,7 +17,7 @@ import { estimateHeadlineNumber } from '@/lib/estimate-number';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { notify } from '@/lib/notify';
-import { pickReviewer, type StaffOption } from '@/lib/estimate-review';
+import { pickReviewer, withReviewRoundArchived, type ReviewRequestFile, type StaffOption } from '@/lib/estimate-review';
 
 // Proof images inline in the review email are presigned for the same window
 // the customer's approval email uses — the reviewer is checking the exact
@@ -222,6 +222,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const priorRequesterId: string | null = estimate.internal_review_requested_by || null;
   const wasPending = estimate.internal_review_status === 'pending';
 
+  // What this round's email carried, so the estimate can show it next to
+  // the note (Craig, 2026-10-23). The PDF is named; picked files keep their
+  // id so they match the Pictures & files section.
+  const requestFiles: ReviewRequestFile[] = [
+    { name: pdf.filename },
+    ...picked.rows.map(r => ({ name: r.file_name, id: r.id })),
+  ];
+
   const { error: updErr } = await supabase
     .from('estimates')
     .update({
@@ -232,8 +240,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       internal_review_decided_by: null,
       internal_review_decided_at: null,
       // A fresh round starts clean — last round's note described an estimate
-      // that has since been edited.
+      // that has since been edited. The last round itself (who asked, what
+      // they wrote, the answer) moves to the history (migration 428).
       internal_review_note: null,
+      internal_review_history: withReviewRoundArchived(estimate),
+      // The requester's note and files, shown on the estimate's In-review
+      // box (Craig, 2026-10-23: the note was only in the email).
+      internal_review_request_note: message || null,
+      internal_review_request_files: requestFiles,
       // This round is reviewed on this estimate, not carried from a copy.
       internal_review_copied_from: null,
       // A fresh request is someone actively asking — last round's snooze
@@ -247,6 +261,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ error: 'The email went out but the review could not be recorded: ' + updErr.message }, { status: 500 });
   }
 
+  // Tags the files "Sent for review" in the estimate's Pictures & files.
+  await recordEstimateFilesSent(supabase, picked.rows.map(r => r.id), 'review');
+
   await logAudit(supabase, {
     actorId: auth.user.id,
     table: 'estimates',
@@ -257,6 +274,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       reviewer: reviewer.name,
       reviewer_id: reviewer.id,
       recipients: emailList,
+      note: message || null,
       reassigned_from: wasPending && priorReviewerId && priorReviewerId !== reviewer.id ? priorReviewerId : undefined,
     },
   });

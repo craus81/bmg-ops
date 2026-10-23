@@ -24,7 +24,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/components/AuthProvider';
-import { useDialog } from '@/components/DialogProvider';
+import { useDialog, growTextarea } from '@/components/DialogProvider';
 import { createClient } from '@/lib/supabase-browser';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { guessNameFromEmail } from '@/lib/new-recipients';
@@ -823,7 +823,8 @@ export default function EmailComposeModal({
           <div style={labelStyle}>Personal message (shown at the top of the email)</div>
           <textarea
             value={message}
-            onChange={e => setMessage(e.target.value)}
+            ref={growTextarea}
+            onChange={e => { setMessage(e.target.value); growTextarea(e.target); }}
             onBlur={refreshPreviewIfChanged}
             rows={3}
             placeholder={messagePlaceholder || 'Optional note to the recipient…'}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickReviewer, reviewStateOf, canDecideReview, reviewReminderDue, reviewSnoozedUntil, reviewContentSignature, clearedReviewColumns, type StaffOption } from './estimate-review';
+import { pickReviewer, reviewStateOf, canDecideReview, reviewReminderDue, reviewSnoozedUntil, reviewContentSignature, clearedReviewColumns, reviewRoundOf, withReviewRoundArchived, reviewRequestFilesOf, REVIEW_HISTORY_LIMIT, type StaffOption } from './estimate-review';
 import { shopWorkMs } from './shop-hours';
 
 const STAFF: StaffOption[] = [
@@ -190,5 +190,57 @@ describe('clearedReviewColumns', () => {
     expect(cleared.internal_review_status).toBeNull();
     expect(cleared.internal_review_copied_from).toBeNull();
     expect(cleared.internal_review_snoozed_until).toBeNull();
+  });
+});
+
+describe('review request note and history (migration 428)', () => {
+  const sentBack = {
+    internal_review_status: 'changes_requested',
+    internal_reviewer_id: 'u-craig',
+    internal_review_requested_by: 'u-valarie',
+    internal_review_requested_at: '2026-10-22T16:14:00Z',
+    internal_review_decided_by: 'u-craig',
+    internal_review_decided_at: '2026-10-22T17:00:00Z',
+    internal_review_note: 'Drop the hood decal.',
+    internal_review_request_note: 'Large spot decal package, tweak the design.',
+    internal_review_request_files: [{ name: 'EST-2610-073.pdf' }, { name: 'proof-1.pdf', id: 'f1' }, { bogus: true }],
+    internal_review_history: [],
+  };
+
+  it('a cleared review counts as part of the round, so a fresh round starts without the note', () => {
+    const cleared = clearedReviewColumns();
+    expect(cleared.internal_review_request_note).toBeNull();
+    expect(cleared.internal_review_request_files).toBeNull();
+    expect('internal_review_history' in cleared).toBe(false);
+  });
+
+  it('snapshots the current round: who asked, the note, the files and the answer', () => {
+    expect(reviewRoundOf(sentBack)).toEqual({
+      requested_by: 'u-valarie',
+      requested_at: '2026-10-22T16:14:00Z',
+      reviewer_id: 'u-craig',
+      request_note: 'Large spot decal package, tweak the design.',
+      request_files: [{ name: 'EST-2610-073.pdf' }, { name: 'proof-1.pdf', id: 'f1' }],
+      status: 'changes_requested',
+      decided_by: 'u-craig',
+      decided_at: '2026-10-22T17:00:00Z',
+      decision_note: 'Drop the hood decal.',
+    });
+    expect(reviewRoundOf({ internal_review_status: null })).toBeNull();
+  });
+
+  it('appends the current round to the history, oldest first, capped', () => {
+    expect(withReviewRoundArchived(sentBack)).toHaveLength(1);
+    expect(withReviewRoundArchived({ internal_review_history: [{ requested_at: 'x' }] })).toEqual([{ requested_at: 'x' }]);
+    const full = { ...sentBack, internal_review_history: Array.from({ length: REVIEW_HISTORY_LIMIT }, (_, i) => ({ requested_at: String(i) })) };
+    const next = withReviewRoundArchived(full);
+    expect(next).toHaveLength(REVIEW_HISTORY_LIMIT);
+    expect(next[0]).toEqual({ requested_at: '1' });
+    expect(next[next.length - 1].request_note).toBe('Large spot decal package, tweak the design.');
+  });
+
+  it('reads stored files defensively', () => {
+    expect(reviewRequestFilesOf(null)).toEqual([]);
+    expect(reviewRequestFilesOf([{ name: '  ' }, { name: 'a.pdf', id: '' }])).toEqual([{ name: 'a.pdf' }]);
   });
 });

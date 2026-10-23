@@ -161,7 +161,66 @@ export const REVIEW_COLUMNS = [
   'internal_review_snoozed_until',
   'internal_review_snoozed_by',
   'internal_review_copied_from',
+  'internal_review_request_note',
+  'internal_review_request_files',
 ] as const;
+
+/** A file that went out on a review email (migration 428). No id = the estimate PDF. */
+export interface ReviewRequestFile {
+  name: string;
+  id?: string;
+}
+
+/** One finished review round, as internal_review_history keeps it. */
+export interface ReviewRound {
+  requested_by: string | null;
+  requested_at: string | null;
+  reviewer_id: string | null;
+  request_note: string | null;
+  request_files: ReviewRequestFile[];
+  status: InternalReviewStatus | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+}
+
+/** Rounds kept per estimate; older ones are in the audit log. */
+export const REVIEW_HISTORY_LIMIT = 20;
+
+export function reviewRequestFilesOf(raw: unknown): ReviewRequestFile[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((f: any) => f && typeof f.name === 'string' && f.name.trim())
+    .map((f: any) => (typeof f.id === 'string' && f.id ? { name: f.name, id: f.id } : { name: f.name }));
+}
+
+/**
+ * The estimate's current round as a history entry, or null when it has
+ * none (never sent for review, or cleared).
+ */
+export function reviewRoundOf(estimate: any): ReviewRound | null {
+  const state = reviewStateOf(estimate);
+  if (!state.status && !state.requestedAt) return null;
+  return {
+    requested_by: state.requestedBy,
+    requested_at: state.requestedAt,
+    reviewer_id: state.reviewerId,
+    request_note: estimate?.internal_review_request_note || null,
+    request_files: reviewRequestFilesOf(estimate?.internal_review_request_files),
+    status: state.status,
+    decided_by: state.decidedBy,
+    decided_at: state.decidedAt,
+    decision_note: state.note,
+  };
+}
+
+/** The history with the current round appended, oldest first, capped. */
+export function withReviewRoundArchived(estimate: any): ReviewRound[] {
+  const prior = Array.isArray(estimate?.internal_review_history) ? estimate.internal_review_history as ReviewRound[] : [];
+  const round = reviewRoundOf(estimate);
+  const next = round ? [...prior, round] : prior;
+  return next.slice(-REVIEW_HISTORY_LIMIT);
+}
 
 /** The update that takes an estimate back to "never reviewed". */
 export function clearedReviewColumns(): Record<string, null> {

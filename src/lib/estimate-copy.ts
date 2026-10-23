@@ -165,9 +165,11 @@ export async function copyEstimate(
   // review still pending or sent back stays with the original, and the
   // reminder/snooze state belongs to the original's round either way.
   Object.assign(copy, clearedReviewColumns());
+  // Earlier rounds describe the original's history, not this estimate's.
+  copy.internal_review_history = [];
   if (source.internal_review_status === 'approved') {
     for (const col of ['internal_review_status', 'internal_reviewer_id', 'internal_review_requested_by',
-      'internal_review_requested_at', 'internal_review_decided_by', 'internal_review_decided_at', 'internal_review_note']) {
+      'internal_review_requested_at', 'internal_review_decided_by', 'internal_review_decided_at', 'internal_review_note', 'internal_review_request_note']) {
       copy[col] = source[col] ?? null;
     }
     copy.internal_review_copied_from = source.internal_review_copied_from || source.estimate_number;

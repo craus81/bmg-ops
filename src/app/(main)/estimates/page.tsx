@@ -49,6 +49,7 @@ import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import EstimateFilesSection from '@/components/EstimateFilesSection';
+import EstimateReviewRequest from '@/components/EstimateReviewRequest';
 import { bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
 import EstimatePartsRequestModal from '@/components/EstimatePartsRequestModal';
 import { closeOnEscape } from '@/lib/modal-escape';
@@ -381,6 +382,10 @@ interface Estimate {
   // Estimate number an approved review was given on, when this is an
   // unchanged copy of it — migration 414.
   internal_review_copied_from?: string | null;
+  // Send for Review note, files and earlier rounds (migration 428).
+  internal_review_request_note?: string | null;
+  internal_review_request_files?: unknown;
+  internal_review_history?: unknown;
 }
 
 // Allowed qualifier options per platform, from vehicle_platforms.config —
@@ -3142,7 +3147,7 @@ export default function EstimatesPage() {
       const typed = await dialog.prompt(
         'What needs changing? This goes back to whoever asked for the review, with a link to the estimate.',
         '',
-        { title: 'Send back with notes', confirmLabel: 'Send back', placeholder: 'What you changed, or what you want changed' },
+        { title: 'Send back with notes', confirmLabel: 'Send back', placeholder: 'What you changed, or what you want changed', multiline: true },
       );
       if (typed === null || !typed.trim()) return;
       note = typed.trim();
@@ -6667,6 +6672,9 @@ export default function EstimatesPage() {
               {state.note && (
                 <div style={{ marginTop: '3px' }}>“{state.note}”</div>
               )}
+              {/* What the requester wrote on Send for Review, the files that
+                  went along, and earlier rounds (Craig, 2026-10-23). */}
+              <EstimateReviewRequest estimate={est} staffName={staffName} />
               {state.status === 'approved' && est.internal_review_copied_from && (
                 <div style={{ marginTop: '3px', fontSize: '11px', color: 'var(--text-muted)' }}>
                   Change a line or a price and the review clears, so it goes through Send for Review again.
