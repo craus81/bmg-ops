@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import {
-  getSalesOrderRecord, getVendorContact, patchPurchaseOrder, patchSalesOrder,
+  createDropShipPoViaRestlet, getSalesOrderRecord, getVendorContact, patchPurchaseOrder, patchSalesOrder,
   setPurchaseOrderNumber, suiteqlQuery, transactionUrl,
 } from '@/lib/netsuite';
 import {
@@ -184,10 +184,37 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     }, { status: 502 });
   }
 
-  // NetSuite makes the PO when it saves the order; read back which one.
-  const after = await getSalesOrderRecord(soId);
+  // NetSuite makes the PO by itself only when an order is first approved
+  // (SO1177, 2026-10-23: already approved, lines marked, no PO). So when the
+  // read-back shows none, the item RESTlet makes it, the same as the Drop
+  // Ship link on the line in NetSuite.
+  let after = await getSalesOrderRecord(soId);
   if (!after.success) {
     return NextResponse.json({ error: `The lines were marked Drop Ship, but the sales order could not be read back: ${after.error}. Check SO ${soNumber} in NetSuite before trying again.` }, { status: 502 });
+  }
+  const unlinked = (rec: any) => {
+    const now = new Map(dropShipLines(rec).map(l => [l.line, l]));
+    return plan.lines.filter(l => !now.get(l.line)?.createdPo);
+  };
+  if (unlinked(after.record).length > 0) {
+    const rates: Record<string, number> = {};
+    for (const l of plan.lines) if (l.itemId && l.rate != null) rates[l.itemId] = l.rate;
+    const made = await createDropShipPoViaRestlet({
+      salesOrderId: soId,
+      vendorId: body.vendorNetsuiteId,
+      customerId: estimate.customer_netsuite_id,
+      rates,
+    });
+    if (!made.success) {
+      return NextResponse.json({
+        error: `The lines are marked Drop Ship on SO ${soNumber}, but NetSuite did not make the purchase order: ${made.error}`,
+      }, { status: 502 });
+    }
+    const reread = await getSalesOrderRecord(soId);
+    if (!reread.success) {
+      return NextResponse.json({ error: `PO ${made.tranId || made.purchaseOrderId} was made in NetSuite, but the sales order could not be read back: ${reread.error}. Check SO ${soNumber} in NetSuite.` }, { status: 502 });
+    }
+    after = reread;
   }
   const nowLines = new Map(dropShipLines(after.record).map(l => [l.line, l]));
   const poIds = new Map<string, { id: string; number: string; lines: typeof plan.lines }>();
@@ -201,8 +228,8 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   }
   if (poIds.size === 0) {
     return NextResponse.json({
-      error: `NetSuite marked ${noPo.join(', ')} Drop Ship but did not make a purchase order. `
-        + `Open SO ${soNumber} in NetSuite and use the Drop Ship link on the line, or check that the vendor is set up to sell this part.`,
+      error: `NetSuite marked ${noPo.join(', ')} Drop Ship but did not link a purchase order to them. `
+        + `Open SO ${soNumber} in NetSuite and use the Drop Ship link on the line.`,
     }, { status: 502 });
   }
 
