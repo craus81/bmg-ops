@@ -5,7 +5,20 @@ import { closeOnEscape } from '@/lib/modal-escape';
 
 interface ConfirmOptions { confirmLabel?: string; cancelLabel?: string; destructive?: boolean; title?: string }
 interface AlertOptions { confirmLabel?: string; title?: string }
-interface PromptOptions { confirmLabel?: string; placeholder?: string; title?: string }
+interface PromptOptions {
+  confirmLabel?: string; placeholder?: string; title?: string;
+  /** A box that grows with the text, for notes (Craig, 2026-10-23: a long
+   *  "Send back with notes" scrolled out of sight in the one-line input).
+   *  Enter adds a line; Ctrl/Cmd+Enter submits. */
+  multiline?: boolean;
+}
+
+/** Grow a textarea to fit its text, up to about half the screen. */
+export function growTextarea(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = 'auto';
+  el.style.height = `${Math.min(el.scrollHeight + 2, Math.round(window.innerHeight * 0.5))}px`;
+}
 
 interface DialogApi {
   /** Yes/no confirmation. Resolves true if the primary button is pressed. */
@@ -86,7 +99,22 @@ export function DialogProvider({ children }: { children: ReactNode }) {
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>{request.options.title}</div>
             )}
             <div style={{ fontSize: '13px', color: 'var(--text-primary)', lineHeight: 1.5, whiteSpace: 'pre-line' }}>{request.message}</div>
-            {request.kind === 'prompt' && (
+            {request.kind === 'prompt' && request.options.multiline && (
+              <textarea
+                autoFocus
+                ref={growTextarea}
+                rows={4}
+                value={inputValue}
+                placeholder={request.options.placeholder}
+                onChange={(e) => { setInputValue(e.target.value); growTextarea(e.target); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); settle(true); }
+                  if (e.key === 'Escape') { e.preventDefault(); settle(false); }
+                }}
+                style={{ width: '100%', marginTop: '12px', padding: '10px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-primary)', fontSize: '14px', lineHeight: 1.45, boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }}
+              />
+            )}
+            {request.kind === 'prompt' && !request.options.multiline && (
               <input
                 autoFocus
                 value={inputValue}

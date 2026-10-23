@@ -9,6 +9,7 @@ describe('sentTags', () => {
       { kind: 'follow_up', at: '2026-10-23T15:00:00' },
       { kind: 'nope' as any, at: '2026-10-23T15:00:00' },
     ])).toEqual(['Sent for approval 10/21', 'Sent in follow-up 10/23']);
+    expect(sentTags([{ kind: 'review', at: '2026-10-22T15:00:00' }])).toEqual(['Sent for review 10/22']);
     expect(sentTags(null)).toEqual([]);
     expect(sentTags({} as any)).toEqual([]);
   });

@@ -5,12 +5,13 @@
  * recordEstimateFilesSent in estimate-attachments.ts.
  */
 
-export type EstimateFileSendKind = 'approval' | 'email_pdf' | 'follow_up';
+export type EstimateFileSendKind = 'approval' | 'email_pdf' | 'follow_up' | 'review';
 
 export const SEND_KIND_LABELS: Record<EstimateFileSendKind, string> = {
   approval: 'Sent for approval',
   email_pdf: 'Emailed with PDF',
   follow_up: 'Sent in follow-up',
+  review: 'Sent for review',
 };
 
 export interface FileSend { kind: EstimateFileSendKind; at: string }
