@@ -945,6 +945,23 @@ export default function CustomerRecordPage() {
     setParentSaving(false);
   };
 
+  // The company email follows the primary (src/lib/company-email-sync.ts).
+  // Every promote/edit route reports what happened to it; mirror a success
+  // locally and keep a refusal on the Company info card in red.
+  const [companyEmailError, setCompanyEmailError] = useState<string | null>(null);
+  const applyCompanyEmail = (r: any) => {
+    if (!r) return;
+    if (r.status === 'updated' && r.email) {
+      setCompanyEmailError(null);
+      setProspect(p => (p ? { ...p, email: r.email } : p));
+      setCustomer(c => (c ? { ...c, email: r.email } : c));
+    } else if (r.status === 'failed') {
+      setCompanyEmailError(r.error || 'NetSuite refused the change');
+    } else {
+      setCompanyEmailError(null);
+    }
+  };
+
   // Promote an EXTERNAL contact (one with no CRM twin — typically created by
   // an inbound text) straight from the notifications box.
   const setPrimaryContact = async (contactId: string) => {
@@ -955,11 +972,10 @@ export default function CustomerRecordPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_primary: true, customerId: customer.id }),
       });
-      if (!res.ok) {
-        const b = await res.json().catch(() => ({}));
-        throw new Error(b?.error || `HTTP ${res.status}`);
-      }
+      const b = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(b?.error || `HTTP ${res.status}`);
       setExtContacts(prev => prev.map(c => ({ ...c, is_primary: c.id === contactId })));
+      applyCompanyEmail(b?.companyEmail);
     } catch (err: any) {
       await dialog.alert(`Could not set the primary contact: ${err?.message || 'unknown error'}`);
     }
@@ -980,6 +996,7 @@ export default function CustomerRecordPage() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || !body?.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      applyCompanyEmail(body?.companyEmail);
       if (customer) await reloadExtContacts(customer.id);
     } catch (err: any) {
       await dialog.alert(`Could not set the primary contact: ${err?.message || 'unknown error'}`);
@@ -2402,9 +2419,21 @@ export default function CustomerRecordPage() {
             ].filter(r => r.v).map(r => (
               <div key={r.l} style={infoRow}>
                 <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{r.l}</span>
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, textAlign: 'right', overflowWrap: 'anywhere' }}>{r.l === 'Address' ? <MapLink address={r.v} /> : r.v}</span>
+                <span style={{ color: 'var(--text-secondary)', fontWeight: 600, textAlign: 'right', overflowWrap: 'anywhere' }}>
+                  {r.l === 'Address' ? <MapLink address={r.v} /> : r.v}
+                  {r.l === 'Email' && primaryExtContact?.email && primaryExtContact.email.trim().toLowerCase() === (email || '').trim().toLowerCase() && (
+                    <span style={{ display: 'block', fontSize: '11px', fontWeight: 500, color: 'var(--text-muted)' }}>
+                      from main contact <strong style={{ color: '#f59e0b' }}>★ {primaryExtContact.name}</strong>
+                    </span>
+                  )}
+                </span>
               </div>
             ))}
+            {companyEmailError && (
+              <div style={{ marginTop: '6px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontSize: '12.5px', fontWeight: 600 }}>
+                NetSuite didn't take the main contact's email, so the company email was not changed: {companyEmailError}. Fix it in NetSuite, then tap the star again.
+              </div>
+            )}
             {customer && (
               <div style={{ ...infoRow, alignItems: 'center' }}>
                 <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>Parent account</span>
