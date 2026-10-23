@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { syncCompanyEmailToPrimary } from '@/lib/company-email-sync';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,7 +67,15 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ contact: data });
+  // Promoting someone, or changing the primary's email, moves the company
+  // email with them (src/lib/company-email-sync.ts). A NetSuite refusal
+  // leaves this save standing and is reported for the page to show.
+  let companyEmail;
+  if (data?.is_primary && data.customer_id && ('is_primary' in body || 'email' in body)) {
+    companyEmail = await syncCompanyEmailToPrimary(supabase, data.customer_id, data.email);
+  }
+
+  return NextResponse.json({ contact: data, ...(companyEmail ? { companyEmail } : {}) });
 }
 
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
