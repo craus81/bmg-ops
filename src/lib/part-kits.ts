@@ -294,6 +294,7 @@ export async function loadKitStock(supabase: SupabaseClient, kits: KitWithMember
     fetchAllRows<any>((from, to) =>
       supabase.from('netsuite_vendor_po_lines')
         .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(status)')
+        .eq('netsuite_vendor_pos.drop_ship', false) // drop ship POs never come in (migration 429)
         .order('id')
         .range(from, to)),
   ]);

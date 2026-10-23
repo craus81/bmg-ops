@@ -69,7 +69,7 @@ export default function FulfillInvoiceModal({ estimateId, soLabel, onClose }: Pr
   const rows = useMemo(() => (so?.lines ?? []).map(l => {
     const open = openOn(l);
     const now = Math.max(0, Number(qty[l.lineSeq] || 0));
-    const shipNow = SHIPPED_TYPES.has(l.itemType) ? Math.max(0, now - open.shippedNotBilled) : 0;
+    const shipNow = SHIPPED_TYPES.has(l.itemType) && !l.dropShipPo ? Math.max(0, now - open.shippedNotBilled) : 0;
     const short = l.onHand !== null && shipNow > l.onHand;
     const over = now > open.toBill;
     return { l, open, now, short, over, amount: l.rate !== null ? now * l.rate : null };
@@ -77,7 +77,7 @@ export default function FulfillInvoiceModal({ estimateId, soLabel, onClose }: Pr
 
   const units = rows.reduce((s, r) => s + r.now, 0);
   const subtotal = rows.reduce((s, r) => s + (r.amount ?? 0), 0);
-  const anyOpen = rows.some(r => r.open.toBill > 0);
+  const anyOpen = rows.some(r => r.open.toBill > 0 || r.open.vendorWaiting > 0);
   const stillOpenAfter = rows.filter(r => r.open.toBill > 0 && r.now < r.open.toBill);
   const hasAdjustment = rows.some(r => ADJUSTMENT_TYPES.has(r.l.itemType) && !r.l.closed);
   const invalid = rows.some(r => r.over) || units <= 0 || (hasAdjustment && stillOpenAfter.length > 0);
@@ -178,12 +178,17 @@ export default function FulfillInvoiceModal({ estimateId, soLabel, onClose }: Pr
                               <div style={{ fontWeight: 700 }}>{l.itemNumber || `Line ${l.lineSeq}`}</div>
                               {l.description && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{l.description}</div>}
                               {adjustment && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Goes on the invoice that bills the rest of the order</div>}
-                              {!adjustment && !SHIPPED_TYPES.has(l.itemType) && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No stock: billed, not shipped</div>}
+                              {!adjustment && !l.dropShipPo && !SHIPPED_TYPES.has(l.itemType) && <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No stock: billed, not shipped</div>}
+                              {l.dropShipPo && (
+                                <div style={{ fontSize: '11px', color: '#60a5fa', fontWeight: 700 }}>
+                                  🚚 Drop ship, PO {l.dropShipPo}{open.vendorWaiting > 0 ? `: ${open.vendorWaiting} waiting on the vendor. Mark the PO shipped in NetSuite, then bill it here.` : ''}
+                                </div>
+                              )}
                             </td>
                             <td style={num}>{adjustment ? '' : l.ordered}</td>
                             <td style={num}>{adjustment ? '' : l.billed}</td>
                             <td style={{ ...num, color: short ? '#f59e0b' : undefined, fontWeight: short ? 800 : undefined }}>
-                              {SHIPPED_TYPES.has(l.itemType) ? (l.onHand ?? '?') : '-'}
+                              {SHIPPED_TYPES.has(l.itemType) && !l.dropShipPo ? (l.onHand ?? '?') : '-'}
                             </td>
                             <td style={num}>
                               {editable ? (
@@ -198,7 +203,7 @@ export default function FulfillInvoiceModal({ estimateId, soLabel, onClose }: Pr
                                     border: `1px solid ${over ? '#ef4444' : short ? '#f59e0b' : 'var(--border)'}`,
                                   }}
                                 />
-                              ) : adjustment ? '' : <span style={{ color: 'var(--text-muted)' }}>done</span>}
+                              ) : adjustment ? '' : <span style={{ color: 'var(--text-muted)' }}>{open.vendorWaiting > 0 ? 'waiting' : 'done'}</span>}
                               {over && <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '2px' }}>Only {open.toBill} open</div>}
                             </td>
                             <td style={num}>{adjustment ? (l.amount !== null ? `-${money(l.amount)}` : '') : amount !== null && now > 0 ? money(amount) : ''}</td>

@@ -2232,6 +2232,18 @@ export async function patchSalesOrder(
 }
 
 /**
+ * Change a PO's header — the drop ship PO's ship-to address and memo
+ * (src/lib/drop-ship.ts). NetSuite's refusal comes back as is.
+ */
+export async function patchPurchaseOrder(
+  purchaseOrderId: string | number,
+  body: Record<string, unknown>,
+): Promise<{ success: boolean; error?: string }> {
+  const res = await purchaseOrderRecordCall(String(purchaseOrderId), 'PATCH', body);
+  return res.ok ? { success: true } : { success: false, error: res.error };
+}
+
+/**
  * Rename a PO (PO453 → PO453-ACME, po-number.ts). NetSuite only keeps a
  * typed number when Setup → Company → Auto-Generated Numbers has Allow
  * Override ticked for Purchase Order, and may otherwise ignore it without

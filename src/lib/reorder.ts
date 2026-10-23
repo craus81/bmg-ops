@@ -137,6 +137,7 @@ export async function loadReorderCandidates(service: SupabaseClient): Promise<Re
     const { data: poLines, error: pErr } = await fetchAllRows<any>((from, to) => service
       .from('netsuite_vendor_po_lines')
       .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(status)')
+      .eq('netsuite_vendor_pos.drop_ship', false) // drop ship POs never come in (migration 429)
       .in('item_number', chunk)
       .order('id').range(from, to));
     if (pErr) throw new Error('reorder PO lines: ' + pErr.message);

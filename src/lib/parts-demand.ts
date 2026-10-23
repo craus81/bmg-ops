@@ -377,6 +377,7 @@ export async function computePartsDemand(service: SupabaseClient<any, any, any>)
     const poLines = must(await fetchAllRows<any>((from, to) => service
       .from('netsuite_vendor_po_lines')
       .select('item_number, quantity, quantity_received, netsuite_vendor_pos!inner(tranid, vendor_name, status, eta_date)')
+      .eq('netsuite_vendor_pos.drop_ship', false) // drop ship POs never come in (migration 429)
       .in('item_number', chunk)
       .order('id')
       .range(from, to)), 'vendor PO lines');
