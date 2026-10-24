@@ -6,6 +6,7 @@ import { theme } from '@/lib/theme';
 import { AI_TAB_ID, type Tab } from '@/lib/nav-tabs';
 import { AI_CHAT_STATE_EVENT, AI_CHAT_TOGGLE_EVENT } from '@/lib/ai-chat-events';
 import { useNavTabs } from '@/components/useNavTabs';
+import { useSplitScreen } from '@/components/SplitScreen';
 import {
   Home, Palette, ClipboardCheck, Warehouse, Users,
   CalendarDays, ScanLine, Clock, FileText, Briefcase,
@@ -33,8 +34,11 @@ export const TAB_ICONS: Record<string, React.ElementType> = {
 };
 
 export default function BottomNav() {
-  const pathname = usePathname();
+  const routePath = usePathname();
   const router = useRouter();
+  // Split screen: tabs open in the side touched last, and light up for it.
+  const split = useSplitScreen();
+  const pathname = split.on ? split.activePath : routePath;
   // Which tabs, in which order: the user's saved choice or the role default
   // (src/lib/nav-tabs.ts, More → Customize Bottom Bar). On the open iPhone
   // Duo screen it's the longer open-screen list instead.
@@ -96,7 +100,7 @@ export default function BottomNav() {
             className={active ? 'app-nav-tab' : 'app-nav-tab bottom-nav-tab'}
             onClick={() => tab.id === AI_TAB_ID
               ? window.dispatchEvent(new Event(AI_CHAT_TOGGLE_EVENT))
-              : router.push(tab.path)}
+              : split.on ? split.go(tab.path) : router.push(tab.path)}
             style={{
               flex: 1, padding: '6px 2px', display: 'flex',
               flexDirection: 'column',

@@ -646,6 +646,16 @@ html[data-sidenav] .ai-chat-panel {
   bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;
 }
 
+/* Split screen (src/components/SplitScreen.tsx): the two panes fill the
+   space between the header and the tab bar (or the rail on the Duo). */
+:root { --split-right: 0px; --split-bottom: calc(62px + env(safe-area-inset-bottom, 0px)); }
+html[data-sidenav] { --split-right: var(--rail-w); --split-bottom: env(safe-area-inset-bottom, 0px); }
+html[data-split] body { overflow: hidden; }
+/* Inside a pane: a proof can be pressed and held to drag it across, so no
+   iOS callout or text selection on those rows. */
+html[data-fs-pane] [data-client-file-id] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+html[data-fs-dragging] [data-client-file-id] { opacity: 0.55; }
+
 /* Home: money tiles two across on the small screen, one row of four on the big one. */
 html[data-sidenav] .dash-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 html[data-duo-wide] .dash-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }

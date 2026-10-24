@@ -13,6 +13,7 @@ import { isPaletteChord, shortcutLabel } from '@/lib/command-palette';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import { Search as SearchIcon } from 'lucide-react';
 import HelpButton from '@/components/HelpButton';
+import { useSplitScreen } from '@/components/SplitScreen';
 import { forgetSiriKey } from '@/lib/siri-bridge';
 import { closeOnEscape } from '@/lib/modal-escape';
 
@@ -35,6 +36,7 @@ interface Notification {
 export default function Header({ activePartNumber, activeEndCustomer }: HeaderProps) {
   const { user, profile, isAdmin, isActualAdmin, viewAsRole, setViewAsRole, hasFeature, hasRole, signOut } = useAuth();
   const router = useRouter();
+  const split = useSplitScreen();
   const [showMenu, setShowMenu] = useState(false);
   const [showSwitchModal, setShowSwitchModal] = useState(false);
   const [switchEmail, setSwitchEmail] = useState('');
@@ -463,6 +465,25 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
               and renders nothing when this screen has none, or when the
               viewer can't read the library. */}
           <HelpButton tone="header" />
+
+          {/* Split screen: two pages side by side (on by itself on the open
+              iPhone Duo; src/lib/split-screen.ts). */}
+          {split.available && (
+          <button
+            onClick={split.toggle}
+            aria-pressed={split.on}
+            title={split.on ? 'Back to one page' : 'Two pages side by side'}
+            style={{
+              background: split.on ? '#fff' : 'rgba(255,255,255,0.1)',
+              border: '1px solid rgba(255,255,255,0.25)', borderRadius: '8px',
+              padding: '6px 8px', fontSize: '11px', fontWeight: 700,
+              color: split.on ? theme.headerBg : 'rgba(255,255,255,0.85)',
+              cursor: 'pointer', lineHeight: 1, marginRight: '4px', whiteSpace: 'nowrap',
+            }}
+          >
+            ◫ Split
+          </button>
+          )}
 
           {/* Universal Search */}
           {canSearch && (

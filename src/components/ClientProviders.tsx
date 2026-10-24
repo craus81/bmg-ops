@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AuthProvider, useAuth } from '@/components/AuthProvider';
 import { AppProvider, useApp } from '@/components/AppProvider';
@@ -15,6 +15,17 @@ import NativePushHandler from '@/components/NativePushHandler';
 import NativeSiriKey from '@/components/NativeSiriKey';
 import UsageTelemetry from '@/components/UsageTelemetry';
 import DuoLayoutWatcher from '@/components/DuoLayoutWatcher';
+import PaneBridge from '@/components/PaneBridge';
+import { SplitScreenProvider, SplitPanes, useSplitScreen } from '@/components/SplitScreen';
+import { isPaneWindow } from '@/lib/split-screen';
+
+/** True inside a split-screen pane. Read after mount, so the first render
+ *  matches the server's. */
+function usePaneMode(): boolean {
+  const [pane, setPane] = useState(false);
+  useEffect(() => { setPane(isPaneWindow()); }, []);
+  return pane;
+}
 
 function PendingScreen() {
   const { signOut } = useAuth();
@@ -63,8 +74,9 @@ function DeniedScreen({ closed = false }: { closed?: boolean }) {
   );
 }
 
-function AppShell({ children }: { children: React.ReactNode }) {
+function AppShell({ children, pane }: { children: React.ReactNode; pane: boolean }) {
   const router = useRouter();
+  const split = useSplitScreen();
   const { user, loading, profile } = useAuth();
   const { activePart, appLoading } = useApp();
 
@@ -101,12 +113,27 @@ function AppShell({ children }: { children: React.ReactNode }) {
   if (profile?.status === 'denied') return <DeniedScreen />;
   if (profile?.deactivated) return <DeniedScreen closed />;
 
+  // One side of split screen: just the page; the header and tab bar are
+  // the page around it.
+  if (pane) {
+    return (
+      <div className="app-shell app-pane" style={{ minHeight: 'calc(100vh / var(--ts))', paddingBottom: '24px', background: 'var(--bg)' }}>
+        <PaneBridge />
+        <main id="main" style={{ maxWidth: '1200px', margin: '0 auto', padding: '10px 12px', boxSizing: 'border-box' }}>
+          {children}
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell" style={{ minHeight: 'calc(100vh / var(--ts))', paddingBottom: '85px', background: 'var(--bg)' }}>
       <Header activePartNumber={activePart?.part_number} activeEndCustomer={activePart?.end_customer} />
-      <main id="main" style={{ maxWidth: '1200px', margin: '0 auto', padding: '14px 20px', boxSizing: 'border-box' }}>
-        {children}
-      </main>
+      {split.on ? <SplitPanes /> : (
+        <main id="main" style={{ maxWidth: '1200px', margin: '0 auto', padding: '14px 20px', boxSizing: 'border-box' }}>
+          {children}
+        </main>
+      )}
       <BottomNav />
       <AiChat />
     </div>
@@ -114,6 +141,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 export default function ClientProviders({ children }: { children: React.ReactNode }) {
+  const pane = usePaneMode();
   return (
     <ThemeProvider>
       <AuthProvider>
@@ -121,11 +149,14 @@ export default function ClientProviders({ children }: { children: React.ReactNod
           <PopoutProvider>
             <DialogProvider>
               <NativeLinkHandler />
-              <NativePushHandler />
-              <NativeSiriKey />
+              {/* The page around a split-screen pane already does these. */}
+              {!pane && <NativePushHandler />}
+              {!pane && <NativeSiriKey />}
               <UsageTelemetry />
-              <DuoLayoutWatcher />
-              <AppShell>{children}</AppShell>
+              {!pane && <DuoLayoutWatcher />}
+              <SplitScreenProvider disabled={pane}>
+                <AppShell pane={pane}>{children}</AppShell>
+              </SplitScreenProvider>
             </DialogProvider>
           </PopoutProvider>
         </AppProvider>
