@@ -3,7 +3,7 @@ import { STOCK_TYPES } from './bill-rule';
 import { chicagoDate, OWN_COMPANY, ruleLocation, type MadeFrom, type SaveResult } from './own-invoices';
 
 /**
- * FleetSuite's own copy of each fulfillment it makes (migration 418; owner
+ * FleetSuite's own copy of each fulfillment it makes (migration 416; owner
  * decision 2026-10-19, thread "Replacing NetSuite with FleetSuite",
  * "Fulfillments"; docs/books.md "FleetSuite's own fulfillments").
  *

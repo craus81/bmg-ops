@@ -18,13 +18,14 @@ export const maxDuration = 300;
  * own fulfillments next to NetSuite's, as Own fulfillments does, and tells
  * the super admins in FleetSuite, in the app and by push, when a month, an
  * item, a balance, an own invoice or an own fulfillment stops matching,
- * with a link to it there
+ * or when the night's mistake checks found a likely mistake nobody has
+ * cleared, with a link to it there
  * (src/lib/books/daily-check.ts, docs/books.md "Daily check"). The
  * 09:58 run notes what newly differs and the 13:58 run tells about what of
  * it still does. Minute 58 is free in vercel.json, and both runs come after
- * a posting run (:48 on odd hours, done by :52) and a copy of NetSuite's
- * stock moves (:43 on odd hours), and before the next copy of NetSuite's
- * ledger (:26 on odd hours).
+ * a posting run (:48 on odd hours, done by :52), a copy of NetSuite's
+ * stock moves (:43 on odd hours) and the mistake checks (09:46), and before
+ * the next copy of NetSuite's ledger (:26 on odd hours).
  *
  * The books are visible only to super admins, so this response says only
  * how the look went, and manual triggering is super admin only too; a run
@@ -50,6 +51,7 @@ export async function GET(req: NextRequest) {
       else if (alert.about === 'balance') await notifyMany(ids, { type: 'books_balance_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'own') await notifyMany(ids, { type: 'books_own_invoice_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'fulfillment') await notifyMany(ids, { type: 'books_own_fulfillment_differs', ...sent, channels: ['in_app', 'push'] });
+      else if (alert.about === 'mistake') await notifyMany(ids, { type: 'books_mistake_found', ...sent, channels: ['in_app', 'push'] });
       else await notifyMany(ids, { type: 'books_month_differs', ...sent, channels: ['in_app', 'push'] });
     }
   };

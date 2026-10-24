@@ -3,15 +3,16 @@
 // 377's functions, at each item's count the way Stock by item does, through
 // migration 401's, at each customer's and vendor's balance the way Customer
 // and vendor balances does, through migration 406's, at FleetSuite's own
-// invoices the way Own invoices does, through migration 407's, and at its own
-// fulfillments the way Own fulfillments does, through migration 418's. This
-// runs the same migrations as differences-sql.test.ts, with 401, 406, 407 and
-// 416, in an in-memory Postgres (PGlite) as the app's server login, copies a
-// made-up handful of NetSuite documents for BMG and 1084, posts FleetSuite's
-// entries for some of them, copies a few stock moves and NetSuite's counts,
-// saves an own invoice and an own fulfillment, and runs the check's looks
-// against it the way the cron does, holding what it tells the super admins
-// and what it records.
+// invoices the way Own invoices does, through migration 407's, at its own
+// fulfillments the way Own fulfillments does, through migration 416's, and at
+// the likely mistakes the night's look kept, through migration 431's. This
+// runs the same migrations as differences-sql.test.ts, with 401, 406, 407,
+// 416 and 431, in an in-memory Postgres (PGlite) as the app's server login,
+// copies a made-up handful of NetSuite documents for BMG and 1084, posts
+// FleetSuite's entries for some of them, copies a few stock moves and
+// NetSuite's counts, saves an own invoice, an own fulfillment and a few likely
+// mistakes, and runs the check's looks against it the way the cron does,
+// holding what it tells the super admins and what it records.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -64,6 +65,7 @@ async function freshDb(): Promise<PGlite> {
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
     '402-books-stock-values.sql', '406-books-party-balances.sql', '407-books-own-invoices.sql', '416-books-own-fulfillments.sql',
+    '431-books-mistake-checks.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -136,15 +138,42 @@ describe('the daily books check', () => {
   const store = new Map<string, { last_result: unknown; updated_at: string; last_synced_at?: string }>();
   /** When a function fails, by what it was asked. */
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
-  /** What a look told about months and stock; about balances, own invoices and own fulfillments, apart. */
+  /** What a look told about months and stock; about balances, own invoices, own fulfillments and likely mistakes, apart. */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
   let toldOwn: CheckAlert[] = [];
   let toldFulfillments: CheckAlert[] = [];
+  let toldMistakes: CheckAlert[] = [];
+
+  /** A read of one of the books' tables, built the way supabase-js builds it, run against the database. */
+  const read = (table: string) => {
+    let columns = '*';
+    const where: Array<[string, unknown]> = [];
+    let order: string | null = null;
+    let range: [number, number] | null = null;
+    const run = async () => {
+      if (failing?.(table, {})) return { data: null, error: { message: `${table} failed` } };
+      const r = await pg.query(
+        `SELECT ${columns} FROM ${table}${where.length ? ` WHERE ${where.map(([col], i) => `${col} = $${i + 1}`).join(' AND ')}` : ''}`
+          + `${order ? ` ORDER BY ${order}` : ''}${range ? ` LIMIT ${range[1] - range[0] + 1} OFFSET ${range[0]}` : ''}`,
+        where.map(([, value]) => value),
+      );
+      return { data: r.rows, error: null };
+    };
+    const query: any = {
+      select: (cols: string) => { columns = cols; return query; },
+      eq: (col: string, value: unknown) => { where.push([col, value]); return query; },
+      order: (col: string) => { order = col; return query; },
+      range: (from: number, to: number) => { range = [from, to]; return query; },
+      then: (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) => run().then(resolve, reject),
+    };
+    return query;
+  };
 
   // sync_state and cron_runs in memory; every function the real one, called the way supabase-js calls it.
   const service = () => ({
     from: (table: string) => {
+      if (table === 'gl_mistake_checks' || table === 'gl_companies') return read(table);
       if (table === 'sync_state') {
         return {
           select: () => ({
@@ -181,8 +210,9 @@ describe('the daily books check', () => {
     toldBalances = [];
     toldOwn = [];
     toldFulfillments = [];
-    const into = (alert: CheckAlert) =>
-      (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn : alert.about === 'fulfillment' ? toldFulfillments : told);
+    toldMistakes = [];
+    const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
+      : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'mistake' ? toldMistakes : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
@@ -326,6 +356,7 @@ describe('the daily books check', () => {
       },
       own: { known: {}, noted: {} },
       fulfillments: { known: {}, noted: {} },
+      mistakes: { known: {}, noted: {} },
     });
   });
 
@@ -488,7 +519,7 @@ describe('the daily books check', () => {
 
   it('records items and how far apart their counts are, never an amount', () => {
     const record = store.get(BOOKS_DAILY_CHECK)!.last_result as Record<string, unknown>;
-    expect(Object.keys(record).sort()).toEqual(['balances', 'companies', 'fulfillments', 'look', 'own', 'stock', 'told']);
+    expect(Object.keys(record).sort()).toEqual(['balances', 'companies', 'fulfillments', 'look', 'mistakes', 'own', 'stock', 'told']);
     expect(record.stock).toEqual({ by: 'item', known: { [LADDER]: 1, [BINS]: 5 }, noted: {} });
   });
 
@@ -716,5 +747,87 @@ describe('the daily books check', () => {
 
   it('records which own fulfillments differ and in how many things, never an amount', () => {
     expect(heldFulfillments()).toEqual({ known: { 6101: 1 }, noted: {} });
+  });
+
+  // ── Likely mistakes ────────────────────────────────────────────────────
+
+  const heldMistakes = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.mistakes;
+  const TWICE = {
+    key: 'twice:8001+8002', kind: 'twice', company: 'BMG', party: '630', party_name: 'Metro Fuel Services', date: '2026-10-09',
+    amount: 1234, strength: 3, docs: [],
+    why: 'Two bills with the same amount and the same invoice number, INV-20931: one dated Oct 3, the other Oct 9.',
+  };
+  const FAR_OFF = {
+    key: 'far_off:8003', kind: 'far_off', company: '1084', party: '631', party_name: 'Lakeside Supply', date: '2026-10-12',
+    amount: 8990, strength: 2, docs: [],
+    why: 'Their last 11 card charges were $89.90 each. This one is a hundred times that.',
+  };
+  /** What the night's look found, kept the way it keeps it, with the copies it looked through made by then. */
+  const found = (items: unknown[], copiedThrough = new Date()) =>
+    fn('gl_mistake_checks_save', { found: items, gone: [], copied_through: copiedThrough.toISOString() });
+  const idOf = async (key: string) =>
+    (await pg.query<{ id: string }>('SELECT id FROM gl_mistake_checks WHERE key = $1', [key])).rows[0].id;
+
+  it("tells about a likely mistake the night's look found and nobody cleared, opening it on Mistake checks", async () => {
+    await found([TWICE]);
+    const id = await idOf(TWICE.key);
+
+    await look('first');
+    expect(toldMistakes).toEqual([]);
+    expect(heldMistakes()).toEqual({ known: {}, noted: { [id]: 1 } });
+
+    expect(await look('second')).toMatchObject({ told: 1 });
+    expect(toldMistakes).toEqual([{
+      title: 'Mistake checks: Metro Fuel Services may be entered twice',
+      body: `${TWICE.why} Mistake checks shows it.`,
+      url: `/admin/books/mistake-checks?company=BMG&item=${id}`,
+      about: 'mistake',
+    }]);
+    expect(told).toEqual([]);
+    expect(toldFulfillments).toEqual([]);
+    expect(heldMistakes()).toEqual({ known: { [id]: 1 }, noted: {} });
+
+    // The next morning, nothing more.
+    await look('first');
+    await look('second');
+    expect(toldMistakes).toEqual([]);
+  });
+
+  it('tells nothing of one a super admin cleared before the second look, and forgets one cleared since', async () => {
+    await found([TWICE, FAR_OFF]);
+    const [twice, farOff] = [await idOf(TWICE.key), await idOf(FAR_OFF.key)];
+    await look('first');
+    expect(heldMistakes()).toEqual({ known: { [twice]: 1 }, noted: { [farOff]: 1 } });
+
+    await fn('gl_mistake_check_clear', { id: farOff, how: 'fine' });
+    await fn('gl_mistake_check_clear', { id: twice, how: 'fixed', note: 'Voided the second bill.' });
+    expect(await look('second')).toMatchObject({ told: 0 });
+    expect(toldMistakes).toEqual([]);
+    expect(heldMistakes()).toEqual({ known: {}, noted: {} });
+  });
+
+  it('tells again about one that came back', async () => {
+    // The copies still show the duplicate once they were made after it was cleared, so the night's look opens it again.
+    await found([TWICE], new Date(Date.now() + 3_600_000));
+    const id = await idOf(TWICE.key);
+    await look('first');
+    expect(await look('second')).toMatchObject({ told: 1 });
+    expect(toldMistakes.map((a) => a.url)).toEqual([`/admin/books/mistake-checks?company=BMG&item=${id}`]);
+  });
+
+  it("keeps what it held for the mistakes when it couldn't read them, and says why", async () => {
+    const before = heldMistakes();
+    failing = (name) => name === 'gl_mistake_checks';
+    try {
+      const result = await look('first');
+      expect(result.error).toBe("Mistake checks: couldn't read the open ones (gl_mistake_checks failed)");
+      expect(heldMistakes()).toEqual(before);
+    } finally {
+      failing = null;
+    }
+  });
+
+  it('records which likely mistakes are open by their id alone, never a vendor or an amount', async () => {
+    expect(heldMistakes()).toEqual({ known: { [await idOf(TWICE.key)]: 1 }, noted: {} });
   });
 });

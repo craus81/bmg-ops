@@ -433,6 +433,15 @@ export const deepLinks = {
    *  for the daily books check's notification about one own fulfillment.
    *  Super admins only. */
   booksOwnFulfillment: (netsuiteId: string) => `/admin/books/own-fulfillments/fulfillment?${new URLSearchParams({ id: netsuiteId })}`,
+  /** Books → Mistake checks on a company's list ('BMG', '1084'), with one
+   *  item on it picked out by its id: the landing for the daily books
+   *  check's notification about new likely mistakes in the copies of
+   *  NetSuite's bills, checks and card charges
+   *  (src/lib/books/daily-check.ts). Super admins only. */
+  booksMistakeChecks: (company?: string | null, item?: string | null) => {
+    const query = new URLSearchParams({ ...(company ? { company } : {}), ...(item ? { item } : {}) }).toString();
+    return `/admin/books/mistake-checks${query ? `?${query}` : ''}`;
+  },
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it
