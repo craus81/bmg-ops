@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireSuperAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { DASHBOARD_FOCI, normalizeFocus } from '@/lib/dashboard-focus';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest) {
   const supabase = getSupabase();
   const [{ data: profile, error: pErr }, { data: prefs }] = await Promise.all([
     supabase.from('profiles')
-      .select('id, full_name, email, email_signature, email_signature_logo')
+      .select('id, full_name, email, email_signature, email_signature_logo, dashboard_focus')
       .eq('id', userId).maybeSingle(),
     supabase.from('notification_preferences')
       .select('*').eq('user_id', userId).maybeSingle(),
@@ -72,6 +73,8 @@ const PutSchema = z.object({
   // Signature edits — omit to leave untouched (null clears).
   email_signature: z.string().max(5000).nullable().optional(),
   email_signature_logo: z.boolean().optional(),
+  // What their Dashboard is about (migration 432); [] or null = from the role.
+  dashboard_focus: z.array(z.enum(DASHBOARD_FOCI)).max(DASHBOARD_FOCI.length).nullable().optional(),
   prefs: PrefsSchema.optional(),
 });
 
@@ -82,13 +85,14 @@ export async function PUT(req: NextRequest) {
 
   const parsed = await validateBody(req, PutSchema);
   if (parsed.error) return parsed.error;
-  const { userId, email_signature, email_signature_logo, prefs } = parsed.data;
+  const { userId, email_signature, email_signature_logo, dashboard_focus, prefs } = parsed.data;
 
   const supabase = getSupabase();
 
   const profileUpdate: Record<string, any> = {};
   if (email_signature !== undefined) profileUpdate.email_signature = email_signature?.trim() || null;
   if (email_signature_logo !== undefined) profileUpdate.email_signature_logo = email_signature_logo;
+  if (dashboard_focus !== undefined) profileUpdate.dashboard_focus = normalizeFocus(dashboard_focus);
   if (Object.keys(profileUpdate).length > 0) {
     const { error } = await supabase.from('profiles').update(profileUpdate).eq('id', userId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });

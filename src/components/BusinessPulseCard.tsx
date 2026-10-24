@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { deepLinks } from '@/lib/deep-links';
 import type { PulseCheck, PulseStatus } from '@/lib/business-heartbeat';
 
@@ -35,7 +35,7 @@ const PILL: Record<PulseStatus, { label: string; bg: string; color: string }> = 
   unknown: { label: "Can't tell", bg: 'var(--subtle-bg)', color: 'var(--text-muted)' },
 };
 
-export default function BusinessPulseCard({ onOpen }: { onOpen: (path: string) => void }) {
+export default function BusinessPulseCard({ onOpen, title }: { onOpen: (path: string) => void; title?: ReactNode }) {
   const [data, setData] = useState<PulseResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,7 +67,7 @@ export default function BusinessPulseCard({ onOpen }: { onOpen: (path: string) =
   return (
     <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px 10px' }}>
-        <h2 style={{ margin: 0, fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--text-secondary)' }}>Business pulse</h2>
+        <h2 style={{ margin: 0, fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--text-secondary)' }}>{title ?? 'Business pulse'}</h2>
         {headNote && <span style={{ fontSize: '11px', fontWeight: 700, color: headColor }}>{headNote}</span>}
       </div>
       <div style={{ borderTop: '1px solid var(--border)' }}>

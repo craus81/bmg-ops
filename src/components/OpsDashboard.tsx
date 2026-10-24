@@ -16,7 +16,7 @@
  *  - Top customers     → customers.ytd_spend (synced from NetSuite)
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
@@ -27,6 +27,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { customerRequiresPo, loadBillableCustomers } from '@/lib/billable-customers';
 import { summarizeDealForecast, daysPast, type DealForecast, type ForecastDeal } from '@/lib/deal-forecast';
 import { deepLinks } from '@/lib/deep-links';
+import { resolveDashboardFocus, splitTodos, dashboardCards, FOCUS_LABEL, type DashCard } from '@/lib/dashboard-focus';
 
 // Stage buckets over graphics statuses (mirrors the pipeline on /graphics).
 const RECEIVED: GraphicsJobStatus[] = ['received', 'designing', 'revision'];
@@ -107,7 +108,7 @@ const OPP_STAGES: { stage: string; label: string }[] = [
  * duplicated because that lib is server-only (it pulls exec-metrics →
  * netsuite into any client bundle that imports it).
  */
-function ShopLoadStrip({ onOpen }: { onOpen: () => void }) {
+function ShopLoadStrip({ onOpen, title }: { onOpen: () => void; title?: ReactNode }) {
   const [days, setDays] = useState<{ day: string; demandHours: number; totalUnits: number; knownHours: number; capacityHours: number | null }[] | null>(null);
   const [capacityConfigured, setCapacityConfigured] = useState(true);
   useEffect(() => {
@@ -129,7 +130,7 @@ function ShopLoadStrip({ onOpen }: { onOpen: () => void }) {
   return (
     <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px 8px' }}>
-        <h2 style={{ margin: 0, fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>Shop load · 2 weeks</h2>
+        <h2 style={{ margin: 0, fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{title ?? 'Shop load · 2 weeks'}</h2>
         <button onClick={onOpen} style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: 0 }}>Planner →</button>
       </div>
       <button onClick={onOpen} style={{ display: 'block', width: '100%', background: 'transparent', border: 'none', cursor: 'pointer', padding: '0 16px 10px', textAlign: 'left' }}>
@@ -158,8 +159,20 @@ function ShopLoadStrip({ onOpen }: { onOpen: () => void }) {
 
 export default function OpsDashboard() {
   const router = useRouter();
-  const { user, isAdmin, hasFeature, canSeeMoney, hasRole } = useAuth();
+  const { user, profile, isAdmin, hasFeature, canSeeMoney, hasRole, setSectionCollapsed } = useAuth();
   const supabase = createClient();
+
+  // What this person's Dashboard is about (owner decision 2026-10-24): set
+  // per person in Admin → Users, else from the role. It decides which
+  // to-dos are "For you", which cards show, and which start folded.
+  const focus = resolveDashboardFocus(profile?.dashboard_focus, {
+    isAdmin, sales: hasRole('sales'), finance: hasRole('finance'), executive: hasRole('executive'),
+  });
+  const everything = focus.includes('everything');
+  // A sales-focused person's quotes, proofs and pipeline are their own;
+  // an Everything person sees the whole shop's.
+  const personalSales = !everything && focus.includes('sales');
+  const cards = dashboardCards(focus);
 
   // The dashboard renders for every role that lands on /home (sales, finance,
   // …), but its links point at feature-gated pages that bounce back here —
@@ -178,20 +191,18 @@ export default function OpsDashboard() {
   const go = (path: string) => { if (canOpen(path)) router.push(path); };
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<DashData | null>(null);
-  const [preset, setPreset] = useState<'ops' | 'sales'>('ops');
   const [unreadExpanded, setUnreadExpanded] = useState(false);
-
+  // Financial focus: what customers owe us, from NetSuite (same read as the
+  // Past Due page). Loaded only when that card shows.
+  const [ar, setAr] = useState<{ outstanding: number; pastDue: number; over60: number } | null | 'error'>(null);
+  const showFinance = !!cards.finance && canSeeMoney;
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('bmg-dash-preset');
-      if (saved === 'sales' || saved === 'ops') setPreset(saved);
-    } catch {}
-  }, []);
-
-  const pickPreset = (p: 'ops' | 'sales') => {
-    setPreset(p);
-    try { localStorage.setItem('bmg-dash-preset', p); } catch {}
-  };
+    if (!showFinance) return;
+    fetch('/api/reports/ar-summary')
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(j => setAr({ outstanding: j.outstanding || 0, pastDue: j.pastDue || 0, over60: j.over60 || 0 }))
+      .catch(() => setAr('error'));
+  }, [showFinance]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   useEffect(() => { loadAll(); }, []);
@@ -209,6 +220,10 @@ export default function OpsDashboard() {
     const todayStart = localMidnight.toISOString();
     const weekStart = new Date(localMidnight); weekStart.setDate(weekStart.getDate() - 6);
     const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 7);
+    // Promised-back dates are shop (Chicago) calendar days.
+    const chiDay = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(d);
+    const todayChi = chiDay(new Date());
+    const tomorrowChi = chiDay(new Date(Date.now() + 86_400_000));
 
     const [
       invoicedRes, gfxRes, scansRes, partsRes, poRes,
@@ -219,6 +234,7 @@ export default function OpsDashboard() {
       oppsRes, custRes, quotesRes, openEstRes, estRes, unpricedRes,
       apSubmittedRes, sentEstRes, sentWrapRes, staleProofRes, healthRes, atRiskRes,
       neverInvoicedRes, quietLeadsRes, readyPickupRes,
+      partsRequestedRes, promisedBackRes,
     ] = await Promise.allSettled([
       // KPI 1 — NetSuite invoiced totals (authoritative revenue)
       fetch('/api/reports/invoiced-summary').then(r => r.json()),
@@ -304,7 +320,7 @@ export default function OpsDashboard() {
       // The extra columns feed the closing forecast (R5-8) from the SAME rows
       // the stage totals use, so strip and pipeline can't disagree.
       fetchAllRows<any>((from, to) => supabase.from('prospect_opportunities')
-        .select('id, prospect_id, title, stage, value, expected_close_date, prospects(company_name)')
+        .select('id, prospect_id, title, stage, value, expected_close_date, created_by, prospects(company_name)')
         .order('id')
         .range(from, to)),
       supabase.from('customers').select('netsuite_id, company_name, ytd_spend').eq('active', true).gt('ytd_spend', 0).order('ytd_spend', { ascending: false }).limit(4),
@@ -313,13 +329,13 @@ export default function OpsDashboard() {
       // tile used to count wraps only, so it read near-zero while the quotes
       // page was full.
       fetchAllRows<any>((from, to) => supabase.from('wrap_quotes')
-        .select('total')
+        .select('total, created_by')
         .in('status', ['draft', 'sent'])
         .is('archived_at', null)
         .order('id')
         .range(from, to)),
       fetchAllRows<any>((from, to) => supabase.from('estimates')
-        .select('grand_total')
+        .select('grand_total, created_by')
         .in('status', ['draft', 'pushed', 'sent'])
         .order('id')
         .range(from, to)),
@@ -330,13 +346,16 @@ export default function OpsDashboard() {
       // Remaining needs-attention queues — payments, quiet quotes, stalled
       // proofs, plus admin-only API checks (at-risk, system health).
       supabase.from('vendor_invoices').select('*', { count: 'exact', head: true }).eq('status', 'submitted'),
-      supabase.from('estimates').select('id, sent_for_approval_at, updated_at, last_followup_at').eq('status', 'sent').limit(500),
-      supabase.from('wrap_quotes').select('id, sent_at, last_followup_at').eq('status', 'sent').is('archived_at', null).limit(500),
-      supabase.from('graphics_jobs').select('*', { count: 'exact', head: true })
-        .eq('customer_approved', false).is('customer_rejected_at', null)
-        .not('sent_for_approval_at', 'is', null)
-        .lte('sent_for_approval_at', new Date(Date.now() - 3 * 86_400_000).toISOString())
-        .not('status', 'in', '("cancelled","shipped","picked_up","installed")'),
+      supabase.from('estimates').select('id, sent_for_approval_at, updated_at, last_followup_at, created_by').eq('status', 'sent').limit(500),
+      supabase.from('wrap_quotes').select('id, sent_at, last_followup_at, created_by').eq('status', 'sent').is('archived_at', null).limit(500),
+      (() => {
+        const q = supabase.from('graphics_jobs').select('*', { count: 'exact', head: true })
+          .eq('customer_approved', false).is('customer_rejected_at', null)
+          .not('sent_for_approval_at', 'is', null)
+          .lte('sent_for_approval_at', new Date(Date.now() - 3 * 86_400_000).toISOString())
+          .not('status', 'in', '("cancelled","shipped","picked_up","installed")');
+        return personalSales ? q.eq('created_by', user?.id || '') : q;
+      })(),
       isAdmin ? fetch('/api/system-health').then(r => r.ok ? r.json() : null) : Promise.resolve(null),
       isAdmin ? fetch('/api/reports/at-risk').then(r => r.ok ? r.json() : null) : Promise.resolve(null),
       // Completed vehicles nobody ever invoiced (R3-14c): the work is done
@@ -381,6 +400,16 @@ export default function OpsDashboard() {
         .eq('status', 'complete')
         .is('archived_at', null)
         .is('pickup_scheduled_date', null),
+      // Parts asked for that no PO covers yet — the Purchasing queue.
+      supabase.from('purchase_requests').select('id, created_at').eq('status', 'pending').limit(500),
+      // Vehicles still in the shop whose promised-back date is tomorrow or
+      // already gone (same open statuses as the promised-back check).
+      supabase.from('fleet_checkins').select('id, promised_back_date')
+        .in('status', ['received', 'checked_in', 'in_progress', 'stuck_parts', 'stuck_graphics'])
+        .is('archived_at', null)
+        .not('promised_back_date', 'is', null)
+        .lte('promised_back_date', tomorrowChi)
+        .limit(500),
     ]);
 
     // A read that FAILED is not a read that found nothing. Collapsing the two
@@ -454,7 +483,8 @@ export default function OpsDashboard() {
     }
 
     // ── Sales ──
-    const opps = rows(oppsRes, 'pipeline');
+    const mine = (r: any) => !personalSales || r.created_by === user?.id;
+    const opps = rows(oppsRes, 'pipeline').filter(mine);
     const stageAgg = OPP_STAGES.map(({ stage, label }) => {
       const inStage = opps.filter((o: any) => o.stage === stage);
       return { stage, label, count: inStage.length, value: inStage.reduce((s: number, o: any) => s + (o.value || 0), 0) };
@@ -476,8 +506,8 @@ export default function OpsDashboard() {
         createdBy: null,
       }));
     const forecast = summarizeDealForecast(forecastDeals, chiToday);
-    const quotes = rows(quotesRes, 'open quotes');
-    const openEstimates = rows(openEstRes, 'open estimates');
+    const quotes = rows(quotesRes, 'open quotes').filter(mine);
+    const openEstimates = rows(openEstRes, 'open estimates').filter(mine);
     const openQuoteCount = quotes.length + openEstimates.length;
     const openQuoteValue =
       quotes.reduce((s: number, q: any) => s + (Number(q.total) || 0), 0)
@@ -555,16 +585,16 @@ export default function OpsDashboard() {
       return ref > 0 && ref < quietCutoff;
     };
     const quietQuotes =
-      rows(sentEstRes, 'sent estimates').filter(e => quoteQuiet(e.sent_for_approval_at || e.updated_at, e.last_followup_at)).length +
-      rows(sentWrapRes, 'sent wrap quotes').filter(w => quoteQuiet(w.sent_at, w.last_followup_at)).length;
+      rows(sentEstRes, 'sent estimates').filter(mine).filter(e => quoteQuiet(e.sent_for_approval_at || e.updated_at, e.last_followup_at)).length +
+      rows(sentWrapRes, 'sent wrap quotes').filter(mine).filter(w => quoteQuiet(w.sent_at, w.last_followup_at)).length;
     if (quietQuotes > 0) queue.push({
       key: 'quotes', count: quietQuotes, tone: 'warn', path: '/quotes',
-      title: 'Quotes needing a follow-up', detail: 'Sent 5+ days ago with no answer',
+      title: personalSales ? 'Your quotes needing a follow-up' : 'Quotes needing a follow-up', detail: 'Sent 5+ days ago with no answer',
     });
     const staleProofs = count(staleProofRes, 'stale proofs');
     if (staleProofs > 0) queue.push({
       key: 'proofs', count: staleProofs, tone: 'warn', path: '/graphics',
-      title: 'Proofs stuck with customers 3+ days', detail: 'Production blocked on approval',
+      title: personalSales ? 'Your proofs stuck with customers 3+ days' : 'Proofs stuck with customers 3+ days', detail: 'Production blocked on approval',
     });
     // Scans stuck waiting on a PO (part requires one, none matched yet).
     const waitingPo = rows(scansRes, 'scans').filter(s =>
@@ -580,6 +610,25 @@ export default function OpsDashboard() {
       key: 'health', count: badJobs, tone: 'err', path: '/admin/system-health',
       title: 'Background jobs down', detail: 'Syncs or crons stale/erroring',
     });
+    const partsRequested = rows(partsRequestedRes, 'parts requests');
+    if (partsRequested.length > 0) {
+      const oldCutoff = Date.now() - 3 * 86_400_000;
+      const old = partsRequested.filter((r: any) => r.created_at && new Date(r.created_at).getTime() < oldCutoff).length;
+      queue.push({
+        key: 'parts-requested', count: partsRequested.length, tone: old > 0 ? 'warn' : 'blue', path: deepLinks.purchaseRequests(),
+        title: 'Parts requested, no PO yet',
+        detail: old > 0 ? `${old} waiting over 3 days · includes auto reorders` : 'Includes auto reorders',
+      });
+    }
+    const promised = rows(promisedBackRes, 'promised back');
+    if (promised.length > 0) {
+      const late = promised.filter((v: any) => v.promised_back_date < todayChi).length;
+      queue.push({
+        key: 'promised-back', count: promised.length, tone: late > 0 ? 'err' : 'warn', path: '/tracking',
+        title: 'Promised back by tomorrow, still in the shop',
+        detail: late > 0 ? `${late} already past the promised date` : 'Call the customer if it will slip',
+      });
+    }
     const atRisk = val(atRiskRes, 'at-risk jobs') as any;
     const atRiskCount = (atRisk?.flagged || []).length;
     if (atRiskCount > 0) queue.push({
@@ -692,6 +741,38 @@ export default function OpsDashboard() {
     blue: { bg: 'rgba(96,165,250,0.1)', color: '#60a5fa' },
   };
 
+  // Folding. A card the focus opens can be folded, and one it folds can be
+  // opened; the flip is saved on the profile (collapsed_sections, like
+  // CollapsibleCard) so it follows the person between phone and desktop.
+  const savedFlips = profile?.collapsed_sections || [];
+  const isOpen = (id: DashCard) => cards[id] === 'open'
+    ? !savedFlips.includes(`dashboard:${id}`)
+    : savedFlips.includes(`dashboard:open:${id}`);
+  const setOpen = (id: DashCard, open: boolean) => {
+    if (cards[id] === 'open') setSectionCollapsed(`dashboard:${id}`, !open);
+    else setSectionCollapsed(`dashboard:open:${id}`, open);
+  };
+  const foldTitle = (id: DashCard, label: string) => (
+    <button type="button" onClick={() => setOpen(id, false)} aria-expanded title="Fold this card — stays folded next time" style={{
+      font: 'inherit', color: 'inherit', letterSpacing: 'inherit', textTransform: 'inherit',
+      background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left',
+    }}>
+      <span aria-hidden style={{ fontSize: '9px', marginRight: '6px' }}>▾</span>{label}
+    </button>
+  );
+  const foldedBar = (id: DashCard, label: string, peek: string) => (
+    <button type="button" onClick={() => setOpen(id, true)} aria-expanded={false} style={{
+      ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px',
+      width: '100%', padding: '12px 16px', cursor: 'pointer', textAlign: 'left',
+    }}>
+      <span style={headTitle}><span aria-hidden style={{ fontSize: '9px', marginRight: '6px' }}>▸</span>{label}</span>
+      <span style={{ fontSize: '11.5px', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{peek}</span>
+    </button>
+  );
+  /** A card as this focus shows it: not at all, folded to one line, or open. */
+  const show = (id: DashCard, label: string, peek: string, open: () => ReactNode): ReactNode =>
+    !cards[id] ? null : isOpen(id) ? open() : foldedBar(id, label, peek);
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '60px 0' }}>
@@ -774,7 +855,7 @@ export default function OpsDashboard() {
   // Every tile in this row is money or billing — invoiced dollars, the
   // invoicing queue, PO backlog, pipeline — so the row goes as a unit for a
   // viewer the money rule excludes (src/lib/money-visibility.ts).
-  const kpis = !canSeeMoney ? null : (
+  const kpis = !canSeeMoney || !cards.kpis ? null : (
     <div className="dash-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '10px', marginBottom: '12px' }}>
       <button onClick={() => router.push('/invoices?tab=sent')} style={{ ...card, textAlign: 'left', padding: '14px 16px 12px', cursor: 'pointer' }}>
         <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)' }}>
@@ -823,18 +904,41 @@ export default function OpsDashboard() {
     </div>
   );
 
-  const needsAttention = (
-    <div style={card}>
+  const { mine: myTodos, others: shopTodos } = splitTodos(d.queue.filter(q => canOpen(q.path)), focus);
+
+  const todoRows = (items: QueueItem[]) => items.map(q => (
+    <button key={q.key} onClick={() => go(q.path)} style={{
+      display: 'flex', alignItems: 'center', gap: '12px', padding: '11px 16px', width: '100%',
+      borderBottom: '1px solid var(--border)', background: 'transparent', border: 'none',
+      borderTop: 'none', borderLeft: 'none', borderRight: 'none', cursor: 'pointer', textAlign: 'left',
+    }}>
+      <span style={{
+        minWidth: '34px', height: '26px', borderRadius: '7px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: '13px', fontWeight: 800, flexShrink: 0, fontVariantNumeric: 'tabular-nums',
+        background: toneStyles[q.tone].bg, color: toneStyles[q.tone].color,
+      }}>{q.count}</span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{q.title}</span>
+        <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{q.detail}</span>
+      </span>
+      <span style={{ color: 'var(--text-muted)', fontSize: '15px' }}>›</span>
+    </button>
+  ));
+
+  // The Financial focus is three short cards and no to-do list (owner,
+  // 2026-10-24: "very simple and focused").
+  const forYou = focus.length === 1 && focus[0] === 'financial' ? null : (
+    <div style={{ ...card, border: '1px solid rgba(238,49,32,0.3)' }}>
       <div style={cardHead}>
-        <h2 style={headTitle}>Needs attention</h2>
-        <span style={{ fontSize: '11px', fontWeight: 700, color: d.queue.length > 0 ? 'var(--warning)' : d.unavailable.length > 0 ? 'var(--text-muted)' : 'var(--success)' }}>
-          {d.queue.length > 0
-            ? `${d.queue.length} item${d.queue.length !== 1 ? 's' : ''}`
+        <h2 style={{ ...headTitle, color: 'var(--orange)' }}>For you</h2>
+        <span style={{ fontSize: '11px', fontWeight: 700, color: myTodos.length > 0 ? 'var(--warning)' : d.unavailable.length > 0 ? 'var(--text-muted)' : 'var(--success)' }}>
+          {myTodos.length > 0
+            ? `${myTodos.length} thing${myTodos.length !== 1 ? 's' : ''}`
             : d.unavailable.length > 0 ? "Can't tell" : 'All clear'}
         </span>
       </div>
       <div style={{ borderTop: '1px solid var(--border)' }}>
-        {d.queue.length === 0 && (
+        {myTodos.length === 0 && (
           d.unavailable.length > 0 ? (
             <div style={{ padding: '20px 16px', textAlign: 'center', fontSize: '13px', color: 'var(--text-muted)' }}>
               <div style={{ fontWeight: 700, color: 'var(--warning)' }}>Can&rsquo;t tell what needs you</div>
@@ -848,27 +952,87 @@ export default function OpsDashboard() {
             </div>
           )
         )}
-        {d.queue.filter(q => canOpen(q.path)).map(q => (
-          <button key={q.key} onClick={() => go(q.path)} style={{
-            display: 'flex', alignItems: 'center', gap: '12px', padding: '11px 16px', width: '100%',
-            borderBottom: '1px solid var(--border)', background: 'transparent', border: 'none',
-            borderTop: 'none', borderLeft: 'none', borderRight: 'none', cursor: 'pointer', textAlign: 'left',
-          }}>
-            <span style={{
-              minWidth: '34px', height: '26px', borderRadius: '7px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: '13px', fontWeight: 800, flexShrink: 0, fontVariantNumeric: 'tabular-nums',
-              background: toneStyles[q.tone].bg, color: toneStyles[q.tone].color,
-            }}>{q.count}</span>
-            <span style={{ flex: 1, minWidth: 0 }}>
-              <span style={{ display: 'block', fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{q.title}</span>
-              <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginTop: '1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{q.detail}</span>
-            </span>
-            <span style={{ color: 'var(--text-muted)', fontSize: '15px' }}>›</span>
+        {todoRows(myTodos)}
+      </div>
+    </div>
+  );
+
+  // Everyone else's to-dos, for the people who watch the whole shop.
+  const shopTodosCard = !everything ? null : show('shopTodos', 'Whole shop to-dos',
+    shopTodos.length > 0 ? `${shopTodos.length} more` : 'none', () => (
+    <div style={card}>
+      <div style={cardHead}>
+        <h2 style={headTitle}>{foldTitle('shopTodos', 'Whole shop to-dos')}</h2>
+        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{shopTodos.length}</span>
+      </div>
+      <div style={{ borderTop: '1px solid var(--border)' }}>
+        {shopTodos.length === 0 && (
+          <div style={{ padding: '14px 16px', textAlign: 'center', fontSize: '12px', color: 'var(--text-muted)' }}>Nothing else open in the shop</div>
+        )}
+        {todoRows(shopTodos)}
+      </div>
+    </div>
+  ));
+
+  const financeTile = (label: string, value: string, sub: ReactNode, path: string | null) => (
+    <button onClick={() => { if (path) router.push(path); }} style={{
+      display: 'block', width: '100%', textAlign: 'left', padding: '12px 16px', background: 'transparent',
+      border: 'none', borderTop: '1px solid var(--border)', cursor: path ? 'pointer' : 'default',
+    }}>
+      <div style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.7px', color: 'var(--text-muted)' }}>{label}</div>
+      <div style={{ fontSize: '22px', fontWeight: 800, letterSpacing: '-0.4px', marginTop: '2px', color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+      <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '2px' }}>{sub}</div>
+    </button>
+  );
+  const financeCards = !showFinance ? null : (
+    <div style={{ display: 'grid', gap: '12px' }}>
+      <div style={card}>
+        <div style={cardHead}><h2 style={headTitle}>This month</h2><span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{today.toLocaleDateString('en-US', { month: 'long' })}</span></div>
+        {financeTile('Invoiced', d.invoiced ? fmtMoney(d.invoiced.total) : '—', d.invoiced
+          ? <>{d.invoiced.deltaPct !== null && (
+              <span style={{ color: d.invoiced.deltaPct >= 0 ? 'var(--success)' : 'var(--error)', fontWeight: 700 }}>
+                {d.invoiced.deltaPct >= 0 ? '▲' : '▼'} {Math.abs(d.invoiced.deltaPct)}% vs last month ·{' '}
+              </span>
+            )}{d.invoiced.invoices} invoices</>
+          : <span style={{ color: 'var(--error)' }}>NetSuite didn&rsquo;t answer</span>, '/invoices?tab=sent')}
+        {financeTile('Ready to invoice', String(d.stages.toInvoice), 'Finished work with no invoice yet', '/invoices')}
+      </div>
+      <div style={card}>
+        <div style={cardHead}><h2 style={headTitle}>Owed to us</h2><span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>A/R</span></div>
+        {ar === 'error'
+          ? <div style={{ padding: '12px 16px', borderTop: '1px solid var(--border)', fontSize: '12.5px', color: 'var(--error)' }}>Couldn&rsquo;t read A/R from NetSuite. Reload the page to try again.</div>
+          : financeTile('Outstanding', ar ? fmtMoney(ar.outstanding) : '…',
+              ar ? <><span style={{ color: ar.pastDue > 0 ? 'var(--warning)' : undefined, fontWeight: 700 }}>{fmtMoney(ar.pastDue)} past due</span> · {fmtMoney(ar.over60)} over 60 days</> : 'Loading from NetSuite',
+              '/invoices/past-due')}
+      </div>
+      <div style={card}>
+        <div style={cardHead}><h2 style={headTitle}>Coming in</h2><span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>Sales</span></div>
+        {financeTile('Open quotes', fmtMoney(d.sales.openQuotes.value), `${d.sales.openQuotes.count} quotes and estimates out · pipeline ${fmtK(d.pipelineValue.total)}`, '/quotes')}
+      </div>
+    </div>
+  );
+
+  // Purchasing: what's on order, as counts (dollars stay with the money tiles).
+  const openPosCard = show('openPos', 'Open POs', `${d.poBacklog.count} open`, () => (
+    <div style={card}>
+      <div style={cardHead}>
+        <h2 style={headTitle}>{foldTitle('openPos', 'Open POs')}</h2>
+        <button onClick={() => go('/admin/pos')} style={headLink}>Purchase orders →</button>
+      </div>
+      <div style={{ display: 'flex', gap: '10px', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
+        {([
+          { n: d.poBacklog.count, l: 'Open POs', path: '/admin/pos' },
+          { n: d.queue.find(q => q.key === 'parts-requested')?.count || 0, l: 'Parts requested', path: deepLinks.purchaseRequests() },
+          { n: d.queue.find(q => q.key === 'imports')?.count || 0, l: 'Imports to review', path: '/admin/pos' },
+        ]).map(p => (
+          <button key={p.l} onClick={() => go(p.path)} style={{ flex: 1, background: 'var(--subtle-bg)', borderRadius: '9px', padding: '9px 11px', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+            <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', fontVariantNumeric: 'tabular-nums' }}>{p.n}</div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>{p.l}</div>
           </button>
         ))}
       </div>
     </div>
-  );
+  ));
 
   const stageDefs = [
     // The COUNT of open POs is work in motion; the dollars remaining are money.
@@ -882,10 +1046,10 @@ export default function OpsDashboard() {
   ];
   const maxStage = Math.max(1, ...stageDefs.map(s => s.n));
 
-  const workInMotion = (
+  const workInMotion = show('graphics', 'Graphics — work in motion', `${d.lanes.gfxActive} active`, () => (
     <div style={card}>
       <div style={cardHead}>
-        <h2 style={headTitle}>Graphics — work in motion</h2>
+        <h2 style={headTitle}>{foldTitle('graphics', 'Graphics — work in motion')}</h2>
         <button onClick={() => router.push('/graphics')} style={headLink}>{d.lanes.gfxActive} active jobs →</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, minmax(0, 1fr))', padding: '2px 8px 12px' }}>
@@ -920,7 +1084,7 @@ export default function OpsDashboard() {
         ))}
       </div>
     </div>
-  );
+  ));
 
   const upfitStages = [
     { n: d.upfit.received, l: 'Received', color: '#60a5fa' },
@@ -930,10 +1094,10 @@ export default function OpsDashboard() {
   ];
   const maxUpfit = Math.max(1, ...upfitStages.map(s => s.n));
 
-  const upfitGlance = (
+  const upfitGlance = show('upfit', 'Upfit — at a glance', `${d.lanes.shopActive} in shop`, () => (
     <div style={card}>
       <div style={cardHead}>
-        <h2 style={headTitle}>Upfit — at a glance</h2>
+        <h2 style={headTitle}>{foldTitle('upfit', 'Upfit — at a glance')}</h2>
         {canOpen('/tracking') ? <button onClick={() => go('/tracking')} style={headLink}>{d.lanes.shopActive} in shop →</button> : <span style={{ ...headLink, cursor: 'default' }}>{d.lanes.shopActive} in shop</span>}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', padding: '2px 8px 12px' }}>
@@ -970,12 +1134,13 @@ export default function OpsDashboard() {
         ))}
       </div>
     </div>
-  );
+  ));
 
-  const salesBand = (
+  const salesLabel = personalSales ? 'My pipeline' : 'Sales';
+  const salesBand = show('sales', salesLabel, `${fmtK(d.pipelineValue.total)} pipeline`, () => (
     <div style={card}>
       <div style={cardHead}>
-        <h2 style={headTitle}>Sales</h2>
+        <h2 style={headTitle}>{foldTitle('sales', salesLabel)}</h2>
         <button onClick={() => router.push('/admin/prospects')} style={headLink}>Customers →</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', borderTop: '1px solid var(--border)' }}>
@@ -1069,7 +1234,7 @@ export default function OpsDashboard() {
         </div>
       </div>
     </div>
-  );
+  ));
 
   const schedRow = (item: ScheduleItem) => {
     const dt = new Date(item.date + 'T12:00:00');
@@ -1102,13 +1267,10 @@ export default function OpsDashboard() {
     );
   };
 
-  const rightRail = (
-    <div style={{ display: 'grid', gap: '12px', alignContent: 'start' }}>
-      {/* Super admins only (owner, 2026-10-22) — replaces the Business Pulse alert. */}
-      {hasRole('super_admin') && <BusinessPulseCard onOpen={go} />}
+  const next7 = show('next7', 'Next 7 days', d.schedule.length === 0 ? 'nothing scheduled' : `${d.schedule.length} on the calendar`, () => (
       <div style={card}>
         <div style={cardHead}>
-          <h2 style={headTitle}>Next 7 days</h2>
+          <h2 style={headTitle}>{foldTitle('next7', 'Next 7 days')}</h2>
           <span style={{ display: 'flex', gap: '10px' }}>
             {canOpen('/admin/schedule') && <>
               <button onClick={() => go('/admin/schedule')} style={headLink} title="Add a calendar event on the Schedule page">+ Add</button>
@@ -1123,9 +1285,16 @@ export default function OpsDashboard() {
           {d.schedule.map(schedRow)}
         </div>
       </div>
-      {canOpen('/admin/shop-week') && <ShopLoadStrip onOpen={() => go('/admin/shop-week')} />}
+  ));
+
+  const shopLoad = !canOpen('/admin/shop-week') ? null
+    : show('shopLoad', 'Shop load · 2 weeks', 'sold hours vs crew', () => (
+      <ShopLoadStrip onOpen={() => go('/admin/shop-week')} title={foldTitle('shopLoad', 'Shop load · 2 weeks')} />
+    ));
+
+  const rightNow = show('rightNow', 'Right now', `${d.now.scansToday} scans today · ${d.now.inShop} in shop`, () => (
       <div style={card}>
-        <div style={cardHead}><h2 style={headTitle}>Right now</h2></div>
+        <div style={cardHead}><h2 style={headTitle}>{foldTitle('rightNow', 'Right now')}</h2></div>
         <div style={{ display: 'flex', gap: '10px', padding: '12px 16px', borderTop: '1px solid var(--border)' }}>
           {([
             // Land on the All Scans tab pre-filtered by scan date, so the list
@@ -1146,10 +1315,16 @@ export default function OpsDashboard() {
           ))}
         </div>
       </div>
-      <RecentActivity />
+  ));
+
+  const activity = show('activity', 'Your recent activity', 'last few days', () => (
+    <RecentActivity title={foldTitle('activity', 'Your recent activity')} />
+  ));
+
+  const messagesCard = show('messages', 'Messages', d.messages[0] ? `${d.messages[0].sender} · ${d.messages[0].ago}` : 'no messages', () => (
       <div style={card}>
         <div style={cardHead}>
-          <h2 style={headTitle}>Messages</h2>
+          <h2 style={headTitle}>{foldTitle('messages', 'Messages')}</h2>
           <button onClick={() => router.push('/messages')} style={headLink}>All →</button>
         </div>
         <div style={{ borderTop: '1px solid var(--border)' }}>
@@ -1173,14 +1348,17 @@ export default function OpsDashboard() {
           ))}
         </div>
       </div>
-    </div>
-  );
+  ));
 
-  const leftColumnAll = preset === 'sales'
-    ? [salesBand, needsAttention, workInMotion, upfitGlance]
-    : [needsAttention, workInMotion, upfitGlance, salesBand];
-  // Pipeline value, closing forecast, won value, customer YTD spend — all money.
-  const leftColumn = canSeeMoney ? leftColumnAll : leftColumnAll.filter(el => el !== salesBand);
+  // Super admins only (owner, 2026-10-22) — replaces the Business Pulse alert.
+  const pulse = !hasRole('super_admin') ? null
+    : show('pulse', 'Business pulse', 'yesterday vs usual', () => (
+      <BusinessPulseCard onOpen={go} title={foldTitle('pulse', 'Business pulse')} />
+    ));
+
+  const leftColumn = [forYou, financeCards, shopTodosCard, workInMotion, upfitGlance, canSeeMoney ? salesBand : null, openPosCard]
+    .filter(Boolean);
+  const rightColumn = [pulse, next7, shopLoad, rightNow, activity, messagesCard].filter(Boolean);
 
   return (
     <div>
@@ -1213,34 +1391,34 @@ export default function OpsDashboard() {
             {today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            {d.queue.length > 0
-              ? `${d.queue.length} item${d.queue.length !== 1 ? 's' : ''} need attention`
-              : d.unavailable.length > 0 ? 'Some checks didn\u2019t load' : 'Nothing needs attention'}
-            {' · '}{d.lanes.gfxActive + d.lanes.shopActive + d.lanes.cniOpen} jobs in motion
-            {canSeeMoney && d.stages.toInvoice > 0 ? ` · ${d.stages.toInvoice} ready to invoice` : ''}
+            {forYou
+              ? (myTodos.length > 0
+                ? `${myTodos.length} thing${myTodos.length !== 1 ? 's' : ''} for you`
+                : d.unavailable.length > 0 ? 'Some checks didn\u2019t load' : 'Nothing needs you')
+              : `${d.stages.toInvoice} ready to invoice`}
+            {everything ? ` · ${d.lanes.gfxActive + d.lanes.shopActive + d.lanes.cniOpen} jobs in motion` : ''}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '6px' }}>
-          {(['ops', 'sales'] as const).map(p => (
-            <button key={p} onClick={() => pickPreset(p)} style={{
-              fontSize: '11px', fontWeight: 700, padding: '5px 12px', borderRadius: '8px', cursor: 'pointer',
-              border: preset === p ? '1px solid var(--tab-active-border)' : '1px solid var(--border)',
-              background: preset === p ? 'var(--tab-active-bg)' : 'transparent',
-              color: preset === p ? 'var(--orange)' : 'var(--text-muted)',
-            }}>{p === 'ops' ? 'Operations' : 'Sales'}</button>
-          ))}
-        </div>
+        {/* What this Dashboard is about; a super admin changes it in Admin → Users. */}
+        <span title="Set in Admin → Users" style={{
+          fontSize: '10.5px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px',
+          padding: '4px 10px', borderRadius: '999px', border: '1px solid var(--border)', color: 'var(--text-muted)',
+        }}>Focus: {focus.map(f => FOCUS_LABEL[f]).join(' + ')}</span>
       </div>
 
       {newForYou}
 
       {kpis}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: '12px', alignItems: 'start' }} className="dash-cols">
+      <div style={{ display: 'grid', gridTemplateColumns: rightColumn.length > 0 ? 'minmax(0, 2fr) minmax(0, 1fr)' : 'minmax(0, 1fr)', gap: '12px', alignItems: 'start', ...(rightColumn.length === 0 ? { maxWidth: '640px' } : {}) }} className="dash-cols">
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: '12px' }}>
           {leftColumn.map((el, i) => <div key={i}>{el}</div>)}
         </div>
-        {rightRail}
+        {rightColumn.length > 0 && (
+          <div style={{ display: 'grid', gap: '12px', alignContent: 'start' }}>
+            {rightColumn.map((el, i) => <div key={i}>{el}</div>)}
+          </div>
+        )}
       </div>
 
       <style>{`@media (max-width: 860px) { .dash-cols { grid-template-columns: minmax(0, 1fr) !important; } }`}</style>
