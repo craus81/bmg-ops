@@ -49,6 +49,7 @@ const PrefsSchema = z.object({
   notify_status_change: z.boolean().optional(),
   notify_ready: z.boolean().optional(),
   notify_ready_for_install: z.boolean().optional(),
+  schedules_installs: z.boolean().optional(),
   notify_invoicing: z.boolean().optional(),
   notify_shipped: z.boolean().optional(),
   notify_new_po: z.boolean().optional(),

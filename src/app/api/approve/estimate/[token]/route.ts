@@ -20,6 +20,7 @@ import { approvalContentHash } from '@/lib/magic-link-approval';
 import { reconcileLinkedWrapQuotes } from '@/lib/wrap-quote-reconcile';
 import { notifyMany, notifyDecisionWatchers } from '@/lib/notify';
 import { notifyProofDecision } from '@/lib/proof-decision-notify';
+import { notifyInstallSchedulers, notifyStartDesigning } from '@/lib/install-scheduling';
 import { deepLinks } from '@/lib/deep-links';
 import { logQuoteResponse } from '@/lib/quote-response-activity';
 import { validateBody, z } from '@/lib/validate';
@@ -270,7 +271,11 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   // One click approved design + price: propagate the acceptance onto the
   // graphics jobs whose proofs were part of this document, so the printing
   // proof-gate opens without a second customer round-trip.
-  await approveLinkedGraphicsJobs(estimate, proofBlocks, { ...metadata, responder }, approvedAt, signedPath, signedHash);
+  const approvedJobIds = await approveLinkedGraphicsJobs(estimate, proofBlocks, { ...metadata, responder }, approvedAt, signedPath, signedHash);
+  // Estimate approval starts the design (Craig, 2026-10-24): linked jobs
+  // whose proof wasn't on this document, or a job to create. Jobs approved
+  // just now with their proof already heard "ready to produce" instead.
+  await notifyStartDesigning(supabase, estimate, approvedJobIds);
 
   // Folded wrap quotes ride the same acceptance: the estimate's grand total
   // already carries their money, and leaving them 'sent' kept them in the
@@ -300,7 +305,8 @@ async function approveLinkedGraphicsJobs(
   approvedAt: string,
   signedPath: string | null,
   signedHash: string | null,
-) {
+): Promise<Set<string>> {
+  const approved = new Set<string>();
   for (const block of proofBlocks) {
     try {
       const { data: job } = await supabase
@@ -368,11 +374,14 @@ async function approveLinkedGraphicsJobs(
         note: `${metadata.responder ? metadata.responder : 'Customer'} approved proof together with Estimate #${estimate.estimate_number} via magic link`,
       });
 
+      approved.add(job.id);
       await notifyGraphicsTeamCombined(job, estimate);
+      await notifyInstallSchedulers(supabase, job.id);
     } catch (err) {
       console.error('graphics-job approval propagation failed:', err);
     }
   }
+  return approved;
 }
 
 /** Same audience as the proof-only flow's approval notification. */

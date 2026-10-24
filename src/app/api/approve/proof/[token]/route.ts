@@ -5,6 +5,7 @@ import {
   getRequestIp, AGREEMENT_TEXT,
 } from '@/lib/magic-link-approval';
 import { notifyProofDecision } from '@/lib/proof-decision-notify';
+import { notifyInstallSchedulers } from '@/lib/install-scheduling';
 import { deepLinks } from '@/lib/deep-links';
 import { r2Get, r2PresignGet, r2Upload } from '@/lib/r2';
 import { validateBody, z } from '@/lib/validate';
@@ -278,6 +279,8 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   });
 
   await notifyGraphicsTeam(job, 'approved', undefined, responder);
+  // Installed jobs: whoever books installs calls the client next.
+  await notifyInstallSchedulers(supabase, job.id);
   return NextResponse.json({ status: 'submitted_accepted' });
 }
 

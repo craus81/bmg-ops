@@ -46,6 +46,7 @@ import GraphicsJobSources from '@/components/GraphicsJobSources';
 import GraphicsJobKits from '@/components/GraphicsJobKits';
 import type { JobKit } from '@/lib/graphics-fleet';
 import GraphicsApprovalHistory from '@/components/GraphicsApprovalHistory';
+import GraphicsInstallCard from '@/components/GraphicsInstallCard';
 import PrintRoomTimer from '@/components/PrintRoomTimer';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { DropZone } from '@/components/DropZone';
@@ -2011,6 +2012,9 @@ export default function GraphicsJobRecordPage() {
           />
         )}
       </div>
+
+      {/* ── Install: date, arrival time, and the client's confirmation ── */}
+      <GraphicsInstallCard job={job} onUpdated={patch => { setJob(prev => (prev ? { ...prev, ...patch } : prev)); loadHistory(); }} />
 
       {/* ── Files ── */}
       <div style={card}>
