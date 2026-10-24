@@ -35,8 +35,8 @@ export const RESTLET_SPECS = [
     label: 'Item RESTlet',
     envVar: 'NETSUITE_ITEM_RESTLET_URL',
     scriptFile: 'scripts/netsuite-item-restlet.js',
-    expectedVersion: '2026-09-10.1',
-    powers: 'Writing item descriptions, names and prices back to NetSuite — catalog auto-enrichment and part admin edits',
+    expectedVersion: '2026-10-23.1',
+    powers: 'Writing item descriptions, names and prices back to NetSuite — catalog auto-enrichment and part admin edits — and making drop ship POs from a sales order (Drop ship from vendor on the estimate)',
     runbook: null,
   },
   {
