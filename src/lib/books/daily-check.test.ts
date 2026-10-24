@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  alertsFor, balanceAlertsFor, balanceKey, fulfillmentAlertsFor, lookOf, nextCheck, ownAlertsFor, parseCheckState, stockAlertsFor,
-  type BalanceNews, type CompanyCheck, type DifferingMonths, type MonthFacts, type MonthNews, type StockNews,
+  alertsFor, balanceAlertsFor, balanceKey, fulfillmentAlertsFor, lookOf, mistakeAlertsFor, nextCheck, ownAlertsFor, parseCheckState,
+  stockAlertsFor,
+  type BalanceNews, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews, type StockNews,
 } from './daily-check';
 import type { DiffDocumentData } from './differences';
 import type { OwnFulfillmentCheck } from './own-fulfillment-check';
@@ -84,6 +85,17 @@ describe('parseCheckState', () => {
       .toEqual({ companies: {}, own: { known: {}, noted: {} }, fulfillments });
     for (const bad of [null, 'x', { known: { IF7001: 1 }, noted: {} }, { known: { 7001: -1 }, noted: {} }, { noted: {} }]) {
       expect(parseCheckState({ companies: {}, fulfillments: bad })).toEqual({ companies: {} });
+    }
+  });
+
+  it("reads what it holds for likely mistakes, keyed by their id on Mistake checks, and drops it when it doesn't read", () => {
+    const id = '0b5c1d2e-3f40-4a51-8b62-7c83d94ea5f6';
+    const mistakes = { known: { [id]: 1 }, noted: {} };
+    expect(parseCheckState({ companies: {}, mistakes })).toEqual({ companies: {}, mistakes });
+    expect(parseCheckState({ companies: {}, fulfillments: { known: {}, noted: {} }, mistakes }))
+      .toEqual({ companies: {}, fulfillments: { known: {}, noted: {} }, mistakes });
+    for (const bad of [null, 'x', { known: { 7001: 1 }, noted: {} }, { known: { [`twice:${id}`]: 1 }, noted: {} }, { known: { [id]: 1 } }]) {
+      expect(parseCheckState({ companies: {}, mistakes: bad })).toEqual({ companies: {} });
     }
   });
 
@@ -454,6 +466,64 @@ describe('fulfillmentAlertsFor', () => {
   it('tells nothing of a fulfillment it has no check for, nor when nothing changed', () => {
     expect(fulfillmentAlertsFor([news('7009')], new Map())).toEqual([]);
     expect(fulfillmentAlertsFor([], new Map())).toEqual([]);
+  });
+});
+
+describe('mistakeAlertsFor', () => {
+  const ids = ['0b5c1d2e-3f40-4a51-8b62-7c83d94ea5f1', '0b5c1d2e-3f40-4a51-8b62-7c83d94ea5f2',
+    '0b5c1d2e-3f40-4a51-8b62-7c83d94ea5f3', '0b5c1d2e-3f40-4a51-8b62-7c83d94ea5f4'];
+  const item = (id: string, over: Partial<MistakeAlertItem> = {}): MistakeAlertItem => ({
+    id, company: 'BMG', kind: 'twice', party: 'Metro Fuel Services',
+    why: 'Two bills with the same amount and the same invoice number, INV-20931: one dated Oct 3, the other Oct 9.', ...over,
+  });
+  const news = (id: string): MonthNews => ({ month: id, documents: 1, before: null });
+
+  it('names the vendor and what looks wrong, says why, and opens it on Mistake checks', () => {
+    expect(mistakeAlertsFor([news(ids[0])], new Map([[ids[0], item(ids[0])]]))).toEqual([{
+      title: 'Mistake checks: Metro Fuel Services may be entered twice',
+      body: 'Two bills with the same amount and the same invoice number, INV-20931: one dated Oct 3, the other Oct 9. Mistake checks shows it.',
+      url: `/admin/books/mistake-checks?company=BMG&item=${ids[0]}`,
+      about: 'mistake',
+    }]);
+    const titles = (['far_off', 'missing', 'odd_account'] as const).map((kind) =>
+      mistakeAlertsFor([news(ids[0])], new Map([[ids[0], item(ids[0], { kind, party: null })]]))[0].title);
+    expect(titles).toEqual([
+      'Mistake checks: A vendor is far off their usual',
+      "Mistake checks: A vendor's monthly charge hasn't come",
+      'Mistake checks: A vendor is coded to an odd account',
+    ]);
+  });
+
+  it("tells about up to three one by one, entered twice first, and more in one notification opening the company's list", () => {
+    const kinds = ['missing', 'twice', 'odd_account', 'far_off'] as const;
+    const items = new Map(ids.map((id, i) => [id, item(id, { kind: kinds[i], party: `Vendor ${i + 1}` })]));
+    expect(mistakeAlertsFor(ids.slice(0, 3).map(news), items).map((a) => a.title)).toEqual([
+      'Mistake checks: Vendor 2 may be entered twice',
+      "Mistake checks: Vendor 1's monthly charge hasn't come",
+      'Mistake checks: Vendor 3 is coded to an odd account',
+    ]);
+    expect(mistakeAlertsFor(ids.map(news), items)).toEqual([{
+      title: 'Mistake checks: 4 likely mistakes in NetSuite',
+      body: 'Vendor 2 (entered twice), Vendor 4 (far off usual), Vendor 1 (monthly charge missing) and 1 more. Mistake checks shows why.',
+      url: '/admin/books/mistake-checks?company=BMG',
+      about: 'mistake',
+    }]);
+    items.set(ids[3], item(ids[3], { company: '1084' }));
+    expect(mistakeAlertsFor(ids.map(news), items)[0].url).toBe('/admin/books/mistake-checks');
+  });
+
+  it("tells nothing of one it can't name, nor when nothing is new", () => {
+    expect(mistakeAlertsFor([news(ids[0])], new Map())).toEqual([]);
+    expect(mistakeAlertsFor([], new Map())).toEqual([]);
+  });
+});
+
+describe('deepLinks.booksMistakeChecks', () => {
+  it('opens Mistake checks, on a company, and on one item there', () => {
+    expect(deepLinks.booksMistakeChecks()).toBe('/admin/books/mistake-checks');
+    expect(deepLinks.booksMistakeChecks('1084')).toBe('/admin/books/mistake-checks?company=1084');
+    expect(deepLinks.booksMistakeChecks(null, 'abc')).toBe('/admin/books/mistake-checks?item=abc');
+    expect(deepLinks.booksMistakeChecks('BMG', 'abc')).toBe('/admin/books/mistake-checks?company=BMG&item=abc');
   });
 });
 

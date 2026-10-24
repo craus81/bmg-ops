@@ -21,7 +21,7 @@ const monthEnd = (month: string) => {
  * GET /api/admin/books/own-fulfillments?month=YYYY-MM — FleetSuite's own
  * fulfillments made that month (the newest month with any when it's left
  * out), each next to NetSuite's fulfillment with what each says it cost
- * (migration 418, src/lib/books/own-fulfillment-check.ts), with every month
+ * (migration 416, src/lib/books/own-fulfillment-check.ts), with every month
  * that has any and how the copies the check reads from last went.
  * GET /api/admin/books/own-fulfillments?id=<NetSuite id> — one of them, item
  * by item, with what NetSuite's fulfillment posted. Amounts are whole cents.

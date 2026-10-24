@@ -679,8 +679,11 @@ export function itemUrl(internalId: string | number): string {
   return `https://${accountForUrl}.app.netsuite.com/app/common/item/item.nl?id=${internalId}`;
 }
 
-/** NetSuite UI link for a transaction record (customer invoice, vendor bill, purchase order). */
-export function transactionUrl(page: 'custinvc' | 'vendbill' | 'purchord', internalId: string | number): string {
+/** NetSuite UI link for a transaction record (customer invoice, vendor bill or bill credit, purchase order, check, card charge or refund). */
+export function transactionUrl(
+  page: 'custinvc' | 'vendbill' | 'vendcred' | 'purchord' | 'check' | 'cardchrg' | 'cardrfnd',
+  internalId: string | number,
+): string {
   const accountForUrl = getConfig().accountId.replace(/-/g, '_').toUpperCase();
   return `https://${accountForUrl}.app.netsuite.com/app/accounting/transactions/${page}.nl?id=${internalId}`;
 }

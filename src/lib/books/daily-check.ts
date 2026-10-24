@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { deepLinks } from '@/lib/deep-links';
+import { fetchAllRows } from '@/lib/fetch-all';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import type { BooksCompany } from './journal';
 import { BOOKS_GL_SYNC, COPY_FROM } from './netsuite-gl';
@@ -15,6 +16,7 @@ import {
 } from './differences';
 import { checkOwnInvoices, type OwnInvoiceCheck, type OwnPairsData } from './own-invoice-check';
 import { checkOwnFulfillments, type CopiesThrough, type FulfilPairsData, type OwnFulfillmentCheck } from './own-fulfillment-check';
+import { MISTAKE_KINDS, type MistakeKind } from './mistake-checks';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -67,16 +69,23 @@ import { checkOwnFulfillments, type CopiesThrough, type FulfilPairsData, type Ow
  * differently, is noted at the first look and told about at the second if it
  * still differs, as is one where more differs than before.
  *
+ * And the likely mistakes the nightly mistake checks keep open (owner
+ * decision 2026-10-24, "Mistake checks"; src/lib/books/mistake-checks.ts): one
+ * the 09:46 look found is noted at the first look and told about at the
+ * second if nobody has cleared it by then. One that comes back, or is opened
+ * again, is told about again. They start the day the check began to look, so
+ * the first ones are told about too.
+ *
  * In-app and push only (books_month_differs, books_stock_differs,
  * books_balance_differs, books_own_invoice_differs,
- * books_own_fulfillment_differs). The record in sync_state,
- * 'books_daily_check', holds which months differ and how many of their
- * documents, which items' counts differ and by about how many, whose
- * balances differ and in how many documents, and which own invoices and own
- * fulfillments differ and in how many things, never an amount, and is left
- * out of
- * HEALTH_MONITORS like the other books jobs; Differences vs NetSuite says
- * when the check last looked. Nothing is written to NetSuite or to the books.
+ * books_own_fulfillment_differs, books_mistake_found). The record in
+ * sync_state, 'books_daily_check', holds which months differ and how many of
+ * their documents, which items' counts differ and by about how many, whose
+ * balances differ and in how many documents, which own invoices and own
+ * fulfillments differ and in how many things, and which likely mistakes are
+ * open, never an amount, and is left out of HEALTH_MONITORS like the other
+ * books jobs; Differences vs NetSuite says when the check last looked.
+ * Nothing is written to NetSuite or to the books.
  */
 
 export const BOOKS_DAILY_CHECK = 'books_daily_check';
@@ -126,6 +135,8 @@ export interface DailyCheckState {
   own?: CompanyCheck;
   /** FleetSuite's own fulfillments that differ from NetSuite's, as its own invoices, by NetSuite's id for the fulfillment. */
   fulfillments?: CompanyCheck;
+  /** The likely mistakes open on Mistake checks, as its own invoices, by the item's id, each counted once. */
+  mistakes?: CompanyCheck;
 }
 
 const MONTH_RE = /^\d{4}-\d{2}-01$/;
@@ -135,6 +146,8 @@ const STOCK_KEY_RE = /^\d+(\|\d*)?$/;
 const BALANCE_KEY_RE = /^(c:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?|v:(\d+)?)$/;
 /** An own invoice or own fulfillment, by NetSuite's id for it. */
 const OWN_KEY_RE = /^\d+$/;
+/** A likely mistake, by its id on Mistake checks. */
+const MISTAKE_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** How the check keys one customer's ('c:<FleetSuite id>') or vendor's ('v:<NetSuite id>') balance; 'c:' and 'v:' for the lines FleetSuite can't name. */
 export const balanceKey = (kind: PartyKind, party: string) => `${kind === 'customer' ? 'c' : 'v'}:${party}`;
@@ -178,19 +191,21 @@ export function parseCheckState(lastResult: unknown): DailyCheckState {
     const noted = parseCounts(last.balances?.[company]?.noted, BALANCE_KEY_RE);
     if (known && noted) balances[company] = { known, noted };
   }
-  const byId = (raw: any): CompanyCheck | null => {
-    const known = parseCounts(raw?.known, OWN_KEY_RE);
-    const noted = parseCounts(raw?.noted, OWN_KEY_RE);
+  const byId = (raw: any, key = OWN_KEY_RE): CompanyCheck | null => {
+    const known = parseCounts(raw?.known, key);
+    const noted = parseCounts(raw?.noted, key);
     return known && noted ? { known, noted } : null;
   };
   const own = byId(last.own);
   const fulfillments = byId(last.fulfillments);
+  const mistakes = byId(last.mistakes, MISTAKE_KEY_RE);
   return {
     companies,
     ...(stock ? { stock } : {}),
     ...(Object.keys(balances).length ? { balances } : {}),
     ...(own ? { own } : {}),
     ...(fulfillments ? { fulfillments } : {}),
+    ...(mistakes ? { mistakes } : {}),
   };
 }
 
@@ -235,10 +250,11 @@ export interface CheckAlert {
   url: string;
   /**
    * Set on a notification about stock by item (books_stock_differs), a customer's or vendor's balance
-   * (books_balance_differs), FleetSuite's own invoices (books_own_invoice_differs) or its own fulfillments
-   * (books_own_fulfillment_differs); one about months has none (books_month_differs).
+   * (books_balance_differs), FleetSuite's own invoices (books_own_invoice_differs), its own fulfillments
+   * (books_own_fulfillment_differs) or likely mistakes (books_mistake_found); one about months has none
+   * (books_month_differs).
    */
-  about?: 'stock' | 'balance' | 'own' | 'fulfillment';
+  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'mistake';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -454,6 +470,52 @@ export function fulfillmentAlertsFor(news: MonthNews[], checks: Map<string, OwnF
   }));
 }
 
+/** A likely mistake a notification names: what Mistake checks shows of it. */
+export interface MistakeAlertItem {
+  id: string;
+  company: BooksCompany;
+  kind: MistakeKind;
+  party: string | null;
+  why: string;
+}
+
+const MISTAKE_TITLES: Record<MistakeKind, (party: string) => string> = {
+  twice: (party) => `${party} may be entered twice`,
+  far_off: (party) => `${party} is far off their usual`,
+  missing: (party) => `${party}'s monthly charge hasn't come`,
+  odd_account: (party) => `${party} is coded to an odd account`,
+};
+const MISTAKE_WORDS: Record<MistakeKind, string> = {
+  twice: 'entered twice', far_off: 'far off usual', missing: 'monthly charge missing', odd_account: 'odd account',
+};
+
+/**
+ * What the super admins are told about likely mistakes nobody has cleared: a notification for each, opening it on
+ * Mistake checks, or with more than ONE_BY_ONE at a look one naming the first few, opening the list.
+ */
+export function mistakeAlertsFor(news: MonthNews[], items: Map<string, MistakeAlertItem>): CheckAlert[] {
+  const told = news.map((n) => items.get(n.month)).filter((i): i is MistakeAlertItem => !!i)
+    .sort((a, b) => MISTAKE_KINDS.indexOf(a.kind) - MISTAKE_KINDS.indexOf(b.kind));
+  if (!told.length) return [];
+  const party = (i: MistakeAlertItem) => i.party ?? 'A vendor';
+  if (told.length > ONE_BY_ONE) {
+    const companies = [...new Set(told.map((i) => i.company))];
+    return [{
+      title: `Mistake checks: ${told.length} likely mistakes in NetSuite`,
+      body: `${listed([...told.slice(0, ONE_BY_ONE).map((i) => `${party(i)} (${MISTAKE_WORDS[i.kind]})`), `${told.length - ONE_BY_ONE} more`])}. `
+        + 'Mistake checks shows why.',
+      url: deepLinks.booksMistakeChecks(companies.length === 1 ? companies[0] : null),
+      about: 'mistake',
+    }];
+  }
+  return told.map((i) => ({
+    title: `Mistake checks: ${MISTAKE_TITLES[i.kind](party(i))}`,
+    body: `${i.why} Mistake checks shows it.`,
+    url: deepLinks.booksMistakeChecks(i.company, i.id),
+    about: 'mistake',
+  }));
+}
+
 // ── Looking ────────────────────────────────────────────────────────────────
 
 /** Months whose documents are looked up at once. */
@@ -567,6 +629,31 @@ async function lookAtOwnFulfillments(
     }
   }), LOOKUPS);
   return { now, checks };
+}
+
+/** The likely mistakes open on Mistake checks, each counted once, with what to name for each. */
+async function lookAtMistakes(service: SupabaseClient): Promise<{ now: DifferingMonths; items: Map<string, MistakeAlertItem> }> {
+  const [rows, companies] = await Promise.all([
+    fetchAllRows<{ id: string; company_id: string; kind: MistakeKind; party_name: string | null; why: string }>((from, to) => service
+      .from('gl_mistake_checks')
+      .select('id, company_id, kind, party_name, why')
+      .eq('state', 'open')
+      .order('id', { ascending: true })
+      .range(from, to)),
+    service.from('gl_companies').select('id, code'),
+  ]);
+  if (rows.error) throw new Error(`couldn't read the open ones (${rows.error.message})`);
+  if (companies.error) throw new Error(`couldn't read the companies (${companies.error.message})`);
+  const codes = new Map(((companies.data ?? []) as Array<{ id: string; code: string }>).map((c) => [c.id, c.code]));
+  const now: DifferingMonths = {};
+  const items = new Map<string, MistakeAlertItem>();
+  for (const r of rows.data) {
+    const company = codes.get(r.company_id);
+    if (!company || !POSTING_COMPANIES.includes(company as BooksCompany) || !MISTAKE_KINDS.includes(r.kind)) continue;
+    now[r.id] = 1;
+    items.set(r.id, { id: r.id, company: company as BooksCompany, kind: r.kind, party: r.party_name, why: r.why });
+  }
+  return { now, items };
 }
 
 /** The newest documents that differ of each balance a notification names one by one. */
@@ -701,6 +788,18 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     errors.push(`Own fulfillments: ${reason(err)}`);
   }
 
+  // The likely mistakes nobody has cleared, from the night's look. They too start the day the check began to look.
+  let mistakes = held.mistakes;
+  try {
+    const { now, items } = await lookAtMistakes(service);
+    const { check, news } = nextCheck(held.mistakes ?? { known: {}, noted: {} }, now, opts.look);
+    mistakes = check;
+    alerts.push(...mistakeAlertsFor(news, items));
+    told += news.length;
+  } catch (err) {
+    errors.push(`Mistake checks: ${reason(err)}`);
+  }
+
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.
   if (alerts.length) await opts.tell(alerts);
   const result: DailyCheckResult = { look: opts.look, told, ...(errors.length ? { error: errors.join(' ') } : {}) };
@@ -711,6 +810,7 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     ...(Object.keys(balances).length ? { balances } : {}),
     ...(own ? { own } : {}),
     ...(fulfillments ? { fulfillments } : {}),
+    ...(mistakes ? { mistakes } : {}),
   };
   const heartbeat = await recordHeartbeat(service, BOOKS_DAILY_CHECK, record, {
     startedAt,

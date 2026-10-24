@@ -11,7 +11,7 @@ import type { FulfilItemPair, OwnFulfillmentCheck } from '@/lib/books/own-fulfil
 
 /**
  * Books → Own fulfillments → one of FleetSuite's own fulfillments, next to
- * NetSuite's (migration 418, src/lib/books/own-fulfillment-check.ts,
+ * NetSuite's (migration 416, src/lib/books/own-fulfillment-check.ts,
  * docs/books.md "FleetSuite's own fulfillments").
  *
  * What's compared, each with FleetSuite's and NetSuite's side and why they
