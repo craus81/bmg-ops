@@ -20,7 +20,7 @@ import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import BuyListModal from '@/components/BuyListModal';
 import { buildBuyList } from '@/lib/buy-list';
-import { looseMatcher } from '@/lib/loose-search';
+import { looseMatcher, partNumberIncludes } from '@/lib/loose-search';
 
 interface DemandSourceRef {
   kind: 'sales_order' | 'estimate';
@@ -273,7 +273,7 @@ export default function PartsDemandTab({ onQueued, onBatchQueued }: {
     if (r.dismissed && !showDismissed) return false;
     if (hideCovered && r.on_order + r.requested >= r.needed) return false;
     if (!search.trim()) return true;
-    return matchSearch(r.item_number, r.description, r.vendor)
+    return matchSearch(r.item_number, r.description, r.vendor) || partNumberIncludes(r.item_number, search)
       || r.sources.some(s => matchSearch(s.label, s.customerName));
   });
 

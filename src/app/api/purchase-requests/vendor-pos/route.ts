@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { transactionUrl } from '@/lib/netsuite';
+import { partNumberRegex } from '@/lib/loose-search';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,12 +50,16 @@ export async function GET(req: NextRequest) {
   if (q) {
     // One .or() per query (the status filter above uses it), so the search
     // resolves to PO ids first: number or vendor, or a part on the PO.
+    const partRe = partNumberRegex(q);
     const [{ data: headHits }, { data: lineHits }] = await Promise.all([
       service.from('netsuite_vendor_pos').select('id')
         .or(`tranid.ilike.%${q}%,vendor_name.ilike.%${q}%`)
         .order('trandate', { ascending: false, nullsFirst: false }).limit(300),
-      service.from('netsuite_vendor_po_lines').select('po_id')
-        .ilike('item_number', `%${q}%`).order('id', { ascending: false }).limit(300),
+      // A part on the PO matches with its dashes ignored ("ar2000" → AR-2000).
+      partRe
+        ? service.from('netsuite_vendor_po_lines').select('po_id')
+          .filter('item_number', 'imatch', partRe).order('id', { ascending: false }).limit(300)
+        : Promise.resolve({ data: [] as any[] }),
     ]);
     const hitIds = [...new Set([
       ...((headHits || []) as any[]).map(h => h.id as string),

@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateSearchParams, z } from '@/lib/validate';
 import { wheelbaseAccepts } from '@/lib/vehicle-fitment';
-import { looseOrFilter } from '@/lib/loose-search';
+import { partSearchOrFilter } from '@/lib/loose-search';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,8 +71,9 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Forgiving match (src/lib/loose-search.ts); a query with no words filters nothing.
-    const qFilter = looseOrFilter(['item_number', 'display_name', 'description'], q);
+    // Forgiving match (src/lib/loose-search.ts), part numbers with or without
+    // their dashes; a query with no words filters nothing.
+    const qFilter = partSearchOrFilter(['item_number'], ['display_name', 'description'], q);
     if (qFilter) query = query.or(qFilter);
     if (categoryId) query = query.eq('product_category_id', categoryId);
     else if (uncategorized) query = query.is('product_category_id', null);

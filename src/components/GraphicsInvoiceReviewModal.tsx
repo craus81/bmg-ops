@@ -20,7 +20,7 @@ import NumberInput from '@/components/NumberInput';
 import type { GraphicsJob } from '@/lib/types';
 import { exportPackingListPDF, packingListFromJob, type PackingListLine } from '@/lib/packing-list-pdf';
 import { closeOnEscape } from '@/lib/modal-escape';
-import { looseOrFilter } from '@/lib/loose-search';
+import { looseOrFilter, partSearchOrFilter } from '@/lib/loose-search';
 
 interface CustomerRow {
   id: string;
@@ -175,7 +175,7 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
 
   // ── Part search (debounced, only for the row being edited) ──
   useEffect(() => {
-    const filter = looseOrFilter(['item_number', 'display_name', 'description'], partSearch);
+    const filter = partSearchOrFilter(['item_number'], ['display_name', 'description'], partSearch);
     if (!activePartRow || partSearch.length < 2 || !filter) { setPartResults([]); return; }
     let cancelled = false;
     setPartSearching(true);

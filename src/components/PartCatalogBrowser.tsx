@@ -6,6 +6,7 @@ import { toJpegIfHeic } from '@/lib/heic';
 import { createClient } from '@/lib/supabase-browser';
 import AddToEstimateModal from '@/components/AddToEstimateModal';
 import { loadKits, normItem, type KitWithMembers } from '@/lib/part-kits';
+import { partNumberIncludes } from '@/lib/loose-search';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { useImageDrop } from '@/lib/use-image-drop';
 import RackKitBrowser from '@/components/RackKitBrowser';
@@ -617,7 +618,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           {(() => {
             const needle = normItem(q);
             const stripKits = (kits || []).filter(k => needle
-              ? !!k.item_number && (normItem(k.item_number).includes(needle) || normItem(k.name).includes(needle))
+              ? !!k.item_number && (partNumberIncludes(k.item_number, q) || normItem(k.name).includes(needle))
               : !k.item_number).slice(0, 30);
             if (stripKits.length === 0) return null;
             return (
