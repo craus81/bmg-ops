@@ -460,6 +460,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/parts/[id]/attach-dropbox-proof/route.ts': admin(),
   'src/app/api/parts/[id]/attach-proof/route.ts': admin(),
   'src/app/api/parts/[id]/description/route.ts': admin(),
+  'src/app/api/parts/[id]/labor/route.ts': superAdmin(),
   'src/app/api/parts/[id]/route.ts': admin(),
   'src/app/api/parts/browse/route.ts': staff(),
   'src/app/api/parts/catalog-health/route.ts': admin(),

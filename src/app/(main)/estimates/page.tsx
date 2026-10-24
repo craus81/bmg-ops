@@ -25,6 +25,8 @@ import {
   type ReviewDecision,
 } from '@/lib/estimate-review';
 import { flashNote } from '@/lib/focus-note';
+import PartLaborEditor from '@/components/PartLaborEditor';
+import { applyPartLaborToLines } from '@/lib/part-labor';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
 import { sameVehicleVin, vinMatchOrFilter } from '@/lib/vin-match';
@@ -515,7 +517,9 @@ export default function EstimatesPage() {
   const router = useRouter();
   const { open: openPopout } = usePopout();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales, isGraphicsProduction, profile, hasFeature, loading: authLoading } = useAuth();
+  const { user, isAdmin, isSales, isGraphicsProduction, profile, hasFeature, hasRole, loading: authLoading } = useAuth();
+  // Super admins set a part's labor hours right on its line (Craig, 2026-10-23).
+  const canSetPartLabor = hasRole('super_admin');
   // The nav tab was feature-gated but the URL itself was open — the exact
   // gated-by-nav-only pattern the role cleanup ended (audit item 9). Same
   // key now guards every /api/estimates route server-side.
@@ -631,6 +635,9 @@ export default function EstimatesPage() {
   const [discountApprovalBusy, setDiscountApprovalBusy] = useState(false);
   const [discountApprovalMsg, setDiscountApprovalMsg] = useState('');
   const [lines, setLines] = useState<LineItem[]>([]);
+  // Which line's labor box is open, and the last labor save's result.
+  const [laborEditKey, setLaborEditKey] = useState<string | null>(null);
+  const [laborSavedMsg, setLaborSavedMsg] = useState<{ key: string; msg: string } | null>(null);
   // Margin floor (%) below which a quote gets flagged — admin-set, shared
   // with the wrap-quote builder via the quote_settings singleton.
   const [linkingSO, setLinkingSO] = useState(false);
@@ -5226,10 +5233,27 @@ export default function EstimatesPage() {
 
                   <div
                     className="est-c-labor"
-                    title={!line.is_custom && line.labor_hours == null
+                    role={canSetPartLabor && line.part_id && !line.is_custom ? 'button' : undefined}
+                    tabIndex={canSetPartLabor && line.part_id && !line.is_custom ? 0 : undefined}
+                    onClick={canSetPartLabor && line.part_id && !line.is_custom
+                      ? () => { setLaborSavedMsg(null); setLaborEditKey(k => (k === line.key ? null : line.key)); }
+                      : undefined}
+                    onKeyDown={canSetPartLabor && line.part_id && !line.is_custom
+                      ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLaborSavedMsg(null); setLaborEditKey(k => (k === line.key ? null : line.key)); } }
+                      : undefined}
+                    title={canSetPartLabor && line.part_id && !line.is_custom
+                      ? 'Tap to set this part\'s labor hours (saves to the part)'
+                      : !line.is_custom && line.labor_hours == null
                       ? 'This part has no labor hours set in the catalog, so it adds nothing to Auto Labor Hours. Set it on the Parts page (0 = no labor).'
                       : line.labor_hours === 0 ? 'No labor for this part' : undefined}
-                    style={{ fontSize: '10px', color: !line.is_custom && line.labor_hours == null ? '#f59e0b' : (line.labor_hours ?? 0) > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center' }}
+                    style={{
+                      fontSize: '10px', color: !line.is_custom && line.labor_hours == null ? '#f59e0b' : (line.labor_hours ?? 0) > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center',
+                      ...(canSetPartLabor && line.part_id && !line.is_custom ? {
+                        cursor: 'pointer', borderRadius: '6px', padding: '3px 2px',
+                        border: `1px solid ${line.labor_hours == null ? '#f59e0b' : 'var(--border)'}`,
+                        background: line.labor_hours == null ? 'rgba(245,158,11,0.08)' : 'transparent',
+                      } : {}),
+                    }}
                   >
                     <div className="est-cell-label">Labor</div>
                     {!line.is_custom && line.labor_hours == null
@@ -5267,6 +5291,29 @@ export default function EstimatesPage() {
                     ≡
                   </div>
                 </div>
+
+                {laborEditKey === line.key && line.part_id && canSetPartLabor && (
+                  <PartLaborEditor
+                    partId={line.part_id}
+                    itemNumber={line.item_number}
+                    currentHours={line.labor_hours}
+                    onClose={() => setLaborEditKey(null)}
+                    onSaved={(hours, msg, filledIds) => {
+                      const part = { id: line.part_id!, netsuite_id: line.netsuite_item_id };
+                      setLines(prev => applyPartLaborToLines(prev, part, hours));
+                      setLaborEditKey(null);
+                      // A saved draft was already filled on the server; any
+                      // other estimate only has it on screen until Save.
+                      const savedHere = !!editingId && filledIds.includes(editingId);
+                      setLaborSavedMsg({ key: line.key, msg: savedHere ? msg : `${msg} Save the estimate to keep it on this quote.` });
+                    }}
+                  />
+                )}
+                {laborSavedMsg?.key === line.key && (
+                  <div style={{ margin: '2px 0 6px', fontSize: '11px', fontWeight: 700, color: '#22c55e' }}>
+                    {laborSavedMsg.msg}
+                  </div>
+                )}
 
                 {/* This line's own discount (migration 350): a slim row under
                     the part, the way the quote and NetSuite show it. */}
