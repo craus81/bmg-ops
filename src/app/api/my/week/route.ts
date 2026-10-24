@@ -4,6 +4,7 @@ import { requireStaff, profileCanSeeMoney } from '@/lib/api-auth';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { weekWindows, countByWeek, type WeekWindows } from '@/lib/my-week';
 import { addDays } from '@/lib/shop-week';
+import { groupArrivals, loadArrivalLinks, type InboundLike } from '@/lib/arrival-groups';
 import { GRAPHICS_ACTIVE_STATUSES, GRAPHICS_AWAITING_STATUSES } from '@/lib/graphics-status';
 import { GRAPHICS_PRE_PRODUCTION_STATUSES, compareReadyJobs } from '@/lib/graphics-proof-state';
 
@@ -114,13 +115,21 @@ async function loadTech(me: string, w: WeekWindows, nextWeekEnd: string) {
       .eq('assigned_to', me).in('status', IN_SHOP).is('archived_at', null).limit(50),
     service.from('job_assignments').select('job_id').eq('job_type', 'scanned_vehicle').eq('user_id', me)
       .order('assigned_at', { ascending: false }).limit(200),
-    service.from('shop_inbound')
-      .select('id, vehicle_desc, customer_name, work_summary, expected_date')
-      .eq('status', 'expected').not('expected_date', 'is', null).lte('expected_date', nextWeekEnd)
-      .order('expected_date').order('id').limit(10),
+    // Every expected row, not just dated ones: an undated SO row can be the
+    // same van as a dated graphics row (arrival-groups.ts).
+    fetchAllRows<InboundLike & { customer_name: string | null; work_summary: string | null }>((from, to) =>
+      service.from('shop_inbound')
+        .select('id, source_type, source_id, vehicle_desc, customer_name, work_summary, expected_date, need_back_date, vin, netsuite_so_number')
+        .eq('status', 'expected')
+        .order('id').range(from, to)),
   ]);
   const err = firstError(scans, credits, checkins, statusMoves, assignedDirect, assignedVia, arrivals);
   if (err) return { error: err.message };
+
+  // One line per van, on the day it shows up.
+  const arrivalGroups = groupArrivals(arrivals.data, await loadArrivalLinks(service, arrivals.data))
+    .filter(g => g.arrivalDate && g.arrivalDate <= nextWeekEnd)
+    .slice(0, 10);
 
   // One install per scan, whether this person scanned it or was on the crew.
   const installs = new Map<string, { vin: string | null; at: string }>();
@@ -165,11 +174,11 @@ async function loadTech(me: string, w: WeekWindows, nextWeekEnd: string) {
     next: {
       vehicles: myVehicles,
       vehiclesTotal: vehicles.size,
-      arrivals: (arrivals.data || []).map(a => ({
-        id: a.id,
-        label: a.vehicle_desc || a.work_summary || 'Vehicle',
-        customer: a.customer_name,
-        date: a.expected_date,
+      arrivals: arrivalGroups.map(g => ({
+        id: g.lead.id,
+        label: g.lead.vehicle_desc || g.lead.work_summary || 'Vehicle',
+        customer: g.lead.customer_name,
+        date: g.arrivalDate,
       })),
     },
   };

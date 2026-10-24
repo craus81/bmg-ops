@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './fetch-all';
 import { chicagoDay } from './exec-metrics';
+import { groupArrivals, loadArrivalLinks } from './arrival-groups';
 
 /**
  * Shop week planner data (R5-16): what lands each day — arriving vehicles
@@ -100,10 +101,10 @@ export async function loadShopWeek(service: SupabaseClient, start: string, numDa
   const [inboundRes, upfitRes, promisedRes, settingsRes, overridesRes, inShopRes] = await Promise.all([
     fetchAllRows<any>((from, to) => service
       .from('shop_inbound')
-      .select('id, source_type, source_id, vehicle_desc, customer_name, work_summary, expected_date, need_back_date, vin')
+      // Every expected row, not just this window's: a van's undated SO row
+      // and its dated graphics row are one arrival (arrival-groups.ts).
+      .select('id, source_type, source_id, vehicle_desc, customer_name, work_summary, expected_date, need_back_date, vin, netsuite_so_number')
       .eq('status', 'expected')
-      .gte('expected_date', start)
-      .lt('expected_date', end)
       .order('expected_date').order('id')
       .range(from, to)),
     fetchAllRows<any>((from, to) => service
@@ -141,8 +142,27 @@ export async function loadShopWeek(service: SupabaseClient, start: string, numDa
     (overridesRes.data || []).map((o: any) => [o.day, { hours: Number(o.hours), note: o.note }]),
   );
 
+  // ── One arrival per van ──────────────────────────────────────────────
+  // The van lands once, on its drop-off day (the row that sets that date);
+  // its graphics installs on other days are work on those days. A shared SO
+  // row of a multi-van estimate shows once.
+  const allInbound = inboundRes.data || [];
+  const placed: { day: string; row: any }[] = [];
+  const placedIds = new Set<string>();
+  const place = (d: string | null, row: any) => {
+    if (!d || d < start || d >= end || placedIds.has(row.id)) return;
+    placedIds.add(row.id);
+    placed.push({ day: d, row });
+  };
+  for (const g of groupArrivals(allInbound, await loadArrivalLinks(service, allInbound))) {
+    const arrivalRow = g.rows.find(r => r.source_type !== 'graphics_job' && r.expected_date?.slice(0, 10) === g.arrivalDate)
+      || g.installs[0]?.row;
+    if (arrivalRow) place(g.arrivalDate, arrivalRow);
+    for (const i of g.installs) place(i.date, i.row);
+  }
+
   // ── Demand hours: linked estimates per unit ──────────────────────────
-  const inbound = inboundRes.data || [];
+  const inbound = placed.map(p => p.row);
   const upfits = upfitRes.data || [];
   const promised = promisedRes.data || [];
 
@@ -189,7 +209,7 @@ export async function loadShopWeek(service: SupabaseClient, start: string, numDa
     const day = addDays(start, i);
     const units: ShopWeekUnit[] = [];
 
-    for (const r of inbound.filter((x: any) => x.expected_date === day)) {
+    for (const r of placed.filter(p => p.day === day).map(p => p.row)) {
       const estId = r.source_type === 'upfit_project' ? estIdByProject.get(r.source_id) : null;
       const est = estId ? estById.get(estId) : null;
       units.push({

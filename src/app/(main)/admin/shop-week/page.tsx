@@ -49,7 +49,7 @@ interface Week {
 
 const KIND_META: Record<WeekUnit['kind'], { label: string; color: string }> = {
   arrival_project: { label: 'Drop-off', color: '#60a5fa' },
-  arrival_graphics: { label: 'Graphics', color: '#c084fc' },
+  arrival_graphics: { label: 'Graphics install', color: '#c084fc' },
   arrival_manual: { label: 'Arrival', color: '#f472b6' },
   upfit: { label: 'Upfit', color: '#fb923c' },
   promised: { label: 'Due back', color: '#4ade80' },
