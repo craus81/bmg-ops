@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { fetchAllRows } from './fetch-all';
+import { groupArrivals, loadArrivalLinks, rowsToClose, type InboundLike } from './arrival-groups';
 
 /**
  * shop_inbound keeps one row per vehicle expected at the shop, so the Shop
@@ -219,6 +221,10 @@ export async function linkInboundToCheckin(
   }
   if (!match) return null;
 
+  // The van's other reasons for coming (its graphics job, its SO, its
+  // upfit) arrived with it — close those rows too, quietly.
+  const siblings = await vanSiblingInboundIds(service, match.id);
+
   await service
     .from('shop_inbound')
     .update({
@@ -230,7 +236,34 @@ export async function linkInboundToCheckin(
       updated_at: new Date().toISOString(),
     })
     .eq('id', match.id);
+  if (siblings.length > 0) {
+    await service
+      .from('shop_inbound')
+      .update({ status: 'arrived', fleet_checkin_id: checkin.id, updated_at: new Date().toISOString() })
+      .in('id', siblings)
+      .eq('status', 'expected');
+  }
   return { id: match.id, vehicle_desc: match.vehicle_desc, expected_date: match.expected_date };
+}
+
+/**
+ * The other expected rows for the same van as `inboundId` (see
+ * arrival-groups.ts): its own rows plus shared SO/upfit rows no other van
+ * still needs. Empty when the row stands alone or is itself a shared row.
+ */
+export async function vanSiblingInboundIds(service: SupabaseClient, inboundId: string): Promise<string[]> {
+  const { data: rows, error } = await fetchAllRows<InboundLike>((from, to) => service
+    .from('shop_inbound')
+    .select('id, source_type, source_id, expected_date, need_back_date, vin, netsuite_so_number')
+    .eq('status', 'expected')
+    .order('id')
+    .range(from, to));
+  // A partial read could pair the wrong rows — close only the pressed one.
+  if (error || !rows.some(r => r.id === inboundId)) return [];
+  const groups = groupArrivals(rows, await loadArrivalLinks(service, rows));
+  const group = groups.find(g => g.own.some(r => r.id === inboundId));
+  if (!group) return [];
+  return rowsToClose(group, groups).map(r => r.id).filter(id => id !== inboundId);
 }
 
 /**

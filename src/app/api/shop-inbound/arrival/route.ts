@@ -4,7 +4,7 @@ import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
-import { linkInboundToCheckin, findActiveCheckinForInbound } from '@/lib/shop-inbound';
+import { linkInboundToCheckin, findActiveCheckinForInbound, vanSiblingInboundIds } from '@/lib/shop-inbound';
 
 const supabase = createServiceClient();
 
@@ -129,6 +129,9 @@ export async function POST(req: NextRequest) {
           customer_name: row.customer_name,
         });
       }
+      // One van, one arrival: its graphics job / SO / upfit rows on the
+      // board close together, under this one notification.
+      const siblings = await vanSiblingInboundIds(supabase, row.id);
       await supabase
         .from('shop_inbound')
         .update({
@@ -136,7 +139,8 @@ export async function POST(req: NextRequest) {
           fleet_checkin_id: checkinLink,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', row.id);
+        .in('id', [row.id, ...siblings])
+        .eq('status', 'expected');
       linkedInbound = { id: row.id, vehicle_desc: row.vehicle_desc, expected_date: row.expected_date };
       if (checkinLink) {
         const { data: c } = await supabase
