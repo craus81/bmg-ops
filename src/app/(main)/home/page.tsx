@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import MentionsInbox from '@/components/MentionsInbox';
 import MyHome from '@/components/MyHome';
+import { resolveDashboardFocus } from '@/lib/dashboard-focus';
 import NeedsInstallDate from '@/components/NeedsInstallDate';
 
 const OpsDashboard = lazy(() => import('@/components/OpsDashboard'));
@@ -22,9 +23,13 @@ function DashSpinner() {
 // The ops Dashboard for everyone; a Financials tab appears alongside it only
 // for roles with the `financials` feature (super_admin + executive).
 function AdminDashboard() {
-  const { hasFeature, hasRole, isAdmin } = useAuth();
-  // Sales reps get their own week on top of the shared dashboard.
-  const showMyWeek = hasRole('sales') && !isAdmin;
+  const { hasFeature, hasRole, isAdmin, profile } = useAuth();
+  // A sales-focused Dashboard (a sales rep, or an admin set to Sales in
+  // Admin → Users) opens with that person's own week.
+  const focus = resolveDashboardFocus(profile?.dashboard_focus, {
+    isAdmin, sales: hasRole('sales'), finance: hasRole('finance'), executive: hasRole('executive'),
+  });
+  const showMyWeek = focus.includes('sales');
   const showFinancials = hasFeature('financials');
   const showOps = hasFeature('in_shop'); // the ops Dashboard is only meaningful for ops roles
   const bothTabs = showFinancials && showOps;

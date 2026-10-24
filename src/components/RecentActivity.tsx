@@ -16,7 +16,7 @@
  *  - scan_logs.scanned_by                 (grouped into one row per day)
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
@@ -78,7 +78,7 @@ const one = (v: any) => (Array.isArray(v) ? v[0] || null : v || null);
 const wasEdited = (createdAt: string | null, updatedAt: string | null) =>
   !!createdAt && !!updatedAt && new Date(updatedAt).getTime() - new Date(createdAt).getTime() > 120_000;
 
-export default function RecentActivity() {
+export default function RecentActivity({ title }: { title?: ReactNode } = {}) {
   const router = useRouter();
   const { user } = useAuth();
   const supabase = createClient();
@@ -230,7 +230,7 @@ export default function RecentActivity() {
     <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px 10px' }}>
         <h2 style={{ margin: 0, fontSize: '12px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.8px', color: 'var(--text-secondary)' }}>
-          Your recent activity
+          {title ?? 'Your recent activity'}
         </h2>
         <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{LOOKBACK_DAYS} days</span>
       </div>
