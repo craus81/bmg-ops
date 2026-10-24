@@ -178,3 +178,42 @@ export function looseOrFilterWithNumbers(numberColumns: string[], textColumns: s
   const extra = numRe ? numberColumns.map(c => `${c}.imatch."${numRe}"`) : [];
   return looseOrFilter([...numberColumns, ...textColumns], query, extra);
 }
+
+/**
+ * Part numbers typed without their dashes, or with them in other places
+ * (owner ask 2026-10-22: "AR2000" should find AR-2000, and "n5rs48-3"
+ * should find N5-RS48-3). The word rule above keeps "n5rs48" whole, so it
+ * never matched across the stored dash.
+ *
+ * A part number's letters and digits are compared with every dash, space,
+ * dot or slash dropped from both sides, still as a "contains" match: "n5rs48"
+ * finds every N5-RS48 shelf. Unlike looseNumberRegex this doesn't need a
+ * digit (some part numbers are all letters). Meant for part number columns
+ * only — on long text it would match scattered letters.
+ */
+export function partNumberKey(value: unknown): string {
+  return searchWords(String(value ?? '')).join('');
+}
+
+/** Does part number `value` hold the typed part number, punctuation aside? */
+export function partNumberIncludes(value: unknown, query: string | null | undefined): boolean {
+  const key = partNumberKey(query);
+  return key.length > 0 && partNumberKey(value).includes(key);
+}
+
+/** The Postgres twin of partNumberIncludes for `imatch`. Null for an empty query. */
+export function partNumberRegex(query: string | null | undefined): string | null {
+  const key = partNumberKey(query);
+  return key ? key.split('').join('[^[:alnum:]]*') : null;
+}
+
+/**
+ * looseOrFilter for a parts search: the text columns get the word rule, and
+ * the part number columns get it too plus partNumberRegex, so a part number
+ * matches with or without its dashes. Null when the query has no words.
+ */
+export function partSearchOrFilter(partColumns: string[], textColumns: string[], query: string | null | undefined): string | null {
+  const re = partNumberRegex(query);
+  const extra = re ? partColumns.map(c => `${c}.imatch."${re}"`) : [];
+  return looseOrFilter([...partColumns, ...textColumns], query, extra);
+}

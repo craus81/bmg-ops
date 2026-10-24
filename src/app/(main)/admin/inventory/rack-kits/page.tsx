@@ -24,6 +24,7 @@ import { storage } from '@/lib/storage';
 import { toJpegIfHeic } from '@/lib/heic';
 import { useImageDrop } from '@/lib/use-image-drop';
 import { rackBaseNumber } from '@/lib/rack-kit-facets';
+import { partNumberIncludes } from '@/lib/loose-search';
 import { kitBuildableFor, loadKits, loadKitStock, normItem, type KitBuildable, type KitWithMembers } from '@/lib/part-kits';
 
 interface RackRow {
@@ -110,8 +111,8 @@ export default function RackKitsPage() {
   const visible = useMemo(() => rows.filter(r => {
     if (filter === 'buildable' && r.build.now <= 0) return false;
     if (filter === 'short' && r.build.now > 0) return false;
-    if (q && !normItem(r.kit.item_number).includes(q) && !normItem(r.kit.name).includes(q)
-      && !r.build.components.some(c => c.item_number.includes(q))) return false;
+    if (q && !partNumberIncludes(r.kit.item_number, q) && !normItem(r.kit.name).includes(q)
+      && !r.build.components.some(c => partNumberIncludes(c.item_number, q))) return false;
     return true;
   }), [rows, filter, q]);
 

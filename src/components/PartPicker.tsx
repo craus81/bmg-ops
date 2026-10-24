@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/components/AddToCatalog';
+import { partNumberKey } from '@/lib/loose-search';
 
 export interface PickedPart {
   part_number: string;
@@ -23,6 +24,8 @@ interface PartPickerProps {
 
 // Part numbers visually conflate O/0; normalize both sides of search.
 const norm = (s: string) => (s || '').toLowerCase().replace(/o/g, '0');
+// Part numbers also match with their dashes ignored ("ar2000" → AR-2000).
+const normPn = (s: string) => partNumberKey(s).replace(/o/g, '0');
 
 /**
  * Single-part picker over the unified netsuite_parts catalog (which now also
@@ -70,8 +73,10 @@ export default function PartPicker({ value, onChange, inputStyle }: PartPickerPr
   const filtered = search
     ? (() => {
         const s = norm(search);
+        const pn = normPn(search);
         return parts.filter(p =>
           norm(p.item_number).includes(s) ||
+          (!!pn && normPn(p.item_number).includes(pn)) ||
           norm(p.part_description || '').includes(s) ||
           norm(p.billable_customer || '').includes(s)
         ).slice(0, 30);

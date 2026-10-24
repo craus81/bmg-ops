@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
+import { partNumberRegex } from '@/lib/loose-search';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,13 +18,15 @@ export async function GET(req: NextRequest) {
   if (q.length < 2) return NextResponse.json({ items: [] });
 
   const like = `%${q}%`;
+  // Part numbers also match with their dashes ignored ("ar2000" → AR-2000).
+  const re = partNumberRegex(q);
   const supabase = createServiceClient();
   const { data, error } = await supabase
     .from('netsuite_parts')
     .select('netsuite_id, item_number, display_name, description, sales_price')
     .eq('is_active', true)
     .not('netsuite_id', 'is', null)
-    .or(`item_number.ilike.${like},display_name.ilike.${like},description.ilike.${like}`)
+    .or(`item_number.ilike.${like},display_name.ilike.${like},description.ilike.${like}${re ? `,item_number.imatch."${re}"` : ''}`)
     .order('item_number')
     .limit(25);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
