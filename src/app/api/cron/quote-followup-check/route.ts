@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getSuperAdminIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
@@ -178,16 +178,13 @@ export async function GET(req: NextRequest) {
       if (days != null) quiet.push({ table: 'wrap_quotes', id: w.id, number: w.quote_number, customer: (w.customer as any)?.name || '—', total: Number(w.total) || 0, repId: w.created_by, quietDays: days });
     }
 
-    // Quotes with no rep fall back to admins so nothing goes unwatched.
-    // Loaded once and shared with the expiry pass below.
+    // Quotes with no rep fall back to the super admins so nothing goes
+    // unwatched (every admin until 2026-10-24). Loaded once and shared with
+    // the expiry pass below.
     let adminIdsCache: string[] | null = null;
     const adminIds = async (): Promise<string[]> => {
       if (adminIdsCache) return adminIdsCache;
-      const { data: admins } = await service
-        .from('profiles').select('id')
-        .or('role.eq.admin,roles.cs.{admin}')
-        .eq('status', 'approved');
-      adminIdsCache = (admins || []).map((a: any) => a.id);
+      adminIdsCache = await getSuperAdminIds();
       return adminIdsCache;
     };
 

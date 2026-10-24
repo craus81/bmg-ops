@@ -6,7 +6,8 @@
  * A super admin picks each person's focus in Admin → Users (stored on
  * `profiles.dashboard_focus`, migration 432). Nobody loses access to any
  * page: focus only decides what the Dashboard shows first, what folds
- * away, and what it leaves out.
+ * away, and what it leaves out. Scheduling, Purchasing and Sales also make
+ * the person that area's alert owner (getAlertOwnerIds in src/lib/notify.ts).
  *
  * With no saved focus, the role decides: admins see everything, sales sees
  * sales, finance and executives see the financial view.

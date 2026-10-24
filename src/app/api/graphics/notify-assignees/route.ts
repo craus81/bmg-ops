@@ -35,8 +35,8 @@ const Schema = z.object({
  * gets the preference-gated 'graphics_status' notification. Assignees are
  * excluded from that second set so nobody is notified twice.
  *
- * kind 'created' is a third audience: the graphics production team and
- * admins, resolved BY ROLE. It deliberately ignores notification_preferences
+ * kind 'created' is a third audience: the graphics production team,
+ * resolved BY ROLE (admins too until 2026-10-24). It deliberately ignores notification_preferences
  * .notify_new_job — that flag was read from the browser, where RLS is
  * own-rows-only, so the recipient list was always empty and no new-job
  * notification has ever been delivered. Role membership is the subscription
@@ -111,7 +111,10 @@ export async function POST(req: NextRequest) {
 
     // ----- Audience 3 (created only): the graphics team, by role -----
     if (kind === 'created') {
-      const TEAM_ROLES = ['admin', 'super_admin', 'graphics_production', 'production'];
+      // Production only: admins came off this list 2026-10-24 (owner: staff
+      // were buried in alerts; a new job is production's to pick up, and
+      // whoever is on the job hears through Audience 1).
+      const TEAM_ROLES = ['graphics_production', 'production'];
       const { data: staff } = await supabase
         .from('profiles')
         .select('id, role, roles, status, deactivated')

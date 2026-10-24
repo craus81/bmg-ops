@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { createServiceClient } from '@/lib/supabase-service';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getSuperAdminIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { financeUserIds } from '@/lib/ap';
 import { bounceDetail, bounceNextStep, bounceIsAmbiguous, recipientsLabel, isQuietStaffBounce } from '@/lib/email-bounce';
@@ -192,12 +192,8 @@ export async function POST(req: NextRequest) {
           if (cust?.account_owner_id) targetIds.add(cust.account_owner_id);
         }
         if (targetIds.size === 0) {
-          const { data: admins } = await service
-            .from('profiles')
-            .select('id')
-            .in('role', ['admin', 'super_admin'])
-            .eq('status', 'approved');
-          for (const a of admins || []) targetIds.add(a.id);
+          // Nobody on the estimate: the super admins (every admin until 2026-10-24).
+          for (const id of await getSuperAdminIds()) targetIds.add(id);
         }
         if (targetIds.size === 0) continue;
         await notifyMany(Array.from(targetIds), {

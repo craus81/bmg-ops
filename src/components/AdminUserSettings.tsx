@@ -258,7 +258,7 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
             {focus.length === 0
               ? 'Nothing picked: their Dashboard follows their role (admins see everything).'
               : focus.map(f => `${FOCUS_LABEL[f]}: ${FOCUS_HINT[f]}`).join('. ') + '.'}
-            {' '}This only changes what their Dashboard shows. They can still open every page they could before.
+            {' '}It decides what their Dashboard shows, and Scheduling, Purchasing and Sales also bring that area&apos;s shop alerts (arrivals and pickups, parts requests, unclaimed calls). They can still open every page they could before.
           </div>
 
           <div style={groupLabel}>Which alerts reach them</div>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { requireStaff } from '@/lib/api-auth';
 import { sendEmailDetailed, buildNotificationEmail } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
@@ -232,16 +232,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Internal awareness: admins + graphics team + creator + assignee.
+    // ── Internal awareness: creator + assignee + whoever schedules pickups.
     // Only after the customer was actually contacted — the message says so.
+    // Was every admin, graphics and sales account until 2026-10-24 (owner:
+    // staff were buried in alerts); now the people who act on a pickup.
     const internalTargets = new Set<string>();
     if (job.created_by) internalTargets.add(job.created_by);
     if (job.assigned_to) internalTargets.add(job.assigned_to);
-    const { data: internalStaff } = await supabase
-      .from('profiles')
-      .select('id, role, roles')
-      .or('role.in.(admin,graphics_production,production,sales),roles.cs.{admin},roles.cs.{graphics_production},roles.cs.{sales}');
-    for (const p of internalStaff || []) internalTargets.add(p.id);
+    for (const id of await getAlertOwnerIds('scheduling')) internalTargets.add(id);
 
     if (internalTargets.size > 0 && (dispatch.email?.ok || dispatch.sms?.ok)) {
       await notifyMany(Array.from(internalTargets), {

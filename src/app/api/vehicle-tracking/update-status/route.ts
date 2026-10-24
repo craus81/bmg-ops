@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireStaff, isAdminRole } from '@/lib/api-auth';
-import { notify, notifyMany } from '@/lib/notify';
+import { notify, notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { loadChecklistTemplate, buildTaskRows } from '@/lib/install-checklist';
 import { appendSoLineTasks } from '@/lib/so-line-tasks';
@@ -365,9 +365,9 @@ async function instantiateChecklist(vehicleId: string, hasGraphics: boolean) {
 /**
  * Who hears about a vehicle finishing or shipping: the people on it — the
  * vehicle's assignee, anyone assigned to it, and the sales rep (the source
- * estimate's creator, same rule as the pickup nudges). The admins are only
- * the fallback when nobody is on the vehicle, so somebody is always on the
- * hook without every admin getting every vehicle. This used to go to ALL
+ * estimate's creator, same rule as the pickup nudges), plus whoever
+ * schedules pickups (Dashboard focus, owner decision 2026-10-24), so
+ * somebody is always on the hook without every admin getting every vehicle. This used to go to ALL
  * admins, twice on complete and again on shipped — ~3 emails per admin per
  * vehicle, which is what ran Resend's daily cap out (2026-09-28).
  */
@@ -387,13 +387,8 @@ async function vehicleAlertTargets(vehicle: any): Promise<string[]> {
   for (const a of assignmentsRes.data || []) if (a.user_id) targets.add(a.user_id);
   const repId = (estimateRes.data as any)?.created_by;
   if (repId) targets.add(repId);
-  if (targets.size > 0) return [...targets];
-
-  const { data: admins } = await serviceSupabase
-    .from('profiles').select('id')
-    .or('role.in.(admin,super_admin),roles.cs.{admin},roles.cs.{super_admin}')
-    .eq('status', 'approved');
-  return (admins || []).map((a: any) => String(a.id));
+  for (const id of await getAlertOwnerIds('scheduling')) targets.add(id);
+  return [...targets];
 }
 
 function vehicleLabelOf(vehicle: any): string {

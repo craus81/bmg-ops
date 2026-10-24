@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { loadReadyForPickup, decideNudges } from '@/lib/ready-pickup';
 import { loadBookingSettings } from '@/lib/booking';
-import { notify, notifyMany } from '@/lib/notify';
+import { notify, notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
@@ -49,16 +49,13 @@ export async function GET(req: NextRequest) {
     ]);
     const plan = decideNudges(vehicles, settings.nudgeDays, Date.now());
 
-    // Vehicles with no sales rep fall back to the admins so nothing goes
-    // unwatched. Loaded once and shared by both passes.
+    // Vehicles with no sales rep fall back to whoever schedules (Dashboard
+    // focus; was every admin until 2026-10-24) so nothing goes unwatched.
+    // Loaded once and shared by both passes.
     let adminIdsCache: string[] | null = null;
     const adminIds = async (): Promise<string[]> => {
       if (adminIdsCache) return adminIdsCache;
-      const { data: admins } = await service
-        .from('profiles').select('id')
-        .or('role.in.(admin,super_admin),roles.cs.{admin},roles.cs.{super_admin}')
-        .eq('status', 'approved');
-      adminIdsCache = (admins || []).map((p: any) => p.id);
+      adminIdsCache = await getAlertOwnerIds('scheduling');
       return adminIdsCache;
     };
 

@@ -24,7 +24,7 @@ const service = createServiceClient();
  * minutes apart); after that the record page's overdue-in-red state carries
  * it. Recipient is the reminder's creator; reminders with no usable creator
  * (voice-note rows can have created_by null, or the creator has since been
- * deactivated) fall back to admins so nothing goes unwatched.
+ * deactivated) fall back to the super admins so nothing goes unwatched.
  */
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get('authorization');
@@ -67,11 +67,12 @@ export async function GET(req: NextRequest) {
       const eligible = new Set(
         (staff || []).filter((p: any) => !p.deactivated).map((p: any) => p.id),
       );
+      // Fallback audience: the super admins (every admin until 2026-10-24).
       const adminIds = (staff || [])
         .filter((p: any) => {
           if (p.deactivated) return false;
           const roles = p.roles?.length ? p.roles : [p.role];
-          return roles.some((r: string) => r === 'admin' || r === 'super_admin');
+          return roles.includes('super_admin');
         })
         .map((p: any) => p.id);
 

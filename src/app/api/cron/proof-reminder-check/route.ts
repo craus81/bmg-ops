@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getSuperAdminIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
@@ -90,11 +90,8 @@ export async function GET(req: NextRequest) {
         if (job.created_by) targets.add(job.created_by);
         if (job.assigned_to) targets.add(job.assigned_to);
         if (targets.size === 0) {
-          const { data: admins } = await service
-            .from('profiles').select('id')
-            .or('role.eq.admin,roles.cs.{admin}')
-            .eq('status', 'approved');
-          for (const a of admins || []) targets.add(a.id);
+          // Nobody on the job: the super admins, not every admin (2026-10-24).
+          for (const id of await getSuperAdminIds()) targets.add(id);
         }
         if (targets.size > 0) {
           await notifyMany([...targets], {

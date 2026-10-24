@@ -222,6 +222,28 @@ export async function getSuperAdminIds(excludeUserId?: string | null): Promise<s
     .filter((id: string) => id && id !== excludeUserId);
 }
 
+/** The parts of the shop an alert can belong to (src/lib/dashboard-focus.ts). */
+export type AlertArea = 'scheduling' | 'purchasing' | 'sales' | 'financial';
+
+/**
+ * Who handles an area's alerts (owner decision 2026-10-24, thread "Simplify
+ * dashboards and notifications"): the approved people whose Dashboard focus
+ * includes that area, as set in Admin → Users. These alerts used to go to
+ * every admin at once (six people). With nobody focused on the area, the
+ * super admins get it, so an alert never goes nowhere; the person who caused
+ * the event is still left out.
+ */
+export async function getAlertOwnerIds(area: AlertArea, excludeUserId?: string | null): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, deactivated')
+    .contains('dashboard_focus', [area])
+    .eq('status', 'approved');
+  const owners = error ? [] : (data || []).filter((p: any) => !p.deactivated).map((p: any) => p.id as string);
+  if (owners.length === 0) return getSuperAdminIds(excludeUserId);
+  return owners.filter(id => id && id !== excludeUserId);
+}
+
 /**
  * Determine which channels a user wants based on their notification preferences
  */

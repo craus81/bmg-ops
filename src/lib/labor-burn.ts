@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getShopLaborForCheckins } from './shop-labor';
-import { isAdminRole } from './features';
 
 /**
  * Labor Burn Meter (R6-12).
@@ -10,7 +9,7 @@ import { isAdminRole } from './features';
  * and nobody finds out until the margin report, months later. This puts the
  * comparison where the work happens: a header chip that goes amber at 80%
  * and red at 100%, a matching badge on the tracking board, and one ping to
- * the assignee and admins the first time a vehicle crosses.
+ * the assignee and the super admins the first time a vehicle crosses.
  *
  * The honesty rule: NO sold hours means NO meter. A vehicle whose estimate
  * carries no labor is not "0% burned" and it is certainly not "over" — it
@@ -198,7 +197,7 @@ function keepNewest(
 }
 
 /**
- * Ping the assignee and admins the FIRST time a vehicle's logged hours reach
+ * Ping the assignee and the super admins the FIRST time a vehicle's logged hours reach
  * the hours sold. One ping per visit — the stamp is the dedupe, not a
  * counter — because a vehicle that crosses, gets pushed back under by a
  * revision, and crosses again is the same conversation, and a ping every
@@ -255,7 +254,8 @@ export async function maybeNotifyLaborBurn(
 }
 
 
-/** Approved, active admins — the standing audience for a money-out alarm.
+/** Approved, active super admins — the standing audience for a money-out
+ *  alarm (every admin until 2026-10-24; owner: Craig's call to make).
  *  Takes the client so this module stays free of a module-scope Supabase
  *  client (which would make the file untestable under vitest). */
 export async function laborBurnAdminIds(service: SupabaseClient): Promise<string[]> {
@@ -265,6 +265,6 @@ export async function laborBurnAdminIds(service: SupabaseClient): Promise<string
     .eq('status', 'approved');
   return (data || [])
     .filter((p: any) => !p.deactivated)
-    .filter((p: any) => isAdminRole(Array.isArray(p.roles) && p.roles.length > 0 ? p.roles : [p.role]))
+    .filter((p: any) => p.role === 'super_admin' || (Array.isArray(p.roles) && p.roles.includes('super_admin')))
     .map((p: any) => p.id);
 }

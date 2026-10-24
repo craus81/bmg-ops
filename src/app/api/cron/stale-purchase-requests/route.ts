@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
@@ -61,11 +61,8 @@ export async function GET(req: NextRequest) {
 
     let alerted = 0;
     if (due.length > 0) {
-      const { data: admins } = await service
-        .from('profiles').select('id')
-        .or('role.eq.admin,roles.cs.{admin},role.eq.super_admin,roles.cs.{super_admin}')
-        .eq('status', 'approved');
-      const adminIds = (admins || []).map(a => a.id);
+      // Purchasing (Dashboard focus), not every admin (2026-10-24).
+      const adminIds = await getAlertOwnerIds('purchasing');
       if (adminIds.length > 0) {
         const days = (iso: string) => Math.floor((now - new Date(iso).getTime()) / 86_400_000);
         const lines = due.slice(0, 3).map(r => {

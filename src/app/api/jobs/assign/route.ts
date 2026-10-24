@@ -132,7 +132,8 @@ export async function POST(req: NextRequest) {
       const { data: teamMembers } = await supabase
         .from('profiles')
         .select('id')
-        .in('role', ['production', 'graphics_production', 'admin', 'super_admin'])
+        // Production only; admins came off 2026-10-24 (owner: too many alerts).
+        .in('role', ['production', 'graphics_production'])
         .eq('status', 'approved');
 
       if (teamMembers && teamMembers.length > 0) {

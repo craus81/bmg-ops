@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { computePartsReadiness } from '@/lib/parts-readiness';
 import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
@@ -265,20 +265,12 @@ export async function POST(req: NextRequest) {
     created.push(row.id);
   }
 
-  // Purchasing (admins) hears about new asks — one digest per call.
+  // Purchasing hears about new asks — one digest per call. Purchasing is
+  // whoever has it in their Dashboard focus (was every admin until
+  // 2026-10-24), never the person asking.
   if (created.length > 0 && !body.fresh) {
     try {
-      const { data: staff } = await supabase
-        .from('profiles')
-        .select('id, role, roles, status, deactivated')
-        .eq('status', 'approved');
-      const adminIds = (staff || [])
-        .filter((p: any) => {
-          if (p.deactivated || p.id === auth.user.id) return false;
-          const roles = p.roles?.length ? p.roles : [p.role];
-          return roles.some((r: string) => r === 'admin' || r === 'super_admin');
-        })
-        .map((p: any) => p.id);
+      const adminIds = await getAlertOwnerIds('purchasing', auth.user.id);
       if (adminIds.length > 0) {
         let projectLabel: string | null = estimateLabel;
         if (!projectLabel && body.projectId) {

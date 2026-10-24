@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { linkInboundToCheckin, findActiveCheckinForInbound, vanSiblingInboundIds } from '@/lib/shop-inbound';
 
@@ -153,18 +153,9 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Arrival notification (item 15) ──
-    const { data: staff } = await supabase
-      .from('profiles')
-      .select('id, role, roles, status, deactivated')
-      .eq('status', 'approved');
-    const adminIds = (staff || [])
-      .filter((p: any) => {
-        if (p.deactivated) return false;
-        if (p.id === auth.user.id) return false; // don't ping the person doing the check-in
-        const roles = p.roles?.length ? p.roles : [p.role];
-        return roles.some((r: string) => r === 'admin' || r === 'super_admin');
-      })
-      .map((p: any) => p.id);
+    // Whoever schedules (Dashboard focus), not every admin (owner decision
+    // 2026-10-24); never the person doing the check-in.
+    const adminIds = await getAlertOwnerIds('scheduling', auth.user.id);
 
     const desc = checkin
       ? [checkin.vehicle_year, checkin.vehicle_make, checkin.vehicle_model].filter(Boolean).join(' ') || 'Vehicle'

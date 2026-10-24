@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import {
   FINISHED_STATES, RINGING_STATES, parseDialpadCall, phoneDigits, verifyDialpadJwt,
 } from '@/lib/dialpad';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
@@ -107,12 +107,9 @@ export async function POST(req: NextRequest) {
     if (targetUserId) {
       audience = [targetUserId];
     } else {
-      const { data: staff } = await service
-        .from('profiles')
-        .select('id, role, roles')
-        .eq('status', 'approved')
-        .or('role.in.(admin,super_admin,sales),roles.cs.{admin},roles.cs.{sales}');
-      audience = (staff || []).map((p: any) => p.id);
+      // No rep on the call: the people focused on sales (every admin and
+      // sales account until 2026-10-24), else the super admins.
+      audience = await getAlertOwnerIds('sales');
     }
     if (audience.length > 0) {
       const pretty = call.fromNumber || call.externalDigits || 'Unknown number';

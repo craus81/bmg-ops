@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
@@ -214,21 +214,12 @@ export async function GET(req: NextRequest) {
       console.error('price drift pass failed:', e?.message || e);
     }
 
-    // One digest to purchasing (admins) about NEW auto requests — top-ups
-    // stay quiet, the queue shows them.
+    // One digest to purchasing (Dashboard focus; was every admin until
+    // 2026-10-24) about NEW auto requests — top-ups stay quiet, the queue
+    // shows them.
     let notified = 0;
     if (created.length > 0) {
-      const { data: staff } = await service
-        .from('profiles')
-        .select('id, role, roles, status, deactivated')
-        .eq('status', 'approved');
-      const adminIds = (staff || [])
-        .filter((p: any) => {
-          if (p.deactivated) return false;
-          const roles = p.roles?.length ? p.roles : [p.role];
-          return roles.some((r: string) => r === 'admin' || r === 'super_admin');
-        })
-        .map((p: any) => p.id);
+      const adminIds = await getAlertOwnerIds('purchasing');
       if (adminIds.length > 0) {
         const lines = created.map(r => `${r.qty}× ${r.itemNumber}`).join(' · ');
         await notifyMany(adminIds, {
@@ -244,11 +235,7 @@ export async function GET(req: NextRequest) {
 
     // Monday-only drift ping (see the counting note above).
     if (driftMaterial > 0 && new Date().getUTCDay() === 1) {
-      const { data: staff } = await service
-        .from('profiles').select('id, role, roles, status, deactivated').eq('status', 'approved');
-      const adminIds = (staff || [])
-        .filter((p: any) => !p.deactivated && (p.roles?.length ? p.roles : [p.role]).some((r: string) => r === 'admin' || r === 'super_admin'))
-        .map((p: any) => p.id);
+      const adminIds = await getAlertOwnerIds('purchasing');
       if (adminIds.length > 0) {
         await notifyMany(adminIds, {
           type: 'price_drift',
