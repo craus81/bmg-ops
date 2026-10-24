@@ -16,6 +16,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import MentionsInbox from '@/components/MentionsInbox';
+import NeedsInstallDate from '@/components/NeedsInstallDate';
 import { deepLinks } from '@/lib/deep-links';
 
 interface WeekCount { thisWeek: number; lastWeek: number }
@@ -249,6 +250,7 @@ export default function MyHome({ role, embedded = false }: { role: MyHomeRole; e
   return (
     <div>
       {!embedded && <MentionsInbox />}
+      {!embedded && <NeedsInstallDate />}
 
       <div style={{ marginBottom: '14px' }}>
         <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>

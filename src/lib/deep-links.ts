@@ -25,8 +25,13 @@ export const deepLinks = {
   mention: (mentionId: string) => `/mentions/${mentionId}`,
   /** Dedicated PO record page. `flag` opens its "needs attention" form. */
   po: (poId: string, opts?: { flag?: boolean }) => `/admin/pos/${poId}${opts?.flag ? '?flag=1' : ''}`,
-  /** Dedicated graphics job record page. */
-  graphicsJob: (jobId: string) => `/graphics/${jobId}`,
+  /** Dedicated graphics job record page. `schedule` scrolls to the Install
+   *  card with its date field open (the "Schedule install" alert). */
+  graphicsJob: (jobId: string, opts?: { schedule?: boolean }) =>
+    `/graphics/${jobId}${opts?.schedule ? '?schedule=1' : ''}`,
+  /** The graphics board's New Job form, filled in from an estimate (the
+   *  estimate's "+ Graphics job" button and the "Start designing" alert). */
+  graphicsNewFromEstimate: (estimateId: string) => `/graphics?new=1&fromEstimate=${estimateId}`,
   /** The graphics board. `mine` opens it on the My Jobs tab — only ever for
    *  a digest of the recipient's OWN jobs: sent to anyone else it lands on
    *  an empty board, which is a dead click with extra steps. */

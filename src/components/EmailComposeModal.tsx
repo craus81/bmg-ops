@@ -75,6 +75,9 @@ interface Props {
   intro?: React.ReactNode;
   /** Comma-separated prefill; the first preview's `to` fills it when empty. */
   initialTo?: string;
+  /** BMG teammates already on the Cc row when the screen opens (e.g. the
+   *  rep on an install confirmation); the sender can remove them. */
+  initialCc?: string[];
   /** Files the sender can attach. Omit to hide the attachments section. */
   attachments?: EmailComposeAttachment[];
   initialAttachmentIds?: string[];
@@ -260,6 +263,7 @@ export default function EmailComposeModal({
   title,
   intro,
   initialTo,
+  initialCc,
   attachments,
   initialAttachmentIds,
   onUploadAttachment,
@@ -298,7 +302,7 @@ export default function EmailComposeModal({
   // so the preview must not overwrite them with the resolved primary.
   const toTouched = useRef(!!initialTo || !!restoredState?.to);
   const [bccSelf, setBccSelf] = useState(loadBccSelfPref);
-  const [cc, setCc] = useState<string[]>(restoredState?.cc || []);
+  const [cc, setCc] = useState<string[]>(restoredState?.cc || initialCc || []);
   const [staff, setStaff] = useState<{ id: string; name: string; email: string }[]>(staffCache || []);
   const [loadedContacts, setLoadedContacts] = useState<EmailComposeContact[]>([]);
   const [message, setMessage] = useState(restoredState?.message || '');

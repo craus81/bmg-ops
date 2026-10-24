@@ -697,6 +697,10 @@ export interface GraphicsJob {
   priority: 'low' | 'normal' | 'high' | 'rush';
   due_date: string | null;
   scheduled_install_date: string | null;
+  /** Arrival time for the install confirmation ("8:00 AM"), migration 430. */
+  install_arrival_time?: string | null;
+  /** When "Send install confirmation" last went out (migration 430). */
+  install_confirmation_sent_at?: string | null;
   /** Where the graphics get installed — "O'Fallon Shop" routes the job onto the shop arrival schedule. */
   install_location: string | null;
   calendar_event_id: string | null;

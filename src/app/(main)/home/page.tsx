@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import MentionsInbox from '@/components/MentionsInbox';
 import MyHome from '@/components/MyHome';
+import NeedsInstallDate from '@/components/NeedsInstallDate';
 
 const OpsDashboard = lazy(() => import('@/components/OpsDashboard'));
 const FinancialsDashboard = lazy(() => import('@/components/FinancialsDashboard'));
@@ -46,6 +47,7 @@ function AdminDashboard() {
   return (
     <div>
       <MentionsInbox />
+      <NeedsInstallDate />
       {showMyWeek && <MyHome role="sales" embedded />}
       {bothTabs && (
         <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>

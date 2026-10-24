@@ -15,6 +15,7 @@
 
 import { roundForSend, roundLabel, openProofRound, closeProofRound } from './proof-rounds';
 import { notify, notifyMany } from './notify';
+import { notifyInstallSchedulers } from './install-scheduling';
 import { deepLinks } from './deep-links';
 import { fetchEmailAttachments } from './email-attachments';
 
@@ -284,5 +285,6 @@ export async function recordVerbalApproval(
       url: deepLinks.graphicsJob(job.id),
     });
   }
+  await notifyInstallSchedulers(service, job.id, { actorId: opts.actorId });
   return { ok: true };
 }
