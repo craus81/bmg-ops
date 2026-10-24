@@ -5,7 +5,7 @@ import { storage } from '@/lib/storage';
 import { toJpegIfHeic } from '@/lib/heic';
 import { createClient } from '@/lib/supabase-browser';
 import AddToEstimateModal from '@/components/AddToEstimateModal';
-import { loadKits, normItem, type KitWithMembers } from '@/lib/part-kits';
+import { loadKits, normItem, rackKitForPart, rackKitsByNumber, type KitWithMembers } from '@/lib/part-kits';
 import { partNumberIncludes } from '@/lib/loose-search';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { useImageDrop } from '@/lib/use-image-drop';
@@ -354,6 +354,99 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
 
   if (!open) return null;
 
+  // One card for a package or rack kit — the strip above the grid, and the
+  // grid itself where a NetSuite item shares a rack kit's part number (the
+  // kit wins, Craig 2026-10-24): there it also lists the parts inside.
+  // A part with a rack kit's number is that rack: the grid shows the kit in
+  // its place, once, and the search strip doesn't repeat it.
+  const kitsByNumber = rackKitsByNumber(kits || []);
+  const gridKitIds = new Set<string>();
+  const gridItems = parts.flatMap((p): { part: BrowsePart; kit: KitWithMembers | null }[] => {
+    const kit = rackKitForPart(kitsByNumber, p.item_number);
+    if (!kit) return [{ part: p, kit: null }];
+    if (gridKitIds.has(kit.id)) return [];
+    gridKitIds.add(kit.id);
+    return [{ part: p, kit }];
+  });
+
+  const renderKitCard = (k: KitWithMembers, inGrid: boolean) => {
+    const photo = k.image_path || k.members.find(m => m.part.image_path)?.part.image_path || null;
+    return (
+      <div key={k.id} style={{ ...(inGrid ? {} : { minWidth: '230px', maxWidth: '230px', flexShrink: 0 }), background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ ...(inGrid ? { aspectRatio: '4/3' } : { height: '110px' }), background: 'var(--subtle-bg, rgba(128,128,128,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+          {photo ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={imageUrl(photo)}
+              alt={k.name}
+              onClick={() => setZoom({ photos: [{ id: k.id, url: imageUrl(photo), title: k.item_number || k.name, subtitle: k.item_number ? k.name : null }], index: 0 })}
+              title="Tap to enlarge the picture"
+              style={{ width: '100%', height: '100%', objectFit: 'cover', cursor: 'zoom-in' }}
+            />
+          ) : (
+            <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', opacity: 0.7 }}>No photo</span>
+          )}
+          {inGrid && (
+            <span style={{ position: 'absolute', top: '8px', left: '8px', padding: '3px 7px', borderRadius: '6px', background: 'rgba(181,136,74,0.16)', color: '#b5884a', fontSize: '10px', fontWeight: 800 }}>Rack kit</span>
+          )}
+          {isAdmin && !inGrid && (
+            <button
+              onClick={() => deleteKit(k)}
+              title="Remove this package (parts are untouched)"
+              style={{ position: 'absolute', top: '6px', right: '6px', padding: '2px 7px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', cursor: 'pointer', color: 'var(--text-muted)' }}
+            >✕</button>
+          )}
+        </div>
+        <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>
+            {k.item_number && <span style={{ fontWeight: 800, marginRight: '6px' }}>{k.item_number}</span>}
+            {k.name}
+          </div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+            {k.vehicle_label ? `${k.vehicle_label} · ` : ''}{k.members.length + k.missing.length} part{k.members.length + k.missing.length !== 1 ? 's' : ''}
+            {k.missing.length > 0 ? ` · ${k.missing.length} not in NetSuite` : ''}
+            {k.totalLabor > 0 ? ` · ${k.totalLabor}h labor` : ''}
+          </div>
+          {k.description && (
+            <div style={{ fontSize: '10px', color: 'var(--text-secondary)', lineHeight: 1.35, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{k.description}</div>
+          )}
+          {inGrid && (
+            <div style={{ fontSize: '10px', fontFamily: 'monospace', color: 'var(--text-secondary)', lineHeight: 1.5, borderTop: '1px solid var(--border)', paddingTop: '6px', marginTop: '2px' }}>
+              {k.members.map(m => (
+                <div key={m.part.id}>{m.quantity} × {m.part.item_number}</div>
+              ))}
+              {k.missing.map(m => (
+                <div key={m.item_number}>{m.quantity} × {m.item_number}</div>
+              ))}
+            </div>
+          )}
+          <span style={{ flex: 1 }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{money(k.totalPrice)}</span>
+            <span style={{ flex: 1 }} />
+            {onAddKit ? (
+              <button
+                onClick={() => { onAddKit(k); setAddedKits(prev => ({ ...prev, [k.id]: (prev[k.id] || 0) + 1 })); }}
+                style={{ padding: '5px 12px', borderRadius: '8px', border: 'none', background: addedKits[k.id] ? 'rgba(34,197,94,0.15)' : 'var(--accent, #2563eb)', color: addedKits[k.id] ? '#22c55e' : '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+              >
+                {addedKits[k.id] ? `✓ ×${addedKits[k.id]}` : k.item_number ? '+ Add rack' : `+ Add ${k.members.length} lines`}
+              </button>
+            ) : (
+              <button
+                onClick={() => setAddTarget({ kit: k })}
+                title="Add this package's lines to an existing estimate, or start a new estimate from it"
+                style={{ padding: '5px 12px', borderRadius: '8px', border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+              >
+                + Add to estimate
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+
   const selStyle: React.CSSProperties = { width: '100%', padding: '7px 8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 600 };
   const chip: React.CSSProperties = { fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '5px', background: 'var(--subtle-bg, rgba(128,128,128,0.12))', border: '1px solid var(--border)', color: 'var(--text-secondary)', whiteSpace: 'nowrap' };
   const detailCategoryName = detail?.product_category_id
@@ -618,76 +711,14 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           {(() => {
             const needle = normItem(q);
             const stripKits = (kits || []).filter(k => needle
-              ? !!k.item_number && (partNumberIncludes(k.item_number, q) || normItem(k.name).includes(needle))
+              ? !!k.item_number && !gridKitIds.has(k.id) && (partNumberIncludes(k.item_number, q) || normItem(k.name).includes(needle))
               : !k.item_number).slice(0, 30);
             if (stripKits.length === 0) return null;
             return (
             <div style={{ marginBottom: '14px' }}>
               <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text-muted)', marginBottom: '6px' }}>{needle ? 'Rack kits' : 'Packages'}</div>
               <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '4px' }}>
-                {stripKits.map(k => {
-                  const photo = k.image_path || k.members.find(m => m.part.image_path)?.part.image_path || null;
-                  return (
-                    <div key={k.id} style={{ minWidth: '230px', maxWidth: '230px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-                      <div style={{ height: '110px', background: 'var(--subtle-bg, rgba(128,128,128,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-                        {photo ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={imageUrl(photo)}
-                            alt={k.name}
-                            onClick={() => setZoom({ photos: [{ id: k.id, url: imageUrl(photo), title: k.item_number || k.name, subtitle: k.item_number ? k.name : null }], index: 0 })}
-                            title="Tap to enlarge the picture"
-                            style={{ width: '100%', height: '100%', objectFit: 'cover', cursor: 'zoom-in' }}
-                          />
-                        ) : (
-                          <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', opacity: 0.7 }}>No photo</span>
-                        )}
-                        {isAdmin && (
-                          <button
-                            onClick={() => deleteKit(k)}
-                            title="Remove this package (parts are untouched)"
-                            style={{ position: 'absolute', top: '6px', right: '6px', padding: '2px 7px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '11px', cursor: 'pointer', color: 'var(--text-muted)' }}
-                          >✕</button>
-                        )}
-                      </div>
-                      <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
-                        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>
-                          {k.item_number && <span style={{ fontWeight: 800, marginRight: '6px' }}>{k.item_number}</span>}
-                          {k.name}
-                        </div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                          {k.vehicle_label ? `${k.vehicle_label} · ` : ''}{k.members.length + k.missing.length} part{k.members.length + k.missing.length !== 1 ? 's' : ''}
-                          {k.missing.length > 0 ? ` · ${k.missing.length} not in NetSuite` : ''}
-                          {k.totalLabor > 0 ? ` · ${k.totalLabor}h labor` : ''}
-                        </div>
-                        {k.description && (
-                          <div style={{ fontSize: '10px', color: 'var(--text-secondary)', lineHeight: 1.35, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{k.description}</div>
-                        )}
-                        <span style={{ flex: 1 }} />
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>{money(k.totalPrice)}</span>
-                          <span style={{ flex: 1 }} />
-                          {onAddKit ? (
-                            <button
-                              onClick={() => { onAddKit(k); setAddedKits(prev => ({ ...prev, [k.id]: (prev[k.id] || 0) + 1 })); }}
-                              style={{ padding: '5px 12px', borderRadius: '8px', border: 'none', background: addedKits[k.id] ? 'rgba(34,197,94,0.15)' : 'var(--accent, #2563eb)', color: addedKits[k.id] ? '#22c55e' : '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
-                            >
-                              {addedKits[k.id] ? `✓ ×${addedKits[k.id]}` : k.item_number ? '+ Add rack' : `+ Add ${k.members.length} lines`}
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => setAddTarget({ kit: k })}
-                              title="Add this package's lines to an existing estimate, or start a new estimate from it"
-                              style={{ padding: '5px 12px', borderRadius: '8px', border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
-                            >
-                              + Add to estimate
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                {stripKits.map(k => renderKitCard(k, false))}
               </div>
             </div>
             );
@@ -697,7 +728,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>No parts match these filters.</div>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
-            {parts.map(p => (
+            {gridItems.map(({ part: p, kit }) => kit ? renderKitCard(kit, true) : (
               <div key={p.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 <div
                   onClick={() => (p.image_path ? openGridPhoto(p.id) : setDetail(p))}
