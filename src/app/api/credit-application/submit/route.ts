@@ -138,7 +138,8 @@ export async function POST(req: NextRequest) {
     // never the EIN, bank fields, or volume (notifications are readable
     // beyond this table's own denylist).
     try {
-      const REVIEWER_ROLES = ['finance', 'admin', 'super_admin'];
+      // Finance and the super admins; admins came off 2026-10-24 (owner: too many alerts).
+      const REVIEWER_ROLES = ['finance', 'super_admin'];
       const { data: staff } = await service
         .from('profiles')
         .select('id, role, roles, status, deactivated')

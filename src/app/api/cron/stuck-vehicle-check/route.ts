@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks, vehicleLinkFor } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
@@ -70,11 +70,8 @@ export async function GET(req: NextRequest) {
       .from('sync_state').select('last_result').eq('sync_type', 'stuck_vehicle_check').maybeSingle();
     const lastAlerts: Record<string, string> = ((state?.last_result as any)?.alerts as Record<string, string>) || {};
 
-    const { data: admins } = await service
-      .from('profiles').select('id')
-      .or('role.eq.admin,roles.cs.{admin}')
-      .eq('status', 'approved');
-    const adminIds = (admins || []).map(a => a.id);
+    // Whoever schedules (Dashboard focus), not every admin (2026-10-24).
+    const adminIds = await getAlertOwnerIds('scheduling');
 
     // Assignees can be external installers whose /tracking link bounces off the
     // in_shop gate — load their roles once so each alert can carry a URL the

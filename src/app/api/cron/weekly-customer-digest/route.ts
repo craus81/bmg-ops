@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { resolveCustomerContact } from '@/lib/customer-notify';
 import { mayReceive } from '@/lib/notification-prefs';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getSuperAdminIds } from '@/lib/notify';
 import { recordHeartbeat } from '@/lib/system-health';
 import { loadDigestBuckets, bucketSize, type DigestBucket } from '@/lib/customer-digest';
 
@@ -19,7 +19,7 @@ const service = createServiceClient();
  * THIS CRON DOES NOT EMAIL CUSTOMERS. It used to send every digest itself.
  * Owner decision 2026-09-14: no customer email leaves FleetSuite without a
  * person sending it. So it counts the digests that are ready and tells the
- * admins once; each one goes out from Customer Notifications (Send update →
+ * super admins once; each one goes out from Customer Notifications (Send update →
  * the standard compose screen, with a preview of that customer's week).
  *
  * The subscription still decides who is even offered: a customer who opted
@@ -56,11 +56,8 @@ export async function GET(req: NextRequest) {
     }
 
     if (ready > 0) {
-      const { data: admins } = await service
-        .from('profiles').select('id')
-        .or('role.in.(admin,super_admin),roles.cs.{admin},roles.cs.{super_admin}')
-        .eq('status', 'approved');
-      const adminIds = (admins || []).map((a: any) => a.id);
+      // Super admins only (every admin until 2026-10-24).
+      const adminIds = await getSuperAdminIds();
       if (adminIds.length > 0) {
         await notifyMany(adminIds, {
           type: 'customer_digest_ready',

@@ -10,7 +10,7 @@ import { chicagoDay } from '@/lib/exec-metrics';
 import { syncShopInboundForUpfitProject } from '@/lib/shop-inbound';
 import { notifyCustomerByName } from '@/lib/customer-notify';
 import { buildNotificationEmail } from '@/lib/resend';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 
 export const dynamic = 'force-dynamic';
@@ -136,15 +136,11 @@ async function propagatePickup(checkinId: string, day: string | null, time: stri
     .eq('id', checkinId);
 }
 
-/** Approved admins (+ the vehicle's assignee) hear about customer-made
- *  bookings; type 'booking' rides default in-app + push. */
+/** Whoever schedules (Dashboard focus; owner decision 2026-10-24, was every
+ *  admin) + the vehicle's assignee hear about customer-made bookings; type
+ *  'booking' rides default in-app + push. */
 async function notifyStaff(target: BookingTarget, projectId: string | null, title: string, body: string) {
-  const { data: admins } = await service
-    .from('profiles')
-    .select('id')
-    .or('role.in.(admin,super_admin),roles.cs.{admin},roles.cs.{super_admin}')
-    .eq('status', 'approved');
-  const ids = new Set((admins || []).map((p: any) => p.id));
+  const ids = new Set(await getAlertOwnerIds('scheduling'));
   if (target.kind === 'pickup') {
     const { data: c } = await service.from('fleet_checkins').select('assigned_to').eq('id', target.checkin.id).maybeSingle();
     if (c?.assigned_to) ids.add(c.assigned_to);

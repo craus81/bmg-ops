@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getSuperAdminIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { recordHeartbeat } from '@/lib/system-health';
 import { isShopWeekend, markWeekendSkip } from '@/lib/quiet-weekends';
@@ -14,7 +14,7 @@ const service = createServiceClient();
 
 /**
  * Daily at-risk account sweep: flags customers who spent real money last
- * year and have gone quiet this year, and alerts admins + the account's
+ * year and have gone quiet this year, and alerts the super admins + the account's
  * sales rep about NEWLY flagged accounts (the full list lives on the
  * report page — no daily re-spam for accounts already known to be at risk).
  */
@@ -44,15 +44,12 @@ export async function GET(req: NextRequest) {
 
     let notified = 0;
     if (fresh.length > 0) {
-      const { data: admins } = await service
-        .from('profiles')
-        .select('id')
-        .or('role.eq.admin,roles.cs.{admin}')
-        .eq('status', 'approved');
-      const adminIds = (admins || []).map(a => a.id);
+      // The digest goes to the super admins (every admin until 2026-10-24);
+      // each account's own rep still gets the per-account nudge.
+      const adminIds = await getSuperAdminIds();
       const fmtK = (n: number) => n >= 1000 ? `$${(n / 1000).toFixed(0)}k` : `$${n.toFixed(0)}`;
 
-      // One digest to admins; a per-account nudge to the owning rep.
+      // One digest to the super admins; a per-account nudge to the owning rep.
       if (adminIds.length > 0) {
         const lines = fresh
           .map(c => `${c.company_name} (${fmtK(c.last_year_spend)} last yr → ${fmtK(c.ytd_spend)} YTD${c.days_quiet != null ? `, quiet ${c.days_quiet}d` : ''})`)

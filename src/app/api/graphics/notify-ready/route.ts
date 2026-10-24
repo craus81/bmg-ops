@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { deepLinks } from '@/lib/deep-links';
@@ -74,17 +74,11 @@ export async function POST(req: NextRequest) {
       for (const a of assignments || []) targetUserIds.add(a.user_id);
     }
 
-    // Admins — match either the primary `role` column or the multi-role
-    // `roles` array. Deliberately does NOT filter by profiles.status since
-    // admin accounts aren't always stamped 'approved' (particularly the
-    // bootstrap admin), and losing visibility on install readiness is
-    // worse than occasionally notifying an admin whose onboarding isn't
-    // fully finalized.
-    const { data: admins } = await supabase
-      .from('profiles')
-      .select('id, role, roles, status')
-      .or('role.eq.admin,roles.cs.{admin}');
-    for (const a of admins || []) targetUserIds.add(a.id);
+    // Whoever schedules installs (Dashboard focus), in place of every admin
+    // (owner decision 2026-10-24: this one emails, and six admins got it).
+    // Falls back to the super admins when nobody is focused on scheduling.
+    const admins = await getAlertOwnerIds('scheduling');
+    for (const id of admins) targetUserIds.add(id);
 
     // Also include the graphics job's creator and assigned user — they
     // are natural recipients even if they aren't flagged elsewhere.
@@ -105,7 +99,7 @@ export async function POST(req: NextRequest) {
     console.log('[notify-ready] dispatch', {
       jobId,
       matchedCheckins: matchedCheckins?.length || 0,
-      adminCount: admins?.length || 0,
+      schedulerCount: admins.length,
       optinCount: optins?.length || 0,
       finalTargetCount: userIds.length,
     });

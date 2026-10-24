@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature, getProfileRoles, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
-import { notifyMany } from '@/lib/notify';
+import { notifyMany, getSuperAdminIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { discountApprovalStatus, getDiscountApprovalPct, stampDiscountApproval } from '@/lib/discount-approval';
 
@@ -15,14 +15,11 @@ const Schema = z.object({
   action: z.enum(['request', 'approve']),
 });
 
-/** Approved admin and super-admin accounts, minus the person acting. */
+/** Who is asked to approve: the super admins, minus the person acting.
+ *  Every admin was asked until 2026-10-24 (owner: Craig approves discounts);
+ *  any admin can still approve from the estimate. */
 async function adminIds(excludeUserId: string): Promise<string[]> {
-  const { data } = await supabase
-    .from('profiles')
-    .select('id')
-    .or('role.eq.admin,roles.cs.{admin},role.eq.super_admin,roles.cs.{super_admin}')
-    .eq('status', 'approved');
-  return [...new Set((data || []).map((p: any) => p.id as string))].filter(id => id && id !== excludeUserId);
+  return getSuperAdminIds(excludeUserId);
 }
 
 /**
@@ -30,7 +27,7 @@ async function adminIds(excludeUserId: string): Promise<string[]> {
  *
  * Discounts over the admin-approval limit (migration 365,
  * src/lib/discount-approval.ts):
- *  - action "request": a rep asks; every admin is notified.
+ *  - action "request": a rep asks; the super admins are notified.
  *  - action "approve": an admin approves at the estimate's current
  *    discount percent; whoever asked is notified.
  */
