@@ -29,7 +29,13 @@ export async function ensureFreshSession(): Promise<void> {
 export function isNativeApp(): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    return !!(window as any).Capacitor?.isNativePlatform?.();
+    if ((window as any).Capacitor?.isNativePlatform?.()) return true;
+    // A split-screen pane is a frame inside the app (src/lib/split-screen.ts):
+    // the app is the page around it.
+    if (window.self !== window.top && window.name.startsWith('fs-pane-')) {
+      return !!(window.parent as any).Capacitor?.isNativePlatform?.();
+    }
+    return false;
   } catch {
     return false;
   }

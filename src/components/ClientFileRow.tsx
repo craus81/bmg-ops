@@ -98,6 +98,10 @@ export default function ClientFileRow({ file, selected, onSelect, onClient, hide
   const builder = !picking && hasFeature('graphics_builder') && opensInGraphicsBuilder(file);
   return (
     <div
+      // Split screen: press and hold a proof to drag it into the Graphics
+      // Builder on the other side (PaneBridge).
+      data-client-file-id={builder ? file.id : undefined}
+      data-client-file-name={builder ? file.name : undefined}
       onClick={e => {
         // Links and buttons inside the row do their own thing. They must not
         // stopPropagation: the iPhone app's NativeLinkHandler listens on

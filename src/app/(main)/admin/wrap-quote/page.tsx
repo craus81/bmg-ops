@@ -95,6 +95,7 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import { looseOrFilter } from '@/lib/loose-search';
 import { holdAwareFetch } from '@/lib/hold-aware-fetch';
 import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
+import { OPEN_CLIENT_FILE_EVENT } from '@/lib/split-screen';
 
 // Manual wrap-quote estimator (WrapUP-style): pick a 1:20 vehicle outline
 // template, draw measurement shapes over it, price by substrate + labor,
@@ -3028,61 +3029,79 @@ export default function WrapQuotePage() {
   // from the file's client folder, open the Customer Proof surface and read
   // the file as if it had been uploaded here. The pages remember the file,
   // so the graphics job made from this worksheet links it.
+  //
+  // Split screen also drops a file here while the worksheet is open (a Client
+  // Files proof dragged over from the other pane, or its 🎨 Builder button):
+  // the same steps, on the worksheet as it stands.
+  const openClientFile = async (fileId: string) => {
+    await switchSurface('proof');
+    setSurfaceChosen(true);
+    setProofBusy('Getting the file from Client Files…');
+    let info: any;
+    try {
+      const res = await apiFetch(`/api/client-files/${encodeURIComponent(fileId)}?format=json`);
+      info = await res.json().catch(() => ({}));
+      if (!res.ok || !info?.url) throw new Error(info?.error || `HTTP ${res.status}`);
+    } catch (e: any) {
+      setProofBusy(null);
+      setProofNotes([`Couldn't open that client file (${e?.message || 'unknown error'}). Download it from Client Files and drop it on the proof instead.`]);
+      return;
+    }
+    setFromClientFile({ id: fileId, name: info.name, client: info.client?.name || null, customer: info.customer?.name || null });
+    if (info.customer?.id && !customerId) {
+      setCustomerId(info.customer.id);
+      const { data: cust } = await supabase
+        .from('customers')
+        .select('company_name, email, phone, address')
+        .eq('id', info.customer.id)
+        .maybeSingle();
+      setCustomer((prev: any) => ({
+        ...prev,
+        name: prev.name || cust?.company_name || info.customer.name || '',
+        email: prev.email || cust?.email || '',
+        phone: prev.phone || cust?.phone || '',
+        address: prev.address || cust?.address || '',
+      }));
+    } else if (!info.customer && info.client?.name) {
+      setCustomer((prev: any) => ({ ...prev, name: prev.name || info.client.name }));
+    }
+    let file: File;
+    try {
+      const got = await fetch(info.url, { credentials: 'omit' });
+      if (!got.ok) throw new Error(`HTTP ${got.status}`);
+      const blob = await got.blob();
+      // An Illustrator file is read through its PDF copy.
+      const type = /\.(pdf|ai)$/i.test(info.name) ? 'application/pdf' : (blob.type || 'application/octet-stream');
+      file = new File([blob], info.name, { type });
+    } catch (e: any) {
+      setProofBusy(null);
+      setProofNotes([`Couldn't download ${info.name} (${e?.message || 'network error'}). Download it from Client Files and drop it on the proof instead.`]);
+      return;
+    }
+    setProofBusy(null);
+    await readProofFiles([file], { clientFileId: fileId });
+  };
+  const openClientFileRef = useRef(openClientFile);
+  openClientFileRef.current = openClientFile;
+
   useEffect(() => {
     const fileId = searchParams.get('clientFile');
     if (!fileId || clientFileHandled.current || loading || !hasAccess) return;
     if (searchParams.get('quote') || searchParams.get('id')) return;
     clientFileHandled.current = true;
-    (async () => {
-      await switchSurface('proof');
-      setSurfaceChosen(true);
-      setProofBusy('Getting the file from Client Files…');
-      let info: any;
-      try {
-        const res = await apiFetch(`/api/client-files/${encodeURIComponent(fileId)}?format=json`);
-        info = await res.json().catch(() => ({}));
-        if (!res.ok || !info?.url) throw new Error(info?.error || `HTTP ${res.status}`);
-      } catch (e: any) {
-        setProofBusy(null);
-        setProofNotes([`Couldn't open that client file (${e?.message || 'unknown error'}). Download it from Client Files and drop it on the proof instead.`]);
-        return;
-      }
-      setFromClientFile({ id: fileId, name: info.name, client: info.client?.name || null, customer: info.customer?.name || null });
-      if (info.customer?.id && !customerId) {
-        setCustomerId(info.customer.id);
-        const { data: cust } = await supabase
-          .from('customers')
-          .select('company_name, email, phone, address')
-          .eq('id', info.customer.id)
-          .maybeSingle();
-        setCustomer((prev: any) => ({
-          ...prev,
-          name: prev.name || cust?.company_name || info.customer.name || '',
-          email: prev.email || cust?.email || '',
-          phone: prev.phone || cust?.phone || '',
-          address: prev.address || cust?.address || '',
-        }));
-      } else if (!info.customer && info.client?.name) {
-        setCustomer((prev: any) => ({ ...prev, name: prev.name || info.client.name }));
-      }
-      let file: File;
-      try {
-        const got = await fetch(info.url, { credentials: 'omit' });
-        if (!got.ok) throw new Error(`HTTP ${got.status}`);
-        const blob = await got.blob();
-        // An Illustrator file is read through its PDF copy.
-        const type = /\.(pdf|ai)$/i.test(info.name) ? 'application/pdf' : (blob.type || 'application/octet-stream');
-        file = new File([blob], info.name, { type });
-      } catch (e: any) {
-        setProofBusy(null);
-        setProofNotes([`Couldn't download ${info.name} (${e?.message || 'network error'}). Download it from Client Files and drop it on the proof instead.`]);
-        return;
-      }
-      setProofBusy(null);
-      await readProofFiles([file], { clientFileId: fileId });
-    })();
+    openClientFileRef.current(fileId);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot once the page has loaded
   }, [searchParams, loading, hasAccess]);
+
+  useEffect(() => {
+    if (loading || !hasAccess) return;
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<{ id: string }>).detail?.id;
+      if (id) openClientFileRef.current(id);
+    };
+    window.addEventListener(OPEN_CLIENT_FILE_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_CLIENT_FILE_EVENT, onOpen);
+  }, [loading, hasAccess]);
 
   // ----- History: archive / delete -----
   // ── Follow-up actions on sent quotes ──
