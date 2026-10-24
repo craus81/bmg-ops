@@ -21,6 +21,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { BrowsePart } from '@/components/PartCatalogBrowser';
 import { fetchAllRows } from './fetch-all';
+import { partNumberKey } from './loose-search';
 
 export const KIT_PART_COLUMNS =
   'id, netsuite_id, item_number, display_name, description, marketing_description, catalog, item_type, vendor, sales_price, purchase_price, avg_install_cost, labor_hours, quantity_on_hand, quantity_available, product_category_id, category_source, image_path, width_in, depth_in, height_in, weight_lb, mount_type, dims_source';
@@ -55,6 +56,28 @@ export interface KitWithMembers {
 }
 
 export const normItem = (s: string | null | undefined) => String(s || '').trim().toUpperCase();
+
+/**
+ * Rack kits keyed by part number, case and dashes aside. A NetSuite item
+ * with the same number as a rack kit is the same rack, and the kit wins:
+ * the Parts Catalog shows the kit in the item's place and estimate part
+ * search leaves the item out (Craig 2026-10-24). Plain packages have no
+ * part number and never match.
+ */
+export function rackKitsByNumber(kits: KitWithMembers[]): Map<string, KitWithMembers> {
+  const byNumber = new Map<string, KitWithMembers>();
+  for (const k of kits) {
+    const key = partNumberKey(k.item_number);
+    if (key && !byNumber.has(key)) byNumber.set(key, k);
+  }
+  return byNumber;
+}
+
+/** The rack kit a catalog part duplicates, if any. */
+export function rackKitForPart(byNumber: Map<string, KitWithMembers>, itemNumber: string | null | undefined): KitWithMembers | null {
+  const key = partNumberKey(itemNumber);
+  return (key && byNumber.get(key)) || null;
+}
 
 /** Every active kit (packages and rack kits), members resolved. */
 export async function loadKits(supabase: SupabaseClient): Promise<KitWithMembers[]> {

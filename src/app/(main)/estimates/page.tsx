@@ -11,7 +11,7 @@ import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import PartCatalogBrowser, { type BrowsePart } from '@/components/PartCatalogBrowser';
 import { RackKitBrowserModal } from '@/components/RackKitBrowser';
-import { kitEstimateLines, loadKits, normItem, type KitLineFields, type KitWithMembers } from '@/lib/part-kits';
+import { kitEstimateLines, loadKits, normItem, rackKitForPart, rackKitsByNumber, type KitLineFields, type KitWithMembers } from '@/lib/part-kits';
 import { gatherKitGroups } from '@/lib/estimate-kits';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeContact, type EmailComposeFields } from '@/components/EmailComposeModal';
@@ -1491,20 +1491,31 @@ export default function EstimatesPage() {
     }
     const needle = normItem(q);
     const kits = await rackKitsRef.current;
-    setKitResults(kits
+    const kitMatches = kits
       .filter(k => partNumberIncludes(k.item_number, q) || normItem(k.name).includes(needle))
       // Exact part number (dashes aside) first, then by part number.
       .sort((a, b) => Number(partNumberKey(b.item_number) === partNumberKey(q)) - Number(partNumberKey(a.item_number) === partNumberKey(q))
         || String(a.item_number).localeCompare(String(b.item_number)))
-      .slice(0, 8));
+      .slice(0, 8);
     const partFilter = partSearchOrFilter(['item_number'], ['display_name', 'description'], q);
     const { data } = partFilter ? await supabase
       .from('netsuite_parts')
       .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost')
       .eq('is_active', true)
       .or(partFilter)
-      .limit(10) : { data: [] };
-    setPartResults((data as Part[]) || []);
+      .limit(14) : { data: [] };
+    // A NetSuite item with a rack kit's number is that rack, and the kit
+    // wins (Craig 2026-10-24): the item stays out and its kit is listed,
+    // even when the search matched only the item's description.
+    const byNumber = rackKitsByNumber(kits);
+    const parts: Part[] = [];
+    for (const p of (data as Part[]) || []) {
+      const kit = rackKitForPart(byNumber, p.item_number);
+      if (!kit) parts.push(p);
+      else if (!kitMatches.includes(kit)) kitMatches.push(kit);
+    }
+    setKitResults(kitMatches);
+    setPartResults(parts.slice(0, 10));
     setPartSearching(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
