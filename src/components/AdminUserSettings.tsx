@@ -20,6 +20,7 @@ import NotificationMatrix from '@/components/NotificationMatrix';
 import { GRAPHICS_STATUS_LABELS, GRAPHICS_STATUS_ORDER, GRAPHICS_STATUS_COLORS } from '@/lib/types';
 import type { GraphicsJobStatus } from '@/lib/types';
 import { parseOverrides, type TypeChannelOverrides } from '@/lib/notification-registry';
+import { DASHBOARD_FOCI, FOCUS_LABEL, FOCUS_HINT, normalizeFocus, type DashboardFocus } from '@/lib/dashboard-focus';
 
 interface Prefs {
   notify_new_job: boolean;
@@ -94,6 +95,8 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
   const [signature, setSignature] = useState('');
   const [sigLogo, setSigLogo] = useState(false);
+  // Empty = their Dashboard follows their role (migration 432).
+  const [focus, setFocus] = useState<DashboardFocus[]>([]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -110,6 +113,7 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
         if (!res.ok) { setError(data.error || 'Failed to load settings'); return; }
         setSignature(data.profile?.email_signature || '');
         setSigLogo(!!data.profile?.email_signature_logo);
+        setFocus(normalizeFocus(data.profile?.dashboard_focus) || []);
         setHadPrefsRow(!!data.prefs);
         setPrefs({ ...DEFAULT_PREFS, ...(data.prefs || {}) });
       } catch {
@@ -133,6 +137,7 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
           userId,
           email_signature: signature.trim() || null,
           email_signature_logo: sigLogo,
+          dashboard_focus: focus.length > 0 ? focus : null,
           prefs: {
             notify_new_job: prefs.notify_new_job,
             notify_status_change: prefs.notify_status_change,
@@ -166,6 +171,16 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
     } finally {
       setSaving(false);
     }
+  };
+
+  // Everything stands alone; any narrower pick replaces it. Several narrow
+  // picks combine (Jessie: Scheduling + Purchasing).
+  const toggleFocus = (f: DashboardFocus) => {
+    setFocus(prev => {
+      if (f === 'everything') return prev.includes('everything') ? [] : ['everything'];
+      const rest = prev.filter(x => x !== 'everything');
+      return rest.includes(f) ? rest.filter(x => x !== f) : [...rest, f];
+    });
   };
 
   const toggleCustomStatus = (s: GraphicsJobStatus) => {
@@ -224,6 +239,27 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
               This user hasn&apos;t saved notification preferences yet — these are the defaults; saving writes them to their account.
             </div>
           )}
+
+          <div style={groupLabel}>Dashboard focus</div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            {DASHBOARD_FOCI.map(f => {
+              const on = focus.includes(f);
+              return (
+                <button key={f} type="button" onClick={() => toggleFocus(f)} aria-pressed={on} title={FOCUS_HINT[f]} style={{
+                  padding: '6px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+                  background: on ? 'rgba(244,114,182,0.14)' : 'var(--input-bg)',
+                  border: `1px solid ${on ? '#f472b6' : 'var(--border)'}`,
+                  color: on ? '#f472b6' : 'var(--text-label)',
+                }}>{on ? '✓ ' : ''}{FOCUS_LABEL[f]}</button>
+              );
+            })}
+          </div>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            {focus.length === 0
+              ? 'Nothing picked: their Dashboard follows their role (admins see everything).'
+              : focus.map(f => `${FOCUS_LABEL[f]}: ${FOCUS_HINT[f]}`).join('. ') + '.'}
+            {' '}This only changes what their Dashboard shows. They can still open every page they could before.
+          </div>
 
           <div style={groupLabel}>Which alerts reach them</div>
           <NotificationMatrix

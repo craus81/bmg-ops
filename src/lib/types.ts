@@ -42,6 +42,9 @@ export interface Profile {
   /** Sections this user has collapsed, '<page>:<section>' (migration 408).
    *  See src/components/CollapsibleCard.tsx. */
   collapsed_sections?: string[] | null;
+  /** What this person's Dashboard is about (migration 432). NULL = from
+   *  the role. See src/lib/dashboard-focus.ts. */
+  dashboard_focus?: string[] | null;
 }
 
 export interface CatalogItem {
