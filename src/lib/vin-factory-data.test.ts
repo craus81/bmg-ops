@@ -80,7 +80,7 @@ describe('parseCarsxeSpecs + mergeFactory', () => {
     const body = m.groups[1].rows;
     expect(body.find(r => r.label === 'Bed length')).toMatchObject({ value: '5.5 ft', note: 'CarsXE · from 145.4" wheelbase' });
     expect(body.find(r => r.label === 'Wheelbase')?.value).toBe('145.4"');
-    expect(m.groups[0].rows.map(r => r.label)).toEqual(['Series', 'Style']);
+    expect(m.groups[0].rows.map(r => r.label)).toEqual(['Series', 'Style', 'Trim']);
     // NHTSA's own value wins.
     expect(m.groups[2].rows[0].value).toBe('Class 2E: 6,001 - 7,000 lb');
     // The NHTSA object isn't mutated.
@@ -91,5 +91,71 @@ describe('parseCarsxeSpecs + mergeFactory', () => {
     const m = mergeFactory(null, parseCarsxeSpecs(f150))!;
     expect(m.title).toBe('2023 Ford F-150 XLT');
     expect(m.make).toBe('Ford');
+  });
+});
+
+describe('CarsXE "No Data" fields (new model years)', () => {
+  const tacoma = {
+    success: true,
+    attributes: {
+      year: '2026', make: 'Toyota', model: 'Tacoma', trim: 'SR5 Xtracab 2WD', style: 'EXTENDED CAB PICKUP 2-DR',
+      engine: '2.4L L4 DOHC 16V', curb_weight: 'No Data lbs', gross_vehicle_weight_rating: 'No Data lbs',
+      overall_height: 'No Data in.', wheelbase_length: 'No Data in.', production_seq_number: '058197',
+    },
+  };
+
+  it('treats "No Data" as blank and hides it from the field list', () => {
+    const f = parseCarsxeSpecs(tacoma)!;
+    expect(f.gvwr).toBe('');
+    expect(f.curbWeight).toBe('');
+    expect(f.wheelbase).toBe('');
+    expect(f.raw.map(r => r.label)).not.toContain('Curb weight');
+    expect(f.raw.map(r => r.label)).toContain('Engine');
+  });
+
+  it('gives the 2024+ Tacoma XtraCab its only bed, and fills trim', () => {
+    const f = parseCarsxeSpecs(tacoma)!;
+    expect(f.bed).toEqual({ value: '6 ft', source: 'only bed on a 2024+ Tacoma XtraCab' });
+    const m = mergeFactory({
+      title: '2026 TOYOTA Tacoma', make: 'TOYOTA', warning: '',
+      groups: [{ heading: 'Vehicle', rows: [{ label: 'Model', value: 'Tacoma' }, { label: 'Trim', value: '' }] }],
+    }, f)!;
+    expect(m.groups[0].rows.find(r => r.label === 'Trim')?.value).toBe('SR5 Xtracab 2WD');
+  });
+
+  it('leaves an older Tacoma Access Cab alone', () => {
+    const f = parseCarsxeSpecs({ ...tacoma, attributes: { ...tacoma.attributes, year: '2022' } })!;
+    expect(f.bed).toBeNull();
+  });
+});
+
+describe('Transit with the wheelbase only in its trim', () => {
+  const transit = {
+    success: true,
+    attributes: {
+      year: '2027', make: 'Ford', model: 'Transit', trim: '150 Van Low Roof w/Sliding Pass. 130-in. WB',
+      style: 'CARGO VAN', wheelbase_length: 'No Data in.', overall_height: 'No Data in.',
+    },
+  };
+
+  it('reads the wheelbase and roof from the trim and narrows NHTSA\'s range', () => {
+    const f = parseCarsxeSpecs(transit)!;
+    expect(f.wheelbase).toBe('130"');
+    expect(f.roof).toEqual({ value: 'Low', source: 'factory style' });
+    const m = mergeFactory({
+      title: '2027 FORD Transit Low Roof', make: 'FORD', warning: '',
+      groups: [
+        { heading: 'Vehicle', rows: [{ label: 'Trim', value: 'Low Roof' }] },
+        { heading: 'Body', rows: [{ label: 'Wheelbase', value: '130" – 148"' }, { label: 'Roof', value: 'Low' }] },
+      ],
+    }, f)!;
+    expect(m.groups[0].rows.find(r => r.label === 'Factory trim')?.value).toBe('150 Van Low Roof w/Sliding Pass. 130-in. WB');
+    expect(m.groups[1].rows.find(r => r.label === 'Wheelbase')).toMatchObject({ value: '130"', note: 'CarsXE · from trim' });
+  });
+
+  it('reads 148" WB spellings too', () => {
+    const f = parseCarsxeSpecs({ ...transit, attributes: { ...transit.attributes, trim: 'T-250 148" WB Med Rf' } })!;
+    expect(f.wheelbase).toBe('148"');
+    expect(f.roof?.value).toBe('Medium');
   });
 });
