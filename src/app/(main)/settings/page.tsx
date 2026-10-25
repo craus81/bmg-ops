@@ -273,6 +273,7 @@ export default function SettingsPage() {
   // the cost rate above.
   const [crewSize, setCrewSize] = useState('');
   const [shiftHours, setShiftHours] = useState('');
+  const [gfxRate, setGfxRate] = useState('');
   const [capBusy, setCapBusy] = useState(false);
   const [capSaved, setCapSaved] = useState(false);
   const [capError, setCapError] = useState('');
@@ -285,6 +286,7 @@ export default function SettingsPage() {
         if (res.ok) {
           setCrewSize(data.crewSize != null ? String(data.crewSize) : '');
           setShiftHours(data.shiftHours != null ? String(data.shiftHours) : '');
+          setGfxRate(data.graphicsInstallRate != null ? String(data.graphicsInstallRate) : '');
         }
       } catch { /* the card still renders; saving surfaces errors */ }
     })();
@@ -307,15 +309,22 @@ export default function SettingsPage() {
         setCapError('Enter whole people and hours per day, or leave both blank to clear.');
         return;
       }
+      const rateTrim = gfxRate.trim();
+      const rate = rateTrim === '' ? null : parseFloat(rateTrim);
+      if (rate != null && (!Number.isFinite(rate) || rate <= 0)) {
+        setCapError('Enter the graphics install rate in dollars per hour, or leave it blank.');
+        return;
+      }
       const res = await apiFetch('/api/admin/shop-capacity', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ crewSize: crew, shiftHours: shift }),
+        body: JSON.stringify({ crewSize: crew, shiftHours: shift, graphicsInstallRate: rate }),
       });
       const data = await res.json();
       if (!res.ok) { setCapError(data?.error || 'Could not save capacity.'); return; }
       setCrewSize(data.crewSize != null ? String(data.crewSize) : '');
       setShiftHours(data.shiftHours != null ? String(data.shiftHours) : '');
+      setGfxRate(data.graphicsInstallRate != null ? String(data.graphicsInstallRate) : '');
       setCapSaved(true);
       setTimeout(() => setCapSaved(false), 2500);
     } catch (e: any) {
@@ -1261,6 +1270,18 @@ export default function SettingsPage() {
                   onChange={e => setShiftHours(e.target.value)}
                   placeholder="e.g. 8"
                   style={{ ...inputStyle, width: '100px' }}
+                />
+              </div>
+              <div>
+                <div style={labelStyle} title="Estimates price graphics install labor in dollars. Shop Week divides those dollars by this rate to get install hours.">Graphics install $ / hour</div>
+                <input
+                  type="number"
+                  step={1}
+                  min={1}
+                  value={gfxRate}
+                  onChange={e => setGfxRate(e.target.value)}
+                  placeholder="e.g. 95"
+                  style={{ ...inputStyle, width: '110px' }}
                 />
               </div>
               <button

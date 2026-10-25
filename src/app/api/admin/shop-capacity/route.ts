@@ -25,12 +25,13 @@ export async function GET(req: NextRequest) {
 
   const { data } = await getSupabase()
     .from('quote_settings')
-    .select('shop_crew_size, shop_shift_hours')
+    .select('shop_crew_size, shop_shift_hours, graphics_install_rate')
     .eq('id', 1)
     .maybeSingle();
   return NextResponse.json({
     crewSize: data?.shop_crew_size != null ? Number(data.shop_crew_size) : null,
     shiftHours: data?.shop_shift_hours != null ? Number(data.shop_shift_hours) : null,
+    graphicsInstallRate: data?.graphics_install_rate != null ? Number(data.graphics_install_rate) : null,
   });
 }
 
@@ -39,6 +40,8 @@ const UpdateSchema = z.union([
     /** Both null clears the setting (planner shows demand without judging). */
     crewSize: z.number().int().min(0).max(200).nullable(),
     shiftHours: z.number().min(0).max(24).nullable(),
+    /** $ of Graphics Install Labor per hour (migration 443); omitted = unchanged. */
+    graphicsInstallRate: z.number().gt(0).max(10000).nullable().optional(),
   }),
   z.object({
     day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -81,16 +84,17 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  const { crewSize, shiftHours } = parsed.data;
+  const { crewSize, shiftHours, graphicsInstallRate } = parsed.data;
   const { data: before } = await supabase
     .from('quote_settings')
-    .select('shop_crew_size, shop_shift_hours')
+    .select('shop_crew_size, shop_shift_hours, graphics_install_rate')
     .eq('id', 1)
     .maybeSingle();
   const { error } = await supabase.from('quote_settings').upsert({
     id: 1,
     shop_crew_size: crewSize,
     shop_shift_hours: shiftHours,
+    ...(graphicsInstallRate !== undefined ? { graphics_install_rate: graphicsInstallRate } : {}),
     updated_at: new Date().toISOString(),
     updated_by: auth.user.id,
   });
@@ -102,9 +106,16 @@ export async function PUT(req: NextRequest) {
     recordId: '1',
     action: 'shop_capacity_changed',
     detail: {
-      from: { crewSize: before?.shop_crew_size ?? null, shiftHours: before?.shop_shift_hours != null ? Number(before.shop_shift_hours) : null },
-      to: { crewSize, shiftHours },
+      from: {
+        crewSize: before?.shop_crew_size ?? null,
+        shiftHours: before?.shop_shift_hours != null ? Number(before.shop_shift_hours) : null,
+        graphicsInstallRate: before?.graphics_install_rate != null ? Number(before.graphics_install_rate) : null,
+      },
+      to: { crewSize, shiftHours, ...(graphicsInstallRate !== undefined ? { graphicsInstallRate } : {}) },
     },
   });
-  return NextResponse.json({ crewSize, shiftHours });
+  const rate = graphicsInstallRate !== undefined
+    ? graphicsInstallRate
+    : before?.graphics_install_rate != null ? Number(before.graphics_install_rate) : null;
+  return NextResponse.json({ crewSize, shiftHours, graphicsInstallRate: rate });
 }

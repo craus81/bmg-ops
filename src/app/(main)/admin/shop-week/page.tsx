@@ -21,11 +21,13 @@ import { deepLinks } from '@/lib/deep-links';
 
 interface WeekUnit {
   key: string;
-  kind: 'arrival_project' | 'arrival_graphics' | 'arrival_manual' | 'upfit' | 'promised';
+  kind: 'arrival_project' | 'arrival_graphics' | 'arrival_manual' | 'upfit' | 'promised' | 'booking';
   id: string;
   label: string;
   customer: string | null;
   hours: number | null;
+  graphicsHours?: number | null;
+  time?: string | null;
   needBack: string | null;
   vin: string | null;
 }
@@ -39,6 +41,7 @@ interface WeekDay {
   overrideNote: string | null;
   capacitySource?: 'override' | 'roster' | 'crew' | null;
   graphicsCapacityHours?: number | null;
+  graphicsDemandHours?: number;
   out?: { name: string; department: 'upfit' | 'graphics_install'; hours: number; fullDay: boolean }[];
 }
 interface Week {
@@ -47,6 +50,7 @@ interface Week {
   capacityConfigured: boolean;
   baseCapacityHours: number | null;
   rosterConfigured?: boolean;
+  graphicsInstallRate?: number | null;
   inShopNow: number;
   coverage: { known: number; total: number };
 }
@@ -57,6 +61,13 @@ const KIND_META: Record<WeekUnit['kind'], { label: string; color: string }> = {
   arrival_manual: { label: 'Arrival', color: '#f472b6' },
   upfit: { label: 'Upfit', color: '#fb923c' },
   promised: { label: 'Due back', color: '#4ade80' },
+  booking: { label: 'Booked drop-off', color: '#38bdf8' },
+};
+
+/** "08:30" → "8:30a" for a chip. */
+const shortTime = (t: string) => {
+  const [h, m] = t.split(':').map(Number);
+  return `${h % 12 || 12}${m ? `:${String(m).padStart(2, '0')}` : ''}${h >= 12 ? 'p' : 'a'}`;
 };
 
 const TONE_COLORS: Record<string, string> = { green: '#22c55e', amber: '#f59e0b', red: '#ef4444', none: 'var(--text-muted)' };
@@ -172,6 +183,7 @@ export default function ShopWeekPage() {
     if (unit.kind === 'upfit' || unit.kind === 'promised') router.push(deepLinks.vehicle(unit.id));
     else if (unit.kind === 'arrival_project') router.push(deepLinks.upfitProject(unit.id));
     else if (unit.kind === 'arrival_graphics') router.push(deepLinks.graphicsJob(unit.id));
+    else if (unit.kind === 'booking') router.push(deepLinks.estimate(unit.id));
     // Manual arrivals have no record page of their own — the chip is the record.
   };
 
@@ -245,6 +257,11 @@ export default function ShopWeekPage() {
           {isAdmin ? ' Add your upfit crew in the Staff calendar, or set crew size × shift hours in Settings → Shop Crew Capacity.' : ''}
         </div>
       )}
+      {week && isAdmin && week.graphicsInstallRate == null && (
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', background: 'var(--subtle-bg)', border: '1px dashed var(--border)', borderRadius: '8px', padding: '7px 10px', marginBottom: '10px' }}>
+          Graphics install hours aren&apos;t counted yet. Set Graphics install $ / hour in Settings → Shop Crew Capacity.
+        </div>
+      )}
       {movePick && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px', fontWeight: 700, color: '#60a5fa', background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '8px', padding: '7px 10px', marginBottom: '10px' }}>
           <span>Moving “{movePick.label}” — tap a day to place it.</span>
@@ -313,14 +330,19 @@ export default function ShopWeekPage() {
                   </div>
 
                   {/* Who's out (staff calendar) and graphics install hours */}
-                  {((d.out && d.out.length > 0) || d.graphicsCapacityHours != null) && (
+                  {((d.out && d.out.length > 0) || d.graphicsCapacityHours != null || (d.graphicsDemandHours || 0) > 0) && (
                     <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px', lineHeight: 1.4 }}>
                       {d.out && d.out.length > 0 && (
                         <div style={{ color: '#f59e0b', fontWeight: 700 }}>
                           Out: {d.out.map(o => o.fullDay ? o.name : `${o.name} (${o.hours}h)`).join(', ')}
                         </div>
                       )}
-                      {d.graphicsCapacityHours != null && <div>Graphics install: {d.graphicsCapacityHours}h available</div>}
+                      {d.graphicsCapacityHours == null && (d.graphicsDemandHours || 0) > 0 && <div>Graphics install: {d.graphicsDemandHours}h</div>}
+                      {d.graphicsCapacityHours != null && (
+                        <div style={{ color: (d.graphicsDemandHours || 0) > d.graphicsCapacityHours ? '#ef4444' : undefined, fontWeight: (d.graphicsDemandHours || 0) > d.graphicsCapacityHours ? 700 : undefined }}>
+                          Graphics install: {d.graphicsDemandHours || 0}h / {d.graphicsCapacityHours}h
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -333,12 +355,14 @@ export default function ShopWeekPage() {
                       return (
                         <div
                           key={u.key}
-                          draggable={canMove && !busy}
+                          draggable={canMove && !busy && u.kind !== 'booking'}
                           onDragStart={e => { e.dataTransfer.setData('text/plain', u.key); e.dataTransfer.effectAllowed = 'move'; setDragKey(u.key); }}
                           onDragEnd={() => setDragKey(null)}
                           onClick={e => {
                             e.stopPropagation();
-                            if (!canMove) { openUnit(u); return; }
+                            // Booked drop-offs before a project/SO have no date of
+                            // their own to move — the customer's booking is it.
+                            if (!canMove || u.kind === 'booking') { openUnit(u); return; }
                             setMovePick(picked ? null : u);
                           }}
                           style={{
@@ -347,23 +371,26 @@ export default function ShopWeekPage() {
                             border: picked ? `1px solid ${meta.color}` : undefined,
                             borderLeft: `3px solid ${meta.color}`,
                             opacity: busy ? 0.5 : 1,
-                            cursor: canMove ? 'grab' : 'pointer',
+                            cursor: canMove && u.kind !== 'booking' ? 'grab' : 'pointer',
                             outline: u.kind === 'promised' ? `1px dashed ${meta.color}55` : undefined,
                           }}
                         >
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '4px' }}>
-                            <span style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.label}</span>
+                            <span style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.time ? `${shortTime(u.time)} · ` : ''}{u.label}</span>
                             <span style={{ fontSize: '8px', fontWeight: 700, padding: '1px 4px', borderRadius: '3px', background: `${meta.color}18`, color: meta.color, whiteSpace: 'nowrap' }}>{meta.label}</span>
                           </div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1px', gap: '4px' }}>
                             <span style={{ fontSize: '9px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.customer || ''}</span>
                             <span style={{ display: 'flex', gap: '5px', alignItems: 'center', whiteSpace: 'nowrap' }}>
-                              {u.kind !== 'promised' && (
+                              {u.kind !== 'promised' && u.kind !== 'arrival_graphics' && (
                                 <span style={{ fontSize: '9px', fontWeight: 700, color: u.hours != null ? 'var(--text-body)' : '#f59e0b' }}>
                                   {u.hours != null ? `${u.hours}h` : 'no est'}
                                 </span>
                               )}
-                              {(u.kind === 'upfit' || u.kind === 'promised' || u.kind === 'arrival_project' || u.kind === 'arrival_graphics') && (
+                              {u.graphicsHours != null && (
+                                <span title="Graphics install hours" style={{ fontSize: '9px', fontWeight: 700, color: '#c084fc' }}>{u.graphicsHours}h gfx</span>
+                              )}
+                              {(u.kind === 'upfit' || u.kind === 'promised' || u.kind === 'arrival_project' || u.kind === 'arrival_graphics' || u.kind === 'booking') && (
                                 <button
                                   onClick={e => { e.stopPropagation(); openUnit(u); }}
                                   title="Open record"
