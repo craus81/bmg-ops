@@ -8,7 +8,7 @@ import { loadStaffCalendar } from '@/lib/shop-staff';
 export const dynamic = 'force-dynamic';
 
 /**
- * Staff calendar (migration 441): the roster of people who do the work and
+ * Staff calendar (migration 442): the roster of people who do the work and
  * the days they'll be out. Admin read and write — the page at
  * /admin/staff-calendar is the only client; Shop Week reads the same
  * tables server-side for capacity.

@@ -12,7 +12,7 @@ import {
 } from '@/lib/shop-staff';
 
 /**
- * Staff calendar (migration 441): who does the work, by department, and
+ * Staff calendar (migration 442): who does the work, by department, and
  * the days they'll be out. Everyone on the roster is assumed to work their
  * normal hours unless marked out here. Shop Week's upfit capacity comes
  * from this once anyone is on the upfit roster.

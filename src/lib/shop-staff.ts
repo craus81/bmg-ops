@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
- * Staff calendar (migration 441, owner decision 2026-10-25): capacity is
+ * Staff calendar (migration 442, owner decision 2026-10-25): capacity is
  * who's working, by department. Everyone on the roster works their normal
  * hours on their work days unless a time-off row says they're out.
  *

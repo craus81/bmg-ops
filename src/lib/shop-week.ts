@@ -39,7 +39,7 @@ export interface ShopWeekDay {
   capacityHours: number | null;
   overrideNote: string | null;
   /** Where capacityHours came from: a per-day override, the staff
-   *  calendar (migration 441), crew size × shift hours, or nothing. */
+   *  calendar (migration 442), crew size × shift hours, or nothing. */
   capacitySource: 'override' | 'roster' | 'crew' | null;
   /** Graphics install hours available (staff calendar); null when no
    *  graphics installer is on the roster. Shown, not yet compared. */
