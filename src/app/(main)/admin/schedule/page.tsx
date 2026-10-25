@@ -218,6 +218,26 @@ export default function SchedulePage() {
       }));
     }
 
+    // 2c. Customer-booked drop-offs (R5-17) — the vehicle arriving at the
+    // shop on the day and time the customer picked. Filed under Upfit with
+    // the other shop-arrival dates, same audience.
+    if (isAdmin || profile?.role === 'shop_tech') {
+      const { data: drops } = await supabase
+        .from('shop_appointments')
+        .select('id, estimate_id, slot_date, slot_time, customer_name, estimates(title, estimate_number)')
+        .eq('kind', 'dropoff')
+        .eq('status', 'booked')
+        .gte('slot_date', startDate)
+        .lte('slot_date', endDate);
+      (drops || []).forEach((d: any) => allEvents.push({
+        id: `do-${d.id}`,
+        title: `Drop-off: ${d.estimates?.title || (d.estimates?.estimate_number ? `Estimate #${d.estimates.estimate_number}` : 'vehicle')}`,
+        subtitle: d.customer_name, date: d.slot_date,
+        time: d.slot_time || undefined,
+        type: 'upfit', color: TYPE_COLORS.upfit, linkTo: d.estimate_id ? deepLinks.estimate(d.estimate_id) : undefined,
+      }));
+    }
+
     // 3. CNI installs — the CONFIRMED schedule is the event; the deadline is
     //    a secondary marker (R6-8). Until now this lane drew the deadline and
     //    nothing else, so the days a crew is actually on site — the one thing

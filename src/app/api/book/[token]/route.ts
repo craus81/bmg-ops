@@ -12,6 +12,7 @@ import { notifyCustomerByName } from '@/lib/customer-notify';
 import { buildNotificationEmail } from '@/lib/resend';
 import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
+import { loadShopWeek, capacityWarning } from '@/lib/shop-week';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -138,7 +139,7 @@ async function propagatePickup(checkinId: string, day: string | null, time: stri
 /** Whoever schedules (Dashboard focus; owner decision 2026-10-24, was every
  *  admin) + the vehicle's assignee hear about customer-made bookings; type
  *  'booking' rides default in-app + push. */
-async function notifyStaff(target: BookingTarget, projectId: string | null, title: string, body: string) {
+async function notifyStaff(target: BookingTarget, projectId: string | null, title: string, body: string, type: 'booking' | 'capacity_warning' = 'booking') {
   const ids = new Set(await getAlertOwnerIds('scheduling'));
   if (target.kind === 'pickup') {
     const { data: c } = await service.from('fleet_checkins').select('assigned_to').eq('id', target.checkin.id).maybeSingle();
@@ -147,7 +148,7 @@ async function notifyStaff(target: BookingTarget, projectId: string | null, titl
   const url = target.kind === 'pickup'
     ? deepLinks.vehicle(target.checkin.id)
     : projectId ? deepLinks.upfitProject(projectId) : deepLinks.estimate(target.estimate.id);
-  await notifyMany([...ids], { type: 'booking', title, body, url });
+  await notifyMany([...ids], { type, title, body, url });
 }
 
 export async function POST(req: NextRequest, { params }: { params: { token: string } }) {
@@ -238,9 +239,25 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
 
   const when = `${fmtDay(slotDate)} at ${fmt12h(slotTime)}`;
   const verb = existing ? 'rescheduled' : 'booked';
+  // Warn, never refuse (owner decision 2026-10-25): the customer keeps the
+  // slot, and the team hears right away when that day is now over the upfit
+  // or graphics install hours available (Shop Week's numbers, which already
+  // include this booking). Best-effort — a failed load still sends the
+  // plain booking alert.
+  let warning: string | null = null;
+  if (target.kind === 'dropoff') {
+    try {
+      const day = (await loadShopWeek(service, slotDate, 1)).days[0];
+      warning = day ? capacityWarning(day) : null;
+    } catch (e) {
+      console.error('booking capacity check failed:', e);
+    }
+  }
   await notifyStaff(target, projectId,
-    `${kindNoun === 'pickup' ? 'Pickup' : 'Drop-off'} ${verb} — ${label}`,
-    `${target.kind === 'pickup' ? target.checkin.customer_name : target.estimate.customer_name} ${verb} a ${kindNoun} for ${when}.`);
+    `${warning ? 'Over capacity: ' : ''}${kindNoun === 'pickup' ? 'Pickup' : 'Drop-off'} ${verb} — ${label}`,
+    `${target.kind === 'pickup' ? target.checkin.customer_name : target.estimate.customer_name} ${verb} a ${kindNoun} for ${when}.`
+      + (warning ? ` ${warning} Open Shop Week to move work or adjust the crew.` : ''),
+    warning ? 'capacity_warning' : 'booking');
 
   // Confirmation back to the customer. This is a direct response to their
   // own action (they just booked it), not an automated campaign — so it

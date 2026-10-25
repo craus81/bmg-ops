@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { loadTone, sumEstimateHours, weekStartMonday, addDays } from './shop-week';
+import { loadTone, sumEstimateHours, weekStartMonday, addDays, isGraphicsInstallLabor, graphicsHoursFromDollars, capacityWarning, overCapacity } from './shop-week';
 
 describe('loadTone', () => {
   it('greens under 85%, ambers to 110%, reds past that', () => {
@@ -56,5 +56,40 @@ describe('weekStartMonday', () => {
 describe('addDays', () => {
   it('walks forward across months', () => {
     expect(addDays('2026-09-28', 7)).toBe('2026-10-05');
+  });
+});
+
+describe('graphics install hours', () => {
+  it('recognises both shapes of the graphics install labor line', () => {
+    expect(isGraphicsInstallLabor({ item_number: 'Graphics Install Labor' })).toBe(true);
+    expect(isGraphicsInstallLabor({ item_number: ' GRAPHICS INSTALL LABOR ' })).toBe(true);
+    expect(isGraphicsInstallLabor({ item_number: '', description: 'Graphics install labor — Wrap' })).toBe(true);
+    expect(isGraphicsInstallLabor({ item_number: '3M Vinyl', description: 'Vinyl — 120 sqft @ $9.00/sqft' })).toBe(false);
+    expect(isGraphicsInstallLabor({ item_number: 'LABOR', description: 'Upfit labor' })).toBe(false);
+  });
+
+  it('divides dollars by the rate, and stays unknown without a rate or dollars', () => {
+    expect(graphicsHoursFromDollars(1239.1, 95)).toBe(13);
+    expect(graphicsHoursFromDollars(500, null)).toBeNull();
+    expect(graphicsHoursFromDollars(0, 95)).toBeNull();
+    expect(graphicsHoursFromDollars(null, 95)).toBeNull();
+  });
+});
+
+describe('capacityWarning', () => {
+  const day = { demandHours: 30, capacityHours: 40, graphicsDemandHours: 4, graphicsCapacityHours: 8, knownHours: 3, totalUnits: 3 };
+
+  it('is quiet when both departments fit, or when nothing is configured', () => {
+    expect(capacityWarning(day)).toBeNull();
+    expect(capacityWarning({ ...day, demandHours: 40 })).toBeNull(); // exactly full still fits
+    expect(capacityWarning({ ...day, demandHours: 90, capacityHours: null, graphicsCapacityHours: null })).toBeNull();
+    expect(overCapacity(41, 40)).toBe(true);
+  });
+
+  it('names each department that is over, and flags unknown hours', () => {
+    expect(capacityWarning({ ...day, demandHours: 52, capacityHours: 43 }))
+      .toBe('Over capacity that day: upfit 52 of 43 hours.');
+    expect(capacityWarning({ ...day, demandHours: 52, graphicsDemandHours: 12, knownHours: 1 }))
+      .toBe('Over capacity that day: upfit 52 of 40 hours, graphics install 12 of 8 hours. 2 vehicles have no labor hours yet, so the real load is higher.');
   });
 });
