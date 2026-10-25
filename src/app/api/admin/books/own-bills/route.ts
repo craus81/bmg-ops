@@ -28,8 +28,22 @@ const link = (page: 'vendbill' | 'purchord', netsuiteId: string | null) => {
   }
 };
 
-/** A checked bill with NetSuite's pages for it and the purchase order it was made from. */
-const withLinks = (bill: OwnBillCheck) => ({ ...bill, netsuiteUrl: link('vendbill', bill.netsuiteId), poUrl: link('purchord', bill.poId) });
+/** A checked bill with NetSuite's pages for it and the purchase order it was made from, and who made it. */
+const withLinks = (bill: OwnBillCheck, names: Map<string, string>) => ({
+  ...bill,
+  netsuiteUrl: link('vendbill', bill.netsuiteId),
+  poUrl: link('purchord', bill.poId),
+  madeByName: bill.madeBy ? names.get(bill.madeBy) ?? null : null,
+});
+
+/** The names of the people who made the bills (Snapped by …). */
+async function namesOf(service: ReturnType<typeof createServiceClient>, bills: OwnBillCheck[]): Promise<Map<string, string>> {
+  const ids = [...new Set(bills.map((b) => b.madeBy).filter((id): id is string => !!id))];
+  if (!ids.length) return new Map();
+  const { data, error } = await service.from('profiles').select('id, full_name').in('id', ids);
+  if (error) throw new Error(error.message);
+  return new Map((data ?? []).filter((p: { full_name: string | null }) => p.full_name).map((p: { id: string; full_name: string }) => [p.id, p.full_name]));
+}
 
 /**
  * GET /api/admin/books/own-bills?month=YYYY-MM — Books' own copies of the
@@ -68,7 +82,11 @@ export async function GET(req: NextRequest) {
     if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
     const [bill] = checkOwnBills(res.data as BillPairsData, copies).bills;
     if (!bill) return NextResponse.json({ error: 'Books has no copy of that bill' }, { status: 404 });
-    return NextResponse.json({ bill: withLinks(bill) });
+    try {
+      return NextResponse.json({ bill: withLinks(bill, await namesOf(service, [bill])) });
+    } catch (e) {
+      return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+    }
   }
 
   const [months, lists, check] = await Promise.all([
@@ -88,6 +106,13 @@ export async function GET(req: NextRequest) {
     checked = checkOwnBills(res.data as BillPairsData, copies);
   }
 
+  let names: Map<string, string>;
+  try {
+    names = await namesOf(service, checked?.bills ?? []);
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 500 });
+  }
+
   const state = (row: typeof bills) =>
     row.data ? { at: row.data.updated_at as string, error: ((row.data.last_result ?? null) as { error?: string } | null)?.error ?? null } : null;
 
@@ -95,7 +120,7 @@ export async function GET(req: NextRequest) {
     months: monthList,
     month: month ? `${month}-01` : null,
     // The list leaves the line by line check to the bill's own page.
-    bills: (checked?.bills ?? []).map(({ fields: _fields, lines: _lines, workedOut: _workedOut, ...row }) => withLinks(row as OwnBillCheck)),
+    bills: (checked?.bills ?? []).map(({ fields: _fields, lines: _lines, workedOut: _workedOut, ...row }) => withLinks(row as OwnBillCheck, names)),
     counts: checked?.counts ?? null,
     lastBills: state(bills),
     lastLedger: state(ledger),

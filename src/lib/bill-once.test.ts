@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('@/lib/netsuite', () => ({ findVendorBill: vi.fn() }));
 
-import { makeBillOnce, STALE_CLAIM_MS } from './bill-once';
+import { madeOrFound, makeBillOnce, STALE_CLAIM_MS } from './bill-once';
 
 const NOW = new Date('2026-10-25T15:00:00.000Z');
 const minutesAgo = (m: number) => new Date(NOW.getTime() - m * 60_000).toISOString();
@@ -180,9 +180,55 @@ describe('makeBillOnce', () => {
     expect(b.create).not.toHaveBeenCalled();
   });
 
+  it("claims a snapped bill while it's a draft, and not once it's sent or thrown away (Snap a bill, migration 436)", async () => {
+    const draft: Row = { id: 'snap-1', status: 'draft', bill_claimed_at: null };
+    const { service, tables } = fakeService(draft);
+    const made = await makeBillOnce(service, 'gl_snapped_bills', 'snap-1', bill(), vi.fn(async () => null), NOW);
+    expect(made.ok).toBe(true);
+    expect(draft.bill_claimed_at).toBe(NOW.toISOString());
+    expect(tables).toEqual(['gl_snapped_bills']);
+    for (const status of ['sent', 'thrown_away', 'approved']) {
+      const row: Row = { id: 'snap-1', status, bill_claimed_at: null };
+      const b = bill();
+      expect((await makeBillOnce(fakeService(row).service, 'gl_snapped_bills', 'snap-1', b, vi.fn(async () => null), NOW)).ok).toBe(false);
+      expect(b.create).not.toHaveBeenCalled();
+    }
+  });
+
+  it("doesn't offer Record Bill for a snapped bill NetSuite already has: Snap a bill has nothing to record", async () => {
+    const made = await makeBillOnce(fakeService({ id: 'snap-1', status: 'draft', bill_claimed_at: null }).service, 'gl_snapped_bills', 'snap-1', bill(),
+      vi.fn(async () => ({ billId: '8801', billNumber: 'VI-1042' })), NOW);
+    expect(made).toEqual({ ok: false, status: 409, error: "NetSuite already has bill VI-1042 from Northside Install Co., so FleetSuite didn't make another." });
+  });
+
   it('gives back empty strings for a bill NetSuite made without saying its id or number', async () => {
     const made = await makeBillOnce(fakeService(approved()).service, 'payouts', 'inv-1',
       bill(vi.fn(async () => ({ success: true }))), vi.fn(async () => null), NOW);
     expect(made).toEqual({ ok: true, billId: '', billNumber: '', claimedAt: NOW.toISOString() });
+  });
+});
+
+describe('madeOrFound', () => {
+  const KEPT = { billId: '8803', billNumber: '88213-10' };
+
+  it("takes NetSuite's word when it says which bill it made, without asking again", async () => {
+    const find = vi.fn(async () => KEPT);
+    expect(await madeOrFound(async () => ({ success: true, billId: '8803', billNumber: '88213-10' }), find)).toEqual({ success: true, ...KEPT });
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it('finds the bill NetSuite kept when the connection dropped, or when no id came back', async () => {
+    const dropped = async () => ({ success: false, error: 'Failed to create vendor bill: fetch failed' });
+    expect(await madeOrFound(dropped, async () => KEPT)).toEqual({ success: true, ...KEPT });
+    expect(await madeOrFound(async () => ({ success: true, billId: '' }), async () => KEPT)).toEqual({ success: true, ...KEPT });
+    expect(await madeOrFound(async () => { throw new Error('socket hang up'); }, async () => KEPT)).toEqual({ success: true, ...KEPT });
+  });
+
+  it("keeps NetSuite's refusal when it has no such bill, or can't be asked", async () => {
+    const refused = { success: false, error: 'NetSuite error (400): Invalid account' };
+    expect(await madeOrFound(async () => refused, async () => null)).toEqual(refused);
+    expect(await madeOrFound(async () => refused, async () => { throw new Error('NetSuite is down'); })).toEqual(refused);
+    expect(await madeOrFound(async () => { throw new Error('socket hang up'); }, async () => null)).toEqual({ success: false, error: 'socket hang up' });
+    expect(await madeOrFound(async () => ({ success: true, billId: 'abc' }), async () => null)).toEqual({ success: true, billId: 'abc' });
   });
 });

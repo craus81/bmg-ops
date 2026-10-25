@@ -251,6 +251,34 @@ describe("checking Books' own bill", () => {
     expect(checkOwnBill(pair(unpriced, fewer), lists, SINCE).status).toBe('differs');
   });
 
+  it("checks a snapped bill line by line, dated as the vendor's bill is, and says who snapped it (Snap a bill)", () => {
+    const snapped = expenseBill({
+      netsuite_id: '8803', number: '88213-10', made_from: 'snapped', made_from_id: 'snap-1', made_by: 'u-1', reference_no: '88213-10',
+      date: '2026-10-20', invoice_total: '1296.83',
+      lines: [
+        { line_no: 1, account_id: SUBCONTRACTORS, item_id: null, item_number: null, description: 'Electric service', quantity: null, rate: null, amount: '1284.33', po_line_id: null },
+        { line_no: 2, account_id: '612', item_id: null, item_number: null, description: 'Late payment charge', quantity: null, rate: null, amount: '12.50', po_line_id: null },
+      ],
+    });
+    const theirs = netsuite({
+      number: '88213-10', date: '2026-10-20', total: '1296.83',
+      lines: [
+        { line_id: '1', item: null, account: SUBCONTRACTORS, amount: '-1284.33', own_amount: '-1284.33', quantity: null, memo: 'Electric service', tax: false },
+        { line_id: '2', item: null, account: '612', amount: '-12.50', own_amount: '-12.50', quantity: null, memo: 'Late payment charge', tax: false },
+      ],
+    });
+    const check = checkOwnBill(pair(snapped, theirs), lists, SINCE);
+    expect(check).toMatchObject({ status: 'matches', madeFrom: 'snapped', madeFromText: 'Snap a bill', madeFromId: 'snap-1', madeBy: 'u-1', fleetsuiteCents: 129683 });
+    expect(check.workedOut).toEqual([
+      "Made with Snap a bill on Oct 21, 2026: FleetSuite read a picture of the vendor's bill, and it was checked before Send to NetSuite.",
+      "2 lines, as FleetSuite sent them: each line's amount to the account picked for it.",
+      "Dated as the vendor's bill is: FleetSuite sends NetSuite the bill's own date.",
+    ]);
+    expect(field(checkOwnBill(pair(snapped, netsuite({ ...theirs, date: '2026-10-21' })), lists, SINCE), 'date').why)
+      .toBe("FleetSuite sent it dated Oct 20, 2026, and NetSuite's bill is dated 1 day later.");
+    expect(checkOwnBill(pair(expenseBill(), null), lists, BEFORE).madeBy).toBeNull();
+  });
+
   it("names a payout's bill and one with no number", () => {
     const payout = checkOwnBill(pair(expenseBill({ made_from: 'payout', number: null, reference_no: 'PP-3F2A91C0' }), null), lists, BEFORE);
     expect(payout).toMatchObject({ number: 'PP-3F2A91C0', madeFromText: 'an installer payout' });

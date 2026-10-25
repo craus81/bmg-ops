@@ -461,6 +461,14 @@ export const deepLinks = {
    *  receipt item by item: the landing for the daily books check's
    *  notification about one own receipt. Super admins only. */
   booksOwnReceipt: (receiptKey: string) => `/admin/books/own-receipts/receipt?${new URLSearchParams({ key: receiptKey })}`,
+  /** Books → Snap a bill: a new one, or one already snapped (saved for
+   *  later, sent or thrown away) by its id, with its picture. Super admins
+   *  only. */
+  booksSnapBill: (id?: string | null) => `/admin/books/snap-a-bill${id ? `?${new URLSearchParams({ id })}` : ''}`,
+  /** The picture or PDF of one snapped bill, as bytes (same-origin, super
+   *  admins only; the books-bills prefix is denied on /api/storage). Feed a
+   *  PDF to `pdfViewer`. */
+  booksSnapBillFile: (id: string) => `/api/admin/books/snap-a-bill?${new URLSearchParams({ file: id })}`,
   /** Books → Mistake checks on a company's list ('BMG', '1084'), with one
    *  item on it picked out by its id: the landing for the daily books
    *  check's notification about new likely mistakes in the copies of

@@ -487,7 +487,7 @@ describe('fulfillmentAlertsFor', () => {
 describe('billAlertsFor', () => {
   const checked = (id: string, over: Partial<OwnBillCheck> = {}): OwnBillCheck => ({
     netsuiteId: id, number: `VI-${id}`, date: '2026-10-20', company: 'BMG', madeFrom: 'vendor_invoice', madeFromText: 'a CNI vendor invoice',
-    madeFromId: 'inv-1', vendor: 'Northside Install Co.', poId: null, poNumber: null, status: 'differs',
+    madeFromId: 'inv-1', madeBy: null, vendor: 'Northside Install Co.', poId: null, poNumber: null, status: 'differs',
     summary: "Amount: NetSuite's is $45.00 less.", differing: 1, fleetsuiteCents: 125000, netsuiteCents: 120500, invoiceCents: null,
     fields: [], lines: [], unknowns: [], workedOut: [], ...over,
   });

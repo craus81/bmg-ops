@@ -2749,21 +2749,35 @@ async function resolveVendorCurrency(vendorId: string | number): Promise<string 
   }
 }
 
+/** One expense line of a vendor bill: its account (NetSuite's internal id) and amount. */
+export interface VendorBillExpense {
+  accountId: string | number;
+  amount: number;
+  memo?: string;
+}
+
 /**
  * Create a Vendor Bill in NetSuite for an installer payout.
  * Uses the REST Record API: POST /services/rest/record/v1/vendorBill
- * Books a single expense line (the payout total) to the given GL account.
+ * Books a single expense line (the payout total) to the given GL account,
+ * or, for Snap a bill, several lines each to its own account, dated as the
+ * vendor's bill is.
  */
 export async function createVendorBill(payload: {
   vendorId: string | number;
-  accountId: string | number;
-  amount: number;
   referenceNo?: string;
   subsidiaryId?: string | number;
   locationId?: string | number;
   memo?: string;
-  lineMemo?: string;
-}): Promise<{ success: boolean; billId?: string; billNumber?: string; error?: string }> {
+  /** 'YYYY-MM-DD'. Without it NetSuite dates the bill the day it's made. */
+  tranDate?: string;
+  /** 'YYYY-MM-DD'. Without it NetSuite works it out from the vendor's terms. */
+  dueDate?: string;
+} & (
+  | { accountId: string | number; amount: number; lineMemo?: string }
+  /** Several expense lines, each to its own account (Snap a bill). */
+  | { lines: VendorBillExpense[] }
+)): Promise<{ success: boolean; billId?: string; billNumber?: string; error?: string }> {
   const config = getConfig();
   const baseUrl = getBaseUrl(config.accountId);
   const url = `${baseUrl}/services/rest/record/v1/vendorBill`;
@@ -2778,20 +2792,23 @@ export async function createVendorBill(payload: {
   // configured); never a guess — see resolveVendorCurrency.
   const currencyId = await resolveVendorCurrency(payload.vendorId);
 
+  const expenses: VendorBillExpense[] = 'lines' in payload
+    ? payload.lines
+    : [{ accountId: payload.accountId, amount: payload.amount, ...(payload.lineMemo ? { memo: payload.lineMemo } : {}) }];
   const body: any = {
     entity: { id: payload.vendorId },
     ...(currencyId ? { currency: { id: currencyId } } : {}),
     ...(payload.referenceNo ? { tranId: payload.referenceNo } : {}),
     ...(payload.subsidiaryId ? { subsidiary: { id: payload.subsidiaryId } } : {}),
     ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
+    ...(payload.tranDate ? { tranDate: payload.tranDate } : {}),
+    ...(payload.dueDate ? { dueDate: payload.dueDate } : {}),
     expense: {
-      items: [
-        {
-          account: { id: payload.accountId },
-          amount: payload.amount,
-          ...(payload.lineMemo ? { memo: payload.lineMemo } : {}),
-        },
-      ],
+      items: expenses.map((line) => ({
+        account: { id: line.accountId },
+        amount: line.amount,
+        ...(line.memo ? { memo: line.memo } : {}),
+      })),
     },
     ...(payload.memo ? { memo: payload.memo } : {}),
   };

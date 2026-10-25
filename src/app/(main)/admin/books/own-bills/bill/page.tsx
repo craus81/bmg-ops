@@ -21,7 +21,7 @@ import type { BillLinePair, OwnBillCheck } from '@/lib/books/own-bill-check';
  * (?id=, NetSuite's id for the bill).
  */
 
-type Bill = OwnBillCheck & { netsuiteUrl: string | null; poUrl: string | null };
+type Bill = OwnBillCheck & { netsuiteUrl: string | null; poUrl: string | null; madeByName: string | null };
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' });
 const fmt = (cents: number) => money.format(cents / 100);
@@ -103,6 +103,14 @@ function MadeFrom({ bill }: { bill: Bill }) {
   }
   if (bill.madeFrom === 'payout') return <Link href="/admin/cni/payouts" style={link}>an installer payout</Link>;
   if (bill.madeFrom === 'parts_mail') return <Link href="/admin/parts-mail" style={link}>a Parts Mail invoice</Link>;
+  if (bill.madeFrom === 'snapped' && bill.madeFromId) {
+    return (
+      <>
+        <Link href={deepLinks.booksSnapBill(bill.madeFromId)} style={link}>the picture snapped</Link>
+        {bill.madeByName ? ` by ${bill.madeByName}` : ''}
+      </>
+    );
+  }
   return <>{bill.madeFromText}</>;
 }
 

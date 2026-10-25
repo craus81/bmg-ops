@@ -53,7 +53,10 @@ export const ALLOWED_STORAGE_PREFIXES = new Set<string>([
 //                      store. Its bytes are served only by the record-scoped
 //                      GET /api/ledger/documents/[id] (ledger readers; sales
 //                      only for pre-cutover QuickBooks sales documents).
-const DENIED_STORAGE_PREFIXES = new Set<string>(['signed-documents', 'ledger']);
+//   books-bills      — the vendors' bills snapped in Books → Snap a bill
+//                      (migration 436), written and served only by the super
+//                      admins' /api/admin/books/snap-a-bill.
+const DENIED_STORAGE_PREFIXES = new Set<string>(['signed-documents', 'ledger', 'books-bills']);
 
 // Top-level prefixes are lowercase kebab tokens (photos, graphics-proofs, …).
 const PREFIX_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;
