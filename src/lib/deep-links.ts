@@ -433,6 +433,34 @@ export const deepLinks = {
    *  for the daily books check's notification about one own fulfillment.
    *  Super admins only. */
   booksOwnFulfillment: (netsuiteId: string) => `/admin/books/own-fulfillments/fulfillment?${new URLSearchParams({ id: netsuiteId })}`,
+  /** Books → Own bills on the month ('YYYY-MM' or 'YYYY-MM-01') they were
+   *  made in, the newest month when it's left out, only those that differ
+   *  from NetSuite's with `differs`: the landing for the daily books check's
+   *  notification about several own bills (src/lib/books/daily-check.ts).
+   *  Super admins only. */
+  booksOwnBills: (month?: string | null, differs = false) => {
+    const query = new URLSearchParams({ ...(month ? { month: month.slice(0, 7) } : {}), ...(differs ? { only: 'differs' } : {}) }).toString();
+    return `/admin/books/own-bills${query ? `?${query}` : ''}`;
+  },
+  /** Books → Own bills → Books' own copy of one bill FleetSuite made, by
+   *  NetSuite's id for it, next to NetSuite's line by line: the landing for
+   *  the daily books check's notification about one own bill. Super admins
+   *  only. */
+  booksOwnBill: (netsuiteId: string) => `/admin/books/own-bills/bill?${new URLSearchParams({ id: netsuiteId })}`,
+  /** Books → Own receipts on the month ('YYYY-MM' or 'YYYY-MM-01') they
+   *  were received in, the newest month when it's left out, only those that
+   *  differ from NetSuite's with `differs`: the landing for the daily books
+   *  check's notification about several own receipts
+   *  (src/lib/books/daily-check.ts). Super admins only. */
+  booksOwnReceipts: (month?: string | null, differs = false) => {
+    const query = new URLSearchParams({ ...(month ? { month: month.slice(0, 7) } : {}), ...(differs ? { only: 'differs' } : {}) }).toString();
+    return `/admin/books/own-receipts${query ? `?${query}` : ''}`;
+  },
+  /** Books → Own receipts → Books' own copy of one Receive on the Receiving
+   *  page, by its key (FleetSuite's first row of it), next to NetSuite's item
+   *  receipt item by item: the landing for the daily books check's
+   *  notification about one own receipt. Super admins only. */
+  booksOwnReceipt: (receiptKey: string) => `/admin/books/own-receipts/receipt?${new URLSearchParams({ key: receiptKey })}`,
   /** Books → Mistake checks on a company's list ('BMG', '1084'), with one
    *  item on it picked out by its id: the landing for the daily books
    *  check's notification about new likely mistakes in the copies of
