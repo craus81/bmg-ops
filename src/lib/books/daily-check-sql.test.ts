@@ -47,13 +47,16 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migrations 314 and 416 point at in the app's own schema.
+    -- What migrations 314, 416 and 435 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
     CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT);
     CREATE TABLE public.netsuite_sales_orders (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(), netsuite_id TEXT NOT NULL UNIQUE, tranid TEXT,
       customer_netsuite_id TEXT, customer_name TEXT
     );
+    CREATE TABLE public.vendor_invoices (id UUID PRIMARY KEY);
+    CREATE TABLE public.payouts (id UUID PRIMARY KEY);
+    CREATE TABLE public.po_receipts (id UUID PRIMARY KEY, ns_status TEXT);
     CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
   `);
   for (const file of [
@@ -65,7 +68,7 @@ async function freshDb(): Promise<PGlite> {
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
     '402-books-stock-values.sql', '406-books-party-balances.sql', '407-books-own-invoices.sql', '416-books-own-fulfillments.sql',
-    '431-books-mistake-checks.sql',
+    '431-books-mistake-checks.sql', '435-books-own-bills.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -138,11 +141,13 @@ describe('the daily books check', () => {
   const store = new Map<string, { last_result: unknown; updated_at: string; last_synced_at?: string }>();
   /** When a function fails, by what it was asked. */
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
-  /** What a look told about months and stock; about balances, own invoices, own fulfillments and likely mistakes, apart. */
+  /** What a look told about months and stock; about balances, own invoices, fulfillments, bills and receipts, and likely mistakes, apart. */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
   let toldOwn: CheckAlert[] = [];
   let toldFulfillments: CheckAlert[] = [];
+  let toldBills: CheckAlert[] = [];
+  let toldReceipts: CheckAlert[] = [];
   let toldMistakes: CheckAlert[] = [];
 
   /** A read of one of the books' tables, built the way supabase-js builds it, run against the database. */
@@ -210,9 +215,12 @@ describe('the daily books check', () => {
     toldBalances = [];
     toldOwn = [];
     toldFulfillments = [];
+    toldBills = [];
+    toldReceipts = [];
     toldMistakes = [];
     const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
-      : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'mistake' ? toldMistakes : told);
+      : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
+        : alert.about === 'mistake' ? toldMistakes : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
@@ -356,6 +364,8 @@ describe('the daily books check', () => {
       },
       own: { known: {}, noted: {} },
       fulfillments: { known: {}, noted: {} },
+      bills: { known: {}, noted: {} },
+      receipts: { known: {}, noted: {} },
       mistakes: { known: {}, noted: {} },
     });
   });
@@ -519,7 +529,9 @@ describe('the daily books check', () => {
 
   it('records items and how far apart their counts are, never an amount', () => {
     const record = store.get(BOOKS_DAILY_CHECK)!.last_result as Record<string, unknown>;
-    expect(Object.keys(record).sort()).toEqual(['balances', 'companies', 'fulfillments', 'look', 'mistakes', 'own', 'stock', 'told']);
+    expect(Object.keys(record).sort()).toEqual([
+      'balances', 'bills', 'companies', 'fulfillments', 'look', 'mistakes', 'own', 'receipts', 'stock', 'told',
+    ]);
     expect(record.stock).toEqual({ by: 'item', known: { [LADDER]: 1, [BINS]: 5 }, noted: {} });
   });
 
@@ -747,6 +759,87 @@ describe('the daily books check', () => {
 
   it('records which own fulfillments differ and in how many things, never an amount', () => {
     expect(heldFulfillments()).toEqual({ known: { 6101: 1 }, noted: {} });
+  });
+
+  // ── Books' own bills and receipts ──────────────────────────────────────
+
+  const RECEIPT_KEY = '0b6a1c3e-5f2d-4c8b-9a7e-1d2c3b4a5f60';
+  const heldBills = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.bills;
+  const heldReceipts = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.receipts;
+
+  it("tells when one of Books' own bills or receipts stops matching NetSuite's, linking to its check", async () => {
+    // FleetSuite billed Northside's vendor invoice for $1,250, which NetSuite's bill has at $1,205...
+    await pg.query('SELECT gl_own_bill_save($1::jsonb)', [JSON.stringify({
+      netsuite_id: '6301', netsuite_number: 'VI-1042', subsidiary_id: '2', made_from: 'vendor_invoice', vendor_netsuite_id: '412',
+      vendor_name: 'Northside Install Co.', reference_no: 'VI-1042', bill_date: '2026-10-20', unknowns: [],
+      lines: [{ line_no: 1, account_netsuite_id: '600', description: 'Install', amount: '1250.00' }],
+    })]);
+    await fn('gl_netsuite_bills_apply', {
+      rows: [{
+        netsuite_id: '6301', tran_type: 'VendBill', tranid: 'VI-1042', trandate: '2026-10-20', vendor_netsuite_id: '412',
+        vendor_name: 'Northside Install Co.', total: '1205.00', status: 'A', status_label: 'Open', voided: false, memo: null,
+        lines: [{ line_id: '1', item: null, account: '600', amount: '-1205.00', own_amount: '-1205.00', quantity: null, memo: 'Install', tax: false }],
+        links: [],
+      }],
+    });
+    // ...and received 12 ladder racks on PO453-ACME, which NetSuite's item receipt has as 10.
+    await pg.query('SELECT gl_own_receipt_save($1::jsonb)', [JSON.stringify({
+      receipt_key: RECEIPT_KEY, netsuite_id: '6401', netsuite_number: 'IR6401', po_netsuite_id: '5001', po_number: 'PO453-ACME',
+      vendor_netsuite_id: '77', vendor_name: 'Acme Truck Racks', receive_date: '2026-10-21', unknowns: [],
+      lines: [{ line_no: 1, item_netsuite_id: LADDER, item_number: 'LDR-24', quantity: 12, rate: 150, po_receipt_id: RECEIPT_KEY }],
+    })]);
+    await moved('6401', 'ItemRcpt', '2026-10-21', [['1', LADDER, WENTZVILLE, '10']]);
+    // NetSuite's counts take the receipt in too, so stock still matches.
+    await counted([{ item_id: LADDER, quantity: '19' }, { item_id: BINS, quantity: '38' }], 'item');
+    // A payout's bill, still waiting for the copy of NetSuite's bills, which isn't told about.
+    await pg.query('SELECT gl_own_bill_save($1::jsonb)', [JSON.stringify({
+      netsuite_id: '6302', made_from: 'payout', bill_date: '2026-10-20', lines: [{ line_no: 1, account_netsuite_id: '600', amount: '300.00' }],
+    })]);
+
+    await look('first');
+    expect([toldBills, toldReceipts]).toEqual([[], []]);
+    expect(heldBills()).toEqual({ known: {}, noted: { 6301: 2 } });
+    expect(heldReceipts()).toEqual({ known: {}, noted: { [RECEIPT_KEY]: 2 } });
+
+    expect(await look('second')).toMatchObject({ told: 2 });
+    expect(toldBills).toEqual([{
+      title: "Own bills: Northside Install Co.'s bill VI-1042 differs from NetSuite's",
+      body: "Lines: 6000 Rent: Books' copy says $1,250.00, and NetSuite's bill $1,205.00. NetSuite's is $45.00 less. Own bills shows why.",
+      url: '/admin/books/own-bills/bill?id=6301',
+      about: 'bill',
+    }]);
+    expect(toldReceipts).toEqual([{
+      title: "Own receipts: the receipt on PO453-ACME (Acme Truck Racks) differs from NetSuite's",
+      body: "NetSuite's receipt IR6401 has 10 of LDR-24. FleetSuite received 12. Own receipts shows why.",
+      url: `/admin/books/own-receipts/receipt?key=${RECEIPT_KEY}`,
+      about: 'receipt',
+    }]);
+    expect([told, toldOwn, toldFulfillments]).toEqual([[], [], []]);
+    expect(heldBills()).toEqual({ known: { 6301: 2 }, noted: {} });
+
+    // The next morning, nothing more.
+    await look('first');
+    await look('second');
+    expect([toldBills, toldReceipts]).toEqual([[], []]);
+  });
+
+  it("keeps what it held for the own bills and receipts when it couldn't look, and says why", async () => {
+    const before = [heldBills(), heldReceipts()];
+    failing = (name) => name === 'gl_own_bill_pairs' || name === 'gl_own_receipt_months';
+    try {
+      const result = await look('first');
+      expect(result.error).toBe(
+        "Own bills: couldn't check October 2026's bills (gl_own_bill_pairs failed) Own receipts: couldn't list the months (gl_own_receipt_months failed)",
+      );
+      expect([heldBills(), heldReceipts()]).toEqual(before);
+    } finally {
+      failing = null;
+    }
+  });
+
+  it('records which own bills and receipts differ and in how many things, never an amount', () => {
+    expect(heldBills()).toEqual({ known: { 6301: 2 }, noted: {} });
+    expect(heldReceipts()).toEqual({ known: { [RECEIPT_KEY]: 2 }, noted: {} });
   });
 
   // ── Likely mistakes ────────────────────────────────────────────────────

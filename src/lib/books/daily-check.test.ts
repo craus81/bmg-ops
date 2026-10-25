@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
-  alertsFor, balanceAlertsFor, balanceKey, fulfillmentAlertsFor, lookOf, mistakeAlertsFor, nextCheck, ownAlertsFor, parseCheckState,
-  stockAlertsFor,
+  alertsFor, balanceAlertsFor, balanceKey, billAlertsFor, fulfillmentAlertsFor, lookOf, mistakeAlertsFor, nextCheck, ownAlertsFor,
+  parseCheckState, receiptAlertsFor, stockAlertsFor,
   type BalanceNews, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews, type StockNews,
 } from './daily-check';
 import type { DiffDocumentData } from './differences';
+import type { OwnBillCheck } from './own-bill-check';
 import type { OwnFulfillmentCheck } from './own-fulfillment-check';
 import type { OwnInvoiceCheck } from './own-invoice-check';
+import type { OwnReceiptCheck } from './own-receipt-check';
 import type { StockLine } from './stock-items';
 import { deepLinks } from '@/lib/deep-links';
 
@@ -85,6 +87,19 @@ describe('parseCheckState', () => {
       .toEqual({ companies: {}, own: { known: {}, noted: {} }, fulfillments });
     for (const bad of [null, 'x', { known: { IF7001: 1 }, noted: {} }, { known: { 7001: -1 }, noted: {} }, { noted: {} }]) {
       expect(parseCheckState({ companies: {}, fulfillments: bad })).toEqual({ companies: {} });
+    }
+  });
+
+  it("reads what it holds for Books' own bills by NetSuite's id and own receipts by their key, and drops either when it doesn't read", () => {
+    const key = '0b6a1c3e-5f2d-4c8b-9a7e-1d2c3b4a5f60';
+    const bills = { known: { 8801: 2 }, noted: { 8802: 1 } };
+    const receipts = { known: { [key]: 1 }, noted: {} };
+    expect(parseCheckState({ companies: {}, bills, receipts })).toEqual({ companies: {}, bills, receipts });
+    for (const bad of [null, 'x', { known: { 'VI-1042': 1 }, noted: {} }, { known: { 8801: 0.5 }, noted: {} }, { known: {} }]) {
+      expect(parseCheckState({ companies: {}, bills: bad, receipts })).toEqual({ companies: {}, receipts });
+    }
+    for (const bad of [{ known: { 8801: 1 }, noted: {} }, { known: {}, noted: { [`r:${key}`]: 1 } }, { noted: {} }]) {
+      expect(parseCheckState({ companies: {}, bills, receipts: bad })).toEqual({ companies: {}, bills });
     }
   });
 
@@ -466,6 +481,85 @@ describe('fulfillmentAlertsFor', () => {
   it('tells nothing of a fulfillment it has no check for, nor when nothing changed', () => {
     expect(fulfillmentAlertsFor([news('7009')], new Map())).toEqual([]);
     expect(fulfillmentAlertsFor([], new Map())).toEqual([]);
+  });
+});
+
+describe('billAlertsFor', () => {
+  const checked = (id: string, over: Partial<OwnBillCheck> = {}): OwnBillCheck => ({
+    netsuiteId: id, number: `VI-${id}`, date: '2026-10-20', company: 'BMG', madeFrom: 'vendor_invoice', madeFromText: 'a CNI vendor invoice',
+    madeFromId: 'inv-1', vendor: 'Northside Install Co.', poId: null, poNumber: null, status: 'differs',
+    summary: "Amount: NetSuite's is $45.00 less.", differing: 1, fleetsuiteCents: 125000, netsuiteCents: 120500, invoiceCents: null,
+    fields: [], lines: [], unknowns: [], workedOut: [], ...over,
+  });
+  const news = (id: string, before: number | null = null): MonthNews => ({ month: id, documents: 1, before });
+
+  it('names the bill and its vendor, says what differs, and links to its check', () => {
+    expect(billAlertsFor([news('8801')], new Map([['8801', checked('8801')]]))).toEqual([{
+      title: "Own bills: Northside Install Co.'s bill VI-8801 differs from NetSuite's",
+      body: "Amount: NetSuite's is $45.00 less. Own bills shows why.",
+      url: deepLinks.booksOwnBill('8801'),
+      about: 'bill',
+    }]);
+    expect(deepLinks.booksOwnBill('8801')).toBe('/admin/books/own-bills/bill?id=8801');
+    const [more] = billAlertsFor([news('8801', 1)], new Map([['8801', checked('8801', { vendor: null })]]));
+    expect(more.title).toBe("Own bills: more of bill VI-8801 differs from NetSuite's");
+  });
+
+  it("tells about up to three one by one, and more in one notification linking to the newest month's that differ", () => {
+    const ids = ['8801', '8802', '8803', '8804'];
+    const checks = new Map(ids.map((id, i) => [id, checked(id, { date: i === 1 ? '2026-11-03' : '2026-10-20', vendor: i ? 'Northside Install Co.' : null })]));
+    expect(billAlertsFor(ids.slice(0, 3).map((id) => news(id)), checks)).toHaveLength(3);
+    expect(billAlertsFor(ids.map((id) => news(id)), checks)).toEqual([{
+      title: "Own bills: 4 differ from NetSuite's now",
+      body: "Bill VI-8801, Northside Install Co.'s bill VI-8802, Northside Install Co.'s bill VI-8803 and 1 more. Own bills shows why.",
+      url: '/admin/books/own-bills?month=2026-11&only=differs',
+      about: 'bill',
+    }]);
+  });
+
+  it('tells nothing of a bill it has no check for, nor when nothing changed', () => {
+    expect(billAlertsFor([news('8809')], new Map())).toEqual([]);
+    expect(billAlertsFor([], new Map())).toEqual([]);
+  });
+});
+
+describe('receiptAlertsFor', () => {
+  const keys = ['0b6a1c3e-5f2d-4c8b-9a7e-1d2c3b4a5f61', '0b6a1c3e-5f2d-4c8b-9a7e-1d2c3b4a5f62',
+    '0b6a1c3e-5f2d-4c8b-9a7e-1d2c3b4a5f63', '0b6a1c3e-5f2d-4c8b-9a7e-1d2c3b4a5f64'];
+  const checked = (key: string, over: Partial<OwnReceiptCheck> = {}): OwnReceiptCheck => ({
+    receiptKey: key, netsuiteId: '7101', number: 'IR-2288', date: '2026-10-21', company: 'BMG', poId: '5001', poNumber: 'PO453-ACME',
+    vendor: 'Acme Truck Racks', location: "O'Fallon", what: '12 RACK-48', status: 'differs',
+    summary: "NetSuite's receipt IR-2288 has 10 of RACK-48. FleetSuite received 12.", differing: 2, fleetsuiteCents: 214000,
+    netsuiteCents: 178333, fields: [], items: [], netsuiteError: null, receiving: { posted: 1, manualNeeded: 0, manualDone: 0 },
+    unknowns: [], workedOut: [], ...over,
+  });
+  const news = (key: string, before: number | null = null): MonthNews => ({ month: key, documents: 2, before });
+
+  it('names the PO and its vendor, says what differs, and links to its check', () => {
+    expect(receiptAlertsFor([news(keys[0])], new Map([[keys[0], checked(keys[0])]]))).toEqual([{
+      title: "Own receipts: the receipt on PO453-ACME (Acme Truck Racks) differs from NetSuite's",
+      body: "NetSuite's receipt IR-2288 has 10 of RACK-48. FleetSuite received 12. Own receipts shows why.",
+      url: `/admin/books/own-receipts/receipt?key=${keys[0]}`,
+      about: 'receipt',
+    }]);
+    const [more] = receiptAlertsFor([news(keys[0], 1)], new Map([[keys[0], checked(keys[0], { vendor: null })]]));
+    expect(more.title).toBe("Own receipts: more of the receipt on PO453-ACME differs from NetSuite's");
+  });
+
+  it("tells about up to three one by one, and more in one notification linking to the newest month's that differ", () => {
+    const checks = new Map(keys.map((key, i) => [key, checked(key, { poNumber: `PO45${3 + i}-ACME`, date: i === 2 ? '2026-11-02' : '2026-10-21' })]));
+    expect(receiptAlertsFor(keys.slice(0, 3).map((key) => news(key)), checks)).toHaveLength(3);
+    expect(receiptAlertsFor(keys.map((key) => news(key)), checks)).toEqual([{
+      title: "Own receipts: 4 differ from NetSuite's now",
+      body: 'PO453-ACME (Acme Truck Racks), PO454-ACME (Acme Truck Racks), PO455-ACME (Acme Truck Racks) and 1 more. Own receipts shows why.',
+      url: '/admin/books/own-receipts?month=2026-11&only=differs',
+      about: 'receipt',
+    }]);
+  });
+
+  it('tells nothing of a receipt it has no check for, nor when nothing changed', () => {
+    expect(receiptAlertsFor([news(keys[3])], new Map())).toEqual([]);
+    expect(receiptAlertsFor([], new Map())).toEqual([]);
   });
 });
 

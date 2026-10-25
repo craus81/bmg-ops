@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { createBillFromPo } from '@/lib/netsuite';
 import { loadThreeWayMatchForPo } from '@/lib/three-way-match';
 import { logAudit } from '@/lib/audit';
+import { saveOwnBill } from '@/lib/books/own-bills';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
 
   const { data: invoice } = await service
     .from('vendor_parts_invoices')
-    .select('*, netsuite_vendor_pos:matched_po_id (id, netsuite_id, tranid, vendor_name)')
+    .select('*, netsuite_vendor_pos:matched_po_id (id, netsuite_id, tranid, vendor_name, vendor_netsuite_id)')
     .eq('id', parsed.data.invoiceId)
     .maybeSingle();
   if (!invoice) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
@@ -112,6 +113,22 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ error: bill.error || 'NetSuite bill creation failed' }, { status: 502 });
   }
+
+  // Books keeps its own copy of what was billed: the PO's open lines at its
+  // prices, as FleetSuite's copy of the PO has them (src/lib/books/own-bills.ts).
+  // It never stops the bill.
+  await saveOwnBill(service, {
+    netsuiteId: bill.billId,
+    netsuiteNumber: bill.billNumber,
+    madeFrom: 'parts_mail',
+    madeFromId: invoice.id,
+    madeBy: auth.user!.id,
+    vendorId: po.vendor_netsuite_id,
+    vendorName: po.vendor_name || invoice.vendor_name,
+    referenceNo: invoice.invoice_number,
+    po: { copyId: po.id, netsuiteId: po.netsuite_id, number: po.tranid },
+    invoiceTotal: invoice.total,
+  });
 
   // A bill posted past a non-green match is an exception the weekly digest
   // reads (R4-5) — recorded as soon as the bill exists, whatever happens

@@ -679,9 +679,9 @@ export function itemUrl(internalId: string | number): string {
   return `https://${accountForUrl}.app.netsuite.com/app/common/item/item.nl?id=${internalId}`;
 }
 
-/** NetSuite UI link for a transaction record (customer invoice, vendor bill or bill credit, purchase order, check, card charge or refund). */
+/** NetSuite UI link for a transaction record (customer invoice, vendor bill or bill credit, purchase order, item receipt, check, card charge or refund). */
 export function transactionUrl(
-  page: 'custinvc' | 'vendbill' | 'vendcred' | 'purchord' | 'check' | 'cardchrg' | 'cardrfnd',
+  page: 'custinvc' | 'vendbill' | 'vendcred' | 'purchord' | 'itemrcpt' | 'check' | 'cardchrg' | 'cardrfnd',
   internalId: string | number,
 ): string {
   const accountForUrl = getConfig().accountId.replace(/-/g, '_').toUpperCase();
@@ -2850,6 +2850,30 @@ export async function createVendorBill(payload: {
   } catch (e: any) {
     return { success: false, error: `Failed to create vendor bill: ${e.message}` };
   }
+}
+
+/**
+ * The bill NetSuite already has from this vendor under this Reference No.
+ * (its tranId), or null when it has none. The bill buttons ask before making
+ * one, so a second try at a bill NetSuite already made is turned away
+ * instead of entered twice (src/lib/bill-once.ts). Throws when NetSuite
+ * can't be asked, so a caller fails closed.
+ */
+export async function findVendorBill(vendorId: string | number, referenceNo: string): Promise<{ billId: string; billNumber: string } | null> {
+  // Interpolated into SuiteQL, so the vendor is only ever a bare number.
+  const id = vendorId.toString().trim();
+  if (!/^\d+$/.test(id)) throw new Error(`NetSuite vendor id "${id}" isn't a number`);
+  const ref = referenceNo.trim().replace(/'/g, "''");
+  if (!ref) throw new Error('No Reference No. to look for');
+  const result = await suiteqlQuery(`
+    SELECT id, tranid
+    FROM transaction
+    WHERE type = 'VendBill' AND entity = ${id} AND UPPER(tranid) = UPPER('${ref}')
+    ORDER BY id
+    FETCH FIRST 1 ROWS ONLY
+  `);
+  const row = result?.items?.[0];
+  return row ? { billId: row.id?.toString() ?? '', billNumber: row.tranid ?? '' } : null;
 }
 
 /**
