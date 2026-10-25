@@ -31,6 +31,8 @@ import { flashNote } from '@/lib/focus-note';
 import PartLaborEditor from '@/components/PartLaborEditor';
 import { applyPartLaborToLines } from '@/lib/part-labor';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
+import { factoryQualifiers } from '@/lib/vin-factory-data';
+import { apiFetch } from '@/lib/api-client';
 import { resolvePlatform, matchQualifiersToConfig } from '@/lib/vin-platform';
 import { sameVehicleVin, vinMatchOrFilter } from '@/lib/vin-match';
 import { IN_SHOP_STATUSES } from '@/lib/types';
@@ -72,6 +74,7 @@ import { remapWorksheetIds } from '@/lib/estimate-copy-worksheets';
 import { sanitizeCopiedProofs } from '@/lib/estimate-copied-proofs';
 import {
   EMPTY_FILTERS, TEMPLATE_COLUMNS, estimateVehicleFields, searchTemplates, templateLabel,
+  matchBedFeet, matchRoof, matchWheelbase, pickerFiltersFromPlatform,
   type TemplateFilters, type VehicleTemplate,
 } from '@/lib/vehicle-templates';
 
@@ -417,8 +420,8 @@ interface VehiclePlatform {
 type VinStatus =
   | { kind: 'partial'; len: number }
   | { kind: 'invalid' }
-  | { kind: 'decoding' }
-  | { kind: 'filled'; summary: string; needs: string[] }
+  | { kind: 'decoding'; factory?: boolean }
+  | { kind: 'filled'; summary: string; needs: string[]; fromFactory?: string[] }
   | { kind: 'no-platform'; summary: string }
   | { kind: 'failed' };
 
@@ -752,6 +755,9 @@ export default function EstimatesPage() {
   // partial length, invalid characters, decoding, filled-with-summary, or
   // decoded-but-unrecognized.
   const [vinStatus, setVinStatus] = useState<VinStatus | null>(null);
+  // Set when the VIN was typed / pasted here or brought in from a checked-in
+  // vehicle, so only those decodes spend a paid CarsXE lookup.
+  const vinTypedRef = useRef(false);
 
   useEffect(() => {
     if (!vin) { setVinStatus(null); return; }
@@ -760,6 +766,8 @@ export default function EstimatesPage() {
     let cancelled = false;
     setVinStatus({ kind: 'decoding' });
     const t = setTimeout(async () => {
+      const typed = vinTypedRef.current;
+      vinTypedRef.current = false;
       try {
         const decoded = await decodeVIN(vin);
         if (cancelled) return;
@@ -773,16 +781,12 @@ export default function EstimatesPage() {
         // as its filters, and the template itself when exactly one fits.
         // A template already picked is left alone.
         const decodedModel = decoded.model === 'Vehicle' ? '' : decoded.model;
+        const seedFilters = { year: decoded.year || '', make: decoded.make || '', model: decodedModel || '' };
         if (!vehicleTemplateRef.current && (decoded.make || decodedModel)) {
-          const filters = { year: decoded.year || '', make: decoded.make || '', model: decodedModel || '' };
-          setVehicleMake(filters.make);
-          setVehicleModel(filters.model);
-          seedVehiclePicker(filters);
-          const narrow = {
-            ...filters,
-            ...(res.roof ? { roof: res.roof } : {}),
-            ...(res.wheelbase ? { wheelbase: res.wheelbase.replace(/\s*EL$/i, ' Extended') } : {}),
-          };
+          setVehicleMake(seedFilters.make);
+          setVehicleModel(seedFilters.model);
+          seedVehiclePicker(seedFilters);
+          const narrow = { ...seedFilters, ...pickerFiltersFromPlatform(res.roof, res.wheelbase) };
           searchTemplates(supabase, { filters: narrow, limit: 2 }).then(found => {
             if (!cancelled && found?.total === 1) setVehicleTemplate(found.rows[0]);
           });
@@ -824,10 +828,34 @@ export default function EstimatesPage() {
         // VIN-encoded qualifiers (Transit body code, Sprinter WB) win;
         // vPIC's dimensional fields fill the rest where unambiguous.
         const matched = matchQualifiersToConfig(decoded, cfg);
-        const wb = res.wheelbase || matched.wheelbase;
-        const roof = res.roof && (cfg.roofs || []).includes(res.roof) ? res.roof : null;
+        let wb = res.wheelbase || matched.wheelbase;
+        let roof = res.roof ? matchRoof(res.roof, cfg.roofs) || null : null;
         const cab = matched.cab;
-        const bed = matched.bed;
+        let bed = matched.bed;
+        // Still missing a roof / wheelbase / bed the platform has: ask
+        // CarsXE (the VIN Lookup window's paid factory data, ~$0.10 a VIN).
+        // Only for a VIN typed or brought in here, never when an estimate
+        // that already has its VIN is reopened (Craig 2026-10-25: "yes" to
+        // the estimate's VIN box filling roof and wheelbase).
+        const fromFactory: string[] = [];
+        if (typed && ((cfg.roofs?.length && !roof) || (cfg.wheelbases?.length && !wb) || (cfg.beds?.length && !bed))) {
+          setVinStatus({ kind: 'decoding', factory: true });
+          try {
+            const r = await apiFetch(`/api/vin-lookup?vin=${vin}&cab=${encodeURIComponent(decoded.cabType || '')}`);
+            const j = await r.json().catch(() => null);
+            if (cancelled) return;
+            const q = factoryQualifiers(j?.found ? j.data : null);
+            const fRoof = !roof ? matchRoof(q.roof, cfg.roofs) : '';
+            if (fRoof) { roof = fRoof; fromFactory.push('roof'); }
+            const fWb = !wb && q.wheelbase ? matchWheelbase(q.wheelbase, cfg.wheelbases) : '';
+            if (fWb) { wb = fWb; fromFactory.push('wheelbase'); }
+            const fBed = !bed ? matchBedFeet(q.bedFeet, cfg.beds) : '';
+            if (fBed) { bed = fBed; fromFactory.push('bed'); }
+          } catch {
+            // CarsXE unreachable: the rep picks what's left by hand.
+          }
+          if (cancelled) return;
+        }
         setVehiclePlatformId(plat.id);
         setVehicleOtherMode(false);
         setVehicleOther('');
@@ -837,6 +865,21 @@ export default function EstimatesPage() {
         setVehicleRoof(prev => roof || ((cfg.roofs || []).includes(prev) ? prev : ''));
         setVehicleCab(prev => cab || ((cfg.cabs || []).includes(prev) ? prev : ''));
         setVehicleBed(prev => bed || ((cfg.beds || []).includes(prev) ? prev : ''));
+        // And the picker's own Roof / Wheelbase dropdowns, so the estimate
+        // doesn't show "Any roof" over a roof it knows (Craig 2026-10-22:
+        // "doesn't fill in all applicable fields like low roof and 130wb").
+        // Only when the library has a template that fits — a roof no
+        // template is tagged with would just empty the list.
+        const pickerExtra = pickerFiltersFromPlatform(roof, wb);
+        if (Object.keys(pickerExtra).length && !vehicleTemplateRef.current && (decoded.make || decodedModel)) {
+          const filters = { ...seedFilters, ...pickerExtra };
+          const found = await searchTemplates(supabase, { filters, limit: 2 });
+          if (cancelled) return;
+          if (found && found.total > 0 && !vehicleTemplateRef.current) {
+            seedVehiclePicker(filters);
+            if (found.total === 1) setVehicleTemplate(found.rows[0]);
+          }
+        }
         const got = [
           decoded.year, plat.label,
           roof && `${roof} roof`,
@@ -850,7 +893,7 @@ export default function EstimatesPage() {
           cfg.cabs?.length && !cab ? 'cab size' : null,
           cfg.beds?.length && !bed ? 'bed length' : null,
         ].filter((n): n is string => !!n);
-        setVinStatus({ kind: 'filled', summary: got, needs });
+        setVinStatus({ kind: 'filled', summary: got, needs, fromFactory });
       } catch {
         if (!cancelled) setVinStatus({ kind: 'failed' });
       }
@@ -3585,7 +3628,7 @@ export default function EstimatesPage() {
     // Prefill what the estimate doesn't have yet — never clobber typed
     // values. A full VIN triggers the decode effect, which fills
     // year/platform/qualifiers on its own.
-    if (!vin.trim() && c.vin) setVin(c.vin.toUpperCase());
+    if (!vin.trim() && c.vin) { vinTypedRef.current = true; setVin(c.vin.toUpperCase()); }
     else if (!vehicleYear && c.vehicle_year) setVehicleYear(c.vehicle_year);
     if (!installInstructions.trim() && c.install_instructions) setInstallInstructions(c.install_instructions);
     if (!onSiteContactName.trim() && c.on_site_contact_name) setOnSiteContactName(c.on_site_contact_name);
@@ -4519,7 +4562,7 @@ export default function EstimatesPage() {
           <input
             style={{ ...inputStyle, textTransform: 'uppercase' }}
             value={vin}
-            onChange={e => setVin(e.target.value.toUpperCase())}
+            onChange={e => { vinTypedRef.current = true; setVin(e.target.value.toUpperCase()); }}
             maxLength={17}
             placeholder="Full 17 auto-fills the vehicle below — prints on the estimate"
           />
@@ -4536,10 +4579,17 @@ export default function EstimatesPage() {
                 </span>
               )}
               {vinStatus.kind === 'invalid' && '⚠ Not a valid VIN — check for typos (VINs never contain I, O, or Q)'}
-              {vinStatus.kind === 'decoding' && <span style={{ fontWeight: 400 }}>Decoding VIN…</span>}
+              {vinStatus.kind === 'decoding' && (
+                <span style={{ fontWeight: 400 }}>{vinStatus.factory ? 'Looking up factory data for roof / wheelbase…' : 'Decoding VIN…'}</span>
+              )}
               {vinStatus.kind === 'filled' && (
                 <>
                   {'✓ '}{vinStatus.summary}{' — vehicle fields filled below'}
+                  {!!vinStatus.fromFactory?.length && (
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
+                      {' '}({vinStatus.fromFactory.join(', ')} from CarsXE factory data)
+                    </span>
+                  )}
                   {vinStatus.needs.length > 0 && (
                     <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
                       {' '}(not in this VIN, pick by hand: {vinStatus.needs.join(', ')})

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  bedFromText, bedFromWheelbase, roofFromText, roofFromHeight, parseCarsxeSpecs, mergeFactory,
+  bedFromText, bedFromWheelbase, roofFromText, roofFromHeight, parseCarsxeSpecs, mergeFactory, factoryQualifiers,
 } from './vin-factory-data';
 import type { VinDetails } from './vin-decoder';
 
@@ -157,5 +157,23 @@ describe('Transit with the wheelbase only in its trim', () => {
     const f = parseCarsxeSpecs({ ...transit, attributes: { ...transit.attributes, trim: 'T-250 148" WB Med Rf' } })!;
     expect(f.wheelbase).toBe('148"');
     expect(f.roof?.value).toBe('Medium');
+  });
+});
+
+describe('factoryQualifiers', () => {
+  it('reads roof, wheelbase and bed for the estimate', () => {
+    const transit = parseCarsxeSpecs({ success: true, attributes: {
+      year: '2025', make: 'Ford', model: 'Transit', trim: '150 Van Low Roof w/Sliding Pass. 130-in. WB', style: '',
+    } });
+    expect(factoryQualifiers(transit)).toEqual({ roof: 'Low', wheelbase: '130', bedFeet: null });
+    const el = parseCarsxeSpecs({ success: true, attributes: {
+      year: '2025', make: 'Ford', model: 'Transit', trim: 'T-350 148" EL High Roof', wheelbase: '148 in.',
+    } });
+    expect(factoryQualifiers(el)).toEqual({ roof: 'High', wheelbase: '148 Extended', bedFeet: null });
+    const truck = parseCarsxeSpecs({ success: true, attributes: {
+      year: '2024', make: 'Ford', model: 'F-150', trim: 'XLT', style: "SuperCrew 4WD 5.5' Box",
+    } });
+    expect(factoryQualifiers(truck).bedFeet).toBe(5.5);
+    expect(factoryQualifiers(null)).toEqual({ roof: '', wheelbase: '', bedFeet: null });
   });
 });

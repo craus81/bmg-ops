@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateVehicleFields, platformFromVehicle, tidyVehicleText, type PlatformLite, type VehicleTemplate } from './vehicle-templates';
+import { estimateVehicleFields, matchBedFeet, matchRoof, matchWheelbase, pickerFiltersFromPlatform, platformFromVehicle, tidyVehicleText, type PlatformLite, type VehicleTemplate } from './vehicle-templates';
 
 const PLATFORMS: PlatformLite[] = [
   { id: 'p-transit', key: 'transit', config: { wheelbases: ['130', '148', '148 EL'], roofs: ['low', 'medium', 'high'] } },
@@ -60,5 +60,25 @@ describe('tidyVehicleText', () => {
   it('title-cases shouty words only', () => {
     expect(tidyVehicleText('FORD TRANSIT 148 High Roof')).toBe('Ford Transit 148 High Roof');
     expect(tidyVehicleText('GMC Savana F-150 RAM')).toBe('GMC Savana F-150 RAM');
+  });
+});
+
+describe('VIN decode → picker and platform words', () => {
+  it('turns platform roof / wheelbase labels into the picker facets', () => {
+    expect(pickerFiltersFromPlatform('low', '130')).toEqual({ roof: 'Low', wheelbase: '130' });
+    expect(pickerFiltersFromPlatform('super high', '159 EXT')).toEqual({ roof: 'Super High', wheelbase: '159 Extended' });
+    expect(pickerFiltersFromPlatform('medium', '148 EL')).toEqual({ roof: 'Medium', wheelbase: '148 Extended' });
+    expect(pickerFiltersFromPlatform(null, null)).toEqual({});
+    expect(pickerFiltersFromPlatform('weird', '148 dually')).toEqual({});
+  });
+  it('matches CarsXE words to the platform options', () => {
+    expect(matchRoof('Low', ['low', 'medium', 'high'])).toBe('low');
+    expect(matchRoof('Super high', ['low', 'high', 'super high'])).toBe('super high');
+    expect(matchRoof('Medium', ['standard', 'high'])).toBe('');
+    expect(matchWheelbase('130', ['130', '148', '148 EL'])).toBe('130');
+    expect(matchWheelbase('148 Extended', ['130', '148', '148 EL'])).toBe('148 EL');
+    expect(matchBedFeet(5.5, ['5.5', '6.5', '8'])).toBe('5.5');
+    expect(matchBedFeet(5 + 7 / 12, ['5.7', '6.4'])).toBe('5.7');
+    expect(matchBedFeet(null, ['5.5'])).toBe('');
   });
 });
