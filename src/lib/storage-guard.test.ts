@@ -34,6 +34,13 @@ describe('checkStoragePath — shape defenses (every tier)', () => {
     expect(checkStoragePath('ledger', 'quickbooks/Invoice/123/Invoice_1042.pdf', { write: true, access: 'staff' })).toBe('Forbidden bucket');
     expect(checkStoragePath('ledger', 'quickbooks/Invoice/123/Invoice_1042.pdf', installer)).toBe('Forbidden bucket');
   });
+
+  it("books-bills (Snap a bill's pictures) is denied for everyone, both operations", () => {
+    const path = '0b9e3c1a-5d2f-4e8b-9a71-3c6d2f1e8b40.jpg';
+    expect(checkStoragePath('books-bills', path, staff)).toBe('Forbidden bucket');
+    expect(checkStoragePath('books-bills', path, { write: true, access: 'staff' })).toBe('Forbidden bucket');
+    expect(checkStoragePath('books-bills', path, installer)).toBe('Forbidden bucket');
+  });
 });
 
 describe('checkStoragePath — R3-22 caller tiers', () => {

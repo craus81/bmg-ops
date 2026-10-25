@@ -23,10 +23,16 @@ import { findVendorBill } from '@/lib/netsuite';
  * The caller stamps the row billed, clearing bill_claimed_at in the same
  * write when claimedAt is set. When that stamp fails the claim stays, so
  * nobody bills the row again while it reads approved.
+ *
+ * Send to NetSuite on Snap a bill (migration 436) bills its snapped bill the
+ * same way, while the bill is a draft.
  */
 
 /** The rows a bill button bills. */
-export type BillOnceTable = 'vendor_invoices' | 'payouts';
+export type BillOnceTable = 'vendor_invoices' | 'payouts' | 'gl_snapped_bills';
+
+/** The status a row has while it can be billed. */
+const READY: Record<BillOnceTable, string> = { vendor_invoices: 'approved', payouts: 'approved', gl_snapped_bills: 'draft' };
 
 /** A claim this old is taken over: the try that held it died without letting it go. */
 export const STALE_CLAIM_MS = 15 * 60_000;
@@ -52,7 +58,7 @@ export async function makeBillOnce(
     .from(table)
     .update({ bill_claimed_at: claimedAt })
     .eq('id', id)
-    .eq('status', 'approved')
+    .eq('status', READY[table])
     .or(`bill_claimed_at.is.null,bill_claimed_at.lt.${staleCutoff}`)
     .select('id');
   let claimed: string | null = claimedAt;
@@ -88,10 +94,12 @@ export async function makeBillOnce(
   if (found) {
     await letGo();
     const number = found.billNumber || found.billId;
+    // The vendor invoice and payout pages can record a bill made in NetSuite; Snap a bill has nothing to record.
+    const record = table === 'gl_snapped_bills' ? '' : ` If that's this one's bill, use Record Bill with ${number}.`;
     return {
       ok: false,
       status: 409,
-      error: `NetSuite already has bill ${number} from ${bill.vendorName}, so FleetSuite didn't make another. If that's this one's bill, use Record Bill with ${number}.`,
+      error: `NetSuite already has bill ${number} from ${bill.vendorName}, so FleetSuite didn't make another.${record}`,
     };
   }
 
@@ -106,4 +114,22 @@ export async function makeBillOnce(
     return { ok: false, status: 502, error: made.error || 'Failed to create vendor bill' };
   }
   return { ok: true, billId: made.billId || '', billNumber: made.billNumber || '', claimedAt: claimed };
+}
+
+/**
+ * A create for makeBillOnce that doesn't take NetSuite's silence for a no (Snap a bill's Send). NetSuite can keep a
+ * bill without saying which (the connection drops after it's saved, or no id comes back). makeBillOnce asked for one
+ * from the vendor under the Reference No. just before the create, so one NetSuite has now is the one just made; when
+ * it has none, the create's own answer stands.
+ */
+export async function madeOrFound(create: () => Promise<Made>, find: () => Promise<Found>): Promise<Made> {
+  let made: Made;
+  try {
+    made = await create();
+  } catch (e) {
+    made = { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+  if (made.success && /^\d+$/.test(made.billId ?? '')) return made;
+  const found = await find().catch(() => null);
+  return found ? { success: true, billId: found.billId, billNumber: found.billNumber } : made;
 }

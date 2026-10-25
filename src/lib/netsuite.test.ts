@@ -8,6 +8,7 @@ import {
   createInvoiceFromSO,
   fulfillSalesOrder,
   createBillFromPo,
+  createVendorBill,
   createItemReceiptFromPo,
   createCustomerOrLead,
   updateCustomer,
@@ -582,6 +583,56 @@ describe('createBillFromPo', () => {
       memo: 'Parts invoice INV-9 (via FleetSuite parts mail)',
     });
     expect(result).toEqual({ success: true, billId: '700', billNumber: 'VB-88' });
+  });
+});
+
+describe('createVendorBill', () => {
+  it("sends one expense line, with no date, for a payout or a CNI vendor invoice", async () => {
+    fetchMock
+      // the vendor's currency
+      .mockResolvedValueOnce(jsonResponse({ items: [{ currency: '1' }] }))
+      .mockResolvedValueOnce(new Response(null, { status: 204, headers: { Location: 'https://x/services/rest/record/v1/vendorBill/8801' } }))
+      .mockResolvedValueOnce(jsonResponse({ items: [{ tranid: 'VI-1042' }] }));
+    const result = await createVendorBill({
+      vendorId: '412', accountId: '611', amount: 1250, referenceNo: 'VI-1042', subsidiaryId: '2', locationId: '1', memo: 'CNI', lineMemo: 'Install',
+    });
+    expect(result).toEqual({ success: true, billId: '8801', billNumber: 'VI-1042' });
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(url).toBe('https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/vendorBill');
+    expect(JSON.parse(init.body)).toEqual({
+      entity: { id: '412' }, currency: { id: '1' }, tranId: 'VI-1042', subsidiary: { id: '2' }, location: { id: '1' },
+      expense: { items: [{ account: { id: '611' }, amount: 1250, memo: 'Install' }] },
+      memo: 'CNI',
+    });
+  });
+
+  it("sends each of a snapped bill's lines to its own account, dated as the vendor's bill is (Snap a bill)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ items: [{ currency: '1' }] }))
+      .mockResolvedValueOnce(jsonResponse({ id: 8803, tranId: '88213-10' }));
+    const result = await createVendorBill({
+      vendorId: '77', referenceNo: '88213-10', subsidiaryId: '2', locationId: '1', memo: 'FleetSuite Snap a bill',
+      tranDate: '2026-10-20', dueDate: '2026-11-19',
+      lines: [{ accountId: '623', amount: 1284.33, memo: 'Electric service' }, { accountId: '640', amount: 12.5 }],
+    });
+    expect(result).toEqual({ success: true, billId: '8803', billNumber: '88213-10' });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      entity: { id: '77' }, currency: { id: '1' }, tranId: '88213-10', subsidiary: { id: '2' }, location: { id: '1' },
+      tranDate: '2026-10-20', dueDate: '2026-11-19',
+      expense: { items: [{ account: { id: '623' }, amount: 1284.33, memo: 'Electric service' }, { account: { id: '640' }, amount: 12.5 }] },
+      memo: 'FleetSuite Snap a bill',
+    });
+  });
+
+  it("passes NetSuite's refusal on with what was sent", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ items: [] }))
+      .mockResolvedValueOnce(new Response('{"o:errorDetails":[{"detail":"Invalid account"}]}', { status: 400 }));
+    const result = await createVendorBill({ vendorId: '77', tranDate: '2026-10-20', lines: [{ accountId: '9', amount: 5 }] });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/^NetSuite error \(400\): \{"o:errorDetails".* \| sent: \{"entity":\{"id":"77"\},"tranDate":"2026-10-20"/);
+    error.mockRestore();
   });
 });
 

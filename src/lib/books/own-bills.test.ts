@@ -91,6 +91,27 @@ describe("working out Books' own bill", () => {
     expect(workOutOwnBill(partsMail, [line({ rate: null, amount: null })], AT).unknowns).toEqual(['prices']);
   });
 
+  it("is each expense line sent for a snapped bill, dated as the vendor's bill is (Snap a bill)", () => {
+    const snapped = made({
+      madeFrom: 'snapped', madeFromId: 'snap-1', expense: null, billDate: '2026-10-20', invoiceTotal: 1296.83,
+      expenses: [
+        { accountId: '623', amount: 1284.33, memo: 'Electric service, Sep 18 to Oct 17' },
+        { accountId: 640, amount: 12.5, memo: null },
+        { accountId: '623', amount: -0.01 },
+      ],
+    });
+    const own = workOutOwnBill(snapped, null, AT);
+    expect(own).toMatchObject({ madeFrom: 'snapped', madeFromId: 'snap-1', billDate: '2026-10-20', invoiceCents: 129683, unknowns: [] });
+    expect(own.lines.map((l) => [l.lineNo, l.accountId, l.description, l.cents, l.itemId, l.quantity])).toEqual([
+      [1, '623', 'Electric service, Sep 18 to Oct 17', 128433, null, null],
+      [2, '640', null, 1250, null, null],
+      [3, '623', null, -1, null, null],
+    ]);
+    // A date that isn't one falls back to the day FleetSuite made it.
+    expect(workOutOwnBill(made({ billDate: '10/20/2026' }), null, AT).billDate).toBe('2026-10-24');
+    expect(workOutOwnBill(made({ billDate: null }), null, AT).billDate).toBe('2026-10-24');
+  });
+
   it("keeps only numbers for NetSuite's ids", () => {
     const own = workOutOwnBill(made({ vendorId: 'V-412', subsidiaryId: ' ', locationId: null }), null, AT);
     expect(own).toMatchObject({ vendorId: null, subsidiaryId: null, locationId: null });
@@ -154,6 +175,17 @@ describe('saving the copy', () => {
     expect(rpc).toHaveBeenCalledWith('gl_own_bill_save', expect.anything());
     expect(payloadOf(rpc)).toMatchObject({ netsuite_id: '8801', made_from: 'vendor_invoice', bill_date: '2026-10-24' });
     expect(reads).toEqual([]);
+  });
+
+  it("saves a snapped bill's lines without reading the PO copy", async () => {
+    const { service, rpc, reads } = fakeService();
+    await saveOwnBill(service, made({
+      madeFrom: 'snapped', expense: null, po: { copyId: 'po-1', netsuiteId: null, number: null }, billDate: '2026-10-20',
+      expenses: [{ accountId: '623', amount: 1284.33, memo: 'Electric service' }, { accountId: '640', amount: 12.5 }],
+    }), AT);
+    expect(reads).toEqual([]);
+    expect(payloadOf(rpc)).toMatchObject({ made_from: 'snapped', bill_date: '2026-10-20' });
+    expect(payloadOf(rpc).lines.map((l: Record<string, unknown>) => [l.line_no, l.account_netsuite_id, l.amount])).toEqual([[1, '623', '1284.33'], [2, '640', '12.50']]);
   });
 
   it("saves a Parts Mail bill from FleetSuite's copy of the PO", async () => {

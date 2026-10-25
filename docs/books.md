@@ -46,8 +46,9 @@ NetSuite's fulfillment each morning, part 26, a look each night through
 the copies of NetSuite's bills, checks and card charges for likely mistakes,
 listed for a super admin to clear, and part 27, Books' own copy of each bill
 and PO receipt FleetSuite puts into NetSuite, checked against NetSuite's
-each morning, with one bill per approved vendor invoice or installer payout.
-The screens are the accounts page at `/admin/books`, the trial
+each morning, with one bill per approved vendor invoice or installer payout,
+and part 28, Snap a bill, which enters a vendor's bill in NetSuite from a
+picture of it. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -62,7 +63,7 @@ behind one at `/admin/books/balances/party`, FleetSuite's own invoices at
 `/admin/books/own-bills` and one's check at `/admin/books/own-bills/bill`,
 its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the mistake checks at
-`/admin/books/mistake-checks`, and sales by location at `/admin/books/sales`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, and sales by location at `/admin/books/sales`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there.
 
 | Piece | Where |
@@ -138,6 +139,9 @@ the accounts page; the others are linked from there.
 | Books' own bills and receipts, saved as FleetSuite makes each and checked against NetSuite's, and one bill per approved vendor invoice or payout | `migrations/435-books-own-bills.sql`, `src/lib/books/own-bills.ts`, `src/lib/books/own-receipts.ts`, `src/lib/books/own-bill-check.ts`, `src/lib/books/own-receipt-check.ts`, `src/lib/bill-once.ts`, `findVendorBill` in `src/lib/netsuite.ts`; saved by `src/app/api/vendor-invoices/workflow/route.ts`, `src/app/api/admin/payouts/route.ts`, `src/app/api/parts-mail/create-bill/route.ts` and `src/app/api/po-receipts/route.ts` |
 | Own bills and own receipts and one's check, and their APIs | `src/app/(main)/admin/books/own-bills/page.tsx`, `src/app/(main)/admin/books/own-bills/bill/page.tsx`, `src/app/(main)/admin/books/own-receipts/page.tsx`, `src/app/(main)/admin/books/own-receipts/receipt/page.tsx`, `src/app/api/admin/books/own-bills/route.ts`, `src/app/api/admin/books/own-receipts/route.ts` |
 | Own bill and receipt tests | `src/lib/books/own-bills.test.ts`, `src/lib/books/own-receipts.test.ts`, `src/lib/books/own-bill-check.test.ts`, `src/lib/books/own-receipt-check.test.ts`, `src/lib/books/own-bills-sql.test.ts`, `src/lib/bill-once.test.ts`; the daily check's are in its test files |
+| Snap a bill: each snapped bill, the reader, the suggestions and checks, sending once, and a vendor's earlier bills | `migrations/436-books-snap-a-bill.sql`, `src/lib/books/bill-reader.ts`, `src/lib/books/snap-a-bill.ts`, `src/lib/books/typed-dollars.ts`, `makeBillOnce` in `src/lib/bill-once.ts`, `createVendorBill` in `src/lib/netsuite.ts` |
+| Snap a bill's page and its API | `src/app/(main)/admin/books/snap-a-bill/page.tsx`, `src/app/api/admin/books/snap-a-bill/route.ts` |
+| Snap a bill tests | `src/lib/books/bill-reader.test.ts`, `src/lib/books/snap-a-bill.test.ts`, `src/lib/books/typed-dollars.test.ts`, `src/lib/books/snap-a-bill-sql.test.ts`; sending once is in `src/lib/bill-once.test.ts`, the bill NetSuite is sent in `src/lib/netsuite.test.ts` |
 | Mistake checks: the night's look for likely mistakes in the copies of NetSuite's bills, checks and card charges, each kept for a super admin to clear | `migrations/431-books-mistake-checks.sql`, `src/lib/books/mistake-checks.ts`, `src/app/api/cron/books-mistake-checks/route.ts` |
 | Mistake checks page and its API | `src/app/(main)/admin/books/mistake-checks/page.tsx`, `src/app/api/admin/books/mistake-checks/route.ts` |
 | Mistake check tests | `src/lib/books/mistake-checks.test.ts`, `src/lib/books/mistake-checks-sql.test.ts`; the daily check's are in its test files |
@@ -2473,7 +2477,7 @@ posted: the books still post NetSuite's bills ("Vendor bills") and item
 receipts ("Stock and cost"). Nothing more is written to NetSuite than
 before.
 
-FleetSuite makes bills three ways, and each saves a copy right after
+FleetSuite makes bills four ways, and each saves a copy right after
 NetSuite makes the bill (`saveOwnBill` in `src/lib/books/own-bills.ts`):
 
 - **Create Bill in NetSuite on an approved CNI vendor invoice**
@@ -2486,10 +2490,15 @@ NetSuite makes the bill (`saveOwnBill` in `src/lib/books/own-bills.ts`):
   (`netsuite_vendor_po_lines`) still had to bill, each line's quantity less
   what's billed, at the line's price, to the cent. The vendor's invoice
   total is kept beside them, as the vendor's invoice says it.
+- **Send to NetSuite on Snap a bill** (`/api/admin/books/snap-a-bill`):
+  each line to the account and for the amount FleetSuite sent, with the
+  bill's total beside them ("Snap a bill").
 
 A bill is dated the day FleetSuite made it, in Central time: FleetSuite
-sends NetSuite no date for a bill, so NetSuite dates it that day. It's kept
-for the company whose NetSuite subsidiary it was made in, else BMG.
+sends NetSuite no date for a bill, so NetSuite dates it that day. A snapped
+bill is the exception: it's dated as the bill is, and FleetSuite sends
+NetSuite that date. It's kept for the company whose NetSuite subsidiary it
+was made in, else BMG.
 
 Receive on the Receiving page (`/api/po-receipts`) saves a copy of each
 Receive (`saveOwnReceipt` in `src/lib/books/own-receipts.ts`), keyed by its
@@ -2518,7 +2527,8 @@ asks NetSuite for a bill from that vendor with the same Reference No.
 made but FleetSuite never heard back about finds that bill rather than
 making another; when NetSuite can't be asked, it makes none. A bill NetSuite
 refuses lets the claim go, the stamp that the row is billed clears it, and a
-claim over 15 minutes old is taken over.
+claim over 15 minutes old is taken over. Send to NetSuite on Snap a bill
+claims the snapped bill the same way, while it's a draft.
 
 ### The checks
 
@@ -2565,9 +2575,10 @@ ledger and lists and the daily check went, and a search. Each opens
 `/admin/books/own-bills/bill?id=` (`deepLinks.booksOwnBill`, by NetSuite's
 id for the bill): what's compared, side by side with why it differs, each
 line on both sides, what FleetSuite didn't know and how it worked the copy
-out, linking to the vendor invoice, payout or Parts Mail it was made from
-and to the bill and PO in NetSuite. `/admin/books/own-receipts`
-(`deepLinks.booksOwnReceipts`) lists a month's receipt copies the same way,
+out, linking to the vendor invoice, payout or Parts Mail it was made from,
+or the picture it was snapped from and who snapped it, and to the bill and
+PO in NetSuite. `/admin/books/own-receipts` (`deepLinks.booksOwnReceipts`)
+lists a month's receipt copies the same way,
 with what each added to stock on both sides. Each opens
 `/admin/books/own-receipts/receipt?key=` (`deepLinks.booksOwnReceipt`, by
 the copy's key): what's compared, each item with its count and value on
@@ -2580,13 +2591,149 @@ tells the super admins when one stops matching ("Daily check").
 - The copies aren't posted: the books post NetSuite's bills and item
   receipts.
 - There's no history: copies start the day part 27 shipped.
-- Snapping a bill in Books, and a snapped bill billing its PO, come next.
+- A snapped bill billing the PO it names comes next ("Snap a bill").
 - FleetSuite's copy of a PO doesn't say the company, so a Parts Mail bill
   and a receipt are kept for BMG, and one for 1084 differs on its company.
 - Receiving dates a receipt by the day in UTC, which in the evening, Central
   time, is already the next day, and NetSuite takes that date.
 - Parts Mail's own claim on its bills doesn't ask NetSuite for the bill
   before making one, and isn't taken over when it's left behind.
+
+## Snap a bill
+
+From the day part 28 shipped, a super admin can enter a vendor's bill in
+NetSuite from a picture of it (owner decision 2026-10-25, "Snap a bill", as
+Books Previews drew it). Books → Snap a bill (`/admin/books/snap-a-bill`,
+`deepLinks.booksSnapBill`) takes a picture with the phone's camera, or a
+PDF or picture picked from the phone or computer. FleetSuite reads it, the
+super admin checks each box against the bill, and Send to NetSuite enters
+it as a vendor bill for BMG or 1084, once only. Books keeps its own copy, as
+it does for the other bills FleetSuite makes ("FleetSuite's own bills and
+receipts"). Each snapped bill is a row of `gl_snapped_bills` (migration
+436), from its picture to NetSuite's bill.
+
+### The picture
+
+The page turns an iPhone's HEIC picture into a JPEG and shrinks a photo to
+2400 pixels on its longest side before it uploads it
+(`shrinkPhotoForUpload`), then uploads it as record files go
+(`uploadRecordFile`): straight to storage, else through the route. A
+picture is taken up to 5MB and a PDF up to 20MB, the most the reader takes.
+It's kept under the storage prefix `books-bills`, named by a random id,
+which `/api/storage` never serves (`src/lib/storage-guard.ts`): only the
+route does (`?file=`, `deepLinks.booksSnapBillFile`), to super admins,
+never cached. A bill thrown away is kept, marked thrown away, with its
+picture.
+
+### Reading it
+
+`readBill` (`src/lib/books/bill-reader.ts`) sends the picture or PDF to
+Claude (`claude-opus-5-5`, or the model `BILL_READER_MODEL` names, with
+`ANTHROPIC_API_KEY`) and asks for a fixed shape back: whether it's a
+vendor's bill at all, the vendor's name, the bill number, its date and due
+date, its terms, each charge with its amount, its total, and what it says is
+due. What the reader couldn't read is left empty, never guessed: a total it
+couldn't read too, rather than the lines added up, since the lines are
+checked against it. It keeps a bill's first 200 lines, the most the form
+takes, so a longer statement comes up short of its total. When the model
+declines a bill, the API reads it again with the model Anthropic recommends
+(server-side fallbacks); a busy API is tried again (`callAnthropicWithRetry`).
+A read costs about 5 to 10 cents. A read that fails says why on the page,
+with Read it again; one that isn't a bill says so, and the form can still be
+filled in by hand. A read fills in the form only if nobody saved or sent it
+while it read.
+
+### The suggestions
+
+From what was read, `formFromRead` (`src/lib/books/snap-a-bill.ts`) fills in
+the form:
+
+- **The vendor**: the vendor in the copy of NetSuite's vendor list whose
+  name has the same words (`matchVendor`). A close match is shown in amber
+  with the others like it to pick from. The vendor box searches the copy,
+  and NetSuite itself for a vendor made since the copy last ran.
+- **The company**: the one the copy of the general ledger books most of the
+  vendor's bills to, else BMG. A note says when their bills went to the
+  other one.
+- **The location**: where the vendor's bills in the company usually go,
+  else `NETSUITE_DEFAULT_LOCATION_ID`, else the company's O'Fallon
+  location, or its first.
+- **The due date**: the bill's date and the vendor's terms in NetSuite,
+  else the due date on the bill. One picked by hand stays.
+- **Each line's account**: a line like one on the vendor's earlier bills
+  (half its words or more) goes where that one went, and the biggest line
+  where their bills keep going (the same account on each of their latest
+  bills, or on two thirds of up to twelve). With no bills yet, it's the
+  vendor's default expense account in NetSuite. Anything else waits for
+  someone to pick it, in amber. Only accounts the company can use are
+  suggested.
+
+The vendor's earlier bills are what the copy of NetSuite's bills has
+(`gl_vendor_bill_history`): their latest 24, voided ones left out, each
+expense line's account and memo (tax and item lines left out), and the
+companies and locations the copy of the general ledger books each to.
+
+Each change on the page asks the route again (`check`, a moment after the
+typing stops), which works out the suggestions again for what hasn't been
+picked by hand. The page takes the answer only if nothing changed
+meanwhile.
+
+### Before Send
+
+Under the lines, green first, then amber, then red (`viewSnapForm`):
+
+- whether the lines add up to the bill's total, which they must;
+- when the bill says more is due than its own charges, that it likely
+  carries an earlier balance, which isn't entered;
+- **Already in NetSuite**: NetSuite has a bill from the vendor with that
+  number (`findVendorBill`, asked as typed), or the copy of NetSuite's bills
+  has one of theirs numbered the same in its letters and digits, whatever
+  its date. Send stays greyed out, and the card links to NetSuite's bill;
+- a bill, check or card charge to the vendor for the same amount within a
+  week of the bill's date (`gl_mistake_docs`), which may be this bill
+  entered already. It doesn't stop Send;
+- what must change before Send: the vendor picked from NetSuite's list, a
+  bill number (up to 40 characters), the bill's date, a due date on or
+  after it, one of the company's locations, a total over $0, and each
+  line's amount and an account the company can use. A company not linked
+  to a NetSuite subsidiary can't send.
+
+Send to NetSuite saves the form first, so a refusal loses nothing, then
+checks it all again on the server, asking NetSuite again. It claims the
+snapped bill (`makeBillOnce`, as Create Bill does a vendor invoice), asks
+NetSuite once more for a bill from the vendor with that number, and makes
+the bill (`createVendorBill`): the vendor, the bill number as its Reference
+No., the company's subsidiary, the location, the bill's date, the due date
+(left out when there's none, so NetSuite works it out from the terms), the
+memo "FleetSuite Snap a bill", and each line to its account for its amount,
+its description as its memo. When NetSuite doesn't say which bill it made
+(the connection drops, or no id comes back), FleetSuite asks it for the
+bill before calling the Send failed. Then it marks the snapped bill sent
+with NetSuite's id for the bill, keeping the form that went, and Books keeps
+its own copy (`saveOwnBill`, made from `snapped`). What NetSuite says when it
+refuses is kept on the snapped bill and shown in red. When NetSuite made the
+bill but FleetSuite couldn't mark it sent, the claim stays, so nobody sends
+it again while it reads as a draft, and the page says to find the bill in
+NetSuite. Once the claim has gone stale (15 minutes), the Already in
+NetSuite card of a bill whose Send didn't finish offers Mark it sent: it
+asks NetSuite for the bill and keeps it as sent, with Books' own copy,
+without sending anything.
+
+### The page
+
+Save for later keeps the form as it is, and the start screen lists the
+bills saved for later. Nothing on a bill can change while it's being read,
+saved or sent, and no Save goes onto a bill a Send holds. Throw it away
+asks once more. A bill sent shows
+NetSuite's bill, who sent it and Snap another. Own bills lists it with who
+sent it ("Snapped by"), linking back here.
+
+### What isn't done yet
+
+- A bill that names a PO isn't billed against the PO: that's the next piece
+  of shared bills.
+- The picture isn't attached to NetSuite's bill; it stays with Books'.
+- Vendor credits and paying bills aren't part of it.
 
 ## Mistake checks
 

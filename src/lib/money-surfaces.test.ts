@@ -71,6 +71,7 @@ const ALLOWED: Record<string, string> = {
   'src/app/(main)/admin/books/own-receipts/receipt/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/sales/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/mistake-checks/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
+  'src/app/(main)/admin/books/snap-a-bill/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
 
   // ── CNI admin console ──
   'src/app/(main)/admin/cni/jobs/[id]/page.tsx': 'cni_admin — admin only',

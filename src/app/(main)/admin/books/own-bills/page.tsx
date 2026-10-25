@@ -15,15 +15,16 @@ import type { OwnBillCheck } from '@/lib/books/own-bill-check';
  * own-bill-check.ts, docs/books.md "FleetSuite's own bills and receipts";
  * owner decision 2026-10-24, "Shared bills").
  *
- * Books' own copy of each bill FleetSuite puts into NetSuite (Create Bill in
- * NetSuite on a CNI vendor invoice or an installer payout, Create bill on a
- * Parts Mail invoice), next to NetSuite's bill, a month at a time: the ones
+ * Books' own copy of each bill FleetSuite puts into NetSuite (Send to NetSuite
+ * on Snap a bill, Create Bill in NetSuite on a CNI vendor invoice or an
+ * installer payout, Create bill on a Parts Mail invoice), next to NetSuite's
+ * bill, a month at a time: the ones
  * that differ first, with why in a sentence. Tap one for its line by line
  * check. The daily check tells the super admins when one differs and links
  * here (?only=differs) or to the bill. Super admins only, as the books are.
  */
 
-type Row = Omit<OwnBillCheck, 'fields' | 'lines' | 'workedOut'> & { netsuiteUrl: string | null; poUrl: string | null };
+type Row = Omit<OwnBillCheck, 'fields' | 'lines' | 'workedOut'> & { netsuiteUrl: string | null; poUrl: string | null; madeByName: string | null };
 
 interface SyncState { at: string; error: string | null }
 
@@ -79,6 +80,7 @@ const MADE_FROM: Record<OwnBillCheck['madeFrom'], string> = {
   vendor_invoice: 'CNI vendor invoice',
   payout: 'Installer payout',
   parts_mail: 'Parts Mail',
+  snapped: 'Snap a bill',
 };
 
 const banner = (color: string): React.CSSProperties => ({
@@ -133,7 +135,12 @@ function BillLabel({ r }: { r: Row }) {
         {r.summary}
       </div>
       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-        {MADE_FROM[r.madeFrom]}{r.poNumber ? `, ${r.poNumber}` : ''}
+        {r.madeFrom === 'snapped' && r.madeFromId ? (
+          <Link href={deepLinks.booksSnapBill(r.madeFromId)} style={{ color: 'var(--text-secondary)' }}>
+            {r.madeByName ? `Snapped by ${r.madeByName}` : MADE_FROM.snapped}
+          </Link>
+        ) : MADE_FROM[r.madeFrom]}
+        {r.poNumber ? `, ${r.poNumber}` : ''}
         {r.netsuiteUrl && (
           <>
             {' · '}
@@ -202,7 +209,7 @@ export default function BooksOwnBillsPage() {
     const match = looseMatcher(search);
     const rows = (data?.bills ?? []).filter((r) => (filter === 'all' || r.status === filter)
       && (!shownCompany || r.company === shownCompany)
-      && match(r.number, r.vendor ?? '', r.poNumber ?? '', MADE_FROM[r.madeFrom]));
+      && match(r.number, r.vendor ?? '', r.poNumber ?? '', MADE_FROM[r.madeFrom], r.madeByName ?? ''));
     // The ones that differ first, then as they came (newest first).
     return rows.sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status));
   }, [data, filter, search, shownCompany]);
@@ -215,10 +222,12 @@ export default function BooksOwnBillsPage() {
       <div style={{ marginBottom: '14px' }}>
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Own bills</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          Each bill FleetSuite puts into NetSuite, from Parts Mail, CNI vendor invoices or installer payouts, kept by Books
-          and checked against NetSuite&apos;s copy; tap one for its line by line check. Nothing here changes NetSuite, and
-          nothing is posted from them yet. Each morning the daily check tells super admins when one differs. Visible only to
-          super admins.{' '}
+          Each bill FleetSuite puts into NetSuite, from Snap a bill, Parts Mail, CNI vendor invoices or installer payouts,
+          kept by Books and checked against NetSuite&apos;s copy; tap one for its line by line check. Nothing here changes
+          NetSuite, and nothing is posted from them yet. Each morning the daily check tells super admins when one differs.
+          Visible only to super admins.{' '}
+          <Link href={deepLinks.booksSnapBill()} style={{ color: 'var(--text-secondary)' }}>Snap a bill</Link>
+          {' · '}
           <Link href="/admin/books/own-receipts" style={{ color: 'var(--text-secondary)' }}>Own receipts</Link>
           {' · '}
           <Link href="/admin/books/mistake-checks" style={{ color: 'var(--text-secondary)' }}>Mistake checks</Link>
@@ -250,8 +259,9 @@ export default function BooksOwnBillsPage() {
 
           {!data.months.length && (
             <div style={banner(BLUE)}>
-              FleetSuite hasn&apos;t made a bill since Books started keeping its own copies. The next one made with Create Bill in
-              NetSuite on a CNI vendor invoice or an installer payout, or Create bill on a Parts Mail invoice, shows up here.
+              FleetSuite hasn&apos;t made a bill since Books started keeping its own copies. The next one sent from Snap a bill,
+              made with Create Bill in NetSuite on a CNI vendor invoice or an installer payout, or with Create bill on a Parts
+              Mail invoice, shows up here.
             </div>
           )}
 

@@ -200,6 +200,8 @@ export default function BooksAccountsPage() {
             {' · '}
             <Link href="/admin/books/own-bills" style={{ color: 'var(--text-secondary)' }}>Own bills</Link>
             {' · '}
+            <Link href="/admin/books/snap-a-bill" style={{ color: 'var(--text-secondary)' }}>Snap a bill</Link>
+            {' · '}
             <Link href="/admin/books/own-receipts" style={{ color: 'var(--text-secondary)' }}>Own receipts</Link>
             {' · '}
             <Link href="/admin/books/mistake-checks" style={{ color: 'var(--text-secondary)' }}>Mistake checks</Link>

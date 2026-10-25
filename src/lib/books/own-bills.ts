@@ -6,21 +6,25 @@ import { chicagoDate, type SaveResult } from './own-invoices';
  * owner decision 2026-10-24, thread "Replacing NetSuite with FleetSuite",
  * "Shared bills"; docs/books.md "FleetSuite's own bills and receipts").
  *
- * FleetSuite makes a bill three ways: Create Bill in NetSuite on an approved
- * vendor invoice (AP) or an approved installer payout, and Create bill on a
- * Parts Mail invoice. Right after NetSuite makes it, Books keeps its own
- * copy of what FleetSuite sent, worked out from what FleetSuite knows rather
- * than read back from NetSuite:
+ * FleetSuite makes a bill four ways: Create Bill in NetSuite on an approved
+ * vendor invoice (AP) or an approved installer payout, Create bill on a
+ * Parts Mail invoice, and Send to NetSuite on Snap a bill (migration 436).
+ * Right after NetSuite makes it, Books keeps its own copy of what FleetSuite
+ * sent, worked out from what FleetSuite knows rather than read back from
+ * NetSuite:
  *
  *   - a vendor invoice's or payout's bill is one expense line: the amount
  *     FleetSuite sent, to the account it sent (Subcontractors);
+ *   - a snapped bill's lines are the expense lines FleetSuite sent, each its
+ *     amount to the account picked for it;
  *   - a Parts Mail bill is made from the invoice's purchase order, which
  *     NetSuite bills at the PO's prices, so its lines are what FleetSuite's
  *     copy of the PO (netsuite_vendor_po_lines, copied every two hours) still
  *     had to bill, each its open quantity at the PO's price, to the cent. The
  *     vendor's invoice total is kept beside them;
  *   - the date is the day FleetSuite made it, in Central time: FleetSuite
- *     sends no date, and NetSuite dates the bill that day.
+ *     sends no date, and NetSuite dates the bill that day. A snapped bill is
+ *     the exception: FleetSuite sends the vendor's date for it.
  *
  * What FleetSuite can't work out is said so on the copy (unknowns) rather
  * than guessed: a PO its copy doesn't have, a line it has no price for. The
@@ -31,7 +35,7 @@ import { chicagoDate, type SaveResult } from './own-invoices';
  * made, so a copy that can't be saved is logged and left.
  */
 
-export type BillMadeFrom = 'vendor_invoice' | 'payout' | 'parts_mail';
+export type BillMadeFrom = 'vendor_invoice' | 'payout' | 'parts_mail' | 'snapped';
 export type BillUnknown = 'lines' | 'prices';
 
 export interface OwnBillLine {
@@ -58,7 +62,7 @@ export interface OwnBill {
   vendorId: string | null;
   vendorName: string | null;
   referenceNo: string | null;
-  /** 'YYYY-MM-DD', the day FleetSuite made it in Central time. */
+  /** 'YYYY-MM-DD': the date FleetSuite sent for the bill, else the day it made it in Central time. */
   billDate: string;
   poId: string | null;
   poNumber: string | null;
@@ -164,7 +168,7 @@ export function billPayload(own: OwnBill): Record<string, unknown> {
 
 // ── Saving ─────────────────────────────────────────────────────────────────
 
-/** What one of the three bill buttons knows once NetSuite has made the bill. */
+/** What one of the bill buttons knows once NetSuite has made the bill. */
 export interface MadeBill {
   netsuiteId: string | null | undefined;
   netsuiteNumber?: string | null;
@@ -178,6 +182,10 @@ export interface MadeBill {
   locationId?: string | number | null;
   /** A vendor invoice's or payout's one expense line, as sent. */
   expense?: { accountId: string | number; amount: number; memo?: string | null } | null;
+  /** A snapped bill's expense lines, as sent. */
+  expenses?: Array<{ accountId: string | number; amount: number; memo?: string | null }> | null;
+  /** 'YYYY-MM-DD', the date FleetSuite sent NetSuite for the bill: a snapped bill's own date. */
+  billDate?: string | null;
   /** The purchase order a Parts Mail bill was made from: its row in FleetSuite's copy, NetSuite's id and number. */
   po?: { copyId: string | null; netsuiteId: string | number | null; number: string | null } | null;
   /** What the vendor's invoice said it came to, in dollars. */
@@ -188,7 +196,19 @@ export interface MadeBill {
 export function workOutOwnBill(made: MadeBill & { netsuiteId: string }, poLines: PoCopyLine[] | null, at: Date): OwnBill {
   const unknowns: BillUnknown[] = [];
   let lines: OwnBillLine[] = [];
-  if (made.expense) {
+  if (made.expenses?.length) {
+    lines = made.expenses.map((e, i) => ({
+      lineNo: i + 1,
+      accountId: numericId(e.accountId),
+      itemId: null,
+      itemNumber: null,
+      description: text(e.memo),
+      quantity: null,
+      rate: null,
+      cents: toCents(e.amount),
+      poLineId: null,
+    }));
+  } else if (made.expense) {
     lines = [{
       lineNo: 1,
       accountId: numericId(made.expense.accountId),
@@ -217,7 +237,7 @@ export function workOutOwnBill(made: MadeBill & { netsuiteId: string }, poLines:
     vendorId: numericId(made.vendorId),
     vendorName: text(made.vendorName),
     referenceNo: text(made.referenceNo),
-    billDate: chicagoDate(at),
+    billDate: made.billDate && /^\d{4}-\d{2}-\d{2}$/.test(made.billDate) ? made.billDate : chicagoDate(at),
     poId: numericId(made.po?.netsuiteId),
     poNumber: text(made.po?.number),
     locationId: numericId(made.locationId),
@@ -248,7 +268,7 @@ export async function saveOwnBill(service: SupabaseClient, made: MadeBill, at: D
   const netsuiteId = numericId(made.netsuiteId);
   if (!netsuiteId) return { saved: false, reason: "NetSuite didn't say which bill it made" };
   try {
-    const poLines = made.expense ? null : await readPoCopyLines(service, made.po?.copyId ?? null);
+    const poLines = made.expense || made.expenses?.length ? null : await readPoCopyLines(service, made.po?.copyId ?? null);
     const own = workOutOwnBill({ ...made, netsuiteId }, poLines, at);
     const { data, error } = await service.rpc('gl_own_bill_save', { p: billPayload(own) });
     if (error) throw new Error(error.message);
