@@ -14,6 +14,7 @@ import { RackKitBrowserModal } from '@/components/RackKitBrowser';
 import { HitchKitBuilderModal } from '@/components/HitchKitBuilder';
 import type { HitchKitLine } from '@/lib/hitch-kits';
 import { kitEstimateLines, loadKits, normItem, rackKitForPart, rackKitsByNumber, type KitLineFields, type KitWithMembers } from '@/lib/part-kits';
+import type { AddonLine } from '@/lib/rack-picker';
 import { gatherKitGroups } from '@/lib/estimate-kits';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeContact, type EmailComposeFields } from '@/components/EmailComposeModal';
@@ -1763,6 +1764,15 @@ export default function EstimatesPage() {
     setPartSearch('');
     setPartResults([]);
     setKitResults([]);
+  };
+
+  // A rack from the Build a rack picker (src/lib/rack-picker.ts): the kit's
+  // lines under the name that carries the ErgoRack sides, then any AluRack
+  // add-ons as their own lines right under the rack.
+  const addBuiltRackLines = (kit: KitWithMembers, kitName: string, addons: AddonLine[]) => {
+    const rack = kitEstimateLines(kit).map(l => ({ ...l, ...(l.kit_group_id ? { kit_name: kitName } : {}), key: genKey() }));
+    const extra = addons.map(l => ({ ...l, key: genKey() }));
+    setLines(prev => [...prev, ...rack, ...extra]);
   };
 
   // A built trailer hitch kit (src/lib/hitch-kits.ts) is one kit group.
@@ -4977,10 +4987,10 @@ export default function EstimatesPage() {
             <button
               type="button"
               onClick={() => setShowRackKits(true)}
-              title="Browse every ladder rack kit by vehicle, line, finish and style"
+              title="Build a ladder rack step by step, or search every rack kit"
               className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(96,165,250,0.08)', color: '#60a5fa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
             >
-              <span className="est-lbl-full">Rack Kits</span><span className="est-lbl-short">Racks</span>
+              <span className="est-lbl-full">Ladder Rack</span><span className="est-lbl-short">Racks</span>
             </button>
             <button
               type="button"
@@ -7428,7 +7438,7 @@ export default function EstimatesPage() {
       )}
 
       {/* Rack kit browser — Add rack drops the kit in with its components */}
-      <RackKitBrowserModal open={showRackKits} onClose={() => setShowRackKits(false)} onAdd={addKitLines} showPrice />
+      <RackKitBrowserModal open={showRackKits} onClose={() => setShowRackKits(false)} onAdd={addKitLines} onAddBuilt={addBuiltRackLines} showPrice />
       <HitchKitBuilderModal
         open={showHitchKits}
         onClose={() => setShowHitchKits(false)}
