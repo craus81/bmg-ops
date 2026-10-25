@@ -54,6 +54,9 @@ export interface EmailMeta {
    *  send a person composed, so the customer sees the rep they know in
    *  their inbox list. The address never changes. */
   fromName?: string | null;
+  /** Extra mail headers — List-Unsubscribe on marketing email
+   *  (src/lib/email-unsubscribe.ts). */
+  headers?: Record<string, string> | null;
 }
 
 /**
@@ -285,6 +288,7 @@ export async function sendEmailDetailed(
           ...(effectiveBcc ? { bcc: effectiveBcc } : {}),
           ...(effectiveCc.length > 0 ? { cc: effectiveCc } : {}),
           ...(attachments && attachments.length > 0 ? { attachments } : {}),
+          ...(meta?.headers ? { headers: meta.headers } : {}),
         });
         lastSendAt = Date.now();
 

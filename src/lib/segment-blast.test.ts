@@ -46,6 +46,13 @@ describe('usedMergeFields / unknownMergeTokens', () => {
 });
 
 describe('buildAudience', () => {
+  it('drops an unsubscribed address even when the opt-in box is ticked', () => {
+    const a = buildAudience([row({ email: 'Dana@Acme.example' })], 'Hello', new Set(['dana@acme.example']));
+    expect(a.sendable).toEqual([]);
+    expect(a.skipped.map(s => s.reason)).toEqual(['unsubscribed']);
+    expect(SKIP_LABEL.unsubscribed).toMatch(/Unsubscribed/);
+  });
+
   it('sends to an opted-in record with an address', () => {
     const a = buildAudience([row()], 'Hello');
     expect(a.sendable.map(s => s.email)).toEqual(['dana@acme.example']);
