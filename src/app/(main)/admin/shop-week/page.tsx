@@ -37,12 +37,16 @@ interface WeekDay {
   totalUnits: number;
   capacityHours: number | null;
   overrideNote: string | null;
+  capacitySource?: 'override' | 'roster' | 'crew' | null;
+  graphicsCapacityHours?: number | null;
+  out?: { name: string; department: 'upfit' | 'graphics_install'; hours: number; fullDay: boolean }[];
 }
 interface Week {
   start: string;
   days: WeekDay[];
   capacityConfigured: boolean;
   baseCapacityHours: number | null;
+  rosterConfigured?: boolean;
   inShopNow: number;
   coverage: { known: number; total: number };
 }
@@ -206,6 +210,9 @@ export default function ShopWeekPage() {
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
           <Link href="/admin/schedule" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none', padding: '6px 10px', border: '1px solid var(--border)', borderRadius: '8px' }}>Calendar view</Link>
           {isAdmin && (
+            <Link href="/admin/staff-calendar" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa', textDecoration: 'none', padding: '6px 10px', border: '1px solid var(--border)', borderRadius: '8px' }}>Staff calendar</Link>
+          )}
+          {isAdmin && (
             <Link href="/settings" style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none', padding: '6px 10px', border: '1px solid var(--border)', borderRadius: '8px' }}>Capacity settings</Link>
           )}
         </div>
@@ -235,7 +242,7 @@ export default function ShopWeekPage() {
       {week && !week.capacityConfigured && (
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', background: 'var(--subtle-bg)', border: '1px dashed var(--border)', borderRadius: '8px', padding: '7px 10px', marginBottom: '10px' }}>
           Crew capacity isn&apos;t configured, so days show demand hours without a load color.
-          {isAdmin ? ' Set crew size × shift hours in Settings → Shop Crew Capacity.' : ''}
+          {isAdmin ? ' Add your upfit crew in the Staff calendar, or set crew size × shift hours in Settings → Shop Crew Capacity.' : ''}
         </div>
       )}
       {movePick && (
@@ -284,7 +291,7 @@ export default function ShopWeekPage() {
                   </div>
 
                   {/* Load bar */}
-                  <div title={d.overrideNote ? `Capacity override: ${d.overrideNote}` : undefined} style={{ marginBottom: '6px' }}>
+                  <div title={d.overrideNote ? `Capacity override: ${d.overrideNote}` : d.capacitySource === 'roster' ? 'Upfit capacity from the staff calendar' : undefined} style={{ marginBottom: '6px' }}>
                     <div style={{ height: '6px', borderRadius: '3px', background: 'var(--subtle-bg)', overflow: 'hidden' }}>
                       {pct != null && pct > 0 && (
                         <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', background: TONE_COLORS[tone], borderRadius: '3px' }} />
@@ -304,6 +311,18 @@ export default function ShopWeekPage() {
                       )}
                     </div>
                   </div>
+
+                  {/* Who's out (staff calendar) and graphics install hours */}
+                  {((d.out && d.out.length > 0) || d.graphicsCapacityHours != null) && (
+                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginBottom: '6px', lineHeight: 1.4 }}>
+                      {d.out && d.out.length > 0 && (
+                        <div style={{ color: '#f59e0b', fontWeight: 700 }}>
+                          Out: {d.out.map(o => o.fullDay ? o.name : `${o.name} (${o.hours}h)`).join(', ')}
+                        </div>
+                      )}
+                      {d.graphicsCapacityHours != null && <div>Graphics install: {d.graphicsCapacityHours}h available</div>}
+                    </div>
+                  )}
 
                   {/* Units */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
