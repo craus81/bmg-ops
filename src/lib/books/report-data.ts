@@ -13,7 +13,7 @@ import type { TbData } from './trial-balance';
  * NetSuite's ledger went.
  */
 export interface LoadedReports {
-  companies: Array<{ code: string; name: string; netsuite_subsidiary_id: string | null }>;
+  companies: Array<{ code: string; name: string; legal_name: string | null; netsuite_subsidiary_id: string | null }>;
   company: string;
   data: ReportData;
   /** The latest month either side has, but never before this month. */
@@ -27,7 +27,7 @@ export interface LoadedReports {
 /** One company's books for the reports: the one asked for, else BMG, else the first. */
 export async function loadReports(service: SupabaseClient, asked: string | null): Promise<LoadedReports | { error: string }> {
   const [companies, accounts, posting, copy] = await Promise.all([
-    service.from('gl_companies').select('id, code, name, netsuite_subsidiary_id').order('code'),
+    service.from('gl_companies').select('id, code, name, legal_name, netsuite_subsidiary_id').order('code'),
     fetchAllRows<Omit<ReportAccount, 'company'> & { company_id: string | null }>((from, to) => service
       .from('gl_accounts')
       .select('id, netsuite_account_id, number, name, account_type, statement, parent_id, company_id')
@@ -68,7 +68,7 @@ export async function loadReports(service: SupabaseClient, asked: string | null)
   const run = (posting.data?.last_result ?? null) as InvoicePostingResult | null;
   const copied = (copy.data?.last_result ?? null) as { error?: string } | null;
   return {
-    companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name, netsuite_subsidiary_id: c.netsuite_subsidiary_id })),
+    companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name, legal_name: c.legal_name, netsuite_subsidiary_id: c.netsuite_subsidiary_id })),
     company,
     data,
     through: lastReportMonth(data, currentMonth),

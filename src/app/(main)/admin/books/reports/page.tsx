@@ -22,6 +22,7 @@ type Kind = 'profit_and_loss' | 'balance_sheet' | 'trial_balance';
 interface Company {
   code: string;
   name: string;
+  legal_name: string | null;
   netsuite_subsidiary_id: string | null;
 }
 
@@ -138,6 +139,78 @@ const select: React.CSSProperties = {
   padding: '6px 8px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
   color: 'var(--text-primary)', fontSize: '12px', fontWeight: 600,
 };
+
+/** Printing shows only the statement as it's handed to someone outside, from NetSuite's own totals. */
+const PRINT_CSS = `
+.rep-print { display: none; }
+@media print {
+  body * { visibility: hidden !important; }
+  .rep-print, .rep-print * { visibility: visible !important; }
+  .rep-print { display: block; position: absolute; left: 0; top: 0; width: 100%; color: #000; background: #fff; font-size: 11px; }
+  .rep-print td { padding: 2px 6px; }
+}`;
+
+/** The dates a printed statement covers, as an outsider reads them. */
+function printPeriod(kind: Kind, from: string, to: string): string {
+  const day = (month: string, last: boolean) => {
+    const d = last ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate() : 1;
+    return `${Number(month.slice(5, 7))}/${d}/${month.slice(0, 4)}`;
+  };
+  return kind === 'profit_and_loss' ? `${day(from, false)} to ${day(to, true)}` : `As of ${day(to, true)}`;
+}
+
+/** The statement alone, one amount per line, for Print / Save PDF. */
+function PrintedStatement({ data, company }: { data: Payload; company: Company | undefined }) {
+  const name = data.report === 'profit_and_loss' ? 'Profit and Loss' : data.report === 'balance_sheet' ? 'Balance Sheet' : 'Trial Balance';
+  const trial = data.report === 'trial_balance';
+  return (
+    <div className="rep-print">
+      <div style={{ textAlign: 'center', marginBottom: '12px' }}>
+        <div style={{ fontSize: '15px', fontWeight: 800 }}>{company?.legal_name || company?.name || data.company}</div>
+        <div style={{ fontSize: '13px', fontWeight: 700 }}>{name}</div>
+        <div style={{ fontSize: '12px' }}>{printPeriod(data.report, data.from, data.to)}</div>
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        {trial && (
+          <thead>
+            <tr><th style={{ textAlign: 'left' }}>Account</th><th style={{ textAlign: 'right' }}>Debit</th><th style={{ textAlign: 'right' }}>Credit</th></tr>
+          </thead>
+        )}
+        <tbody>
+          {data.lines.map((l, i) => {
+            const amount = l.netsuite;
+            const total = l.kind === 'total';
+            return (
+              <tr key={`${i}-${l.account ?? l.label}`} style={{
+                fontWeight: l.grand ? 800 : total || l.kind === 'section' ? 700 : l.kind === 'heading' ? 600 : 400,
+                borderTop: l.grand ? '3px double #000' : total ? '1px solid #000' : 'none',
+              }}>
+                <td style={{ paddingLeft: `${6 + l.depth * 14}px`, fontStyle: l.derived ? 'italic' : 'normal' }}>
+                  {l.number ? `${l.number} ` : ''}{l.label}
+                </td>
+                {trial ? (
+                  <>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{debitOf(amount ?? 0)}</td>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{creditOf(amount ?? 0)}</td>
+                  </>
+                ) : (
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{amount === null ? '' : fmt(amount)}</td>
+                )}
+              </tr>
+            );
+          })}
+          {trial && data.totals && (
+            <tr style={{ fontWeight: 800, borderTop: '3px double #000' }}>
+              <td>Total</td>
+              <td style={{ textAlign: 'right' }}>{plain.format(data.totals.netsuite.debit / 100)}</td>
+              <td style={{ textAlign: 'right' }}>{plain.format(data.totals.netsuite.credit / 100)}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 const GREEN = '#22c55e';
 const RED = '#ef4444';
@@ -324,6 +397,8 @@ export default function BooksReportsPage() {
 
   return (
     <div>
+      <style>{PRINT_CSS}</style>
+      {data && <PrintedStatement data={data} company={data.companies.find((c) => c.code === data.company)} />}
       <div style={{ marginBottom: '14px' }}>
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Reports</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
@@ -464,10 +539,20 @@ export default function BooksReportsPage() {
                 </span>
               )}
             </div>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', gap: '6px', alignItems: 'center' }}>
-              <input type="checkbox" checked={onlyDifferences} onChange={(e) => setOnlyDifferences(e.target.checked)} />
-              Only lines that differ
-            </label>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', gap: '6px', alignItems: 'center' }}>
+                <input type="checkbox" checked={onlyDifferences} onChange={(e) => setOnlyDifferences(e.target.checked)} />
+                Only lines that differ
+              </label>
+              <button
+                onClick={() => window.print()}
+                disabled={loading}
+                title="Prints the statement alone, one amount per line from NetSuite's own totals, for sending outside"
+                style={button(false)}
+              >
+                🖨 Print / Save PDF
+              </button>
+            </div>
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
             {isProfitAndLoss && (
