@@ -113,6 +113,24 @@ export function roofFromHeight(model: string, overallHeightIn: number): string |
   return van.bands.find(([max]) => overallHeightIn < max)![1];
 }
 
+/**
+ * CarsXE's roof / wheelbase / bed for the estimate's VIN box, in plain
+ * words the platform and picker matchers take: roof "Low", wheelbase "130"
+ * or "148 Extended" (the factory trim says EL / EXT on extended bodies),
+ * bed in feet. Empty where CarsXE didn't say.
+ */
+export function factoryQualifiers(f: FactoryData | null): { roof: string; wheelbase: string; bedFeet: number | null } {
+  if (!f) return { roof: '', wheelbase: '', bedFeet: null };
+  const wb = Math.round(inches(f.wheelbase));
+  const extended = /\b(?:EL|EXT|extended)\b/i.test(`${f.trim} ${f.style}`);
+  const bed = f.bed ? parseFloat(f.bed.value) : NaN;
+  return {
+    roof: f.roof?.value || '',
+    wheelbase: Number.isFinite(wb) && wb > 0 ? `${wb}${extended ? ' Extended' : ''}` : '',
+    bedFeet: Number.isFinite(bed) ? bed : null,
+  };
+}
+
 const LABELS: Record<string, string> = {
   gross_vehicle_weight_rating: 'GVWR',
   manufacturer_suggested_retail_price: 'MSRP',

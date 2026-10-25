@@ -9,6 +9,7 @@
 
 import type { PanelDimension } from '@/lib/wrap-reference';
 import { resolvePlatform } from '@/lib/vin-platform';
+import { ROOF_ORDER } from '@/lib/template-facets';
 
 export interface VehicleTemplate {
   id: string;
@@ -116,7 +117,7 @@ const pickOption = (options: string[] | undefined, test: (o: string) => boolean)
 };
 
 // "148" → "148"; "148 Extended" → the platform's "148 EL" / "159 EXT".
-const matchWheelbase = (facet: string, options?: string[]) => {
+export const matchWheelbase = (facet: string, options?: string[]) => {
   const m = facet.match(/^(\d+)/);
   if (!m) return '';
   const extended = /extended/i.test(facet);
@@ -127,6 +128,29 @@ const matchWheelbase = (facet: string, options?: string[]) => {
     return extended ? optExtended : om[2].trim() === '';
   });
 };
+
+// "Low" ↔ the platform's "low".
+export const matchRoof = (roof: string, options?: string[]) =>
+  roof ? pickOption(options, o => normText(o) === normText(roof)) : '';
+
+/**
+ * The other way round: a platform's roof / wheelbase labels ("low",
+ * "148 EL", "159 EXT") in the template library's facet words ("Low",
+ * "148 Extended"), so a VIN decode can set the picker's Roof and Wheelbase
+ * dropdowns. Anything it can't place is left out.
+ */
+export function pickerFiltersFromPlatform(roof: string | null, wheelbase: string | null): Partial<TemplateFilters> {
+  const out: Partial<TemplateFilters> = {};
+  const r = ROOF_ORDER.find(o => normText(o) === normText(roof));
+  if (r) out.roof = r;
+  const m = (wheelbase || '').trim().match(/^(\d+)\s*(.*)$/);
+  if (m) {
+    const rest = m[2].trim();
+    if (!rest) out.wheelbase = m[1];
+    else if (/^(el|ext|extended)$/i.test(rest)) out.wheelbase = `${m[1]} Extended`;
+  }
+  return out;
+}
 
 // "Crew Cab" ↔ "Crew", "Super Cab" ↔ "SuperCab", "Regular Cab" ↔ "Regular".
 const matchCab = (facet: string, options?: string[]) => {
@@ -141,9 +165,10 @@ const matchCab = (facet: string, options?: string[]) => {
 const matchBed = (facet: string, options?: string[]) => {
   const m = facet.match(/^(\d+(?:\.\d+)?)'(?:(\d+)")?/);
   if (!m) return '';
-  const feet = parseFloat(m[1]) + (m[2] ? parseInt(m[2], 10) / 12 : 0);
-  return pickOption(options, o => Math.abs(parseFloat(o) - feet) <= 0.15);
+  return matchBedFeet(parseFloat(m[1]) + (m[2] ? parseInt(m[2], 10) / 12 : 0), options);
 };
+export const matchBedFeet = (feet: number | null, options?: string[]) =>
+  feet != null && Number.isFinite(feet) ? pickOption(options, o => Math.abs(parseFloat(o) - feet) <= 0.15) : '';
 
 /**
  * Which vehicle_platforms row (the parts catalog's fitment key) the picked
