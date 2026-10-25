@@ -9,6 +9,9 @@ import {
   buildAudience, applyMerge, unknownMergeTokens, MAX_RECIPIENTS,
   type BlastRecipientSource,
 } from '@/lib/segment-blast';
+import {
+  loadUnsubscribed, unsubscribeTokenFor, marketingFooterHtml, marketingFooterText, listUnsubscribeHeaders,
+} from '@/lib/email-unsubscribe';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -31,8 +34,9 @@ const Schema = z.object({
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-/** The sender's words, merged, on the house shell. Paragraphs, not raw HTML. */
-function renderBody(messageForRecipient: string, signatureHtml: string): string {
+/** The sender's words, merged, on the house shell. Paragraphs, not raw HTML.
+ *  The address + unsubscribe footer goes under the signature (CAN-SPAM). */
+function renderBody(messageForRecipient: string, signatureHtml: string, footerHtml: string): string {
   const paragraphs = messageForRecipient
     .split(/\n{2,}/)
     .map(p => `<p style="margin:0 0 14px;line-height:1.55;">${escapeHtml(p).replace(/\n/g, '<br />')}</p>`)
@@ -41,6 +45,7 @@ function renderBody(messageForRecipient: string, signatureHtml: string): string 
     <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px 16px;color:#1f2937;">
       ${paragraphs}
       ${signatureHtml}
+      ${footerHtml}
     </div>`;
 }
 
@@ -83,7 +88,13 @@ export async function POST(req: NextRequest) {
   const byId = new Map((rows || []).map((r: any) => [r.id, r as BlastRecipientSource]));
   const ordered = ids.map(id => byId.get(id)).filter(Boolean) as BlastRecipientSource[];
 
-  const audience = buildAudience(ordered, `${subject}\n${message}`);
+  let unsubscribed: Set<string>;
+  try {
+    unsubscribed = await loadUnsubscribed(service, ordered.map(r => r.email || ''));
+  } catch (err: any) {
+    return NextResponse.json({ error: `${err.message}. Nothing was sent. Try again in a minute.` }, { status: 503 });
+  }
+  const audience = buildAudience(ordered, `${subject}\n${message}`, unsubscribed);
 
   // The To field NARROWS the audience — removing an address drops that
   // recipient. It cannot widen it: an address with no record behind it has
@@ -108,7 +119,8 @@ export async function POST(req: NextRequest) {
       preview: {
         to: sendable.map(s => s.email),
         subject: source ? applyMerge(subject, source) : subject,
-        html: renderBody(source ? applyMerge(message, source) : message, signatureHtml),
+        // A sample link: the real one is minted per address at send time.
+        html: renderBody(source ? applyMerge(message, source) : message, signatureHtml, marketingFooterHtml('0'.repeat(48))),
       },
       audience: {
         sendableCount: sendable.length,
@@ -144,15 +156,23 @@ export async function POST(req: NextRequest) {
 
   for (const r of sendable) {
     const source = byId.get(r.id)!;
+    let unsubToken: string;
+    try {
+      unsubToken = await unsubscribeTokenFor(service, r.email);
+    } catch {
+      // No unsubscribe link, no marketing email.
+      failed.push({ email: r.email, company: r.companyName });
+      continue;
+    }
     const { ok } = await sendEmailDetailed(
       r.email,
       applyMerge(subject, source),
-      renderBody(applyMerge(message, source), signatureHtml),
-      applyMerge(message, source),
+      renderBody(applyMerge(message, source), signatureHtml, marketingFooterHtml(unsubToken)),
+      applyMerge(message, source) + marketingFooterText(unsubToken),
       undefined,
       auth.user?.email || undefined,
       senderEmail || undefined,
-      { kind: 'segment_blast', contextUrl: deepLinks.prospect(r.id) },
+      { kind: 'segment_blast', contextUrl: deepLinks.prospect(r.id), headers: listUnsubscribeHeaders(unsubToken) },
     );
     if (ok) {
       sent.push(r.email);

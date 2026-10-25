@@ -75,7 +75,7 @@ export function applyMerge(template: string, recipient: BlastRecipientSource): s
   return out;
 }
 
-export type SkipReason = 'no_email' | 'not_opted_in' | 'duplicate_email' | 'missing_merge_field';
+export type SkipReason = 'no_email' | 'unsubscribed' | 'not_opted_in' | 'duplicate_email' | 'missing_merge_field';
 
 export interface BlastRecipient {
   id: string;
@@ -104,7 +104,13 @@ export interface BlastAudience {
  * Split a segment into who can be sent to and who cannot, with a reason for
  * every exclusion. Order is preserved so the caller's sort survives.
  */
-export function buildAudience(rows: BlastRecipientSource[], template: string): BlastAudience {
+export function buildAudience(
+  rows: BlastRecipientSource[],
+  template: string,
+  /** Addresses that used an unsubscribe link (src/lib/email-unsubscribe.ts).
+   *  Checked before the opt-in box: ticking it again doesn't undo an opt-out. */
+  unsubscribed: ReadonlySet<string> = new Set(),
+): BlastAudience {
   const used = usedMergeFields(template);
   const seen = new Set<string>();
   const sendable: BlastRecipient[] = [];
@@ -116,6 +122,10 @@ export function buildAudience(rows: BlastRecipientSource[], template: string): B
 
     if (!email) {
       skipped.push({ id: r.id, companyName, email: null, reason: 'no_email' });
+      continue;
+    }
+    if (unsubscribed.has(email)) {
+      skipped.push({ id: r.id, companyName, email, reason: 'unsubscribed' });
       continue;
     }
     if (!r.email_campaign) {
@@ -143,6 +153,7 @@ export function buildAudience(rows: BlastRecipientSource[], template: string): B
 
 export const SKIP_LABEL: Record<SkipReason, string> = {
   no_email: 'No email address on the record',
+  unsubscribed: 'Unsubscribed from BMG marketing email',
   not_opted_in: 'Not opted in to campaign email',
   duplicate_email: 'Same address as another record in this segment',
   missing_merge_field: 'Missing a field the message fills in',
