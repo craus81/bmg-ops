@@ -10,7 +10,7 @@ rule). Built in parts:
 2. **The weekly list** (migration 438): `/admin/outreach`, linked from Prospects.
 3. **Drafts and Send** (migration 439): Claude research + email draft per company, rep edits and taps Send.
 4. **Pick a time / Call me** (migration 440): two buttons on every Outreach email, public `/meet/<token>` page.
-5. A follow-up draft a week after no answer, for the rep to review (to come).
+5. **Follow-ups** (migration 441): a follow-up draft a week after no answer, for the rep to review and send.
 
 ## The weekly list
 
@@ -65,3 +65,22 @@ rule). Built in parts:
 - **Call me**: phone required, best time optional. Sets the row to **Call them back** and
   logs a call request on the prospect.
 - Either one notifies the rep at once (`outreach_response`: bell, push and email).
+
+## Follow-ups
+
+- **When** (`src/lib/outreach-followup.ts`): a row still at **Sent** 7 days after its first
+  email gets a follow-up draft from the drafting cron (`/api/cron/outreach-draft`, after
+  that run's first drafts, sharing its 15-per-run budget). One follow-up per company.
+- **"No answer"** means nothing FleetSuite can see: no booking or call-back (those move the
+  row off Sent), the rep hasn't tapped **They replied** (replies go to the rep's own
+  mailbox, so FleetSuite can't see them), and no call, meeting, note or quote has been
+  logged on the prospect since the send. A row that fails that check, or whose address
+  unsubscribed, is skipped for good (`followup_skipped`).
+- **The draft**: 40–80 words, "Re: <first subject>", written from the first email without
+  repeating it. The row goes to **Follow-up ready** and the rep gets one alert per run
+  (`outreach_followup`, bell + push), deep-linked to the company when there's one.
+  Earlier weeks' follow-ups and call-backs show in their own section on the list.
+- **Send**: **Review & send follow-up** opens the same compose screen with the same rules
+  (only the list's rep, own name, footer, unsubscribe, Pick a time / Call me buttons).
+  Then the row rests at **Followed up**. **Rewrite follow-up** and **Write follow-up now**
+  work any time after the first send. Nothing sends itself.

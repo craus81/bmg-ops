@@ -8,10 +8,19 @@ import { findCustomerDuplicates } from './customer-dupes';
  */
 
 export const TARGET_COLS =
-  'id, source, source_id, kind, company_name, trade, street, city, state, zip, miles, phone, email, website, fleet_size, facts, rep_id, week_of, status, status_changed_at, prospect_id, contact_name, draft_subject, draft_body, draft_reasons, drafted_at, draft_error, sent_at, sent_subject, booking_token, meeting_at, meeting_contact, callback_phone, callback_when, callback_requested_at';
+  'id, source, source_id, kind, company_name, trade, street, city, state, zip, miles, phone, email, website, fleet_size, facts, rep_id, week_of, status, status_changed_at, prospect_id, contact_name, draft_subject, draft_body, draft_reasons, drafted_at, draft_error, sent_at, sent_subject, booking_token, meeting_at, meeting_contact, callback_phone, callback_when, callback_requested_at, followup_subject, followup_body, followup_drafted_at, followup_error, followup_skipped, followup_sent_at';
 
 /** Statuses a draft can be (re)written or sent from. */
 export const OPEN_STATUSES = ['new', 'draft', 'call_first', 'later'];
+
+/** What the list's own buttons may move a row to (key), and from where. */
+const MOVES: Record<string, string[]> = {
+  later: ['new', 'draft', 'call_first'],
+  not_fit: [...OPEN_STATUSES, 'sent', 'follow_up', 'followed_up', 'call_back'],
+  new: ['later', 'not_fit'],
+  replied: ['sent', 'follow_up', 'followed_up', 'call_back'],
+};
+export const statusMoveAllowed = (from: string, to: string): boolean => (MOVES[to] || []).includes(from);
 
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
