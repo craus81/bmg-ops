@@ -11,6 +11,8 @@ import { theme } from '@/lib/theme';
 import CustomerDefaultsEditor from '@/components/CustomerDefaultsEditor';
 import PartCatalogBrowser, { type BrowsePart } from '@/components/PartCatalogBrowser';
 import { RackKitBrowserModal } from '@/components/RackKitBrowser';
+import { HitchKitBuilderModal } from '@/components/HitchKitBuilder';
+import type { HitchKitLine } from '@/lib/hitch-kits';
 import { kitEstimateLines, loadKits, normItem, rackKitForPart, rackKitsByNumber, type KitLineFields, type KitWithMembers } from '@/lib/part-kits';
 import { gatherKitGroups } from '@/lib/estimate-kits';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
@@ -859,6 +861,7 @@ export default function EstimatesPage() {
   // N4-A: the visual faceted catalog browser (Ranger-style pick-from-list).
   const [showCatalogBrowser, setShowCatalogBrowser] = useState(false);
   const [showRackKits, setShowRackKits] = useState(false);
+  const [showHitchKits, setShowHitchKits] = useState(false);
   // T1.6 install context
   const [installInstructions, setInstallInstructions] = useState('');
   const [onSiteContactName, setOnSiteContactName] = useState('');
@@ -1760,6 +1763,12 @@ export default function EstimatesPage() {
     setPartSearch('');
     setPartResults([]);
     setKitResults([]);
+  };
+
+  // A built trailer hitch kit (src/lib/hitch-kits.ts) is one kit group.
+  const addHitchKitLines = (kitLines: HitchKitLine[]) => {
+    const added = kitLines.map(({ not_in_netsuite: _missing, ...l }) => ({ ...l, key: genKey() }));
+    setLines(prev => [...prev, ...added]);
   };
 
   // Rack kit heading edits: the rack quantity scales every component; the
@@ -4975,6 +4984,14 @@ export default function EstimatesPage() {
             </button>
             <button
               type="button"
+              onClick={() => setShowHitchKits(true)}
+              title="Build a trailer hitch kit: hitch, wiring, 7-way adapter and brake controller for this vehicle"
+              className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(96,165,250,0.08)', color: '#60a5fa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
+            >
+              <span className="est-lbl-full">Hitch Kit</span><span className="est-lbl-short">Hitch</span>
+            </button>
+            <button
+              type="button"
               onClick={() => { setDraftError(null); setDraftResult(null); setDraftFromOld(null); setDraftOpen(true); }}
               title="Paste an RFQ email and get a reviewable grid of candidate lines. Nothing is added until you accept it."
               className="est-part-action" style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid rgba(167,139,250,0.3)', background: 'rgba(167,139,250,0.08)', color: '#a78bfa', fontSize: '12px', fontWeight: 800, cursor: 'pointer', whiteSpace: 'nowrap' }}
@@ -7412,6 +7429,15 @@ export default function EstimatesPage() {
 
       {/* Rack kit browser — Add rack drops the kit in with its components */}
       <RackKitBrowserModal open={showRackKits} onClose={() => setShowRackKits(false)} onAdd={addKitLines} showPrice />
+      <HitchKitBuilderModal
+        open={showHitchKits}
+        onClose={() => setShowHitchKits(false)}
+        onAdd={addHitchKitLines}
+        platformId={vehiclePlatformId}
+        vehicleYear={vehicleYear}
+        laborRate={laborRate}
+        showPrice
+      />
 
       {/* N4-A: Ranger-style visual catalog — add straight into the estimate */}
       <PartCatalogBrowser

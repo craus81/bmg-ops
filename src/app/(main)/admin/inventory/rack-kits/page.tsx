@@ -123,6 +123,7 @@ export default function RackKitsPage() {
       <div style={{ marginBottom: '12px' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
           <h1 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Rack Kits</h1>
+          <Link href="/admin/inventory/hitch-kits" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>Hitch Kits</Link>
           <Link href="/admin/inventory" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>← Inventory</Link>
         </div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>

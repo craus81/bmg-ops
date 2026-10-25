@@ -9,6 +9,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { r2PublicUrl } from './r2';
+import { curtSkuFromItemNumber, hitchImagesForLines } from './hitch-kits';
 
 export interface PartAssetFields {
   /** Absolute public URL of the catalog photo, or null. */
@@ -22,7 +23,7 @@ export interface PartAssetFields {
 const safeUrl = (u: string | null | undefined): string | null =>
   u && /^https?:\/\//i.test(u.trim()) ? u.trim() : null;
 
-export async function enrichLinesWithPartAssets<T extends { part_id?: string | null }>(
+export async function enrichLinesWithPartAssets<T extends { part_id?: string | null; item_number?: string | null; kit_item_number?: string | null }>(
   service: SupabaseClient,
   lines: T[],
 ): Promise<(T & PartAssetFields)[]> {
@@ -35,6 +36,9 @@ export async function enrichLinesWithPartAssets<T extends { part_id?: string | n
       .in('id', ids);
     for (const p of data || []) byId.set(p.id, p);
   }
+  // Hitch kit parts (migration 433) fall back to Curt's photo, so the
+  // customer sees every part even before it has a catalog photo.
+  const hitchImages = await hitchImagesForLines(service, lines);
   return lines.map(l => {
     const p = l.part_id ? byId.get(l.part_id) : null;
     return {
@@ -44,7 +48,9 @@ export async function enrichLinesWithPartAssets<T extends { part_id?: string | n
       // — because this URL rides inside estimate approval EMAILS (rendered
       // by renderEstimateDocument), where a presign would expire while the
       // email lives on. The PDF generator fetches it server-side too.
-      part_image_url: p?.image_path ? r2PublicUrl('photos', p.image_path) : null,
+      part_image_url: p?.image_path
+        ? r2PublicUrl('photos', p.image_path)
+        : hitchImages.get(curtSkuFromItemNumber(l.item_number) || '') || null,
       part_product_url: safeUrl(p?.product_url),
     };
   });

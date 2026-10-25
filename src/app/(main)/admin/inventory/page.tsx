@@ -133,6 +133,7 @@ export default function InventoryPage() {
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
           <h1 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Inventory</h1>
           <Link href="/admin/inventory/rack-kits" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>Rack Kits: what can we build? →</Link>
+          <Link href="/admin/inventory/hitch-kits" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>Hitch Kits →</Link>
         </div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
           On hand · allocated to jobs · free · on order — {totals.parts} parts shown, {totals.allocated} allocated, {totals.onOrder} on order
