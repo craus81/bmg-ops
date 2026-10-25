@@ -136,10 +136,18 @@ export async function POST(req: NextRequest) {
         .in('role', ['production', 'graphics_production'])
         .eq('status', 'approved');
 
-      if (teamMembers && teamMembers.length > 0) {
+      // Plus anyone ticked for "New graphics jobs" in Admin → Users (migration 433).
+      const { data: optins } = await supabase
+        .from('notification_preferences').select('user_id').eq('new_graphics_jobs', true);
+      const optinIds = (optins || []).map((o: any) => o.user_id);
+      const { data: optinProfiles } = optinIds.length
+        ? await supabase.from('profiles').select('id').in('id', optinIds).eq('status', 'approved')
+        : { data: [] as any[] };
+      const members = [...new Set([...(teamMembers || []), ...(optinProfiles || [])].map((m: any) => m.id as string))];
+
+      if (members.length > 0) {
         // Exclude the person who created it and already-assigned users
-        const teamIds = teamMembers
-          .map((m: any) => m.id)
+        const teamIds = members
           .filter((id: string) => id !== assignedBy && !userIds.includes(id as string));
 
         if (teamIds.length > 0) {
