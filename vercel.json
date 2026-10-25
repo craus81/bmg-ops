@@ -179,6 +179,10 @@
     {
       "path": "/api/cron/outreach-fill",
       "schedule": "3 11 * * 1"
+    },
+    {
+      "path": "/api/cron/outreach-draft",
+      "schedule": "28 11-23 * * 1-5"
     }
   ],
   "headers": [

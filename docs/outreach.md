@@ -8,7 +8,7 @@ rule). Built in parts:
 1. Unsubscribe link + postal address on marketing email (#1299, migration 437,
    `src/lib/email-unsubscribe.ts`).
 2. **The weekly list** (migration 438): `/admin/outreach`, linked from Prospects.
-3. Claude research + email draft per company, rep edits and taps Send (to come).
+3. **Drafts and Send** (migration 439): Claude research + email draft per company, rep edits and taps Send.
 4. Pick-a-time / call-me page on the rep's calendar (to come).
 5. A follow-up draft a week after no answer, for the rep to review (to come).
 
@@ -31,3 +31,23 @@ rule). Built in parts:
   unique). Anyone matching a Customer or Prospect by company name, phone or email is
   skipped, and unsubscribed addresses are dropped.
 - Half fleets, half trades, nearest first, dealt round-robin across reps.
+
+## Drafts and Send
+
+- **Drafting** (`src/lib/outreach-draft.ts`): reads the company's home, /contact and /about
+  pages (public http(s) only, 8 s timeout, text capped), finds an email address (own domain
+  first), and asks Claude (`OUTREACH_MODEL`, default claude-sonnet-5-5) for a 90–140 word
+  email plus 2–3 "why this company" lines, using only the facts given. A company with no
+  email found goes to **Call first**; its draft is still written.
+- The cron `/api/cron/outreach-draft` (weekdays, hourly at :28, 11–23 UTC; System Health
+  `outreach_draft`) drafts up to 15 new companies per run. On the page: **Write email** /
+  **Rewrite** per row, and **Write all emails**. A failed draft shows its reason in red
+  and is not retried by the cron; Rewrite retries it.
+- **Send**: **Review & send** opens the standard compose screen
+  (`EmailComposeModal`, with the draft prefilled via `initialMessage`) and a Subject
+  field. Only the rep whose list it is can send. The email is From "<rep> via BMG Fleet"
+  with Reply-To set to the rep, and each To address gets its own copy with the address +
+  unsubscribe footer and List-Unsubscribe headers. Unsubscribed addresses are refused.
+- The first send makes the company a prospect (`source` 'outreach', lead source
+  **Outreach**, `created_by` the rep), or links an existing matching prospect. The email
+  lands on its timeline (email log, kind `outreach`).

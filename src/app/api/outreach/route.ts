@@ -4,6 +4,7 @@ import { requireRole, getProfileRoles, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { weekOf, loadSalesReps, BATCH_SIZE } from '@/lib/outreach-batch';
 import { hasGoogleKey } from '@/lib/outreach-sources';
+import { TARGET_COLS } from '@/lib/outreach-send';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +32,7 @@ export async function GET(req: NextRequest) {
 
   const reps = admin ? await loadSalesReps(service).catch(() => []) : [];
 
-  const cols = 'id, source, source_id, kind, company_name, trade, street, city, state, zip, miles, phone, email, website, fleet_size, facts, rep_id, week_of, status, status_changed_at, prospect_id';
+  const cols = TARGET_COLS;
   const [thisWeek, later] = await Promise.all([
     service.from('outreach_targets').select(cols).eq('rep_id', repId).eq('week_of', week)
       .order('kind').order('miles').order('id'),
@@ -47,6 +48,7 @@ export async function GET(req: NextRequest) {
     isAdmin: admin,
     reps,
     googleReady: hasGoogleKey(),
+    me: auth.user.id,
     targets: thisWeek.data || [],
     savedForLater: later.data || [],
   });

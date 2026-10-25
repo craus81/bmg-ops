@@ -56,6 +56,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'owner_brief', label: "Monday owner's brief", intervalMinutes: 10080 },
   { syncType: 'deal_forecast_check', label: 'Weekly deal-forecast sweep', intervalMinutes: 10080 },
   { syncType: 'outreach_fill', label: 'Monday Outreach list (new companies for each rep)', intervalMinutes: 10080 },
+  { syncType: 'outreach_draft', label: 'Outreach email drafts (weekdays, hourly)', intervalMinutes: 5760 },
   // Weekdays only, so the Friday→Monday gap must not read as stale.
   { syncType: 'ar_past_due_check', label: 'Past-due invoice reminders (weekdays 7 AM)', intervalMinutes: 2880 },
   { syncType: 'graphics_reminders', label: 'Graphics job reminder digests (weekdays 8:20 AM)', intervalMinutes: 2880 },

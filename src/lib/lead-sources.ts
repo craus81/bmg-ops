@@ -15,6 +15,8 @@ export const LEAD_SOURCES = [
   'Lead',
   'Maryland Heights Chamber of Commerce',
   'Little Black Book',
+  // Found by the Monday Outreach list (docs/outreach.md), set on its first send.
+  'Outreach',
   'Other',
 ] as const;
 

@@ -102,6 +102,8 @@ interface Props {
    */
   filesAsLinks?: boolean;
   messagePlaceholder?: string;
+  /** Prefilled message (e.g. an Outreach draft) the sender reads and edits. */
+  initialMessage?: string;
   sendLabel?: string;
   /**
    * Let Send proceed with no email recipients (flows with an SMS fallback).
@@ -273,6 +275,7 @@ export default function EmailComposeModal({
   maxAttachmentBytes: maxAttachmentBytesProp = DEFAULT_MAX_ATTACHMENT_BYTES,
   filesAsLinks = false,
   messagePlaceholder,
+  initialMessage,
   sendLabel = 'Send',
   allowSendWithoutTo = false,
   emptyToNote,
@@ -305,7 +308,7 @@ export default function EmailComposeModal({
   const [cc, setCc] = useState<string[]>(restoredState?.cc || initialCc || []);
   const [staff, setStaff] = useState<{ id: string; name: string; email: string }[]>(staffCache || []);
   const [loadedContacts, setLoadedContacts] = useState<EmailComposeContact[]>([]);
-  const [message, setMessage] = useState(restoredState?.message || '');
+  const [message, setMessage] = useState(restoredState?.message || initialMessage || '');
 
   // Company contacts: the caller's list wins; otherwise load the customer's
   // external_contacts once per open (cheap, and it's the same list the
