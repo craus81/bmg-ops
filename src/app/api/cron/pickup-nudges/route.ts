@@ -15,7 +15,7 @@ const service = createServiceClient();
 
 /**
  * Daily ready-for-pickup sweep (R5-17 part 2). Vehicles complete N+ days
- * with no booked pickup need chasing: the customer has to book a slot or
+ * and not picked up need chasing: someone has to arrange the pickup or
  * the van just sits in the lot.
  *
  * THIS CRON DOES NOT EMAIL CUSTOMERS. It used to send the reminder itself,
@@ -75,8 +75,8 @@ export async function GET(req: NextRequest) {
       await notifyMany(targets, {
         type: 'booking',
         title: `Remind ${v.customerName}: ${v.label}`,
-        body: `${v.label} has been ${waited} with no pickup booked, and nothing has gone to the customer.`
-          + ' Open the vehicle and use Email Customer to send them the booking link.',
+        body: `${v.label} has been ${waited} and hasn't been picked up, and nothing has gone to the customer.`
+          + ' Open the vehicle and use Email Customer to send them a pickup reminder.',
         url: deepLinks.vehicle(v.id),
         channels: ['in_app', 'push', 'email'],
       });
@@ -89,7 +89,7 @@ export async function GET(req: NextRequest) {
     let escalated = 0;
     for (const v of plan.escalations) {
       const title = `Still in the lot: ${v.label}`;
-      const body = `${v.customerName || 'The customer'} hasn't booked a pickup — complete for ${v.daysReady} days. Worth a call.`;
+      const body = `${v.customerName || 'The customer'} hasn't picked it up — complete for ${v.daysReady} days. Worth a call.`;
       const url = deepLinks.vehicle(v.id);
       if (v.salesRepId) {
         await notify({ userId: v.salesRepId, type: 'booking', title, body, url });

@@ -59,14 +59,12 @@ export function vehicleEmailLabel(v: VehicleEmailVehicle): string {
 }
 
 /**
- * Where the customer lands. A vehicle's own booking token opens the pick-a-
- * slot page; without one (legacy rows that predate migration 001) we fall
- * back to the portal dashboard rather than a dead link.
+ * Where the customer lands. Pickups aren't booked online any more (owner
+ * decision 2026-10-25: customers call or reply to arrange pickup), so the
+ * button opens the portal dashboard rather than the old pick-a-slot page.
  */
-function vehicleCta(v: VehicleEmailVehicle, appUrl: string): { url: string; label: string; booking: boolean } {
-  return v.customer_portal_token
-    ? { url: `${appUrl}/book/${v.customer_portal_token}`, label: 'Book your pickup time', booking: true }
-    : { url: `${appUrl}/customer/dashboard`, label: 'View order status', booking: false };
+function vehicleCta(appUrl: string): { url: string; label: string } {
+  return { url: `${appUrl}/customer/dashboard`, label: 'View order status' };
 }
 
 export function buildVehicleCustomerEmail(
@@ -76,16 +74,14 @@ export function buildVehicleCustomerEmail(
 ): VehicleEmailContent {
   const label = vehicleEmailLabel(v);
   const vinTail = v.vin ? ` (VIN ending ${String(v.vin).slice(-8)})` : '';
-  const cta = vehicleCta(v, appUrl);
+  const cta = vehicleCta(appUrl);
 
   if (kind === 'pickup_reminder') {
     const days = v.daysReady ?? null;
     const waited = days && days > 0
       ? ` has been ready for pickup for ${days} day${days === 1 ? '' : 's'}`
       : ' is ready for pickup';
-    const body = cta.booking
-      ? `Your ${label}${waited}. Book a time that works and we'll have it waiting.`
-      : `Your ${label}${waited}. Please contact us to arrange pickup.`;
+    const body = `Your ${label}${waited}. Reply to this email or call us to arrange pickup.`;
     return {
       subject: `[BMG Fleet] Reminder — your ${label} is ready for pickup`,
       title: `Your ${label} is ready`,
@@ -93,15 +89,11 @@ export function buildVehicleCustomerEmail(
       ctaUrl: cta.url,
       ctaLabel: cta.label,
       threadSubject: `${label} ready for pickup`,
-      smsBody: cta.booking
-        ? `[BMG Fleet] Reminder: your ${label} is ready for pickup. Book a time: ${cta.url}`
-        : null,
+      smsBody: null,
     };
   }
 
-  const body = cta.booking
-    ? `The install for your ${label}${vinTail} is complete. Book a pickup time online — or reply to this email if another arrangement works better.`
-    : `The install for your ${label}${vinTail} is complete. Please contact us to arrange pickup.`;
+  const body = `The install for your ${label}${vinTail} is complete. Reply to this email or call us to arrange pickup.`;
   return {
     subject: `[BMG Fleet] Your vehicle is ready — ${label}`,
     title: `Your vehicle is ready — ${label}`,
@@ -109,8 +101,6 @@ export function buildVehicleCustomerEmail(
     ctaUrl: cta.url,
     ctaLabel: cta.label,
     threadSubject: `${label} ready for pickup`,
-    smsBody: cta.booking
-      ? `[BMG Fleet] Your ${label} is ready for pickup. Book a time: ${cta.url}`
-      : null,
+    smsBody: null,
   };
 }

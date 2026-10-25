@@ -36,10 +36,9 @@ const fmtDay = (day: string) =>
 /** The state gates shared by GET and POST. Returns a terminal status
  *  string, or null when booking is open. */
 function gateTarget(target: BookingTarget): string | null {
-  if (target.kind === 'pickup') {
-    if (target.checkin.archived_at || target.checkin.status === 'shipped') return 'closed';
-    return null;
-  }
+  // Pickup booking is retired (owner decision 2026-10-25): old links from
+  // "vehicle ready" emails still resolve, but only to a call-us message.
+  if (target.kind === 'pickup') return 'no_pickup';
   if (!target.estimate.customer_approved) return 'not_approved';
   if (['cancelled', 'rejected', 'lost'].includes(target.estimate.status)) return 'closed';
   if (!validateExpiry(target.estimate.approval_token_expires_at).ok) return 'expired';

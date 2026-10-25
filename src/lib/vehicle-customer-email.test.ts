@@ -24,21 +24,17 @@ describe('vehicleEmailLabel', () => {
 });
 
 describe('buildVehicleCustomerEmail', () => {
-  it('points the two pickup emails at the vehicle booking page', () => {
+  it('sends customers to call or reply, never to a pickup booking page', () => {
     for (const kind of ['ready', 'pickup_reminder'] as const) {
       const c = buildVehicleCustomerEmail(van, kind, APP);
-      expect(c.ctaUrl).toBe(`${APP}/book/tok123`);
-      expect(c.ctaLabel).toBe('Book your pickup time');
+      // Pickup booking was retired 2026-10-25 — even a vehicle that still
+      // carries a portal token must not link to /book.
+      expect(c.ctaUrl).toBe(`${APP}/customer/dashboard`);
+      expect(c.ctaLabel).toBe('View order status');
+      expect(c.body).toContain('arrange pickup');
+      expect(c.body).not.toMatch(/book/i);
+      expect(c.smsBody).toBeNull();
     }
-  });
-
-  it('falls back to the portal dashboard when the vehicle has no booking token', () => {
-    const c = buildVehicleCustomerEmail({ ...van, customer_portal_token: null }, 'ready', APP);
-    // Never a dead link, and never a button that promises booking it can't do.
-    expect(c.ctaUrl).toBe(`${APP}/customer/dashboard`);
-    expect(c.ctaLabel).toBe('View order status');
-    expect(c.body).toContain('contact us to arrange pickup');
-    expect(c.smsBody).toBeNull();
   });
 
   it('counts the wait in the reminder, and reads correctly at one day', () => {

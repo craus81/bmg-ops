@@ -43,16 +43,17 @@ const MAX_NUDGE_AGE_DAYS = 60;
 
 /**
  * Pure nudge policy: first chase at nudgeDays after completion, weekly
- * repeats, one-time sales-rep escalation at 2× nudgeDays. Booked vehicles
- * are left alone; so are vehicles with no booking token, whose chase has
- * no link to offer (the escalation still covers them).
+ * repeats, one-time sales-rep escalation at 2× nudgeDays. Vehicles with a
+ * pickup already booked (from before pickup booking was retired on
+ * 2026-10-25) are left alone. The reminder no longer carries a booking
+ * link, so a vehicle without a portal token is chased like any other.
  */
 export function decideNudges(vehicles: ReadyVehicle[], nudgeDays: number, nowMs: number): NudgePlan {
   const nudges: ReadyVehicle[] = [];
   const escalations: ReadyVehicle[] = [];
   for (const v of vehicles) {
     if (v.hasBooking || v.daysReady > MAX_NUDGE_AGE_DAYS) continue;
-    if (v.daysReady >= nudgeDays && v.portalToken) {
+    if (v.daysReady >= nudgeDays) {
       const lastMs = v.lastNudgeAt ? Date.parse(v.lastNudgeAt) : null;
       if (lastMs == null || nowMs - lastMs >= REPEAT_DAYS * 86_400_000) nudges.push(v);
     }

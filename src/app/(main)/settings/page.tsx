@@ -1300,10 +1300,10 @@ export default function SettingsPage() {
         <>
           <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Customer Booking</div>
           <div style={sectionStyle}>
-            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Pickup &amp; Drop-off Slots</div>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>Drop-off Slots</div>
             <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
-              The completion email and estimate-approval page link customers to a booking page.
-              These hours define its open slots; block a date for holidays or short crews.
+              When this is on, customers who approve an estimate online get a button to book their drop-off.
+              Turn it off to hide that button. These hours define the open slots; block a date for holidays or short crews.
             </div>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px', cursor: 'pointer' }}>
               <input type="checkbox" checked={bookingCfg.enabled !== false}
@@ -1374,7 +1374,7 @@ export default function SettingsPage() {
                   style={{ ...inputStyle, width: '80px' }} />
               </div>
               <div>
-                <div style={labelStyle} title="Days after completion before the automated pickup reminder; the sales rep hears at double this.">Nudge after (days)</div>
+                <div style={labelStyle} title="Days after completion before the rep is prompted to send a pickup reminder; a louder alert follows at double this.">Pickup reminder after (days)</div>
                 <input type="number" min={1} max={30} value={bookingCfg.nudgeDays ?? 3}
                   onChange={e => setBookingCfg({ ...bookingCfg, nudgeDays: parseInt(e.target.value || '3', 10) })}
                   style={{ ...inputStyle, width: '80px' }} />
