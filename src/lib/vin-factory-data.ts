@@ -15,10 +15,17 @@ export interface FactoryValue { value: string; source: string }
 
 export interface FactoryData {
   title: string;
+  trim: string;
   style: string;
   bed: FactoryValue | null;
   roof: FactoryValue | null;
   wheelbase: string;
+  /** Set when the wheelbase came from the trim text, not a dimension field. */
+  wheelbaseSource: string;
+  overallWidth: string;
+  cargoLength: string;
+  payload: string;
+  towing: string;
   overallHeight: string;
   overallLength: string;
   gvwr: string;
@@ -113,6 +120,10 @@ const LABELS: Record<string, string> = {
 const label = (k: string) =>
   LABELS[k] || k.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase());
 
+// CarsXE fills fields it doesn't have with "No Data", unit attached
+// ("No Data in.", "No Data lbs") — common on the newest model year.
+const noData = (v: unknown) => /^\s*no data\b/i.test(String(v));
+
 /**
  * Read a CarsXE /specs response. Returns null when it found nothing.
  * `cabHint` is NHTSA's cab type, used when CarsXE's style doesn't say.
@@ -122,13 +133,17 @@ export function parseCarsxeSpecs(json: any, cabHint = ''): FactoryData | null {
   if (!json?.success || !a || typeof a !== 'object') return null;
   const s = (k: string) => {
     const v = a[k];
-    return v == null ? '' : String(v).trim();
+    return v == null || noData(v) ? '' : String(v).trim();
   };
   const model = s('model');
   const style = s('style');
   const text = [s('trim'), style, s('category'), s('type')].join(' ');
 
-  const wbIn = inches(s('wheelbase_length') || s('wheelbase'));
+  // Vans often have no wheelbase field but say it in the trim:
+  // "150 Van Low Roof w/Sliding Pass. 130-in. WB", "T-250 148\" WB".
+  const wbField = inches(s('wheelbase_length') || s('wheelbase'));
+  const wbText = text.match(/(\d{3}(?:\.\d+)?)\s*-?\s*(?:in\.?|"|”)\s*(?:WB|wheelbase)/i);
+  const wbIn = Number.isFinite(wbField) ? wbField : wbText ? parseFloat(wbText[1]) : NaN;
   const heightIn = inches(s('overall_height'));
 
   let bed: FactoryValue | null = null;
@@ -137,6 +152,11 @@ export function parseCarsxeSpecs(json: any, cabHint = ''): FactoryData | null {
   else if (/pickup|truck/i.test(text)) {
     const est = bedFromWheelbase(`${s('make')} ${model}`, `${text} ${cabHint}`, wbIn);
     if (est) bed = { value: feet(est), source: `from ${fmtIn(wbIn)} wheelbase` };
+    else if (/TACOMA/i.test(model) && /xtra|access|extended/i.test(`${text} ${cabHint}`)
+      && parseInt(s('year'), 10) >= 2024) {
+      // The 2024+ Tacoma XtraCab is only built with the 6 ft bed.
+      bed = { value: feet(6), source: 'only bed on a 2024+ Tacoma XtraCab' };
+    }
   }
 
   let roof: FactoryValue | null = null;
@@ -148,15 +168,21 @@ export function parseCarsxeSpecs(json: any, cabHint = ''): FactoryData | null {
   }
 
   const raw = Object.entries(a)
-    .filter(([, v]) => v != null && v !== '' && typeof v !== 'object')
+    .filter(([, v]) => v != null && v !== '' && typeof v !== 'object' && !noData(v))
     .map(([k, v]) => ({ label: label(k), value: String(v) }));
 
   return {
     title: [s('year'), s('make'), model, s('trim')].filter(Boolean).join(' '),
+    trim: s('trim'),
     style,
     bed,
     roof,
     wheelbase: fmtIn(wbIn),
+    wheelbaseSource: !Number.isFinite(wbField) && wbText ? 'from trim' : '',
+    overallWidth: fmtIn(inches(s('overall_width'))),
+    cargoLength: fmtIn(inches(s('cargo_length'))),
+    payload: s('maximum_payload') || s('standard_payload'),
+    towing: s('maximum_towing') || s('standard_towing'),
     overallHeight: fmtIn(heightIn),
     overallLength: fmtIn(inches(s('overall_length'))),
     gvwr: s('gross_vehicle_weight_rating'),
@@ -196,23 +222,35 @@ export function mergeFactory(details: VinDetails | null, f: FactoryData | null):
     const rows = group(h);
     const row = rows.find(r => r.label === label);
     if (row) {
-      if (!row.value) { row.value = value; row.note = note; }
+      // A blank, or an NHTSA range ("130\" – 148\"") CarsXE can narrow.
+      if (!row.value || (row.value.includes('–') && !value.includes('–'))) { row.value = value; row.note = note; }
       return;
     }
     const nr: VinDetailRow = { label, value, note };
     const i = after ? rows.findIndex(r => r.label === after) : -1;
     if (i >= 0) rows.splice(i + 1, 0, nr); else rows.push(nr);
   };
+  fill('Vehicle', 'Trim', f.trim, 'CarsXE', 'Model');
+  // NHTSA's trim is often a word ("Low Roof"); CarsXE's is the full factory
+  // description, which names wheelbase, roof and doors. Show both.
+  const nhtsaTrim = group('Vehicle').find(r => r.label === 'Trim');
+  if (f.trim && nhtsaTrim && nhtsaTrim.value.toLowerCase() !== f.trim.toLowerCase()) {
+    fill('Vehicle', 'Factory trim', f.trim, 'CarsXE', 'Trim');
+  }
   fill('Vehicle', 'Style', f.style, 'CarsXE', 'Series');
   if (f.bed) fill('Body', 'Bed length', f.bed.value, `CarsXE · ${f.bed.source}`, 'Cab');
-  fill('Body', 'Wheelbase', f.wheelbase);
+  fill('Body', 'Wheelbase', f.wheelbase, f.wheelbaseSource ? `CarsXE · ${f.wheelbaseSource}` : 'CarsXE');
   if (f.roof) fill('Body', 'Roof', f.roof.value, `CarsXE · ${f.roof.source}`, 'Wheelbase');
   fill('Body', 'Overall height', f.overallHeight, 'CarsXE', f.roof ? 'Roof' : 'Wheelbase');
   fill('Body', 'Overall length', f.overallLength, 'CarsXE', 'Overall height');
+  fill('Body', 'Overall width', f.overallWidth, 'CarsXE', 'Overall length');
+  fill('Body', 'Cargo length', f.cargoLength, 'CarsXE', 'Overall width');
   fill('Drivetrain', 'Drive', f.drivetrain);
   fill('Drivetrain', 'Engine', f.engine);
   fill('Drivetrain', 'Transmission', f.transmission);
   fill('Weight', 'GVWR', f.gvwr);
   fill('Weight', 'Curb weight', f.curbWeight);
+  fill('Weight', 'Payload', f.payload);
+  fill('Weight', 'Towing', f.towing);
   return base;
 }
