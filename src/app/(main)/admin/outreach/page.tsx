@@ -6,7 +6,8 @@
  * the DOT carrier list, trade contractors from Google business listings.
  * Claude writes a first email for each (migration 439); the rep reads it,
  * edits it and sends it from the standard compose screen under their own
- * name. Nothing sends itself.
+ * name. Nothing sends itself. A week after a first email with no answer,
+ * Claude writes a follow-up the rep reviews and sends (migration 441).
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -15,6 +16,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { deepLinks } from '@/lib/deep-links';
+import { flashNote } from '@/lib/focus-note';
 
 interface Target {
   id: string;
@@ -49,6 +51,11 @@ interface Target {
   meeting_contact: string | null;
   callback_phone: string | null;
   callback_when: string | null;
+  followup_subject: string | null;
+  followup_body: string | null;
+  followup_drafted_at: string | null;
+  followup_error: string | null;
+  followup_sent_at: string | null;
 }
 
 interface ListView {
@@ -61,6 +68,7 @@ interface ListView {
   me: string;
   targets: Target[];
   savedForLater: Target[];
+  needsYou: Target[];
 }
 
 const STATUS: Record<string, { label: string; color: string }> = {
@@ -68,6 +76,8 @@ const STATUS: Record<string, { label: string; color: string }> = {
   draft: { label: 'Draft ready', color: '#60a5fa' },
   call_first: { label: 'Call first', color: '#f59e0b' },
   sent: { label: 'Sent', color: '#94a3b8' },
+  follow_up: { label: 'Follow-up ready', color: '#60a5fa' },
+  followed_up: { label: 'Followed up', color: '#94a3b8' },
   replied: { label: 'Replied', color: '#22c55e' },
   booked: { label: 'Call booked', color: '#22c55e' },
   call_back: { label: 'Call them back', color: '#f97316' },
@@ -93,6 +103,7 @@ export default function OutreachPage() {
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [composing, setComposing] = useState<Target | null>(null);
+  const [followUpMode, setFollowUpMode] = useState(false);
   const [subject, setSubject] = useState('');
   const [writingAll, setWritingAll] = useState<{ done: number; total: number } | null>(null);
 
@@ -114,7 +125,11 @@ export default function OutreachPage() {
     load();
   }, [authLoading, isAdmin, isSales, load, router]);
 
-  const setStatus = async (t: Target, status: 'new' | 'later' | 'not_fit') => {
+  // A notification's deep link (?target=<id>) lands on that company.
+  const focusId = params?.get('target') || '';
+  useEffect(() => { if (view && focusId) flashNote(`outreach-${focusId}`); }, [view, focusId]);
+
+  const setStatus = async (t: Target, status: 'new' | 'later' | 'not_fit' | 'replied') => {
     setBusy(t.id);
     setMsg(null);
     try {
@@ -123,7 +138,7 @@ export default function OutreachPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'That didn\'t save');
-      setMsg({ ok: true, text: status === 'later' ? `${t.company_name} saved for later.` : status === 'not_fit' ? `${t.company_name} marked not a fit. It won't come back.` : `${t.company_name} is back on the list.` });
+      setMsg({ ok: true, text: status === 'later' ? `${t.company_name} saved for later.` : status === 'not_fit' ? `${t.company_name} marked not a fit. It won't come back.` : status === 'replied' ? `${t.company_name} marked replied. No follow-up will be written.` : `${t.company_name} is back on the list.` });
       await load();
     } catch (e: any) {
       setMsg({ ok: false, text: e.message });
@@ -133,16 +148,16 @@ export default function OutreachPage() {
   };
 
   /** Write (or rewrite) one draft. Returns the error in words, or null. */
-  const writeOne = async (t: Target): Promise<string | null> => {
-    const res = await apiFetch(`/api/outreach/${t.id}/draft`, { method: 'POST' });
+  const writeOne = async (t: Target, followUp = false): Promise<string | null> => {
+    const res = await apiFetch(`/api/outreach/${t.id}/draft${followUp ? '?followUp=1' : ''}`, { method: 'POST' });
     const data = await res.json().catch(() => ({}));
     return res.ok ? null : (data.error || 'The draft didn\'t get written');
   };
 
-  const draftOne = async (t: Target) => {
+  const draftOne = async (t: Target, followUp = false) => {
     setBusy(t.id);
     setMsg(null);
-    const err = await writeOne(t);
+    const err = await writeOne(t, followUp);
     if (err) setMsg({ ok: false, text: `${t.company_name}: ${err}` });
     await load();
     setBusy(null);
@@ -164,8 +179,9 @@ export default function OutreachPage() {
     await load();
   };
 
-  const openCompose = (t: Target) => {
-    setSubject(t.draft_subject || '');
+  const openCompose = (t: Target, followUp = false) => {
+    setSubject((followUp ? t.followup_subject : t.draft_subject) || '');
+    setFollowUpMode(followUp);
     setComposing(t);
   };
 
@@ -176,6 +192,7 @@ export default function OutreachPage() {
     cc: fields.cc,
     bccSelf: fields.bccSelf,
     preview,
+    followUp: followUpMode || undefined,
   });
 
   const fetchPreview = async (fields: EmailComposeFields) => {
@@ -202,7 +219,9 @@ export default function OutreachPage() {
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || 'The email didn\'t go out');
       const failedLine = (data.failed || []).length ? ` These did NOT send: ${data.failed.join(', ')}.` : '';
-      setMsg({ ok: !failedLine, text: `Sent to ${data.sent.join(', ')}. ${composing.company_name} is now in Prospects.${failedLine}` });
+      setMsg({ ok: !failedLine, text: followUpMode
+        ? `Follow-up sent to ${data.sent.join(', ')}.${failedLine}`
+        : `Sent to ${data.sent.join(', ')}. ${composing.company_name} is now in Prospects.${failedLine}` });
       setComposing(null);
       await load();
       return { ok: true };
@@ -264,7 +283,7 @@ export default function OutreachPage() {
     const done = t.status === 'not_fit';
     const open = ['new', 'draft', 'call_first', 'later'].includes(t.status);
     return (
-      <div key={t.id} style={{ ...card, opacity: done ? 0.6 : 1 }}>
+      <div key={t.id} id={`outreach-${t.id}`} style={{ ...card, opacity: done ? 0.6 : 1 }}>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: '240px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -320,10 +339,26 @@ export default function OutreachPage() {
             {['booked', 'call_back'].includes(t.status) && t.prospect_id && (
               <div style={{ fontSize: '12px', marginTop: '4px' }}><a href={deepLinks.prospect(t.prospect_id)} style={{ color: '#60a5fa' }}>Open prospect</a></div>
             )}
-            {t.status === 'sent' && (
+            {['sent', 'follow_up', 'followed_up', 'replied'].includes(t.status) && t.sent_at && (
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Sent {t.sent_at ? new Date(t.sent_at).toLocaleDateString() : ''}{t.sent_subject ? `: “${t.sent_subject}”` : ''}
+                Sent {new Date(t.sent_at).toLocaleDateString()}{t.sent_subject ? `: “${t.sent_subject}”` : ''}
+                {t.followup_sent_at ? ` · followed up ${new Date(t.followup_sent_at).toLocaleDateString()}` : ''}
                 {t.prospect_id && <> · <a href={deepLinks.prospect(t.prospect_id)} style={{ color: '#60a5fa' }}>Open prospect</a></>}
+              </div>
+            )}
+            {t.status === 'sent' && (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                No answer after a week? A follow-up gets written for you to review. If they wrote back, tap They replied.
+              </div>
+            )}
+            {t.followup_error && t.status === 'follow_up' && (
+              <div style={{ fontSize: '12px', color: 'var(--error)', fontWeight: 600, marginTop: '4px' }}>{t.followup_error}</div>
+            )}
+            {t.followup_body && t.status === 'follow_up' && (
+              <div style={{ marginTop: '8px', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: '11px', fontWeight: 800, color: '#60a5fa', marginBottom: '4px' }}>FOLLOW-UP DRAFT · no answer in a week</div>
+                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{t.followup_subject}</div>
+                <div style={{ fontSize: '13px', color: 'var(--text-body)', whiteSpace: 'pre-wrap', marginTop: '4px', lineHeight: 1.5 }}>{t.followup_body}</div>
               </div>
             )}
           </div>
@@ -339,6 +374,20 @@ export default function OutreachPage() {
             {open && t.status !== 'later' && (
               <>
                 <button disabled={busy === t.id} onClick={() => setStatus(t, 'later')} style={btn('#a78bfa')}>Save for later</button>
+                <button disabled={busy === t.id} onClick={() => setStatus(t, 'not_fit')} style={btn('#94a3b8')}>Not a fit</button>
+              </>
+            )}
+            {t.status === 'follow_up' && t.followup_body && mine(t) && (
+              <button disabled={busy === t.id} onClick={() => openCompose(t, true)} style={{ ...btn('#22c55e'), background: 'rgba(34,197,94,0.12)' }}>Review &amp; send follow-up</button>
+            )}
+            {['sent', 'follow_up'].includes(t.status) && (
+              <button disabled={busy === t.id} onClick={() => draftOne(t, true)} style={btn('#60a5fa')}>
+                {busy === t.id ? 'Writing…' : t.followup_body ? 'Rewrite follow-up' : 'Write follow-up now'}
+              </button>
+            )}
+            {['sent', 'follow_up', 'followed_up', 'call_back'].includes(t.status) && (
+              <>
+                <button disabled={busy === t.id} onClick={() => setStatus(t, 'replied')} style={btn('#22c55e')}>They replied</button>
                 <button disabled={busy === t.id} onClick={() => setStatus(t, 'not_fit')} style={btn('#94a3b8')}>Not a fit</button>
               </>
             )}
@@ -428,6 +477,17 @@ export default function OutreachPage() {
             {shown.map(row)}
           </div>
 
+          {view.needsYou.length > 0 && (
+            <>
+              <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', margin: '22px 0 8px' }}>
+                From earlier weeks: follow-ups and call-backs ({view.needsYou.length})
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {view.needsYou.map(row)}
+              </div>
+            </>
+          )}
+
           {view.savedForLater.length > 0 && (
             <>
               <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', margin: '22px 0 8px' }}>
@@ -443,10 +503,10 @@ export default function OutreachPage() {
 
       {composing && (
         <EmailComposeModal
-          title={`Email ${composing.company_name}`}
-          stateKey={`outreach:${composing.id}`}
+          title={followUpMode ? `Follow up with ${composing.company_name}` : `Email ${composing.company_name}`}
+          stateKey={`outreach:${followUpMode ? 'followup:' : ''}${composing.id}`}
           initialTo={composing.email || ''}
-          initialMessage={composing.draft_body || ''}
+          initialMessage={(followUpMode ? composing.followup_body : composing.draft_body) || ''}
           sendLabel="Send"
           previewKey={subject}
           intro={(
@@ -461,8 +521,10 @@ export default function OutreachPage() {
                 />
               </label>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-                Claude wrote this from {composing.source === 'dot' ? 'their DOT record' : 'their Google listing'}{composing.website ? ' and website' : ''}. Read it and fix anything that isn&apos;t right before you send.
-                It goes out from you, with your signature, BMG&apos;s address and an unsubscribe link. Sending adds {composing.company_name} to Prospects.
+                {followUpMode
+                  ? <>Claude wrote this follow-up from your first email, since they haven&apos;t answered. Read it and fix anything that isn&apos;t right before you send. It goes out from you with the same Pick a time / Call me buttons, your signature, BMG&apos;s address and an unsubscribe link.</>
+                  : <>Claude wrote this from {composing.source === 'dot' ? 'their DOT record' : 'their Google listing'}{composing.website ? ' and website' : ''}. Read it and fix anything that isn&apos;t right before you send.
+                    It goes out from you, with your signature, BMG&apos;s address and an unsubscribe link. Sending adds {composing.company_name} to Prospects.</>}
               </div>
             </div>
           )}

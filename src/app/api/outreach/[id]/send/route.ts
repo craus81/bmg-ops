@@ -23,6 +23,8 @@ const Schema = z.object({
   cc: z.array(z.string()).optional(),
   bccSelf: z.boolean().optional(),
   preview: z.boolean().optional(),
+  /** The week-later follow-up (migration 441) rather than the first email. */
+  followUp: z.boolean().optional(),
 });
 
 /**
@@ -33,13 +35,15 @@ const Schema = z.object({
  * first send adds the company to Prospects (source Outreach, the rep's) and
  * the email lands on its timeline. Every copy carries the company's Pick a
  * time / Call me buttons (migration 440, src/lib/outreach-meet.ts).
+ * followUp sends the one follow-up (migration 441) once the row is Follow-up
+ * ready, the same way.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const auth = await requireRole(req, ['admin', 'sales']);
   if (auth.error) return auth.error;
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
-  const { subject, message, cc, bccSelf, preview } = parsed.data;
+  const { subject, message, cc, bccSelf, preview, followUp } = parsed.data;
   const emails = [...new Set(parsed.data.emails.map(normalizeEmail))];
 
   const { data: t } = await service.from('outreach_targets').select(TARGET_COLS).eq('id', params.id).maybeSingle();
@@ -48,7 +52,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (target.rep_id !== auth.user.id) {
     return NextResponse.json({ error: 'Only the rep whose list this is can send it, so it goes out under their name.' }, { status: 403 });
   }
-  if (!OPEN_STATUSES.includes(target.status)) {
+  if (followUp) {
+    if (target.status !== 'follow_up') {
+      return NextResponse.json({ error: target.status === 'followed_up' ? 'The follow-up has already been sent.' : 'This company isn\'t waiting on a follow-up.' }, { status: 409 });
+    }
+  } else if (!OPEN_STATUSES.includes(target.status)) {
     return NextResponse.json({ error: 'This one has already been emailed.' }, { status: 409 });
   }
 
@@ -127,7 +135,16 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     (ok ? sent : failed).push(email);
   }
 
-  if (sent.length > 0) {
+  if (sent.length > 0 && followUp) {
+    await service.from('outreach_targets').update({
+      status: 'followed_up',
+      status_changed_at: new Date().toISOString(),
+      followup_sent_at: new Date().toISOString(),
+      followup_subject: subject,
+      followup_body: message,
+      prospect_id: prospectId,
+    }).eq('id', target.id);
+  } else if (sent.length > 0) {
     await service.from('outreach_targets').update({
       status: 'sent',
       status_changed_at: new Date().toISOString(),
