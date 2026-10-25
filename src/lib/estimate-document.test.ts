@@ -164,6 +164,20 @@ describe('renderEstimateDocument line assets', () => {
     expect(html).not.toContain('<img src=');
   });
 
+  it('shows photos on a hitch kit\'s parts but not on a rack\'s components', () => {
+    const kitLine = (id: string, item: string, kitNumber: string, group: string) => ({
+      id, item_number: item, description: `${item} part`, quantity: 1, unit_price: 50, line_total: 50,
+      kit_group_id: group, kit_item_number: kitNumber, kit_name: `${kitNumber} kit`, kit_quantity: 1,
+      part_image_url: `https://www.curtmfg.com/media/${item}.jpg`,
+    });
+    const html = renderEstimateDocument(baseEst, [
+      kitLine('h1', '13193', 'Hitch kit', '11111111-1111-4111-8111-111111111111'),
+      kitLine('r1', 'FEA-0024', 'AR1205-S', '22222222-2222-4222-8222-222222222222'),
+    ]);
+    expect(html).toContain('src="https://www.curtmfg.com/media/13193.jpg"');
+    expect(html).not.toContain('FEA-0024.jpg');
+  });
+
   it('escapes asset URLs', () => {
     const html = renderEstimateDocument(baseEst, [{
       ...baseLine,

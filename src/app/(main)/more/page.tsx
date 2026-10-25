@@ -95,6 +95,7 @@ export default function MorePage() {
         { title: 'Parts', sub: 'Part photos, install files, labor hours and installed photos', path: '/installer-parts', show: F('installer_parts') && !F('parts_catalog') },
         { title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
         { title: 'Rack Kits', sub: 'How many of each rack kit we can build from the parts on the shelf', path: '/admin/inventory/rack-kits', show: F('parts_catalog') },
+        { title: 'Hitch Kits', sub: 'Labor hours, brake controllers and Curt fitment for the estimate’s hitch kit builder', path: '/admin/inventory/hitch-kits', show: F('parts_catalog') },
         { title: 'Part Tagging Rules', sub: 'Auto-categorize parts by vendor & name instead of one dropdown at a time', path: '/admin/part-category-rules', show: F('part_admin') },
         { title: 'Vendor Costs', sub: 'Upload vendor cost & target margin for outsourced parts (FleetSuite only)', path: '/admin/vendor-costs', show: F('part_admin') },
         { title: 'Fill In Part Display Names', sub: 'Copy graphic package or description into display names that are blank or just the part number', path: '/admin/part-display-names', show: isAdmin },

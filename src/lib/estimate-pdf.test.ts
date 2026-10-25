@@ -72,6 +72,22 @@ describe('buildEstimatePdf', () => {
     expect(raw).toContain('https://vendor.example.com/sh-4820');
   });
 
+  it('renders a hitch kit with photos on its parts', () => {
+    const group = { kit_group_id: '11111111-1111-4111-8111-111111111111', kit_item_number: 'Hitch kit', kit_name: 'Trailer hitch kit, 2024 Ford Transit, Class 3, 4-way', kit_quantity: 1 };
+    const doc = buildEstimatePdf({
+      ...data,
+      lines: [
+        { item_number: '13193', description: 'Class 3 hitch', quantity: 1, unit_price: 285.95, line_total: 285.95, image: { dataUrl: PNG_1PX, format: 'PNG' }, ...group } as any,
+        { item_number: '56327', description: '4-way harness', quantity: 1, unit_price: 100.95, line_total: 100.95, image: { dataUrl: PNG_1PX, format: 'PNG' }, ...group } as any,
+      ],
+    });
+    const raw = Buffer.from(doc.output('arraybuffer')).toString('latin1');
+    expect(raw).toContain('Trailer hitch kit, 2024 Ford Transit');
+    expect(raw).toContain('386.90');
+    expect(raw).toContain('56327');
+    expect((raw.match(/\/Subtype \/Image/g) || []).length).toBeGreaterThan(0);
+  });
+
   it('renders the vinyl/graphics section from linked wrap quotes', () => {
     const doc = buildEstimatePdf({
       ...data,
