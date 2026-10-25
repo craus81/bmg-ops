@@ -4,14 +4,17 @@
  * Outreach (migration 438; Craig, 2026-10-25). Every Monday each Sales rep
  * gets 25 companies BMG has never dealt with, within 100 miles: fleets from
  * the DOT carrier list, trade contractors from Google business listings.
- * The rep works the list: save one for later, or mark it not a fit. Email
- * drafts for each company come next; nothing here sends anything.
+ * Claude writes a first email for each (migration 439); the rep reads it,
+ * edits it and sends it from the standard compose screen under their own
+ * name. Nothing sends itself.
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
+import { deepLinks } from '@/lib/deep-links';
 
 interface Target {
   id: string;
@@ -32,6 +35,16 @@ interface Target {
   facts: any;
   week_of: string;
   status: string;
+  rep_id: string;
+  prospect_id: string | null;
+  contact_name: string | null;
+  draft_subject: string | null;
+  draft_body: string | null;
+  draft_reasons: string[] | null;
+  drafted_at: string | null;
+  draft_error: string | null;
+  sent_at: string | null;
+  sent_subject: string | null;
 }
 
 interface ListView {
@@ -41,6 +54,7 @@ interface ListView {
   isAdmin: boolean;
   reps: { id: string; name: string }[];
   googleReady: boolean;
+  me: string;
   targets: Target[];
   savedForLater: Target[];
 }
@@ -73,6 +87,9 @@ export default function OutreachPage() {
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [composing, setComposing] = useState<Target | null>(null);
+  const [subject, setSubject] = useState('');
+  const [writingAll, setWritingAll] = useState<{ done: number; total: number } | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -107,6 +124,86 @@ export default function OutreachPage() {
       setMsg({ ok: false, text: e.message });
     } finally {
       setBusy(null);
+    }
+  };
+
+  /** Write (or rewrite) one draft. Returns the error in words, or null. */
+  const writeOne = async (t: Target): Promise<string | null> => {
+    const res = await apiFetch(`/api/outreach/${t.id}/draft`, { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    return res.ok ? null : (data.error || 'The draft didn\'t get written');
+  };
+
+  const draftOne = async (t: Target) => {
+    setBusy(t.id);
+    setMsg(null);
+    const err = await writeOne(t);
+    if (err) setMsg({ ok: false, text: `${t.company_name}: ${err}` });
+    await load();
+    setBusy(null);
+  };
+
+  const writeAll = async (list: Target[]) => {
+    setMsg(null);
+    setWritingAll({ done: 0, total: list.length });
+    const errors: string[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const err = await writeOne(list[i]);
+      if (err) errors.push(`${list[i].company_name}: ${err}`);
+      setWritingAll({ done: i + 1, total: list.length });
+    }
+    setWritingAll(null);
+    setMsg(errors.length
+      ? { ok: false, text: `${list.length - errors.length} of ${list.length} drafts written. ${errors.join(' · ')}` }
+      : { ok: true, text: `${list.length} draft${list.length === 1 ? '' : 's'} written. Read each one before you send it.` });
+    await load();
+  };
+
+  const openCompose = (t: Target) => {
+    setSubject(t.draft_subject || '');
+    setComposing(t);
+  };
+
+  const composeBody = (fields: EmailComposeFields, preview: boolean) => JSON.stringify({
+    subject: subject.trim() || '(no subject yet)',
+    message: fields.message || '(no message yet)',
+    emails: fields.emails,
+    cc: fields.cc,
+    bccSelf: fields.bccSelf,
+    preview,
+  });
+
+  const fetchPreview = async (fields: EmailComposeFields) => {
+    if (!composing) return { error: 'Nothing to preview' };
+    if (fields.emails.length === 0) return { error: 'Add the address to send to.' };
+    try {
+      const res = await apiFetch(`/api/outreach/${composing.id}/send`, { method: 'POST', body: composeBody(fields, true) });
+      const data = await res.json();
+      if (!res.ok) return { error: data.error || 'Preview failed' };
+      return data.warning ? { error: data.warning, preview: data.preview } : { preview: data.preview };
+    } catch (e: any) {
+      return { error: e.message || 'Preview failed' };
+    }
+  };
+
+  const send = async (fields: EmailComposeFields) => {
+    if (!composing) return { ok: false };
+    if (!subject.trim()) {
+      setMsg({ ok: false, text: 'Give the email a subject before sending.' });
+      return { ok: false };
+    }
+    try {
+      const res = await apiFetch(`/api/outreach/${composing.id}/send`, { method: 'POST', body: composeBody(fields, false) });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || 'The email didn\'t go out');
+      const failedLine = (data.failed || []).length ? ` These did NOT send: ${data.failed.join(', ')}.` : '';
+      setMsg({ ok: !failedLine, text: `Sent to ${data.sent.join(', ')}. ${composing.company_name} is now in Prospects.${failedLine}` });
+      setComposing(null);
+      await load();
+      return { ok: true };
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message });
+      return { ok: false };
     }
   };
 
@@ -154,9 +251,13 @@ export default function OutreachPage() {
   const trades = targets.length - fleets;
   const repName = view?.reps.find(r => r.id === view.repId)?.name;
 
+  const mine = (t: Target) => t.rep_id === view?.me;
+  const toDraft = targets.filter(t => t.status === 'new' && !t.drafted_at);
+
   const row = (t: Target) => {
     const st = STATUS[t.status] || STATUS.new;
     const done = t.status === 'not_fit';
+    const open = ['new', 'draft', 'call_first', 'later'].includes(t.status);
     return (
       <div key={t.id} style={{ ...card, opacity: done ? 0.6 : 1 }}>
         <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -180,12 +281,42 @@ export default function OutreachPage() {
               {t.source === 'dot' && <a href={safer(t.source_id)} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>DOT record #{t.source_id}</a>}
               {t.source === 'google' && t.facts?.googleMapsUrl && <a href={t.facts.googleMapsUrl} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>Google listing</a>}
             </div>
-            {!t.email && t.status === 'new' && (
-              <div style={{ fontSize: '12px', color: '#f59e0b', marginTop: '4px' }}>No email found yet{t.website ? '. The website may have one.' : '. Call instead.'}</div>
+            {!t.email && open && (
+              <div style={{ fontSize: '12px', color: '#f59e0b', marginTop: '4px' }}>
+                {t.drafted_at ? 'No email address found. Call first, then add their address in To when you send.' : `No email found yet${t.website ? '. The draft step reads their website for one.' : '. Call instead.'}`}
+              </div>
+            )}
+            {t.draft_error && open && (
+              <div style={{ fontSize: '12px', color: 'var(--error)', fontWeight: 600, marginTop: '4px' }}>{t.draft_error}</div>
+            )}
+            {t.draft_body && open && (
+              <div style={{ marginTop: '8px', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg)', border: '1px solid var(--border)' }}>
+                {(t.draft_reasons || []).length > 0 && (
+                  <ul style={{ margin: '0 0 8px', paddingLeft: '18px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                    {(t.draft_reasons || []).map((r, i) => <li key={i}>{r}</li>)}
+                  </ul>
+                )}
+                <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{t.draft_subject}</div>
+                <div style={{ fontSize: '13px', color: 'var(--text-body)', whiteSpace: 'pre-wrap', marginTop: '4px', lineHeight: 1.5 }}>{t.draft_body}</div>
+              </div>
+            )}
+            {t.status === 'sent' && (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Sent {t.sent_at ? new Date(t.sent_at).toLocaleDateString() : ''}{t.sent_subject ? `: “${t.sent_subject}”` : ''}
+                {t.prospect_id && <> · <a href={deepLinks.prospect(t.prospect_id)} style={{ color: '#60a5fa' }}>Open prospect</a></>}
+              </div>
             )}
           </div>
           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            {(t.status === 'new') && (
+            {open && t.status !== 'later' && t.draft_body && mine(t) && (
+              <button disabled={busy === t.id} onClick={() => openCompose(t)} style={{ ...btn('#22c55e'), background: 'rgba(34,197,94,0.12)' }}>Review &amp; send</button>
+            )}
+            {open && t.status !== 'later' && (
+              <button disabled={busy === t.id || !!writingAll} onClick={() => draftOne(t)} style={btn('#60a5fa')}>
+                {busy === t.id ? 'Writing…' : t.draft_body ? 'Rewrite' : 'Write email'}
+              </button>
+            )}
+            {open && t.status !== 'later' && (
               <>
                 <button disabled={busy === t.id} onClick={() => setStatus(t, 'later')} style={btn('#a78bfa')}>Save for later</button>
                 <button disabled={busy === t.id} onClick={() => setStatus(t, 'not_fit')} style={btn('#94a3b8')}>Not a fit</button>
@@ -210,8 +341,8 @@ export default function OutreachPage() {
       </div>
       <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '14px', lineHeight: 1.5, maxWidth: '72ch' }}>
         Every Monday each sales rep gets {view?.batchSize || 25} companies BMG has never worked with, within 100 miles of O&apos;Fallon:
-        fleets from the federal DOT carrier list and trade contractors from Google business listings. Nothing is emailed from here.
-        Next, FleetSuite will write an email for each one for you to read, edit and send.
+        fleets from the federal DOT carrier list and trade contractors from Google business listings. Claude writes a short first
+        email for each from their record and website. You read it, fix anything, and send it under your name. Nothing sends by itself.
       </div>
 
       {view?.isAdmin && (
@@ -255,7 +386,17 @@ export default function OutreachPage() {
             <button onClick={() => setFilter('fleet')} style={chip(filter === 'fleet')}>Fleets {fleets}</button>
             <button onClick={() => setFilter('trade')} style={chip(filter === 'trade')}>Trades {trades}</button>
             {repName && <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{repName}&apos;s list</span>}
+            {toDraft.length > 0 && (
+              <button onClick={() => writeAll(toDraft)} disabled={!!writingAll} style={{ ...btn('#60a5fa'), marginLeft: 'auto' }}>
+                {writingAll ? `Writing ${writingAll.done} of ${writingAll.total}…` : `Write all emails (${toDraft.length})`}
+              </button>
+            )}
           </div>
+          {view.repId !== view.me && targets.length > 0 && (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+              Only {repName || 'this rep'} can send from this list, so each email goes out under their own name.
+            </div>
+          )}
 
           {targets.length === 0 && (
             <div style={{ ...card, color: 'var(--text-muted)', fontSize: '13px' }}>
@@ -278,6 +419,37 @@ export default function OutreachPage() {
             </>
           )}
         </>
+      )}
+
+      {composing && (
+        <EmailComposeModal
+          title={`Email ${composing.company_name}`}
+          stateKey={`outreach:${composing.id}`}
+          initialTo={composing.email || ''}
+          initialMessage={composing.draft_body || ''}
+          sendLabel="Send"
+          previewKey={subject}
+          intro={(
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <label style={{ display: 'block' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-label)', display: 'block', marginBottom: '4px' }}>Subject</span>
+                <input
+                  id="outreach-subject"
+                  value={subject}
+                  onChange={e => setSubject(e.target.value)}
+                  style={{ width: '100%', padding: '9px 12px', borderRadius: '9px', fontSize: '13px', border: '1px solid var(--border)', background: 'var(--input-bg)', color: 'var(--text-body)', boxSizing: 'border-box' }}
+                />
+              </label>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                Claude wrote this from {composing.source === 'dot' ? 'their DOT record' : 'their Google listing'}{composing.website ? ' and website' : ''}. Read it and fix anything that isn&apos;t right before you send.
+                It goes out from you, with your signature, BMG&apos;s address and an unsubscribe link. Sending adds {composing.company_name} to Prospects.
+              </div>
+            </div>
+          )}
+          fetchPreview={fetchPreview}
+          onSend={send}
+          onClose={() => setComposing(null)}
+        />
       )}
     </div>
   );
