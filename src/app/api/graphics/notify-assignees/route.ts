@@ -111,9 +111,10 @@ export async function POST(req: NextRequest) {
 
     // ----- Audience 3 (created only): the graphics team, by role -----
     if (kind === 'created') {
-      // Production only: admins came off this list 2026-10-24 (owner: staff
-      // were buried in alerts; a new job is production's to pick up, and
-      // whoever is on the job hears through Audience 1).
+      // Production, plus anyone ticked for "New graphics jobs" in Admin →
+      // Users (migration 433; Craig and Zach). Admins as a whole came off
+      // this list 2026-10-24 (owner: staff were buried in alerts), and
+      // whoever is on the job hears through Audience 1.
       const TEAM_ROLES = ['graphics_production', 'production'];
       const { data: staff } = await supabase
         .from('profiles')
@@ -129,6 +130,14 @@ export async function POST(req: NextRequest) {
           return roles.some((r: string) => TEAM_ROLES.includes(r));
         })
         .map((p: any) => p.id);
+      const { data: optins } = await supabase
+        .from('notification_preferences')
+        .select('user_id')
+        .eq('new_graphics_jobs', true);
+      const activeIds = new Set((staff || []).filter((p: any) => !p.deactivated).map((p: any) => p.id));
+      for (const o of optins || []) {
+        if (o.user_id !== actorId && activeIds.has(o.user_id) && !teamIds.includes(o.user_id)) teamIds.push(o.user_id);
+      }
       // Assignees already got the 'graphics_activity' ping above; don't double up.
       const freshIds = teamIds.filter((id: string) => !assigneeIds.has(id));
       if (freshIds.length > 0) {

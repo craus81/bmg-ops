@@ -131,7 +131,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'incoming_call', label: 'Incoming call matched', description: 'Caller ID matched a customer or lead on an inbound call.', area: 'sales', defaultChannels: ['in_app', 'push'], audience: 'The rep the call rang; with no rep, whoever has Sales in their Dashboard focus, else the super admins.' },
 
   // ── Graphics & proofs ─────────────────────────────────────────────────
-  { type: 'graphics_new', label: 'New graphics job', description: 'A graphics job was created.', area: 'graphics', defaultChannels: ['in_app', 'push'], audience: 'Graphics production and whoever is on the job.' },
+  { type: 'graphics_new', label: 'New graphics job', description: 'A graphics job was created.', area: 'graphics', defaultChannels: ['in_app', 'push'], audience: 'Graphics production, whoever is on the job, and anyone ticked for "New graphics jobs" in Admin → Users.' },
   { type: 'graphics_flagged', label: 'Graphics job flagged', description: 'A job came in needing someone to confirm it before work starts.', area: 'graphics', defaultChannels: ['in_app', 'push'] },
   { type: 'graphics_status', label: 'Graphics job changed status', description: 'A job moved between production stages.', area: 'graphics', defaultChannels: ['in_app'] },
   { type: 'graphics_activity', label: 'Activity on a graphics job', description: 'A note, file or change landed on a job you follow.', area: 'graphics', defaultChannels: ['in_app'] },
