@@ -16,7 +16,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { vehicleDescription } from './estimate-document';
 import { discountLabel, normalizeVehicleCount, perVehicleAmount } from './estimate-totals';
-import { toKitDisplayLines } from './estimate-kits';
+import { kitComponentShowsPhoto, toKitDisplayLines } from './estimate-kits';
 
 export interface EstimatePdfImage {
   dataUrl: string;
@@ -73,6 +73,7 @@ export interface EstimatePdfData {
 const money = (n: any) => `$${Number(n || 0).toFixed(2)}`;
 
 const PHOTO = 40; // thumbnail edge in pt
+const KIT_PHOTO = 28; // a hitch kit part's thumbnail, under its kit line
 // Plain ASCII — helvetica (standard-14 font) has no arrow glyphs.
 const LINK_LABEL = 'View product';
 
@@ -164,7 +165,7 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   const tableY = Math.max(leftY, rightY) + 16;
 
   // ── Line table — photo column only when any line has one ───────────────
-  const hasPhotos = lines.some(l => !!l.image && !(l as any).kit_component);
+  const hasPhotos = lines.some(l => !!l.image && (!(l as any).kit_component || kitComponentShowsPhoto(l as any)));
   const itemCell = (l: EstimatePdfLine & { kit_component?: boolean }) => {
     const label = l.item_number || l.description || 'Item';
     if (l.kit_component) {
@@ -221,6 +222,8 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
       if (hook.section !== 'body') return;
       const line = lines[hook.row.index];
       if (hasPhotos && line?.image && !(line as any).kit_component) hook.cell.styles.minCellHeight = PHOTO + 10;
+      // A hitch kit's parts carry a smaller photo.
+      if (hasPhotos && line?.image && kitComponentShowsPhoto(line as any)) hook.cell.styles.minCellHeight = KIT_PHOTO + 6;
       // Components under a rack read smaller and lighter than priced lines.
       if ((line as any)?.kit_component) {
         hook.cell.styles.fontSize = 8;
@@ -237,6 +240,13 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     didDrawCell: (hook) => {
       if (hook.section !== 'body') return;
       const line = lines[hook.row.index];
+      if (line && hasPhotos && hook.column.index === 0 && line.image && kitComponentShowsPhoto(line as any)) {
+        try {
+          doc.addImage(line.image.dataUrl, line.image.format,
+            hook.cell.x + 5 + (PHOTO - KIT_PHOTO), hook.cell.y + 3, KIT_PHOTO, KIT_PHOTO, undefined, 'FAST');
+        } catch { /* bad image data — leave the cell empty */ }
+        return;
+      }
       // Components under a rack stay one compact text row: no photo, no link.
       if (!line || (line as any).kit_component || (line as any).discount_row) return;
       if (hasPhotos && hook.column.index === 0 && line.image) {

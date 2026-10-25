@@ -33,6 +33,16 @@ export type KitDisplayLine<T> = T & {
 };
 
 const num = (v: unknown) => Number(v) || 0;
+
+/** kit_item_number of a hitch kit (src/lib/hitch-kits.ts): no part number of its own. */
+export const HITCH_KIT_ITEM_NUMBER = 'Hitch kit';
+
+/**
+ * Rack components stay one compact text row, but a hitch kit's parts show
+ * their photos (Craig 2026-10-25: the customer sees what they're getting).
+ */
+export const kitComponentShowsPhoto = (l: { kit_component?: boolean; kit_item_number?: string | null }) =>
+  !!l.kit_component && l.kit_item_number === HITCH_KIT_ITEM_NUMBER;
 const lineTotal = (l: AnyLine) =>
   l.line_total != null && l.line_total !== '' ? num(l.line_total) : num(l.quantity) * num(l.unit_price);
 
@@ -112,7 +122,8 @@ export function toKitDisplayLines<T extends AnyLine>(lines: T[]): KitDisplayLine
  */
 export function kitTaggedDescription(desc: string | undefined, line: KitLineFields): string | undefined {
   if (!line.kit_item_number) return desc;
-  const tag = `[Rack ${line.kit_item_number}]`;
+  // A hitch kit (src/lib/hitch-kits.ts) has no rack number of its own.
+  const tag = line.kit_item_number === HITCH_KIT_ITEM_NUMBER ? '[Hitch kit]' : `[Rack ${line.kit_item_number}]`;
   return desc ? `${desc} ${tag}` : tag;
 }
 

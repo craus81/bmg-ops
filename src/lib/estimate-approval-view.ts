@@ -16,7 +16,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { loadEstimateGraphics, loadEstimateProofs, type EstimateProofBlock } from './estimate-graphics';
 import { enrichLinesWithPartAssets } from './estimate-line-parts';
-import { toKitDisplayLines } from './estimate-kits';
+import { kitComponentShowsPhoto, toKitDisplayLines } from './estimate-kits';
 
 /** The estimate fields the customer-facing document is allowed to show. */
 export function publicEstimate(est: any) {
@@ -74,6 +74,8 @@ export function publicLines(lines: any[]) {
     product_url: l.part_product_url || null,
     kit_header: !!l.kit_header,
     kit_component: !!l.kit_component,
+    // A hitch kit's parts show their photos under the kit line.
+    kit_photo: kitComponentShowsPhoto(l),
     // The line's own discount (migration 350), shown as a row under it.
     discount_type: l.discount_type ?? null,
     discount_value: l.discount_value ?? null,

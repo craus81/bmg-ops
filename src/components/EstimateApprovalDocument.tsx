@@ -70,6 +70,14 @@ export default function EstimateApprovalDocument({ estimate: est, lines, graphic
               key={l.id}
               style={{ display: 'flex', gap: '12px', alignItems: 'baseline', padding: '2px 0 4px 18px', fontSize: '12px', color: '#475569' }}
             >
+              {l.kit_photo && l.image_url && (
+                <ZoomableImage
+                  src={l.image_url}
+                  alt={l.item_number || 'Part'}
+                  wrapStyle={{ flexShrink: 0, alignSelf: 'center' }}
+                  style={{ width: '40px', height: '40px', objectFit: 'contain', borderRadius: '4px', border: '1px solid #e2e8f0', background: '#fff' }}
+                />
+              )}
               <div style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
                 ↳ <span style={{ fontWeight: 600, color: '#334155' }}>{l.item_number || l.description || 'Part'}</span>
                 {l.description && l.description !== l.item_number && <span> {l.description}</span>}
