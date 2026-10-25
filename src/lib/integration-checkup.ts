@@ -182,6 +182,7 @@ export const ENV_SPECS: EnvSpec[] = [
   { name: 'PROOF_SUBJECT_KEYWORDS', group: 'platform', powers: 'Subject matching for the proof sweep', whenMissing: 'off' },
 
   // --- Not wired up ---
+  { name: 'CARSXE_API_KEY', group: 'optional', powers: 'Paid factory data in the VIN Lookup window (bed length, roof height, dimensions) — without it the window shows the free NHTSA decode only', whenMissing: 'off' },
   { name: 'DROPBOX_APP_KEY', group: 'optional', powers: 'Dropbox proof sync', whenMissing: 'off' },
   { name: 'DROPBOX_APP_SECRET', group: 'optional', powers: 'Dropbox proof sync', whenMissing: 'off' },
   { name: 'DROPBOX_CLIENT_FILES_PATH', group: 'optional', powers: 'Which Dropbox folder Client Files copies; unset means /OFFICE/Clients', whenMissing: 'off' },
