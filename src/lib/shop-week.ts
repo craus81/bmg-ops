@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from './fetch-all';
 import { chicagoDay } from './exec-metrics';
 import { groupArrivals, loadArrivalLinks } from './arrival-groups';
+import { loadStaffCalendar, dayCapacity, rosterCovers, type StaffDepartment } from './shop-staff';
 
 /**
  * Shop week planner data (R5-16): what lands each day — arriving vehicles
@@ -37,6 +38,14 @@ export interface ShopWeekDay {
   totalUnits: number;
   capacityHours: number | null;
   overrideNote: string | null;
+  /** Where capacityHours came from: a per-day override, the staff
+   *  calendar (migration 441), crew size × shift hours, or nothing. */
+  capacitySource: 'override' | 'roster' | 'crew' | null;
+  /** Graphics install hours available (staff calendar); null when no
+   *  graphics installer is on the roster. Shown, not yet compared. */
+  graphicsCapacityHours: number | null;
+  /** Rostered people out that day. */
+  out: { name: string; department: StaffDepartment; hours: number; fullDay: boolean }[];
 }
 
 export type LoadTone = 'green' | 'amber' | 'red' | 'none';
@@ -90,6 +99,8 @@ export interface ShopWeek {
   days: ShopWeekDay[];
   capacityConfigured: boolean;
   baseCapacityHours: number | null;
+  /** The upfit shop's capacity comes from the staff calendar. */
+  rosterConfigured: boolean;
   inShopNow: number;
   /** Overall sold-hours coverage across the window's units. */
   coverage: { known: number; total: number };
@@ -98,7 +109,7 @@ export interface ShopWeek {
 export async function loadShopWeek(service: SupabaseClient, start: string, numDays: number): Promise<ShopWeek> {
   const end = addDays(start, numDays); // exclusive
 
-  const [inboundRes, upfitRes, promisedRes, settingsRes, overridesRes, inShopRes] = await Promise.all([
+  const [inboundRes, upfitRes, promisedRes, settingsRes, overridesRes, inShopRes, staffCal] = await Promise.all([
     fetchAllRows<any>((from, to) => service
       .from('shop_inbound')
       // Every expected row, not just this window's: a van's undated SO row
@@ -130,6 +141,7 @@ export async function loadShopWeek(service: SupabaseClient, start: string, numDa
     service.from('quote_settings').select('shop_crew_size, shop_shift_hours').eq('id', 1).maybeSingle(),
     service.from('shop_capacity_overrides').select('day, hours, note').gte('day', start).lt('day', end),
     service.from('fleet_checkins').select('id', { count: 'exact', head: true }).in('status', IN_SHOP).is('archived_at', null),
+    loadStaffCalendar(service, start, end),
   ]);
   for (const r of [inboundRes, upfitRes, promisedRes]) {
     if (r.error) throw new Error(r.error.message);
@@ -138,6 +150,10 @@ export async function loadShopWeek(service: SupabaseClient, start: string, numDa
   const crew = settingsRes.data?.shop_crew_size != null ? Number(settingsRes.data.shop_crew_size) : null;
   const shift = settingsRes.data?.shop_shift_hours != null ? Number(settingsRes.data.shop_shift_hours) : null;
   const baseCapacity = crew != null && shift != null ? Math.round(crew * shift * 10) / 10 : null;
+  // Staff calendar: once anyone active is on the upfit roster, who's
+  // working replaces crew × shift as the upfit shop's daily capacity.
+  const rosterUpfit = rosterCovers(staffCal.staff, 'upfit');
+  const rosterGraphics = rosterCovers(staffCal.staff, 'graphics_install');
   const overrideByDay = new Map<string, { hours: number; note: string | null }>(
     (overridesRes.data || []).map((o: any) => [o.day, { hours: Number(o.hours), note: o.note }]),
   );
@@ -257,14 +273,20 @@ export async function loadShopWeek(service: SupabaseClient, start: string, numDa
     const demandUnits = units.filter(u => u.kind !== 'promised');
     const demandHours = Math.round(demandUnits.reduce((s, u) => s + (u.hours || 0), 0) * 10) / 10;
     const override = overrideByDay.get(day);
+    const cap = dayCapacity(staffCal.staff, staffCal.timeOff, day);
+    const rosterHours = rosterUpfit ? cap.hours.upfit : null;
+    const capacitySource = override ? 'override' : rosterUpfit ? 'roster' : baseCapacity != null ? 'crew' : null;
     days.push({
       day,
       units,
       demandHours,
       knownHours: demandUnits.filter(u => u.hours != null).length,
       totalUnits: demandUnits.length,
-      capacityHours: override ? override.hours : baseCapacity,
+      capacityHours: override ? override.hours : rosterUpfit ? rosterHours : baseCapacity,
       overrideNote: override?.note || null,
+      capacitySource,
+      graphicsCapacityHours: rosterGraphics ? cap.hours.graphics_install : null,
+      out: cap.out.map(o => ({ name: o.name, department: o.department, hours: o.hours, fullDay: o.fullDay })),
     });
   }
 
@@ -275,8 +297,9 @@ export async function loadShopWeek(service: SupabaseClient, start: string, numDa
   return {
     start,
     days,
-    capacityConfigured: baseCapacity != null,
+    capacityConfigured: baseCapacity != null || rosterUpfit,
     baseCapacityHours: baseCapacity,
+    rosterConfigured: rosterUpfit,
     inShopNow: inShopRes.count || 0,
     coverage,
   };

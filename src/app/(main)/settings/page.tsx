@@ -1232,7 +1232,9 @@ export default function SettingsPage() {
               Installers on the floor on a normal day × hours each works. The Shop Week planner colors
               each day&apos;s load bar against crew × shift hours; one-off days (holiday, short crew) can be
               overridden per day from the planner API. Leave both blank and the planner shows demand
-              hours without judging them.
+              hours without judging them. Once anyone is on the upfit list in the{' '}
+              <a href="/admin/staff-calendar" style={{ color: '#60a5fa' }}>Staff calendar</a>, who&apos;s working
+              replaces this number.
             </div>
             <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
               <div>

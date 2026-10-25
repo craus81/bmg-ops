@@ -157,6 +157,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // Shop crew capacity (R5-16 week planner): reading the crew/shift config
   // is admin; writing is super-admin — it recolors every load bar.
   'src/app/api/admin/shop-capacity/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
+  'src/app/api/admin/shop-staff/route.ts': admin(),
   'src/app/api/admin/payouts/route.ts': admin(),
   'src/app/api/admin/payroll/route.ts': admin(),
   'src/app/api/admin/review-link/route.ts': admin(),
