@@ -103,6 +103,7 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   // ── Sales & quotes ────────────────────────────────────────────────────
   { type: 'quote_followup', label: 'Quote needs a follow-up', description: 'A sent quote has gone quiet and is due a chase. Nothing goes to the customer automatically — this is the prompt to send it.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'] },
   { type: 'outreach_response', label: 'Outreach: call booked or call-back asked', description: 'Someone you emailed from Outreach picked a time for a call or asked you to call them.', area: 'sales', defaultChannels: ['in_app', 'push', 'email'], emailNow: true },
+  { type: 'outreach_followup', label: 'Outreach: follow-up ready', description: 'A company you emailed from Outreach hasn\'t answered in a week, and a follow-up draft is waiting for you to review and send.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'prospect_reminder', label: 'Lead follow-up due', description: 'A reminder you set on a prospect has come round.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'deal_overdue', label: 'Deal past its close date', description: 'An opportunity is still open past when it was expected to close.', area: 'sales', defaultChannels: ['in_app', 'push'] },
   { type: 'pipeline_movement', label: 'Deal changed stage', description: 'An opportunity moved forward or back in the pipeline.', area: 'sales', defaultChannels: ['in_app'] },
