@@ -423,7 +423,7 @@ async function notifyCompletion(vehicle: any, actorName: string) {
       : `Install complete: ${vehicleLabel}`,
     body: `${actorName} marked ${vehicleLabel}${hasCustomer ? ` (${vehicle.customer_name})` : ''} complete. VIN ${vehicle.vin}.`
       + (hasCustomer
-        ? ' Nothing has gone to the customer: open the vehicle and use Email Customer to send them the pickup booking link.'
+        ? ' Nothing has gone to the customer: open the vehicle and use Email Customer to tell them it is ready for pickup.'
         : ''),
     url: deepLinks.vehicle(vehicle.id),
   });

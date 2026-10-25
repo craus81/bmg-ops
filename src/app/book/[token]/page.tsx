@@ -121,6 +121,9 @@ export default function BookingPage() {
   if (view.status === 'closed') {
     return frame(<div>{view.kind === 'pickup' ? 'This vehicle has already been picked up.' : 'This order is closed.'} Questions? Contact BMG Fleet Installations.</div>);
   }
+  if (view.status === 'no_pickup') {
+    return frame(<div>Pickup times aren&apos;t booked online. Please reply to our email or call BMG Fleet Installations to arrange pickup.</div>);
+  }
   if (view.status === 'disabled') return frame(<div>Online booking is currently unavailable — please contact us to schedule.</div>);
 
   const current = view.booking;

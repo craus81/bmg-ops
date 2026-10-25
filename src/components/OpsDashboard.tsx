@@ -394,8 +394,9 @@ export default function OpsDashboard() {
         .eq('status', 'active')
         .neq('record_type', 'vendor')
         .lt('updated_at', new Date(Date.now() - 30 * 86_400_000).toISOString()),
-      // Ready for pickup with NO booked slot (R5-17): complete vehicles
-      // auto-archive never touches — someone should be chasing each one.
+      // Ready for pickup (R5-17): complete vehicles auto-archive never
+      // touches — someone should be chasing each one. The booked-slot filter
+      // only skips pickups booked before online pickup booking was retired.
       supabase.from('fleet_checkins').select('*', { count: 'exact', head: true })
         .eq('status', 'complete')
         .is('archived_at', null)
@@ -559,8 +560,8 @@ export default function OpsDashboard() {
     const readyPickup = count(readyPickupRes, 'ready for pickup');
     if (readyPickup > 0) queue.push({
       key: 'ready-pickup', count: readyPickup, tone: 'warn', path: '/tracking',
-      title: 'Ready for pickup, no booking yet',
-      detail: 'Complete vehicles in the lot — the nudge cron mails the booking link; call the stragglers',
+      title: 'Ready for pickup',
+      detail: 'Complete vehicles still in the lot — email or call the customer to arrange pickup',
     });
     const pendingUsers = count(usersRes, 'users');
     if (pendingUsers > 0 && hasFeature('user_management')) queue.push({

@@ -28,14 +28,14 @@ describe('decideNudges', () => {
     expect(plan.escalations).toEqual([]); // already escalated
   });
 
-  it('leaves booked vehicles, tokenless rows, and pre-feature relics alone', () => {
+  it('leaves booked vehicles and pre-feature relics alone, and chases tokenless rows', () => {
     const plan = decideNudges([
       { ...base, id: 'booked', daysReady: 10, hasBooking: true },
       { ...base, id: 'no-token', daysReady: 10, portalToken: null },
       { ...base, id: 'relic', daysReady: 200 }, // months old — no auto-email blast
     ], 3, NOW);
-    expect(plan.nudges).toEqual([]);
-    // A tokenless vehicle can still escalate to staff; booked and relic don't.
+    // The reminder has no booking link any more, so a token isn't needed.
+    expect(plan.nudges.map(v => v.id)).toEqual(['no-token']);
     expect(plan.escalations.map(v => v.id)).toEqual(['no-token']);
   });
 });

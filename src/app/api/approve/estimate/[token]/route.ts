@@ -31,6 +31,7 @@ import { recordQuoteView } from '@/lib/quote-view-recorder';
 import { loadApprovalDownloads } from '@/lib/estimate-approval-downloads';
 import { jobCoversEstimate } from '@/lib/graphics-fleet';
 import { resolveProofResponder } from '@/lib/proof-responder';
+import { loadBookingSettings } from '@/lib/booking';
 
 export const dynamic = 'force-dynamic';
 
@@ -87,8 +88,11 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   // Download links (the estimate PDF and the files the email carried) stay
   // on the decided screens too: a customer who approved last week and
   // wants the PDF again should not have to dig out the email.
+  // bookingOpen drives the "Schedule your drop-off" button on the accepted
+  // screen: while online booking is switched off in Settings the button is
+  // hidden rather than leading to a "booking unavailable" page.
   if (estimate.customer_approved) {
-    return NextResponse.json({ status: 'already_approved', estimate: publicEstimate(estimate), downloads: await loadApprovalDownloads(supabase, estimate, [], '', params.token) });
+    return NextResponse.json({ status: 'already_approved', estimate: publicEstimate(estimate), downloads: await loadApprovalDownloads(supabase, estimate, [], '', params.token), bookingOpen: (await loadBookingSettings(supabase)).enabled });
   }
   if (estimate.customer_rejected_at) {
     return NextResponse.json({ status: 'already_rejected', estimate: publicEstimate(estimate), downloads: await loadApprovalDownloads(supabase, estimate, [], '', params.token) });
@@ -125,6 +129,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     lines: publicLines(lines),
     // Same-origin links (appUrl '') so a preview deploy serves its own.
     downloads: await loadApprovalDownloads(supabase, estimate, proofs, '', params.token),
+    bookingOpen: (await loadBookingSettings(supabase)).enabled,
   });
 }
 
