@@ -7,6 +7,8 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
 import { kitBuildableFor, loadKits, loadKitStock, type KitStock, type KitWithMembers } from '@/lib/part-kits';
 import { rackBaseNumber, rackFacets, rackMatchesSearch, type RackFacets } from '@/lib/rack-kit-facets';
+import type { AddonLine } from '@/lib/rack-picker';
+import RackStepPicker from '@/components/RackStepPicker';
 
 /**
  * Browse every rack kit (Craig 2026-10-20): one list with a search box and
@@ -263,24 +265,42 @@ export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice
   );
 }
 
-/** The estimate builder's Rack kits window. */
-export function RackKitBrowserModal({ open, onClose, onAdd, showPrice }: {
+/**
+ * The estimate builder's ladder rack window (Craig 2026-10-25: replaces the
+ * Rack kits list). "Build a rack" walks the kits a step at a time
+ * (RackStepPicker); "Search all racks" is the full list with filters.
+ */
+export function RackKitBrowserModal({ open, onClose, onAdd, onAddBuilt, showPrice }: {
   open: boolean;
   onClose: () => void;
   onAdd: (kit: KitWithMembers) => void;
+  onAddBuilt: (kit: KitWithMembers, kitName: string, addons: AddonLine[]) => void;
   showPrice: boolean;
 }) {
+  const [tab, setTab] = useState<'build' | 'search'>('build');
   if (!open) return null;
+  const tabBtn = (t: 'build' | 'search', text: string) => (
+    <button type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
+      style={{ padding: '6px 12px', borderRadius: '6px', border: 'none', background: tab === t ? 'var(--card)' : 'transparent', color: tab === t ? 'var(--text-primary)' : 'var(--text-muted)', fontSize: '12px', fontWeight: 800, cursor: 'pointer', boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.2)' : 'none' }}>
+      {text}
+    </button>
+  );
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'var(--overlay)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }} ref={closeOnEscape(onClose)}>
-      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg, var(--card))', borderRadius: '16px', width: '100%', maxWidth: '1100px', height: 'calc(88vh / var(--ts))', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border)', boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ fontSize: '16px', fontWeight: 800 }}>Rack kits</div>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg, var(--card))', borderRadius: '16px', width: '100%', maxWidth: tab === 'build' ? '720px' : '1100px', height: 'calc(88vh / var(--ts))', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid var(--border)', boxShadow: '0 12px 40px rgba(0,0,0,0.4)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+          <div style={{ fontSize: '16px', fontWeight: 800 }}>Ladder rack</div>
+          <div role="tablist" style={{ display: 'flex', gap: '2px', padding: '3px', borderRadius: '8px', background: 'var(--subtle-bg, rgba(128,128,128,0.12))' }}>
+            {tabBtn('build', 'Build a rack')}
+            {tabBtn('search', 'Search all racks')}
+          </div>
           <span style={{ flex: 1 }} />
           <button type="button" onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
         </div>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 16px' }}>
-          <RackKitBrowser onAdd={onAdd} showPrice={showPrice} />
+          {tab === 'build'
+            ? <RackStepPicker onAdd={onAddBuilt} showPrice={showPrice} />
+            : <RackKitBrowser onAdd={onAdd} showPrice={showPrice} />}
         </div>
       </div>
     </div>
