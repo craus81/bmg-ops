@@ -7,6 +7,8 @@ import { useFocusTrap } from '@/lib/use-focus-trap';
 import VinScanner from '@/components/VinScanner';
 import { decodeVinDetails, isValidVIN, windowStickerUrl, type VinDetails } from '@/lib/vin-decoder';
 import { resolvePlatform } from '@/lib/vin-platform';
+import { apiFetch } from '@/lib/api-client';
+import { mergeFactory, type FactoryData } from '@/lib/vin-factory-data';
 
 /**
  * Stand-alone VIN lookup (header "VIN" button). Type, paste or scan a VIN and
@@ -22,6 +24,8 @@ export default function VinLookupModal({ open, onClose }: { open: boolean; onClo
   const [details, setDetails] = useState<VinDetails | null>(null);
   const [lookedUp, setLookedUp] = useState('');
   const [copied, setCopied] = useState('');
+  // Paid factory data (CarsXE), fetched after the free NHTSA decode.
+  const [factory, setFactory] = useState<{ loading: boolean; data: FactoryData | null; message: string }>({ loading: false, data: null, message: '' });
   const inputRef = useRef<HTMLInputElement>(null);
   const trapRef = useFocusTrap<HTMLDivElement>(open);
 
@@ -40,6 +44,7 @@ export default function VinLookupModal({ open, onClose }: { open: boolean; onClo
     setScanning(false);
     setError('');
     setDetails(null);
+    setFactory({ loading: false, data: null, message: '' });
     if (!isValidVIN(v)) {
       setError(v.length !== 17
         ? `A VIN is 17 characters — this one has ${v.length}.`
@@ -47,9 +52,11 @@ export default function VinLookupModal({ open, onClose }: { open: boolean; onClo
       return;
     }
     setLoading(true);
+    let cab = '';
     try {
       const d = await decodeVinDetails(v);
-      if (!d.title) setError("NHTSA doesn't recognise this VIN. Double-check it against the door sticker.");
+      cab = d.groups[1]?.rows.find(r => r.label === 'Cab')?.value || '';
+      if (!d.title) setDetails(d);
       else {
         // Transit roof height and Sprinter wheelbase live in the VIN body
         // code, not in NHTSA's data — fill them from our own rules.
@@ -69,17 +76,33 @@ export default function VinLookupModal({ open, onClose }: { open: boolean; onClo
       }
       setLookedUp(v);
     } catch {
-      setError("Couldn't reach NHTSA's VIN service. Check the connection and try again.");
+      setLookedUp(v);
     } finally {
       setLoading(false);
     }
+    void loadFactory(v, cab);
   };
 
+  const loadFactory = async (v: string, cab: string) => {
+    setFactory({ loading: true, data: null, message: '' });
+    try {
+      const res = await apiFetch(`/api/vin-lookup?vin=${v}&cab=${encodeURIComponent(cab)}`);
+      const j = await res.json();
+      if (j.configured === false) { setFactory({ loading: false, data: null, message: '' }); return; }
+      setFactory({ loading: false, data: j.found ? j.data : null, message: j.found ? '' : (j.message || j.error || '') });
+    } catch {
+      setFactory({ loading: false, data: null, message: "Couldn't reach the factory data service" });
+    }
+  };
+
+  const shown = mergeFactory(details, factory.data);
+  const nothing = !!lookedUp && !loading && !factory.loading && !shown?.title;
+
   const copy = async (what: 'vin' | 'all') => {
-    if (!details) return;
+    if (!shown) return;
     const text = what === 'vin'
       ? lookedUp
-      : [details.title, `VIN ${lookedUp}`, ...details.groups.flatMap(g => g.rows.filter(r => r.value).map(r => `${r.label}: ${r.value}`))].join('\n');
+      : [shown.title, `VIN ${lookedUp}`, ...shown.groups.flatMap(g => g.rows.filter(r => r.value).map(r => `${r.label}: ${r.value}`))].join('\n');
     try {
       await navigator.clipboard.writeText(text);
       setCopied(what);
@@ -89,12 +112,14 @@ export default function VinLookupModal({ open, onClose }: { open: boolean; onClo
 
   const reset = () => {
     setVin(''); setDetails(null); setError(''); setLookedUp('');
+    setFactory({ loading: false, data: null, message: '' });
     setTimeout(() => inputRef.current?.focus(), 50);
   };
 
-  const sticker = details ? windowStickerUrl(details.make, lookedUp) : null;
-  const missingBed = details?.groups[1].rows.some(r => r.label === 'Bed length' && !r.value)
-    && /pickup/i.test(details.groups[1].rows.find(r => r.label === 'Body')?.value || '');
+  const sticker = shown?.make ? windowStickerUrl(shown.make, lookedUp) : null;
+  const body = shown?.groups.find(g => g.heading === 'Body')?.rows || [];
+  const missingBed = !factory.loading && body.some(r => r.label === 'Bed length' && !r.value)
+    && /pickup/i.test(body.find(r => r.label === 'Body')?.value || '');
 
   const btn = (primary = false): React.CSSProperties => ({
     padding: '9px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
@@ -167,25 +192,41 @@ export default function VinLookupModal({ open, onClose }: { open: boolean; onClo
             </div>
           )}
 
-          {details && (
+          {nothing && (
+            <div role="alert" style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', fontSize: '13px', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, color: theme.error }}>
+              Nobody recognises this VIN{factory.message ? ` (${factory.message})` : ''}. Double-check it against the door sticker.
+            </div>
+          )}
+
+          {shown?.title && (
             <div style={{ marginTop: '14px' }}>
-              <div style={{ fontSize: '18px', fontWeight: 800 }}>{details.title}</div>
+              <div style={{ fontSize: '18px', fontWeight: 800 }}>{shown.title}</div>
               <div style={{ fontSize: '12px', color: theme.textMuted, fontFamily: 'ui-monospace, Menlo, monospace', marginTop: '2px' }}>{lookedUp}</div>
 
-              {details.warning && (
+              {factory.loading && (
+                <div style={{ marginTop: '10px', fontSize: '12px', color: theme.textMuted }}>Getting factory data (bed, roof, dimensions)…</div>
+              )}
+              {!factory.loading && factory.message && (
+                <div style={{ marginTop: '10px', fontSize: '12px', color: theme.textMuted }}>Factory data: {factory.message}</div>
+              )}
+
+              {shown.warning && (
                 <div style={{ marginTop: '10px', padding: '8px 10px', borderRadius: '8px', fontSize: '12px', background: theme.warningBg, border: `1px solid ${theme.warningBorder}`, color: theme.warning }}>
-                  NHTSA note: {details.warning}
+                  NHTSA note: {shown.warning}
                 </div>
               )}
 
-              {details.groups.map(g => (
+              {shown.groups.filter(g => g.rows.length).map(g => (
                 <div key={g.heading} style={{ marginTop: '14px' }}>
                   <div style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.6px', textTransform: 'uppercase', color: theme.textMuted, marginBottom: '4px' }}>{g.heading}</div>
                   {g.rows.map(r => (
                     <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '6px 0', borderBottom: `1px solid ${theme.border}`, fontSize: '14px' }}>
                       <span style={{ color: theme.textSecondary, flexShrink: 0 }}>{r.label}</span>
                       <span style={{ textAlign: 'right', fontWeight: r.value ? 600 : 400, color: r.value ? theme.textPrimary : theme.textMuted, fontStyle: r.value ? 'normal' : 'italic' }}>
-                        {r.value || 'Not in the VIN'}
+                        {r.value || (factory.loading ? '…' : 'Not in the VIN')}
+                        {r.value && r.note && (
+                          <span style={{ display: 'block', fontSize: '11px', fontWeight: 400, color: theme.textMuted }}>{r.note}</span>
+                        )}
                       </span>
                     </div>
                   ))}
@@ -196,9 +237,21 @@ export default function VinLookupModal({ open, onClose }: { open: boolean; onClo
                 <div style={{ marginTop: '14px', padding: '10px 12px', borderRadius: '8px', fontSize: '13px', background: theme.bg, border: `1px solid ${theme.border}` }}>
                   {missingBed && <div style={{ marginBottom: sticker ? '6px' : 0 }}>This maker doesn&apos;t put bed length in the VIN. The window sticker lists it.</div>}
                   {sticker
-                    ? <a href={sticker} target="_blank" rel="noopener noreferrer" style={{ color: theme.orange, fontWeight: 700 }}>Open the {details.make} window sticker ↗</a>
+                    ? <a href={sticker} target="_blank" rel="noopener noreferrer" style={{ color: theme.orange, fontWeight: 700 }}>Open the {shown.make} window sticker (not every vehicle has one) ↗</a>
                     : <span style={{ color: theme.textMuted }}>Check the door sticker or the build sheet.</span>}
                 </div>
+              )}
+
+              {factory.data && factory.data.raw.length > 0 && (
+                <details style={{ marginTop: '14px', fontSize: '13px' }}>
+                  <summary style={{ cursor: 'pointer', color: theme.textSecondary, fontWeight: 700 }}>All factory fields ({factory.data.raw.length})</summary>
+                  {factory.data.raw.map(r => (
+                    <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', padding: '4px 0', borderBottom: `1px solid ${theme.border}` }}>
+                      <span style={{ color: theme.textSecondary, flexShrink: 0 }}>{r.label}</span>
+                      <span style={{ textAlign: 'right', wordBreak: 'break-word' }}>{r.value}</span>
+                    </div>
+                  ))}
+                </details>
               )}
 
               <div style={{ display: 'flex', gap: '8px', marginTop: '16px', flexWrap: 'wrap' }}>

@@ -149,7 +149,7 @@ export async function decodeVinsBatch(
 }
 
 /** One labelled row in the VIN lookup window; value '' means "not in the VIN". */
-export interface VinDetailRow { label: string; value: string }
+export interface VinDetailRow { label: string; value: string; /** Where a value came from, when not NHTSA ("CarsXE · from 145\" wheelbase"). */ note?: string }
 
 export interface VinDetails {
   /** Headline, e.g. "2024 Ford F-150 XLT". Empty when vPIC knew nothing. */
