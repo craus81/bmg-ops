@@ -8,6 +8,7 @@ import { suiteqlQuery, createItemReceiptFromPo } from '@/lib/netsuite';
 import { mapReceiptLines, type NsPoLine } from '@/lib/po-receiving';
 import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
 import { computePartsReadiness } from '@/lib/parts-readiness';
+import { saveOwnReceipt } from '@/lib/books/own-receipts';
 
 const supabase = createServiceClient();
 
@@ -86,7 +87,7 @@ export async function POST(req: NextRequest) {
 
   const { data: po } = await supabase
     .from('netsuite_vendor_pos')
-    .select('id, netsuite_id, tranid, vendor_name, status')
+    .select('id, netsuite_id, tranid, vendor_name, vendor_netsuite_id, status')
     .eq('id', body.poId)
     .maybeSingle();
   if (!po) return NextResponse.json({ error: 'PO not found' }, { status: 404 });
@@ -96,7 +97,7 @@ export async function POST(req: NextRequest) {
 
   const { data: mirrorLines } = await supabase
     .from('netsuite_vendor_po_lines')
-    .select('line_id, item_netsuite_id, item_number, description, quantity, quantity_received')
+    .select('line_id, item_netsuite_id, item_number, description, quantity, quantity_received, rate')
     .eq('po_id', po.id);
   const mirrorByLineId = new Map((mirrorLines || []).map((l: any) => [l.line_id as string, l]));
 
@@ -226,7 +227,7 @@ export async function POST(req: NextRequest) {
     };
   });
   const { data: insertedReceipts, error: insertErr } = await supabase
-    .from('po_receipts').insert(rows).select('id, item_number');
+    .from('po_receipts').insert(rows).select('id, item_number, line_id');
   if (insertErr) {
     // The NetSuite receipt (if posted) exists regardless — say so instead
     // of inviting a retry that would double-receive.
@@ -234,6 +235,27 @@ export async function POST(req: NextRequest) {
       error: `${posted ? `Item receipt ${receiptNumber || receiptId} posted to NetSuite, but the` : 'The'} local receipt record failed: ${insertErr.message}`,
     }, { status: 500 });
   }
+
+  // Books keeps its own copy of the Receive at the PO's prices
+  // (src/lib/books/own-receipts.ts). It never stops the Receive.
+  const rowIdByLine = new Map((insertedReceipts || []).map((r: any) => [r.line_id as string, r.id as string]));
+  await saveOwnReceipt(supabase, {
+    rows: rows.map(r => ({
+      id: rowIdByLine.get(r.line_id) ?? null,
+      lineId: r.line_id,
+      itemId: r.item_netsuite_id,
+      itemNumber: r.item_number,
+      description: r.description,
+      quantity: r.quantity,
+      rate: mirrorByLineId.get(r.line_id)?.rate ?? null,
+    })),
+    netsuiteId: receiptId,
+    netsuiteNumber: receiptNumber,
+    netsuiteError: posted ? null : nsError,
+    po: { netsuiteId: po.netsuite_id, number: po.tranid, vendorId: po.vendor_netsuite_id, vendorName: po.vendor_name },
+    receiveDate: today,
+    madeBy: auth.user.id,
+  });
 
   // ── R6-7: structured dock exceptions ────────────────────────────────
   // Short / damaged / wrong-item flags become their own rows so open

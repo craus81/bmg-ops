@@ -3,6 +3,8 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, validateSearchParams, z } from '@/lib/validate';
 import { findLocation, createVendorBill } from '@/lib/netsuite';
+import { makeBillOnce } from '@/lib/bill-once';
+import { saveOwnBill } from '@/lib/books/own-bills';
 import { logAudit } from '@/lib/audit';
 import { notify } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
@@ -500,22 +502,39 @@ export async function POST(req: NextRequest) {
         referenceNo = `${job?.job_number ? job.job_number + '-' : 'CNI-'}${payout.id.slice(0, 8)}`;
       }
 
-      const bill = await createVendorBill({
-        vendorId, accountId: SUBCONTRACTOR_ACCT_ID, amount,
+      // Once only: two screens at once, or a try again after a failed
+      // stamp, are turned away (src/lib/bill-once.ts, migration 435).
+      const bill = await makeBillOnce(service, 'payouts', payout.id, {
+        vendorId,
+        vendorName: prof?.full_name || 'this installer',
         referenceNo,
-        subsidiaryId: BILL_SUBSIDIARY_ID, locationId: location.id,
-        memo, lineMemo: memo,
+        create: () => createVendorBill({
+          vendorId, accountId: SUBCONTRACTOR_ACCT_ID, amount,
+          referenceNo,
+          subsidiaryId: BILL_SUBSIDIARY_ID, locationId: location.id,
+          memo, lineMemo: memo,
+        }),
       });
-      if (!bill.success) {
-        return NextResponse.json({ error: bill.error || 'Failed to create vendor bill' }, { status: 502 });
+      if (!bill.ok) {
+        return NextResponse.json({ error: bill.error }, { status: bill.status });
       }
       const billRef = bill.billNumber || bill.billId || '';
+      // Books keeps its own copy of what was sent (src/lib/books/own-bills.ts); it never stops the bill.
+      await saveOwnBill(service, {
+        netsuiteId: bill.billId, netsuiteNumber: bill.billNumber, madeFrom: 'payout', madeFromId: payout.id, madeBy: auth.user.id,
+        vendorId, vendorName: prof?.full_name ?? null, referenceNo, subsidiaryId: BILL_SUBSIDIARY_ID, locationId: location.id,
+        expense: { accountId: SUBCONTRACTOR_ACCT_ID, amount, memo },
+      });
 
       const { error } = await service
         .from('payouts')
-        .update({ status: 'billed', netsuite_bill_id: billRef, billed_by: auth.user.id, billed_at: new Date().toISOString() })
+        .update({
+          status: 'billed', netsuite_bill_id: billRef, billed_by: auth.user.id, billed_at: new Date().toISOString(),
+          ...(bill.claimedAt ? { bill_claimed_at: null } : {}),
+        })
         .eq('id', payout.id);
-      if (error) return NextResponse.json({ error: 'Bill created in NetSuite but failed to update payout: ' + error.message }, { status: 500 });
+      // The claim stays held, so nobody bills it again while it reads approved.
+      if (error) return NextResponse.json({ error: `Bill ${billRef} was created in NetSuite but marking the payout billed failed: ${error.message}. Use Record bill with ${billRef}.` }, { status: 500 });
       await logAudit(service, {
         actorId: auth.user.id,
         table: 'payouts',

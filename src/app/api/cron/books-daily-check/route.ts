@@ -14,10 +14,12 @@ export const maxDuration = 300;
  * Differences vs NetSuite does, each item's count next to NetSuite's, as
  * Stock by item does, each customer's and vendor's balance next to
  * NetSuite's, as Customer and vendor balances does, each of FleetSuite's
- * own invoices next to NetSuite's, as Own invoices does, and each of its
- * own fulfillments next to NetSuite's, as Own fulfillments does, and tells
- * the super admins in FleetSuite, in the app and by push, when a month, an
- * item, a balance, an own invoice or an own fulfillment stops matching,
+ * own invoices next to NetSuite's, as Own invoices does, each of its own
+ * fulfillments next to NetSuite's, as Own fulfillments does, and each of
+ * Books' own bills and receipts next to NetSuite's, as Own bills and Own
+ * receipts do, and tells the super admins in FleetSuite, in the app and by
+ * push, when a month, an item, a balance, an own invoice, fulfillment, bill
+ * or receipt stops matching,
  * or when the night's mistake checks found a likely mistake nobody has
  * cleared, with a link to it there
  * (src/lib/books/daily-check.ts, docs/books.md "Daily check"). The
@@ -51,6 +53,8 @@ export async function GET(req: NextRequest) {
       else if (alert.about === 'balance') await notifyMany(ids, { type: 'books_balance_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'own') await notifyMany(ids, { type: 'books_own_invoice_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'fulfillment') await notifyMany(ids, { type: 'books_own_fulfillment_differs', ...sent, channels: ['in_app', 'push'] });
+      else if (alert.about === 'bill') await notifyMany(ids, { type: 'books_own_bill_differs', ...sent, channels: ['in_app', 'push'] });
+      else if (alert.about === 'receipt') await notifyMany(ids, { type: 'books_own_receipt_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'mistake') await notifyMany(ids, { type: 'books_mistake_found', ...sent, channels: ['in_app', 'push'] });
       else await notifyMany(ids, { type: 'books_month_differs', ...sent, channels: ['in_app', 'push'] });
     }

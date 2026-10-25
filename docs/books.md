@@ -42,9 +42,11 @@ own rules and checked against NetSuite's invoice each morning, part 24,
 those copies posted to the books in place of NetSuite's invoices when they
 match them, part 25, FleetSuite's own copy of each fulfillment it
 makes, with what it cost worked out from stock by item, checked against
-NetSuite's fulfillment each morning, and part 26, a look each night through
+NetSuite's fulfillment each morning, part 26, a look each night through
 the copies of NetSuite's bills, checks and card charges for likely mistakes,
-listed for a super admin to clear.
+listed for a super admin to clear, and part 27, Books' own copy of each bill
+and PO receipt FleetSuite puts into NetSuite, checked against NetSuite's
+each morning, with one bill per approved vendor invoice or installer payout.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -56,7 +58,10 @@ behind one at `/admin/books/balances/party`, FleetSuite's own invoices at
 `/admin/books/own-invoices` and one's check at
 `/admin/books/own-invoices/invoice`, and its own fulfillments at
 `/admin/books/own-fulfillments` and one's check at
-`/admin/books/own-fulfillments/fulfillment`, the mistake checks at
+`/admin/books/own-fulfillments/fulfillment`, its own bills at
+`/admin/books/own-bills` and one's check at `/admin/books/own-bills/bill`,
+its own receipts at `/admin/books/own-receipts` and one's check at
+`/admin/books/own-receipts/receipt`, the mistake checks at
 `/admin/books/mistake-checks`, and sales by location at `/admin/books/sales`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there.
 
@@ -111,7 +116,7 @@ the accounts page; the others are linked from there.
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
-| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs`, `books_balance_differs`, `books_own_invoice_differs`, `books_own_fulfillment_differs` and `books_mistake_found` in `src/lib/notification-registry.ts` |
+| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs`, `books_balance_differs`, `books_own_invoice_differs`, `books_own_fulfillment_differs`, `books_own_bill_differs`, `books_own_receipt_differs` and `books_mistake_found` in `src/lib/notification-registry.ts` |
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
@@ -130,6 +135,9 @@ the accounts page; the others are linked from there.
 | FleetSuite's own fulfillments, saved as each is made, costed from stock by item and checked against NetSuite's | `migrations/416-books-own-fulfillments.sql`, `src/lib/books/own-fulfillments.ts`, `src/lib/books/own-fulfillment-check.ts`; saved by `src/app/api/vehicle-tracking/invoice/route.ts` and `src/app/api/netsuite/create-invoice/route.ts` right after `fulfillSalesOrder` in `src/lib/netsuite.ts` |
 | Own fulfillments and one fulfillment's check, and their API | `src/app/(main)/admin/books/own-fulfillments/page.tsx`, `src/app/(main)/admin/books/own-fulfillments/fulfillment/page.tsx`, `src/app/api/admin/books/own-fulfillments/route.ts` |
 | Own fulfillment tests | `src/lib/books/own-fulfillments.test.ts`, `src/lib/books/own-fulfillment-check.test.ts`, `src/lib/books/own-fulfillments-sql.test.ts`; the daily check's are in its test files |
+| Books' own bills and receipts, saved as FleetSuite makes each and checked against NetSuite's, and one bill per approved vendor invoice or payout | `migrations/435-books-own-bills.sql`, `src/lib/books/own-bills.ts`, `src/lib/books/own-receipts.ts`, `src/lib/books/own-bill-check.ts`, `src/lib/books/own-receipt-check.ts`, `src/lib/bill-once.ts`, `findVendorBill` in `src/lib/netsuite.ts`; saved by `src/app/api/vendor-invoices/workflow/route.ts`, `src/app/api/admin/payouts/route.ts`, `src/app/api/parts-mail/create-bill/route.ts` and `src/app/api/po-receipts/route.ts` |
+| Own bills and own receipts and one's check, and their APIs | `src/app/(main)/admin/books/own-bills/page.tsx`, `src/app/(main)/admin/books/own-bills/bill/page.tsx`, `src/app/(main)/admin/books/own-receipts/page.tsx`, `src/app/(main)/admin/books/own-receipts/receipt/page.tsx`, `src/app/api/admin/books/own-bills/route.ts`, `src/app/api/admin/books/own-receipts/route.ts` |
+| Own bill and receipt tests | `src/lib/books/own-bills.test.ts`, `src/lib/books/own-receipts.test.ts`, `src/lib/books/own-bill-check.test.ts`, `src/lib/books/own-receipt-check.test.ts`, `src/lib/books/own-bills-sql.test.ts`, `src/lib/bill-once.test.ts`; the daily check's are in its test files |
 | Mistake checks: the night's look for likely mistakes in the copies of NetSuite's bills, checks and card charges, each kept for a super admin to clear | `migrations/431-books-mistake-checks.sql`, `src/lib/books/mistake-checks.ts`, `src/app/api/cron/books-mistake-checks/route.ts` |
 | Mistake checks page and its API | `src/app/(main)/admin/books/mistake-checks/page.tsx`, `src/app/api/admin/books/mistake-checks/route.ts` |
 | Mistake check tests | `src/lib/books/mistake-checks.test.ts`, `src/lib/books/mistake-checks-sql.test.ts`; the daily check's are in its test files |
@@ -1732,6 +1740,21 @@ once get one, linking to Own fulfillments open on the newest one's month
 with those that differ. The record (`fulfillments`) holds them by
 NetSuite's id for each, with how many things differ, never an amount.
 
+So are Books' own bills and receipts, the same way (owner decision
+2026-10-24, "Shared bills"): a bill that differs from NetSuite's, on its
+vendor, number, date, company, lines or total, and a receipt that differs
+from NetSuite's item receipt, on its date, company, items or what it added
+to stock, is noted at the first look and told about at the second if it
+still differs, and so is one where more differs than before. A Receive
+NetSuite didn't take isn't told about: it's on Receiving's list to enter by
+hand. Each gets its own notification (`books_own_bill_differs`, naming the
+vendor and the bill, and `books_own_receipt_differs`, naming the PO and its
+vendor, in the app and by push) saying what differs first, linking to its
+check; more than three of either at once get one, linking to Own bills or
+Own receipts open on the newest one's month with those that differ. The
+record holds them (`bills` by NetSuite's id for each bill, `receipts` by
+each copy's key) with how many things differ, never an amount.
+
 So are the likely mistakes the night's mistake checks keep (owner decision
 2026-10-24, "Mistake checks"): one nobody has cleared is noted at the first
 look and told about at the second if it's still open, so one a super admin
@@ -2436,6 +2459,134 @@ order. The daily check tells the super admins when one stops matching
   incomplete.
 - A fulfillment NetSuite took from more than one location differs on
   location: FleetSuite takes each one from one.
+
+## FleetSuite's own bills and receipts
+
+From the day part 27 shipped, Books keeps its own copy of each bill
+FleetSuite puts into NetSuite, and of each receipt of a purchase order's
+items, worked out from what FleetSuite knows rather than read back from
+NetSuite (owner decision 2026-10-24, "Shared bills": each bill is entered
+once, from FleetSuite, and Books keeps its copy to check against
+NetSuite's). The copies are `gl_own_bills` and `gl_own_bill_lines`, and
+`gl_own_receipts` and `gl_own_receipt_lines` (migration 435). They aren't
+posted: the books still post NetSuite's bills ("Vendor bills") and item
+receipts ("Stock and cost"). Nothing more is written to NetSuite than
+before.
+
+FleetSuite makes bills three ways, and each saves a copy right after
+NetSuite makes the bill (`saveOwnBill` in `src/lib/books/own-bills.ts`):
+
+- **Create Bill in NetSuite on an approved CNI vendor invoice**
+  (`/api/vendor-invoices/workflow`) and **on an approved installer payout**
+  (`/api/admin/payouts`): one expense line, to the account and for the
+  amount FleetSuite sent.
+- **Create bill on a Parts Mail invoice** (`/api/parts-mail/create-bill`):
+  NetSuite makes the bill from the invoice's purchase order, at the PO's
+  prices, so the copy's lines are what FleetSuite's copy of the PO
+  (`netsuite_vendor_po_lines`) still had to bill, each line's quantity less
+  what's billed, at the line's price, to the cent. The vendor's invoice
+  total is kept beside them, as the vendor's invoice says it.
+
+A bill is dated the day FleetSuite made it, in Central time: FleetSuite
+sends NetSuite no date for a bill, so NetSuite dates it that day. It's kept
+for the company whose NetSuite subsidiary it was made in, else BMG.
+
+Receive on the Receiving page (`/api/po-receipts`) saves a copy of each
+Receive (`saveOwnReceipt` in `src/lib/books/own-receipts.ts`), keyed by its
+first row in `po_receipts`, as one tap of Receive is one receipt: each item
+and how many, at the price FleetSuite's copy of the PO has for its line,
+with NetSuite's id for the item receipt when NetSuite took it, or what
+NetSuite said when it didn't. It's dated as FleetSuite dated it for
+NetSuite, and kept for BMG, as FleetSuite's copy of a PO doesn't say the
+company.
+
+Saving never stops a bill or a Receive: a copy that can't be saved is
+logged (`[books] own copy of …`) and the work goes on. A copy is kept once;
+saving the same one again changes nothing. Bills and receipts made in
+NetSuite by hand have no copy. What FleetSuite can't work out is kept on the
+copy as unknown, never guessed from NetSuite: a Parts Mail bill's lines (its
+copy of the PO didn't have them yet) and a line's price.
+
+### One bill each
+
+Create Bill in NetSuite on a vendor invoice or a payout claims the row first
+(`bill_claimed_at`, `makeBillOnce` in `src/lib/bill-once.ts`), as Parts
+Mail's bills already did (migration 251), so only one try at a time gets
+past it: a double tap, or two people at once, can't make two bills. Then it
+asks NetSuite for a bill from that vendor with the same Reference No.
+(`findVendorBill` in `src/lib/netsuite.ts`), so a try whose bill NetSuite
+made but FleetSuite never heard back about finds that bill rather than
+making another; when NetSuite can't be asked, it makes none. A bill NetSuite
+refuses lets the claim go, the stamp that the row is billed clears it, and a
+claim over 15 minutes old is taken over.
+
+### The checks
+
+`checkOwnBill` (`src/lib/books/own-bill-check.ts`) puts each bill copy next
+to NetSuite's bill as the copy of NetSuite's bills has it (migration 384):
+its vendor, number and date, the company the copy of its general ledger
+books it to, each line (an expense line by its account, an item line by its
+item, with how many) and its total. NetSuite's tax and layout lines are
+left out. `checkOwnReceipt` (`src/lib/books/own-receipt-check.ts`) puts each
+receipt copy next to NetSuite's item receipt as the copy of NetSuite's stock
+moves has it (migration 401): its date, its company, each item and how
+many, and what it added to stock, the items NetSuite keeps in stock at the
+PO's prices, to the cent, against what NetSuite's receipt posted to the
+inventory accounts, as the copy of its general ledger has it. Where NetSuite
+put it is shown, not compared. A copy:
+
+- **waits** until the copies have NetSuite's bill or receipt, and the
+  ledger entry that says a bill's company or values a receipt. Once the
+  bills copy has run since without the bill, or the stock copy without a
+  receipt of anything kept in stock, NetSuite's is gone;
+- is **not in NetSuite** (a receipt) when NetSuite didn't take the Receive
+  and it's on Receiving's list to enter by hand there;
+- is **voided** ("Gone from NetSuite") when NetSuite's is gone, deleted or
+  voided;
+- **differs** when anything compared differs;
+- is **incomplete** when nothing compared differs but FleetSuite didn't know
+  something, which then isn't compared, or when there's nothing to check
+  against: a receipt entered in NetSuite by hand (Receiving doesn't say
+  which item receipt that is), or one NetSuite didn't say it made;
+- **matches** otherwise.
+
+A receipt's items and how many are compared apart from what it added to
+stock, so another count says so once, and the list's sentence doesn't name
+the cost too, which follows from it; a bill's total likewise follows from
+its lines.
+
+### The pages
+
+`/admin/books/own-bills` (`deepLinks.booksOwnBills`, `?month=YYYY-MM`,
+`&only=differs`) lists a month's bill copies, those that differ first, with
+FleetSuite's total, NetSuite's and the difference and what each was made
+from, how many have each status, how the last copies of NetSuite's bills,
+ledger and lists and the daily check went, and a search. Each opens
+`/admin/books/own-bills/bill?id=` (`deepLinks.booksOwnBill`, by NetSuite's
+id for the bill): what's compared, side by side with why it differs, each
+line on both sides, what FleetSuite didn't know and how it worked the copy
+out, linking to the vendor invoice, payout or Parts Mail it was made from
+and to the bill and PO in NetSuite. `/admin/books/own-receipts`
+(`deepLinks.booksOwnReceipts`) lists a month's receipt copies the same way,
+with what each added to stock on both sides. Each opens
+`/admin/books/own-receipts/receipt?key=` (`deepLinks.booksOwnReceipt`, by
+the copy's key): what's compared, each item with its count and value on
+both sides, linking to its moves on Stock by item, where Receiving's rows
+for it stand, and what NetSuite said when it didn't take it. The daily check
+tells the super admins when one stops matching ("Daily check").
+
+### What isn't done yet
+
+- The copies aren't posted: the books post NetSuite's bills and item
+  receipts.
+- There's no history: copies start the day part 27 shipped.
+- Snapping a bill in Books, and a snapped bill billing its PO, come next.
+- FleetSuite's copy of a PO doesn't say the company, so a Parts Mail bill
+  and a receipt are kept for BMG, and one for 1084 differs on its company.
+- Receiving dates a receipt by the day in UTC, which in the evening, Central
+  time, is already the next day, and NetSuite takes that date.
+- Parts Mail's own claim on its bills doesn't ask NetSuite for the bill
+  before making one, and isn't taken over when it's left behind.
 
 ## Mistake checks
 

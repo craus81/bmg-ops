@@ -3,6 +3,8 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { createVendorBill, findLocation } from '@/lib/netsuite';
+import { makeBillOnce } from '@/lib/bill-once';
+import { saveOwnBill } from '@/lib/books/own-bills';
 import { logAudit } from '@/lib/audit';
 import { notifyMany } from '@/lib/notify';
 import { financeUserIds, apSubmitterUrl } from '@/lib/ap';
@@ -160,24 +162,41 @@ export async function POST(req: NextRequest) {
       // reconcilable.
       const referenceNo = (invoice.invoice_number ? `VI-${invoice.invoice_number}` : `VI-${invoice.id.slice(0, 8)}`).slice(0, 40);
 
-      const bill = await createVendorBill({
+      // Once only: two screens at once, or a try again after a failed
+      // stamp, are turned away (src/lib/bill-once.ts, migration 435).
+      const bill = await makeBillOnce(service, 'vendor_invoices', invoice.id, {
         vendorId,
-        accountId: SUBCONTRACTOR_ACCT_ID,
-        amount: Math.round(amount * 100) / 100,
+        vendorName: invoice.vendor_name,
         referenceNo,
-        subsidiaryId: BILL_SUBSIDIARY_ID,
-        locationId: location.id,
-        memo,
-        lineMemo: memo,
+        create: () => createVendorBill({
+          vendorId,
+          accountId: SUBCONTRACTOR_ACCT_ID,
+          amount: Math.round(amount * 100) / 100,
+          referenceNo,
+          subsidiaryId: BILL_SUBSIDIARY_ID,
+          locationId: location.id,
+          memo,
+          lineMemo: memo,
+        }),
       });
-      if (!bill.success) return NextResponse.json({ error: bill.error || 'Failed to create vendor bill' }, { status: 502 });
+      if (!bill.ok) return fail(bill.error, bill.status);
       const billRef = bill.billNumber || bill.billId || '';
+      // Books keeps its own copy of what was sent (src/lib/books/own-bills.ts); it never stops the bill.
+      await saveOwnBill(service, {
+        netsuiteId: bill.billId, netsuiteNumber: bill.billNumber, madeFrom: 'vendor_invoice', madeFromId: invoice.id, madeBy: actorId,
+        vendorId, vendorName: invoice.vendor_name, referenceNo, subsidiaryId: BILL_SUBSIDIARY_ID, locationId: location.id,
+        expense: { accountId: SUBCONTRACTOR_ACCT_ID, amount: Math.round(amount * 100) / 100, memo },
+      });
 
       const { error } = await service
         .from('vendor_invoices')
-        .update({ status: 'billed', netsuite_bill_id: billRef, billed_by: actorId, billed_at: now })
+        .update({
+          status: 'billed', netsuite_bill_id: billRef, billed_by: actorId, billed_at: now,
+          ...(bill.claimedAt ? { bill_claimed_at: null } : {}),
+        })
         .eq('id', invoice.id);
-      if (error) return fail(`Bill created in NetSuite but failed to update the invoice: ${error.message}`, 500);
+      // The claim stays held, so nobody bills it again while it reads approved.
+      if (error) return fail(`Bill ${billRef} was created in NetSuite but marking the invoice billed failed: ${error.message}. Use Record Bill with ${billRef}.`, 500);
       await logAudit(service, { actorId, table: 'vendor_invoices', recordId: invoice.id, action: 'create_bill', detail: { vendor: invoice.vendor_name, amount, netsuite_bill_id: billRef, location: body.location } });
       return NextResponse.json({ success: true, netsuiteBillId: billRef });
     }
