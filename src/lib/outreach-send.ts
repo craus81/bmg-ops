@@ -8,7 +8,7 @@ import { findCustomerDuplicates } from './customer-dupes';
  */
 
 export const TARGET_COLS =
-  'id, source, source_id, kind, company_name, trade, street, city, state, zip, miles, phone, email, website, fleet_size, facts, rep_id, week_of, status, status_changed_at, prospect_id, contact_name, draft_subject, draft_body, draft_reasons, drafted_at, draft_error, sent_at, sent_subject';
+  'id, source, source_id, kind, company_name, trade, street, city, state, zip, miles, phone, email, website, fleet_size, facts, rep_id, week_of, status, status_changed_at, prospect_id, contact_name, draft_subject, draft_body, draft_reasons, drafted_at, draft_error, sent_at, sent_subject, booking_token, meeting_at, meeting_contact, callback_phone, callback_when, callback_requested_at';
 
 /** Statuses a draft can be (re)written or sent from. */
 export const OPEN_STATUSES = ['new', 'draft', 'call_first', 'later'];
@@ -16,14 +16,16 @@ export const OPEN_STATUSES = ['new', 'draft', 'call_first', 'later'];
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-/** The rep's words as paragraphs, signature, then address + unsubscribe. */
-export function renderOutreachHtml(message: string, signatureHtml: string, footerHtml: string): string {
+/** The rep's words as paragraphs, the Pick a time / Call me buttons,
+ *  signature, then address + unsubscribe. */
+export function renderOutreachHtml(message: string, signatureHtml: string, footerHtml: string, buttonsHtml = ''): string {
   const paragraphs = message.split(/\n{2,}/)
     .map(p => `<p style="margin:0 0 14px;line-height:1.55;">${escapeHtml(p).replace(/\n/g, '<br />')}</p>`)
     .join('');
   return `
     <div style="font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px 16px;color:#1f2937;">
       ${paragraphs}
+      ${buttonsHtml}
       ${signatureHtml}
       ${footerHtml}
     </div>`;

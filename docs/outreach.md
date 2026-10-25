@@ -9,7 +9,7 @@ rule). Built in parts:
    `src/lib/email-unsubscribe.ts`).
 2. **The weekly list** (migration 438): `/admin/outreach`, linked from Prospects.
 3. **Drafts and Send** (migration 439): Claude research + email draft per company, rep edits and taps Send.
-4. Pick-a-time / call-me page on the rep's calendar (to come).
+4. **Pick a time / Call me** (migration 440): two buttons on every Outreach email, public `/meet/<token>` page.
 5. A follow-up draft a week after no answer, for the rep to review (to come).
 
 ## The weekly list
@@ -51,3 +51,17 @@ rule). Built in parts:
 - The first send makes the company a prospect (`source` 'outreach', lead source
   **Outreach**, `created_by` the rep), or links an existing matching prospect. The email
   lands on its timeline (email log, kind `outreach`).
+
+## Pick a time / Call me
+
+- Every Outreach send carries two buttons under the message: **Pick a time to talk** and
+  **Have <rep> call me**. Both open `/meet/<token>` (no login; `booking_token` on the
+  target, 40 hex, minted on first send). Nothing is emailed back to the customer.
+- **Pick a time** (`src/lib/outreach-meet.ts`): 20-minute phone calls, weekdays
+  9:00 to 16:00 Central, the next 8 weekdays from tomorrow, minus any timed entry already
+  on the rep's FleetSuite schedule (all-day entries don't block). Phone required. A booking
+  adds a `calendar_events` row for the rep (category `sales`, "Call: <company>"), sets the
+  row to **Call booked**, and logs a meeting on the prospect.
+- **Call me**: phone required, best time optional. Sets the row to **Call them back** and
+  logs a call request on the prospect.
+- Either one notifies the rep at once (`outreach_response`: bell, push and email).

@@ -45,6 +45,10 @@ interface Target {
   draft_error: string | null;
   sent_at: string | null;
   sent_subject: string | null;
+  meeting_at: string | null;
+  meeting_contact: string | null;
+  callback_phone: string | null;
+  callback_when: string | null;
 }
 
 interface ListView {
@@ -65,7 +69,8 @@ const STATUS: Record<string, { label: string; color: string }> = {
   call_first: { label: 'Call first', color: '#f59e0b' },
   sent: { label: 'Sent', color: '#94a3b8' },
   replied: { label: 'Replied', color: '#22c55e' },
-  booked: { label: 'Meeting booked', color: '#22c55e' },
+  booked: { label: 'Call booked', color: '#22c55e' },
+  call_back: { label: 'Call them back', color: '#f97316' },
   later: { label: 'Saved for later', color: '#a78bfa' },
   not_fit: { label: 'Not a fit', color: '#94a3b8' },
   unsubscribed: { label: 'Unsubscribed', color: '#94a3b8' },
@@ -299,6 +304,21 @@ export default function OutreachPage() {
                 <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>{t.draft_subject}</div>
                 <div style={{ fontSize: '13px', color: 'var(--text-body)', whiteSpace: 'pre-wrap', marginTop: '4px', lineHeight: 1.5 }}>{t.draft_body}</div>
               </div>
+            )}
+            {t.status === 'booked' && t.meeting_at && (
+              <div style={{ fontSize: '13px', color: '#22c55e', fontWeight: 700, marginTop: '4px' }}>
+                Call booked for {new Date(t.meeting_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago' })}
+                {t.meeting_contact ? ` · ${t.meeting_contact}` : ''} · it&apos;s on your schedule
+              </div>
+            )}
+            {t.status === 'call_back' && t.callback_phone && (
+              <div style={{ fontSize: '13px', color: '#f97316', fontWeight: 700, marginTop: '4px' }}>
+                Asked you to call <a href={`tel:${t.callback_phone.replace(/\D/g, '')}`} style={{ color: '#f97316' }}>{t.callback_phone}</a>
+                {t.callback_when ? ` · ${t.callback_when}` : ''}{t.meeting_contact ? ` · ${t.meeting_contact}` : ''}
+              </div>
+            )}
+            {['booked', 'call_back'].includes(t.status) && t.prospect_id && (
+              <div style={{ fontSize: '12px', marginTop: '4px' }}><a href={deepLinks.prospect(t.prospect_id)} style={{ color: '#60a5fa' }}>Open prospect</a></div>
             )}
             {t.status === 'sent' && (
               <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
