@@ -162,6 +162,8 @@ export const ENV_SPECS: EnvSpec[] = [
   { name: 'APNS_BUNDLE_ID', group: 'push', powers: 'Native iOS push', whenMissing: 'off' },
 
   // --- AI ---
+  { name: 'GOOGLE_MAPS_API_KEY', group: 'ai', powers: 'Outreach: finding trade contractors (plumbers, HVAC, electricians…) near the shop from Google business listings — without it the Monday list is fleets only', whenMissing: 'warn' },
+  { name: 'SOCRATA_APP_TOKEN', group: 'ai', powers: 'Outreach: a higher rate limit on the DOT carrier list (data.transportation.gov) — optional, it works without one', whenMissing: 'off' },
   { name: 'ANTHROPIC_API_KEY', group: 'ai', powers: 'PO and vendor-invoice extraction, ship-to parsing, voice notes, knowledge-base vision, the AI agent, the Estimator\u2019s customer-proof reader, the Pull In VIN plate reader, Books\u2019 Snap a bill reader', whenMissing: 'warn' },
   { name: 'PROOF_READER_MODEL', group: 'ai', powers: 'Overrides the vision model that reads customer proofs in the Estimator (defaults to claude-opus-5)', whenMissing: 'off' },
   { name: 'VIN_READER_MODEL', group: 'ai', powers: 'Overrides the vision model that reads VIN plate photos on Pull In (defaults to claude-sonnet-5-5)', whenMissing: 'off' },

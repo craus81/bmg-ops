@@ -291,6 +291,8 @@ export const deepLinks = {
   cniCompliance: () => '/admin/cni/compliance',
   /** Quiet-lead triage queue (R6-9) — the destination for the dashboard's
    *  quiet-leads tile, which used to land on the bare prospects list. */
+  /** The weekly Outreach list; `rep` opens another rep's list (admins). */
+  outreach: (rep?: string) => `/admin/outreach${rep ? `?rep=${encodeURIComponent(rep)}` : ''}`,
   quietLeads: (days?: number) => `/admin/leads/quiet${days ? `?days=${days}` : ''}`,
   /** The installer's own earnings/payout history — the destination for CNI
    *  payout-status notifications (there is no per-payout page). */

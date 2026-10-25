@@ -194,6 +194,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // R5-17: pickup/drop-off booking. The token IS the credential (a
   // check-in's portal token or an approved estimate's approval token);
   // rate-limited both verbs, slot race settled by a partial unique index.
+  'src/app/api/outreach/route.ts': role(),
   'src/app/api/unsubscribe/[token]/route.ts': token('marketing-email unsubscribe from the footer link or a mail client one-click POST; the token is the credential, rate-limited, and the only write it can make is opting its own address out', 'findUnsubscribeToken('),
   'src/app/api/book/[token]/route.ts': token('customer pickup/drop-off booking via the completion-email or approval-page link; token resolved + state-gated before any write', 'resolveBookingToken('),
   'src/app/api/auth/google/callback/route.ts': staff(),
@@ -302,6 +303,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/estimate-review-reminder/route.ts': cron('requireAdmin('),
   'src/app/api/cron/proof-reminder-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/prospect-reminder-check/route.ts': cron('requireAdmin('),
+  'src/app/api/cron/outreach-fill/route.ts': cron('requireAdmin('),
   'src/app/api/cron/quote-followup-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/reorder-check/route.ts': cron('requireAdmin('),
   'src/app/api/cron/metric-snapshots/route.ts': cron('requireAdmin('),
