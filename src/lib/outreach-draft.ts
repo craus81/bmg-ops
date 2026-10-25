@@ -136,7 +136,7 @@ Rules:
 - Mention one or two concrete things about THIS company (fleet size, the work they do, their area) and connect them to something BMG does.
 - Never invent facts. Use only what is given above. If unsure, stay general.
 - Greet the contact by first name only if the website clearly names the owner or a fleet/office manager; otherwise "Hi there,".
-- End by asking for a short call, and say they can reply to this email or call. Do not include a signature, phone number or links (those are added automatically).
+- End by asking for a short call. Two buttons are added under your text automatically ("Pick a time to talk" and "Have ${input.repName.split(' ')[0]} call me"), so say they can pick a time or ask for a call below, or just reply. Do not include a signature, phone number or links.
 - Subject: under 60 characters, specific to them, no clickbait.
 
 Reply with ONLY a JSON object:

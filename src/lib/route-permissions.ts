@@ -197,6 +197,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/outreach/route.ts': role(),
   'src/app/api/outreach/[id]/draft/route.ts': role(),
   'src/app/api/outreach/[id]/send/route.ts': role(),
+  'src/app/api/meet/[token]/route.ts': token('Outreach Pick a time / Call me from the email buttons; the token is the credential, rate-limited, resolved to its own rep before anything, and the only writes are one call on that rep\'s schedule or a call-back number for them', 'isMeetToken('),
   'src/app/api/unsubscribe/[token]/route.ts': token('marketing-email unsubscribe from the footer link or a mail client one-click POST; the token is the credential, rate-limited, and the only write it can make is opting its own address out', 'findUnsubscribeToken('),
   'src/app/api/book/[token]/route.ts': token('customer pickup/drop-off booking via the completion-email or approval-page link; token resolved + state-gated before any write', 'resolveBookingToken('),
   'src/app/api/auth/google/callback/route.ts': staff(),
