@@ -18,7 +18,7 @@
 
 import type { EmailSignature } from './email-signature';
 import { discountLabel, normalizeVehicleCount, perVehicleAmount } from './estimate-totals';
-import { toKitDisplayLines } from './estimate-kits';
+import { kitComponentShowsPhoto, toKitDisplayLines } from './estimate-kits';
 import {
   escHtml,
   renderQuoteDocument,
@@ -177,8 +177,16 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
       const qty = units > 1 ? `${escHtml(l.quantity)} &times; ${units}` : escHtml(l.quantity);
       const desc = l.description && l.description !== l.item_number
         ? ` <span style="color:#6b7280;">${escHtml(l.description)}</span>` : '';
+      const compText = `&#8627; ${escHtml(l.item_number || l.description || 'Part')}${desc}`;
+      // A hitch kit's parts show their photo (rack components stay text only).
+      const compHtml = kitComponentShowsPhoto(l) && l.part_image_url
+        ? `<table role="presentation" style="border-collapse:collapse;margin-left:18px;"><tr>
+            <td style="padding:0 8px 0 0;vertical-align:top;"><img src="${escHtml(l.part_image_url)}" alt="${escHtml(l.item_number || 'Part')}" width="40" height="40" style="width:40px;height:40px;object-fit:contain;border-radius:4px;border:1px solid #e5e7eb;background:#fff;display:block;"></td>
+            <td style="vertical-align:middle;font-size:12px;color:#374151;">${compText}</td>
+          </tr></table>`
+        : `<div style="padding-left:18px;font-size:12px;color:#374151;">${compText}</div>`;
       return [{
-        itemHtml: `<div style="padding-left:18px;font-size:12px;color:#374151;">&#8627; ${escHtml(l.item_number || l.description || 'Part')}${desc}</div>`,
+        itemHtml: compHtml,
         qtyHtml: `<span style="font-size:12px;color:#374151;">${qty}</span>`,
         rateHtml: '',
         totalHtml: '',
