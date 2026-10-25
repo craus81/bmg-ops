@@ -114,7 +114,7 @@ const labelStyle: React.CSSProperties = {
 export default function ProspectsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { user, profile, isAdmin, hasFeature, loading: authLoading } = useAuth();
+  const { user, profile, isAdmin, isSales, hasFeature, loading: authLoading } = useAuth();
   const supabase = createClient();
   const dialog = useDialog();
 
@@ -954,6 +954,13 @@ export default function ProspectsPage() {
             color: crmTab === tab ? '#3b82f6' : 'var(--text-muted)', marginBottom: '-2px',
           }}>{tab === 'customers' ? `Customers (${customerCount})` : tab === 'prospects' ? `Prospects (${prospectCount})` : tab === 'vendors' ? `Vendors (${vendorCount})` : `Contacts${contactsLoaded ? ` (${allContacts.length})` : ''}`}</button>
         ))}
+        {(isAdmin || isSales) && (
+          // The weekly list of new companies for each rep (migration 438).
+          <a href={deepLinks.outreach()} style={{
+            marginLeft: 'auto', alignSelf: 'center', padding: '6px 12px', fontSize: '12px', fontWeight: 700,
+            borderRadius: '8px', border: '1px solid #22c55e55', color: '#22c55e', textDecoration: 'none',
+          }}>Outreach →</a>
+        )}
       </div>
 
       {crmTab === 'contacts' ? (
