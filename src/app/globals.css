@@ -600,6 +600,34 @@ button {
   .est-part-action { padding: 8px 10px !important; flex: 1 1 auto; }
 }
 
+/* Scans list rows (admin/scans). A computer keeps one row: vehicle on the
+   left, chips, who/when, Edit and ✕ on the right. On a phone that right side
+   squeezed the left to one word per line and the VIN ran under the chips, so
+   the row stacks instead: vehicle + Edit, VIN, part, chips, then who/when on
+   one line. The ✕ hides on phones (Delete is in the Edit panel) so a scroll
+   can't tap it. !important beats the rows' inline styles. */
+.scan-row-who > span { display: block; }
+@media (max-width: 640px) {
+  .scan-row {
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "chk main edit" ". chips chips" ". who who";
+    column-gap: 8px; row-gap: 4px;
+    align-items: start !important;
+  }
+  .scan-row-chk { grid-area: chk; margin-top: 1px; }
+  .scan-row-main { grid-area: main; }
+  .scan-row-vin { display: block; overflow-wrap: anywhere; }
+  .scan-row-side { display: contents !important; }
+  .scan-row-chips { grid-area: chips; flex-wrap: wrap; }
+  .scan-row-chips:empty { display: none !important; }
+  .scan-row-who { grid-area: who; text-align: left !important; }
+  .scan-row-who > span { display: inline; }
+  .scan-row-who > span + span::before { content: ' · '; }
+  .scan-row-edit { grid-area: edit; padding: 4px 10px !important; font-size: 11px !important; }
+  .scan-row-del { display: none !important; }
+}
+
 /* ===== iPhone Duo =====
    DuoLayoutWatcher stamps these on <html> (rules in src/lib/duo-layout.ts):
    data-sidenav on the folding iPhone's short, wide screens, data-duo-wide
