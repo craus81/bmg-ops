@@ -16,12 +16,16 @@
  * unticked or changed first. Lines not in the catalog go in with the part
  * number exactly as typed on the estimate; purchasing works out what it is
  * (Craig, 2026-10-01).
+ *
+ * Print stock check turns the same list into a sheet for counting the
+ * shelves against on hand (Craig, 2026-10-26; see stock-check-pdf.ts).
  */
 
 import { useMemo, useState } from 'react';
 import { theme } from '@/lib/theme';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { startingRequestQty } from '@/lib/estimate-request-qty';
+import { openStockCheckPdf, type StockCheckData } from '@/lib/stock-check-pdf';
 
 const qtyText = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
@@ -48,12 +52,14 @@ interface Props {
   parts: RequestablePart[];
   /** Overrides the heading line, e.g. the post-conversion prompt. */
   title?: string;
+  /** Header for the printed stock check sheet. */
+  printInfo?: Omit<StockCheckData, 'lines' | 'accepted'>;
   onClose: () => void;
   /** Fires after the requests land, with how many were created or raised. */
   onDone: (count: number) => void;
 }
 
-export default function EstimatePartsRequestModal({ estimateId, estimateLabel, accepted, parts, title, onClose, onDone }: Props) {
+export default function EstimatePartsRequestModal({ estimateId, estimateLabel, accepted, parts, title, printInfo, onClose, onDone }: Props) {
   // Needs ordering first, then everything already covered.
   const due = useMemo(() => parts.filter(p => p.to_request > 0), [parts]);
   const covered = useMemo(() => parts.filter(p => p.to_request <= 0), [parts]);
@@ -85,6 +91,30 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
     if (next.has(item)) next.delete(item); else next.add(item);
     return next;
   });
+
+  const printSheet = () => {
+    setError(null);
+    const ticked = new Map(selected.map(s => [s.part.item_number, s.quantity]));
+    const result = openStockCheckPdf({
+      estimateNumber: printInfo?.estimateNumber || estimateLabel,
+      customer: printInfo?.customer ?? null,
+      vehicle: printInfo?.vehicle ?? null,
+      vin: printInfo?.vin ?? null,
+      soNumber: printInfo?.soNumber ?? null,
+      accepted,
+      lines: lines.map(p => ({
+        itemNumber: p.item_number,
+        description: p.description,
+        needed: p.needed,
+        onHand: p.on_hand,
+        onOrder: p.on_order,
+        requesting: ticked.get(p.item_number) || 0,
+        short: !p.uncatalogued && p.short > 0,
+        uncatalogued: p.uncatalogued,
+      })),
+    });
+    if (!result.ok) setError(`Could not make the stock check sheet: ${result.error}`);
+  };
 
   const confirm = async () => {
     if (selected.length === 0 || busy) return;
@@ -148,6 +178,9 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
                   Short parts only
                 </button>
               )}
+              <button type="button" onClick={printSheet} disabled={busy} style={{ ...toolButton, marginLeft: 'auto' }}>
+                🖨 Print stock check
+              </button>
             </div>
           )}
           {!accepted && (

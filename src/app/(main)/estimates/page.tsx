@@ -7552,6 +7552,14 @@ export default function EstimatesPage() {
           accepted={estAccepted}
           parts={partsRequest.parts}
           title={partsRequest.title}
+          printInfo={{
+            estimateNumber: editingNumber,
+            customer: editingEst?.customer_name || null,
+            vehicle: [editingEst?.vehicle_year, editingEst?.vehicle_make, editingEst?.vehicle_model].filter(Boolean).join(' ')
+              || editingEst?.vehicle_other || null,
+            vin: editingEst?.vin || null,
+            soNumber: editingEst?.netsuite_so_number ? `SO #${editingEst.netsuite_so_number}` : null,
+          }}
           onClose={() => setPartsRequest(null)}
           onDone={async count => {
             setPartsRequest(null);
