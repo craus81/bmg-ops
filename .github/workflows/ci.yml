@@ -26,6 +26,10 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+        env:
+          # tsc outgrew Node's default ~4GB heap too (OOM on every run from
+          # PR #1292, 2026-10-25), same as the Build step below.
+          NODE_OPTIONS: --max-old-space-size=6144
 
       - name: Lint
         run: npm run lint
