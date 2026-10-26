@@ -546,8 +546,8 @@ export default function AdminScansPage() {
       poRequired[part || ''] !== false && customerRequiresPo(cust, billableCustomers));
     if (state === 'invoiced') {
       return s.is_paid
-        ? { label, color: '#4ade80', bg: 'rgba(74,222,128,0.12)' }
-        : { label, color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' };
+        ? { state, label, color: '#4ade80', bg: 'rgba(74,222,128,0.12)' }
+        : { state, label, color: '#fbbf24', bg: 'rgba(251,191,36,0.12)' };
     }
     const styles = {
       archived: { color: '#94a3b8', bg: 'rgba(148,163,184,0.12)' },
@@ -555,7 +555,7 @@ export default function AdminScansPage() {
       ready: { color: '#22c55e', bg: 'rgba(34,197,94,0.12)' },
       waiting: { color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
     } as const;
-    return { label, ...styles[state] };
+    return { state, label, ...styles[state] };
   };
 
   const getTabScans = () => {
@@ -2488,6 +2488,20 @@ export default function AdminScansPage() {
           <div style={{ display: 'flex', gap: '6px' }}>
             <button onClick={applyBulkEdit} disabled={bulkEditBusy} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: '#22c55e', color: '#fff', border: 'none', cursor: bulkEditBusy ? 'default' : 'pointer', opacity: bulkEditBusy ? 0.6 : 1 }}>{bulkEditBusy ? 'Applying…' : single ? 'Save Scan' : 'Apply Changes'}</button>
             <button onClick={closeScanEditor} style={{ padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
+            {/* Delete lives here as well as on the row's ✕: phones hide the
+                ✕ so a scroll can't tap it by accident. */}
+            {single && (
+              <button
+                onClick={async () => {
+                  if (!(await dialog.confirm('Delete this scan?', { destructive: true, confirmLabel: 'Delete' }))) return;
+                  await deleteScans([single.id]);
+                  closeScanEditor();
+                  loadAll();
+                }}
+                disabled={bulkEditBusy}
+                style={{ marginLeft: 'auto', padding: '8px 14px', borderRadius: '6px', fontSize: '11px', fontWeight: 700, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', cursor: bulkEditBusy ? 'default' : 'pointer' }}
+              >Delete scan</button>
+            )}
           </div>
           </>); })()}
         </div>
@@ -3010,13 +3024,13 @@ export default function AdminScansPage() {
             {visible.map(scan => {
               const st = scanStatus(scan);
               return (
-                <div key={scan.id} style={{
+                <div key={scan.id} className="scan-row" style={{
                   display: 'flex', alignItems: 'center', gap: '8px',
                   padding: '6px 10px', borderRadius: '6px',
                   background: 'var(--card)', border: '1px solid var(--border)',
                 }}>
-                  <input type="checkbox" checked={selectedScans.has(scan.id)} onChange={() => toggleSelect(scan.id)} style={{ width: '14px', height: '14px', flexShrink: 0 }} />
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  <input type="checkbox" className="scan-row-chk" checked={selectedScans.has(scan.id)} onChange={() => toggleSelect(scan.id)} style={{ width: '14px', height: '14px', flexShrink: 0 }} />
+                  <div className="scan-row-main" style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>
                       {[scan.vehicle_year, scan.vehicle_make, scan.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}
                       {scan.billable_customer && <span style={{ fontWeight: 600, color: '#a78bfa', marginLeft: '6px' }}>{scan.billable_customer}</span>}
@@ -3025,6 +3039,7 @@ export default function AdminScansPage() {
                       href={deepLinks.vehicleRecord(scan.vin)}
                       onClick={e => e.stopPropagation()}
                       title="Open this vehicle's record"
+                      className="scan-row-vin"
                       style={{ fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
                     >{scan.vin}</a>
                     {(scan.part_number || scan.location_name) && (
@@ -3036,20 +3051,24 @@ export default function AdminScansPage() {
                       </div>
                     )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
-                    <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: st.bg, color: st.color, whiteSpace: 'nowrap' }}>
-                      {st.label}
-                    </span>
+                  <div className="scan-row-side" style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                    <div className="scan-row-chips" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    {/* An invoiced scan's chip opens that invoice. */}
+                    {st.state === 'invoiced' && scan.invoice_number ? (
+                      <a href={deepLinks.invoicesSent(scan.invoice_number)} title={`Open invoice #${scan.invoice_number}`} style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: st.bg, color: st.color, whiteSpace: 'nowrap', textDecoration: 'none' }}>
+                        {st.label}
+                      </a>
+                    ) : (
+                      <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: st.bg, color: st.color, whiteSpace: 'nowrap' }}>
+                        {st.label}
+                      </span>
+                    )}
                     {scan.unit_number && (
                       <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
                         Unit {scan.unit_number}
                       </span>
                     )}
-                    {scan.po_number && (
-                      <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
-                        PO #{scan.po_number}
-                      </span>
-                    )}
+                    {scan.po_number && <PoChip poId={scan.po_id} poNumber={scan.po_number} size={8} />}
                     {cniByScanId[scan.id] && (
                       <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(6,182,212,0.12)', color: '#06b6d4' }}>
                         {cniByScanId[scan.id]}
@@ -3060,18 +3079,20 @@ export default function AdminScansPage() {
                         ${Number(scan.install_cost).toFixed(2)}
                       </span>
                     )}
+                    </div>
                     {/* Who did the install (person + company) — the scanning
                         account stays on the tooltip and in the Edit modal. */}
                     <div
+                      className="scan-row-who"
                       title={profiles[scan.scanned_by || ''] ? `Scanned by ${profiles[scan.scanned_by || '']}` : undefined}
                       style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}
                     >
-                      {installerNamesOf(scan).length > 0 && (<>{installerNamesOf(scan).join(', ')}<br /></>)}
-                      {installerCompanyOf(scan) && (<>{installerCompanyOf(scan)}<br /></>)}
-                      {new Date(scan.scanned_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                      {installerNamesOf(scan).length > 0 && <span>{installerNamesOf(scan).join(', ')}</span>}
+                      {installerCompanyOf(scan) && <span>{installerCompanyOf(scan)}</span>}
+                      <span>{new Date(scan.scanned_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
                     </div>
-                    <button onClick={() => openScanEditor([scan.id])} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
-                    <button onClick={() => deleteScan(scan.id)} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
+                    <button className="scan-row-edit" onClick={() => openScanEditor([scan.id])} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
+                    <button className="scan-row-del" onClick={() => deleteScan(scan.id)} title="Delete this scan" style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
                   </div>
                 </div>
               );
@@ -3284,7 +3305,7 @@ export default function AdminScansPage() {
                             </button>
                             {/* A vehicle group's parts can sit on different POs, so the
                                 PO belongs on each part's own line, not up here. */}
-                            {!isPOGroup && !isVehicleGroup && groupScans[0]?.po_number && <span style={{ fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>PO #{groupScans[0].po_number}</span>}
+                            {!isPOGroup && !isVehicleGroup && groupScans[0]?.po_number && <PoChip poId={groupScans[0].po_id} poNumber={groupScans[0].po_number} size={9} />}
                             <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)' }}>{groupScans.length}</span>
                           </div>
                         </div>
@@ -3347,13 +3368,13 @@ export default function AdminScansPage() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', paddingLeft: '10px' }}>
                             {groupScans.map(scan => (
                               <div key={scan.id}>
-                              <div style={{
+                              <div className="scan-row" style={{
                                 display: 'flex', alignItems: 'center', gap: '8px',
                                 padding: '6px 10px', borderRadius: '6px',
                                 background: 'var(--card)', border: `1px solid ${scan.po_id ? 'rgba(34,197,94,0.15)' : 'var(--border)'}`,
                               }}>
-                                <input type="checkbox" checked={selectedScans.has(scan.id)} onChange={() => toggleSelect(scan.id)} style={{ width: '14px', height: '14px', flexShrink: 0 }} />
-                                <div style={{ flex: 1, minWidth: 0 }}>
+                                <input type="checkbox" className="scan-row-chk" checked={selectedScans.has(scan.id)} onChange={() => toggleSelect(scan.id)} style={{ width: '14px', height: '14px', flexShrink: 0 }} />
+                                <div className="scan-row-main" style={{ flex: 1, minWidth: 0 }}>
                                   <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)' }}>
                                     {[scan.vehicle_year, scan.vehicle_make, scan.vehicle_model].filter(Boolean).join(' ') || 'Unknown'}
                                   </div>
@@ -3361,6 +3382,7 @@ export default function AdminScansPage() {
                                     href={deepLinks.vehicleRecord(scan.vin)}
                                     onClick={e => e.stopPropagation()}
                                     title="Open this vehicle's record"
+                                    className="scan-row-vin"
                                     style={{ fontSize: '9px', fontFamily: 'monospace', color: 'var(--text-muted)', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
                                   >{scan.vin}</a>
                                   {scan.part_number && (
@@ -3372,27 +3394,25 @@ export default function AdminScansPage() {
                                     </div>
                                   )}
                                 </div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                                <div className="scan-row-side" style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}>
+                                  <div className="scan-row-chips" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                   {scan.unit_number && (
                                     <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
                                       Unit {scan.unit_number}
                                     </span>
                                   )}
-                                  {scan.po_number && (
-                                    <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>
-                                      PO #{scan.po_number}
-                                    </span>
-                                  )}
+                                  {scan.po_number && <PoChip poId={scan.po_id} poNumber={scan.po_number} size={8} />}
                                   {/* Why this scan is in Exported: which path stamped it, when, by whom (K9). */}
                                   {tab === 'exported' && scan.exported_at && (
-                                    <span
+                                    <a
+                                      href={scan.invoice_number ? deepLinks.invoicesSent(scan.invoice_number) : undefined}
                                       title={`Exported ${new Date(scan.exported_at).toLocaleString()}${profiles[scan.exported_by || ''] ? ` by ${profiles[scan.exported_by || '']}` : ''}${scan.invoice_number ? ` — back-stamped by invoicing (#${scan.invoice_number})` : ' — via CSV export'}`}
-                                      style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(96,165,250,0.12)', color: '#60a5fa', whiteSpace: 'nowrap' }}
+                                      style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(96,165,250,0.12)', color: '#60a5fa', whiteSpace: 'nowrap', textDecoration: 'none' }}
                                     >
                                       {scan.invoice_number ? `Invoiced #${scan.invoice_number}` : 'CSV export'}
                                       {' · '}{new Date(scan.exported_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
                                       {profiles[scan.exported_by || ''] ? ` · ${profiles[scan.exported_by || '']}` : ''}
-                                    </span>
+                                    </a>
                                   )}
                                   {cniByScanId[scan.id] && (
                                     <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(6,182,212,0.12)', color: '#06b6d4' }}>
@@ -3417,17 +3437,19 @@ export default function AdminScansPage() {
                                       ${Number(scan.install_cost).toFixed(2)}
                                     </span>
                                   )}
+                                  </div>
                                   {/* Who did the install — scanner on the tooltip. */}
                                   <div
+                                    className="scan-row-who"
                                     title={profiles[scan.scanned_by || ''] ? `Scanned by ${profiles[scan.scanned_by || '']}` : undefined}
                                     style={{ fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}
                                   >
-                                    {installerNamesOf(scan).length > 0 && (<>{installerNamesOf(scan).join(', ')}<br /></>)}
-                                    {installerCompanyOf(scan) && (<>{installerCompanyOf(scan)}<br /></>)}
-                                    {new Date(scan.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                    {installerNamesOf(scan).length > 0 && <span>{installerNamesOf(scan).join(', ')}</span>}
+                                    {installerCompanyOf(scan) && <span>{installerCompanyOf(scan)}</span>}
+                                    <span>{new Date(scan.scanned_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</span>
                                   </div>
-                                  <button onClick={() => openScanEditor([scan.id])} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
-                                  <button onClick={() => deleteScan(scan.id)} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
+                                  <button className="scan-row-edit" onClick={() => openScanEditor([scan.id])} style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>Edit</button>
+                                  <button className="scan-row-del" onClick={() => deleteScan(scan.id)} title="Delete this scan" style={{ padding: '2px 5px', borderRadius: '4px', border: 'none', background: 'rgba(239,68,68,0.08)', color: '#ef4444', fontSize: '9px', fontWeight: 700, cursor: 'pointer' }}>✕</button>
                                 </div>
                               </div>
                               </div>
@@ -3560,6 +3582,18 @@ const INVOICE_STATUS_CHIP: Record<string, { label: string; color: string; bg: st
   billed: { label: 'Billed', color: '#a78bfa', bg: 'rgba(167,139,250,0.12)' },
   paid: { label: 'Paid', color: '#34d399', bg: 'rgba(52,211,153,0.12)' },
 };
+
+/** A scan's PO chip. Opens the PO when the scan is linked to one; a PO
+ *  number typed with no PO behind it stays a plain chip. */
+function PoChip({ poId, poNumber, size }: { poId: string | null; poNumber: string; size: number }) {
+  const style: React.CSSProperties = { fontSize: `${size}px`, fontWeight: 700, padding: size > 8 ? '2px 6px' : '2px 5px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e', whiteSpace: 'nowrap', textDecoration: 'none' };
+  if (!poId) return <span style={style}>PO #{poNumber}</span>;
+  return (
+    <a href={deepLinks.po(poId)} onClick={e => e.stopPropagation()} title={`Open PO #${poNumber}`} style={style}>
+      PO #{poNumber}
+    </a>
+  );
+}
 
 function VendorInvoicesTab({ allParts, allLocations, poRequired, billableCustomers, onCommitted, onPartAdded }: {
   allParts: { id: string; item_number: string; display_name: string | null; billable_customer: string | null; vehicle_type: string | null; graphic_package: string | null }[];
