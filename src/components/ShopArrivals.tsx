@@ -10,6 +10,10 @@
  * One row per van (arrival-groups.ts): a van's graphics job, sales order
  * and upfit show as tags on a single row dated by its drop-off, and
  * Arrived / ✕ close every one of them.
+ *
+ * Tapping "Arriving" folds the box down to its header (Craig, 2026-10-26),
+ * saved per user like the customer page cards ('inshop:arriving'). The
+ * overdue/today counts and red border stay visible while folded.
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
@@ -18,6 +22,7 @@ import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
 import { IN_SHOP_STATUSES } from '@/lib/types';
 import { useAuth } from '@/components/AuthProvider';
+import { useCollapsed } from '@/components/CollapsibleCard';
 import { groupArrivals, loadArrivalLinks, rowsToClose, type ArrivalGroup, type ArrivalLinks } from '@/lib/arrival-groups';
 
 interface InboundRow {
@@ -68,6 +73,11 @@ export default function ShopArrivals() {
   const searchParams = useSearchParams();
   const supabase = createClient();
   const { user } = useAuth();
+  const [collapsed, setCollapsed] = useCollapsed('inshop', 'arriving');
+  // A ping link (?arrival=) opens a folded box for this visit without
+  // changing the saved choice.
+  const [peek, setPeek] = useState(false);
+  const folded = collapsed && !peek;
 
   const [inbound, setInbound] = useState<InboundRow[]>([]);
   const [links, setLinks] = useState<ArrivalLinks>({ graphicsEstimate: new Map(), upfitEstimate: new Map() });
@@ -115,6 +125,7 @@ export default function ShopArrivals() {
     // The row may be folded into its van's line — flash that line.
     const group = groupArrivals(inbound, links).find(g => g.rows.some(r => r.id === target));
     if (group) {
+      setPeek(true);
       setFlashId(group.key);
       setTimeout(() => {
         document.getElementById(`arr-${group.key}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -309,20 +320,29 @@ export default function ShopArrivals() {
         </div>
       )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
-        <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}>
-          Arriving{counts ? <span style={{ color: overdue.length > 0 ? '#ef4444' : 'var(--text-muted)', fontWeight: 700 }}> — {counts}</span> : <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}> — nothing scheduled</span>}
-        </span>
-        <span style={{ display: 'flex', gap: '6px' }}>
+        <button
+          type="button"
+          onClick={() => { setPeek(false); setCollapsed(!folded); }}
+          aria-expanded={!folded}
+          title={folded ? 'Show the arrival schedule' : 'Hide the arrival schedule — stays hidden next time'}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: '4px 0', margin: '-4px 0', cursor: 'pointer', textAlign: 'left', fontSize: '12px', fontWeight: 800, color: 'var(--text-primary)' }}
+        >
+          <span aria-hidden style={{ fontSize: '10px', width: '10px', display: 'inline-block', color: 'var(--text-muted)', transition: 'transform 0.15s', transform: folded ? 'rotate(-90deg)' : 'none' }}>▾</span>
+          <span>
+            Arriving{counts ? <span style={{ color: overdue.length > 0 ? '#ef4444' : 'var(--text-muted)', fontWeight: 700 }}> — {counts}</span> : <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}> — nothing scheduled</span>}
+          </span>
+        </button>
+        {!folded && <span style={{ display: 'flex', gap: '6px' }}>
           <button onClick={() => setView(v => v === 'list' ? 'calendar' : 'list')} style={{ padding: '5px 10px', borderRadius: '7px', background: 'var(--input-bg)', border: '1px solid var(--border)', color: 'var(--text-secondary)', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
             {view === 'list' ? 'Calendar' : 'List'}
           </button>
           <button onClick={() => setShowAdd(s => !s)} style={{ padding: '5px 10px', borderRadius: '7px', background: 'rgba(59,130,246,0.15)', border: '1px solid rgba(59,130,246,0.4)', color: '#60a5fa', fontSize: '10px', fontWeight: 700, cursor: 'pointer' }}>
             + Expected
           </button>
-        </span>
+        </span>}
       </div>
 
-      {showAdd && (
+      {!folded && showAdd && (
         <div style={{ marginTop: '10px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '8px', marginBottom: '8px' }}>
             <input style={inputStyle} placeholder="Vehicle (e.g. 2025 Transit 250)" value={addForm.vehicle_desc} onChange={e => setAddForm({ ...addForm, vehicle_desc: e.target.value })} />
@@ -343,7 +363,7 @@ export default function ShopArrivals() {
         </div>
       )}
 
-      {view === 'list' && groups.length > 0 && (
+      {!folded && view === 'list' && groups.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px' }}>
           {overdue.length > 0 && (
             <div>
@@ -372,7 +392,7 @@ export default function ShopArrivals() {
         </div>
       )}
 
-      {view === 'calendar' && (
+      {!folded && view === 'calendar' && (
         <div style={{ marginTop: '10px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
             <button onClick={() => setCalMonth(({ y, m }) => m === 0 ? { y: y - 1, m: 11 } : { y, m: m - 1 })} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', fontSize: '16px', cursor: 'pointer' }}>‹</button>
