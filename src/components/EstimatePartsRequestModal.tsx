@@ -1,11 +1,16 @@
 'use client';
 
 /**
- * Request parts off an estimate: the short lines (and lines not in the
- * catalog) from the estimate's stock check, each with a checkbox and an
- * editable quantity, sent into the Purchasing queue tagged with the
- * estimate. Opened from the stock banner, and offered once more right
- * after the estimate converts to a sales order.
+ * Request parts off an estimate: every part line from the estimate's stock
+ * check, each with a checkbox and an editable quantity, sent into the
+ * Purchasing queue tagged with the estimate. Opened from the stock banner,
+ * and offered once more right after the estimate converts to a sales order.
+ *
+ * Short lines (and lines not in the catalog) start ticked at what's still
+ * needed. Lines already covered by stock or a PO sit underneath, unticked,
+ * at the full estimate quantity, so any part on the order can be requested
+ * (Craig, 2026-10-26, option A). Select all / Short parts only set the ticks
+ * in one tap.
  *
  * Nothing is sent until the person confirms, and every line can be
  * unticked or changed first. Lines not in the catalog go in with the part
@@ -16,6 +21,7 @@
 import { useMemo, useState } from 'react';
 import { theme } from '@/lib/theme';
 import { closeOnEscape } from '@/lib/modal-escape';
+import { startingRequestQty } from '@/lib/estimate-request-qty';
 
 const qtyText = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
@@ -24,6 +30,8 @@ export interface RequestablePart {
   description: string | null;
   needed: number;
   short: number;
+  /** NetSuite available, shown beside the part. */
+  on_hand?: number;
   on_order: number;
   requested: number;
   to_request: number;
@@ -46,8 +54,11 @@ interface Props {
 }
 
 export default function EstimatePartsRequestModal({ estimateId, estimateLabel, accepted, parts, title, onClose, onDone }: Props) {
-  const lines = useMemo(() => parts.filter(p => p.to_request > 0), [parts]);
-  const [skipped, setSkipped] = useState<Set<string>>(new Set());
+  // Needs ordering first, then everything already covered.
+  const due = useMemo(() => parts.filter(p => p.to_request > 0), [parts]);
+  const covered = useMemo(() => parts.filter(p => p.to_request <= 0), [parts]);
+  const lines = useMemo(() => [...due, ...covered], [due, covered]);
+  const [skipped, setSkipped] = useState<Set<string>>(() => new Set(covered.map(p => p.item_number)));
   const [edited, setEdited] = useState<Record<string, string>>({});
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -55,7 +66,7 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
 
   const qtyFor = (p: RequestablePart): number => {
     const raw = edited[p.item_number];
-    if (raw === undefined) return p.to_request;
+    if (raw === undefined) return startingRequestQty(p);
     const n = parseFloat(raw);
     return Number.isFinite(n) && n > 0 ? n : 0;
   };
@@ -64,6 +75,10 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
     .filter(p => !skipped.has(p.item_number))
     .map(p => ({ part: p, quantity: qtyFor(p) }))
     .filter(s => s.quantity > 0);
+
+  const allTicked = lines.length > 0 && skipped.size === 0;
+  const selectAll = () => setSkipped(allTicked ? new Set(lines.map(p => p.item_number)) : new Set());
+  const shortOnly = () => setSkipped(new Set(covered.map(p => p.item_number)));
 
   const toggle = (item: string) => setSkipped(prev => {
     const next = new Set(prev);
@@ -121,8 +136,20 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
             {title || 'Request parts for this estimate'}
           </div>
           <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '3px' }}>
-            {estimateLabel}. These go to the Purchasing queue. Quantity is what’s short, less anything already requested.
+            {estimateLabel}. These go to the Purchasing queue. Short parts start at what’s short; in-stock parts start unticked at the full estimate quantity.
           </div>
+          {lines.length > 0 && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '9px' }}>
+              <button type="button" onClick={selectAll} disabled={busy} style={toolButton}>
+                {allTicked ? 'Untick all' : 'Select all'}
+              </button>
+              {due.length > 0 && covered.length > 0 && (
+                <button type="button" onClick={shortOnly} disabled={busy} style={toolButton}>
+                  Short parts only
+                </button>
+              )}
+            </div>
+          )}
           {!accepted && (
             <div style={{
               marginTop: '8px', padding: '6px 9px', borderRadius: '7px', fontSize: '11.5px', fontWeight: 700,
@@ -136,14 +163,25 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
         <div style={{ flex: 1, overflowY: 'auto', padding: '10px 16px' }}>
           {lines.length === 0 && (
             <div style={{ fontSize: '12.5px', color: theme.textMuted, padding: '8px 0' }}>
-              Nothing left to request. Every part is in stock, on order or already requested.
+              This estimate has no parts to request.
             </div>
           )}
-          {lines.map(p => {
+          {lines.map((p, i) => {
             const off = skipped.has(p.item_number);
+            const heading = i === 0 && due.length > 0 ? 'Needs ordering'
+              : i === due.length && covered.length > 0 ? 'In stock or on order'
+                : null;
             return (
+              <div key={p.item_number}>
+              {heading && (
+                <div style={{
+                  fontSize: '10.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase',
+                  color: theme.textMuted, padding: '8px 2px 4px',
+                }}>
+                  {heading}
+                </div>
+              )}
               <div
-                key={p.item_number}
                 style={{
                   display: 'flex', alignItems: 'center', gap: '9px',
                   padding: '7px 8px', borderRadius: '8px', marginBottom: '3px',
@@ -172,7 +210,8 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
                   )}
                   <div style={{ fontSize: '10.5px', color: theme.textMuted, marginTop: '2px' }}>
                     Needed {qtyText(p.needed)}
-                    {!p.uncatalogued && ` · short ${qtyText(p.short)}`}
+                    {!p.uncatalogued && p.on_hand !== undefined && ` · on hand ${qtyText(p.on_hand)}`}
+                    {!p.uncatalogued && p.short > 0 && ` · short ${qtyText(p.short)}`}
                     {p.on_order > 0 && ` · on order ${qtyText(p.on_order)}`}
                     {p.requested > 0 && ` · already requested ${qtyText(p.requested)}`}
                   </div>
@@ -180,7 +219,7 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
                 <input
                   type="number" min="0" step="any" disabled={busy || off}
                   aria-label={`Quantity of ${p.item_number}`}
-                  value={edited[p.item_number] ?? String(p.to_request)}
+                  value={edited[p.item_number] ?? qtyText(startingRequestQty(p))}
                   onChange={e => setEdited(prev => ({ ...prev, [p.item_number]: e.target.value }))}
                   style={{
                     width: '72px', flexShrink: 0, textAlign: 'right',
@@ -189,6 +228,7 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
                     border: `1px solid ${theme.border}`, borderRadius: '6px',
                   }}
                 />
+              </div>
               </div>
             );
           })}
@@ -239,3 +279,9 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
     </div>
   );
 }
+
+const toolButton: React.CSSProperties = {
+  padding: '5px 10px', borderRadius: '7px', fontSize: '11.5px', fontWeight: 700,
+  border: `1px solid ${theme.border}`, background: 'var(--card)', color: theme.textPrimary,
+  cursor: 'pointer',
+};

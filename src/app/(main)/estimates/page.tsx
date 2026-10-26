@@ -598,8 +598,9 @@ export default function EstimatesPage() {
   const [stockLoading, setStockLoading] = useState(false);
   const [stockErr, setStockErr] = useState<string | null>(null);
   const [stockBusy, setStockBusy] = useState<string | null>(null);
-  // Request parts (Craig, 2026-10-01): the short lines into the Purchasing
-  // queue. `title` set = the prompt offered right after Convert to SO.
+  // Request parts (Craig, 2026-10-01): parts into the Purchasing queue. Lists
+  // every part since 2026-10-26, short ones ticked. `title` set = the prompt
+  // offered right after Convert to SO.
   const [partsRequest, setPartsRequest] = useState<{ parts: StockReadiness['parts']; title?: string } | null>(null);
   const canRequestParts = hasFeature('parts_ordering');
   // Counter-offer workbench (R6-9): what this revision changed against the
@@ -3368,12 +3369,16 @@ export default function EstimatesPage() {
         } else if (canRequestParts) {
           // The sale is real now: offer to order whatever is still short, so
           // nobody finds out at install time that the parts were never bought.
+          // Offered whenever there are parts, since any of them can be
+          // requested (Craig, 2026-10-26).
           const fresh = await checkStock();
           const due = fresh?.summary.toRequest || 0;
-          if (fresh && due > 0) {
+          if (fresh && fresh.parts.length > 0) {
             setPartsRequest({
               parts: fresh.parts,
-              title: `Request the ${due} part${due === 1 ? '' : 's'} that still need ordering?`,
+              title: due > 0
+                ? `Request the ${due} part${due === 1 ? '' : 's'} that still need ordering?`
+                : 'Request any parts for this job?',
             });
           }
         }
@@ -4865,15 +4870,19 @@ export default function EstimatesPage() {
               >
                 {stock && !stockStale ? 'Re-check' : 'Check stock'}
               </button>
-              {stock && !stockStale && editingId && canRequestParts && stock.summary.toRequest > 0 && (
+              {stock && !stockStale && editingId && canRequestParts && stock.parts.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setPartsRequest({ parts: stock.parts })}
                   disabled={stockLoading}
-                  title="Send the short parts to the Purchasing queue, tagged with this estimate"
-                  style={{
+                  title="Send any of this estimate's parts to the Purchasing queue, tagged with this estimate"
+                  style={stock.summary.toRequest > 0 ? {
                     padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
                     border: '1px solid rgba(248,113,113,0.45)', background: 'rgba(248,113,113,0.14)', color: '#f87171',
+                    cursor: 'pointer', whiteSpace: 'nowrap',
+                  } : {
+                    padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 800,
+                    border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-primary)',
                     cursor: 'pointer', whiteSpace: 'nowrap',
                   }}
                 >
