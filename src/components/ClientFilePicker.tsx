@@ -161,8 +161,11 @@ export default function ClientFilePicker({ customerName, customerNetsuiteId, alr
       <div
         onClick={e => e.stopPropagation()}
         style={{
+          // Fill the fixed overlay rather than 100vh: in the iPhone app the web
+          // view is inset under the status bar and home bar, so 100vh ran past
+          // the bottom and hid the Add button (Craig, 2026-10-26).
           width: '100%', maxWidth: '560px', margin: '0 auto',
-          height: 'calc(100vh / var(--ts))', display: 'flex', flexDirection: 'column',
+          flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
           background: 'var(--bg)',
         }}
       >
@@ -174,10 +177,19 @@ export default function ClientFilePicker({ customerName, customerNetsuiteId, alr
                 Linked to the job, not copied: they open from Dropbox&apos;s latest version.
               </div>
             </div>
-            <button onClick={onClose} style={{
-              background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px', flexShrink: 0,
-              padding: '4px 10px', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
-            }}>Cancel</button>
+            <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+              <button onClick={onClose} style={{
+                background: 'transparent', border: '1px solid var(--border)', borderRadius: '6px',
+                padding: '4px 10px', color: 'var(--text-body)', fontSize: '11px', fontWeight: 700, cursor: 'pointer',
+              }}>Cancel</button>
+              {/* Also up here, so a tick never needs a scroll to the bottom bar. */}
+              {picked.size > 0 && (
+                <button onClick={add} disabled={adding} style={{
+                  background: 'var(--accent, #2563eb)', border: 'none', borderRadius: '6px',
+                  padding: '4px 12px', color: '#fff', fontSize: '11px', fontWeight: 800, cursor: adding ? 'default' : 'pointer',
+                }}>{adding ? 'Adding…' : `Add ${picked.size}`}</button>
+              )}
+            </div>
           </div>
           {folders !== null && (
             <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '8px' }}>
