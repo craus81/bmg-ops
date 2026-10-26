@@ -3,6 +3,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { addDays, chicagoDate } from './own-invoices';
 import { toCents } from './own-bills';
 import type { BillRead, BillReadLine } from './bill-reader';
+import { extraWords, viewPo, type PoFacts, type PoView } from './snap-po';
 
 /**
  * Snap a bill (migration 436; owner decision 2026-10-25, thread "Replacing
@@ -27,7 +28,11 @@ import type { BillRead, BillReadLine } from './bill-reader';
  *   - whether NetSuite already has it, by the Mistake checks rules: a bill
  *     from the vendor with the same number stops it (NetSuite is asked, and
  *     the copy of its bills looked through); a bill, check or card charge to
- *     them for the same amount within a week only warns.
+ *     them for the same amount within a week only warns;
+ *   - the purchase order it names (migration 444, src/lib/books/snap-po.ts):
+ *     a bill for one of the vendor's open POs bills that PO, after Parts
+ *     Mail's three-way match, with what it's more than the PO on a line of
+ *     its own.
  * Every rule here is pure; the route (/api/admin/books/snap-a-bill) gathers
  * what they read. Sending is the route's, once only (src/lib/bill-once.ts).
  */
@@ -57,6 +62,16 @@ export interface SnapLine {
   picked: boolean;
 }
 
+/** The line for what a bill that bills a PO is more than the PO (freight, say): its amount is the difference. */
+export interface SnapExtra {
+  description: string;
+  accountId: string | null;
+  /** True once someone chose the account, so a suggestion never replaces it. */
+  picked: boolean;
+  /** True once someone left it off: NetSuite bills the PO's lines only. */
+  leftOff: boolean;
+}
+
 /** The form as the page has it. */
 export interface SnapForm {
   /** 'BMG' or '1084'. */
@@ -71,6 +86,14 @@ export interface SnapForm {
   totalCents: number | null;
   locationId: string | null;
   lines: SnapLine[];
+  /** The purchase order the bill is for, as read off it, typed or tapped (migration 444). */
+  poNumber: string | null;
+  /** Bill the PO, or a plain bill of the lines; null until someone picks, when the PO is billed if it can take the bill. */
+  howBilled: 'po' | 'plain' | null;
+  /** Why the PO is billed past a check that didn't pass, for the audit log. */
+  overrideReason: string | null;
+  /** The line for what the bill is more than the PO it bills; null until there's been one. */
+  extra: SnapExtra | null;
 }
 
 export interface SnapCompany {
@@ -248,14 +271,20 @@ export function memoWords(text: string | null | undefined): string[] {
 /** A line is like an earlier one when this much of what they're for is the same. */
 export const LIKE_SHARE = 0.5;
 
-/** The account of a bill's biggest expense line, or null when its lines aren't known. */
+/**
+ * The account of a bill's biggest expense line, or null when its lines aren't known, or come to under half of it: a
+ * PO's bill, whose items the copy leaves out, doesn't say where the vendor's bills go by its freight.
+ */
 const mainAccount = (bill: HistoryBill): string | null => {
   let best: { account: string; cents: number } | null = null;
+  let sum = 0;
   for (const l of bill.lines) {
     const c = Math.abs(amountOf(l.amount) ?? 0);
+    sum += c;
     if (l.account && (!best || c > best.cents)) best = { account: l.account, cents: c };
   }
-  return best?.account ?? null;
+  const total = Math.abs(amountOf(bill.total) ?? 0);
+  return total > 0 && sum * 2 < total ? null : best?.account ?? null;
 };
 
 /**
@@ -279,7 +308,8 @@ export function usualAccount(bills: HistoryBill[]): { accountId: string; bills: 
  * Each line's account from where the vendor's earlier bills went, in the company it's for (their bills the copy of the
  * general ledger books elsewhere are left out). A line like an earlier one goes where that one went; the biggest line
  * where their bills keep going, else to the vendor's default expense account when they've no bills yet. Anything else
- * waits for someone to pick. Only accounts the company can use are suggested. Pure.
+ * waits for someone to pick. Only accounts the company can use are suggested. likeOnly keeps to lines like earlier
+ * ones: the extra line on a PO's bill is what the PO left out, not the parts their bills are for. Pure.
  */
 export function suggestAccounts(
   lines: Array<Pick<SnapLine, 'description' | 'cents'>>,
@@ -290,6 +320,7 @@ export function suggestAccounts(
     vendorDefault: string | null;
     usable: (accountId: string) => boolean;
     label: (accountId: string) => string;
+    likeOnly?: boolean;
   },
 ): AccountSuggestion[] {
   if (!ctx.vendorKnown) return lines.map(() => ({ accountId: null, text: "Pick the account. FleetSuite suggests one once it knows the vendor." }));
@@ -302,9 +333,11 @@ export function suggestAccounts(
     : null;
   const earlier = bills.flatMap((b) => b.lines.filter((l) => l.account && l.memo).map((l) => ({ account: l.account!, memo: l.memo!, words: memoWords(l.memo) })));
   let biggest = -1;
-  lines.forEach((l, i) => {
-    if (biggest < 0 || Math.abs(l.cents ?? 0) > Math.abs(lines[biggest].cents ?? 0)) biggest = i;
-  });
+  if (!ctx.likeOnly) {
+    lines.forEach((l, i) => {
+      if (biggest < 0 || Math.abs(l.cents ?? 0) > Math.abs(lines[biggest].cents ?? 0)) biggest = i;
+    });
+  }
 
   const fresh = bills.length ? 'New for this vendor, so pick the account.' : 'No earlier bills from them, so pick the account.';
   const offer = (accountId: string, text: string): AccountSuggestion => (ctx.usable(accountId)
@@ -406,6 +439,10 @@ export interface SnapView {
   company: string | null;
   /** NetSuite already has the bill: Send stays greyed out. */
   stop: (SameBill & { url: string | null; text: string }) | null;
+  /** The purchase order the bill names, and the checks against it (src/lib/books/snap-po.ts). */
+  po: PoView;
+  /** The account FleetSuite suggests for the extra line, while billing the PO puts one on. */
+  extra: AccountSuggestion | null;
   /** Under the lines, in order: green, then amber, then red. */
   notes: SnapNote[];
   /** What must change before Send, each in a sentence (the red notes). */
@@ -429,10 +466,37 @@ export interface SnapFacts {
   defaultLocationId: string | null;
   link: (type: string, netsuiteId: string) => string | null;
   today: string;
+  /** The PO the form names, or the vendor's open POs (src/lib/books/snap-po.ts); null when not looked for. */
+  po: PoFacts | null;
 }
 
 /** Whether a company can use an account on a bill. */
 export const usableBy = (account: SnapAccount | undefined, company: string) => !!account && account.companies.includes(company);
+
+/** The company a PO's bill is for: FleetSuite's copy of NetSuite's POs keeps no company, and they're BMG's. */
+export const PO_COMPANY = 'BMG';
+
+/** The extra line's account: where a line like it on the vendor's earlier bills went, else none, to pick. Pure. */
+export function suggestExtraAccount(
+  description: string,
+  cents: number,
+  facts: Pick<SnapFacts, 'accounts' | 'vendor' | 'history'>,
+): AccountSuggestion {
+  return suggestAccounts([{ description, cents }], facts.history.bills, {
+    company: PO_COMPANY,
+    vendorKnown: !!facts.vendor,
+    vendorDefault: null,
+    usable: (id) => usableBy(facts.accounts.get(id), PO_COMPANY),
+    label: (id) => {
+      const a = facts.accounts.get(id);
+      return a ? accountLabel(a) : `NetSuite account ${id}`;
+    },
+    likeOnly: true,
+  })[0];
+}
+
+/** What a line is called in a sentence, for the extra line: "the freight", else "the line not on the PO". */
+const theExtra = (extra: Pick<SnapExtra, 'description'> | null) => (extra?.description.trim() ? theLine(extra.description, 0) : 'the line not on the PO');
 
 /** What the page shows for a form: the suggestions, the notes under the lines, and whether it can be sent. Pure. */
 export function viewSnapForm(form: SnapForm, facts: SnapFacts): SnapView {
@@ -453,6 +517,13 @@ export function viewSnapForm(form: SnapForm, facts: SnapFacts): SnapView {
     vendor = { tone: 'amber', text: 'Not sure which vendor in NetSuite this is. Pick one.', others: facts.match.others.map((v) => ({ id: v.id, name: v.name })) };
   }
 
+  // The PO the bill names. Its vendor is one to pick while the form has none.
+  const po = viewPo(form, facts.po, who, facts.today);
+  if (po.vendor && !form.vendorId && !vendor.others.some((o) => o.id === po.vendor!.id)) {
+    vendor = { tone: 'amber', text: vendor.text ?? 'Not sure which vendor in NetSuite this is. Pick one.', others: [po.vendor, ...vendor.others] };
+  }
+  const extra = po.billing && po.extraCents > 0 ? suggestExtraAccount(form.extra?.description ?? '', po.extraCents, facts) : null;
+
   const due = suggestDue(form.billDate, facts.terms, facts.read?.dueDate ?? null, !!facts.vendor, facts.today);
   const accounts = suggestAccounts(form.lines, facts.history.bills, {
     company: form.company,
@@ -469,10 +540,10 @@ export function viewSnapForm(form: SnapForm, facts: SnapFacts): SnapView {
   const problems: string[] = [];
   const red = (text: string) => problems.push(text);
 
-  // The lines against the bill's total.
+  // The lines against the bill's total: a PO's bill is its lines, not these.
   const lineCents = form.lines.map((l) => l.cents);
   const sum = lineCents.every((c) => c !== null) ? lineCents.reduce((n: number, c) => n + (c as number), 0) : null;
-  if (form.lines.length && sum !== null && form.totalCents !== null) {
+  if (!po.billing && form.lines.length && sum !== null && form.totalCents !== null) {
     if (sum === form.totalCents) notes.push({ tone: 'green', text: `The lines add up to ${dollars(sum)}, the bill's total.` });
     else red(`The lines add up to ${dollars(sum)}, ${dollars(Math.abs(sum - form.totalCents))} ${sum < form.totalCents ? 'less' : 'more'} than the bill's total of ${dollars(form.totalCents)}.`);
   }
@@ -528,22 +599,34 @@ export function viewSnapForm(form: SnapForm, facts: SnapFacts): SnapView {
   else if (number.length > BILL_NUMBER_MAX) red(`NetSuite takes a bill number of up to ${BILL_NUMBER_MAX} characters.`);
   if (!form.billDate) red('Fill in the bill date.');
   if (form.billDate && form.dueDate && form.dueDate < form.billDate) red('The due date is before the bill date.');
-  if (company?.locations.length) {
+  if (!po.billing && company?.locations.length) {
     if (!form.locationId) red('Pick a location.');
     else if (!company.locations.some((l) => l.id === form.locationId)) red(`Pick one of ${company.code}'s locations.`);
   }
   if (form.totalCents === null) red("Fill in the bill's total.");
   else if (form.totalCents <= 0) red("A bill's total must be more than $0.");
-  if (!form.lines.length) red('Add a line.');
-  if (form.lines.some((l) => l.cents === null || l.cents === 0)) red("Fill in each line's amount.");
-  const noAccount = form.lines.map((l, i) => ({ l, i })).filter(({ l }) => !l.accountId);
-  if (noAccount.length === 1) red(`Pick an account for ${theLine(noAccount[0].l.description, noAccount[0].i + 1)} before sending.`);
-  else if (noAccount.length > 1) red(`Pick an account for ${noAccount.length} lines before sending.`);
-  form.lines.forEach((l, i) => {
-    if (l.accountId && !usableBy(facts.accounts.get(l.accountId), form.company)) {
-      red(`${label(l.accountId)} can't be used on ${form.company}'s bills: pick another account for ${theLine(l.description, i + 1)}.`);
+  if (po.billing) {
+    // The PO brings its company, location and lines; what the bill is more than it needs an account.
+    if (form.company !== PO_COMPANY) red(`A PO's bill is ${PO_COMPANY}'s. To enter it for ${form.company}, make it a plain bill.`);
+    if (po.needsReason && !form.overrideReason?.trim()) red(`Say why ${po.number} is billed anyway, or enter it as a plain bill.`);
+    if (extra) {
+      if (!form.extra?.accountId) red(`Pick an account for ${theExtra(form.extra)} before sending.`);
+      else if (!usableBy(facts.accounts.get(form.extra.accountId), PO_COMPANY)) {
+        red(`${label(form.extra.accountId)} can't be used on ${PO_COMPANY}'s bills: pick another account for ${theExtra(form.extra)}.`);
+      }
     }
-  });
+  } else {
+    if (!form.lines.length) red('Add a line.');
+    if (form.lines.some((l) => l.cents === null || l.cents === 0)) red("Fill in each line's amount.");
+    const noAccount = form.lines.map((l, i) => ({ l, i })).filter(({ l }) => !l.accountId);
+    if (noAccount.length === 1) red(`Pick an account for ${theLine(noAccount[0].l.description, noAccount[0].i + 1)} before sending.`);
+    else if (noAccount.length > 1) red(`Pick an account for ${noAccount.length} lines before sending.`);
+    form.lines.forEach((l, i) => {
+      if (l.accountId && !usableBy(facts.accounts.get(l.accountId), form.company)) {
+        red(`${label(l.accountId)} can't be used on ${form.company}'s bills: pick another account for ${theLine(l.description, i + 1)}.`);
+      }
+    });
+  }
   for (const p of problems) notes.push({ tone: 'red', text: p });
   const TONES: SnapNote['tone'][] = ['green', 'amber', 'red'];
 
@@ -554,6 +637,8 @@ export function viewSnapForm(form: SnapForm, facts: SnapFacts): SnapView {
     location,
     company: companyNote,
     stop,
+    po,
+    extra,
     notes: notes.map((n, i) => ({ n, i })).sort((a, b) => TONES.indexOf(a.n.tone) - TONES.indexOf(b.n.tone) || a.i - b.i).map(({ n }) => n),
     problems,
     canSend: !problems.length && !stop,
@@ -576,18 +661,28 @@ export function billToMarkSent(unfinished: boolean, view: Pick<SnapView, 'proble
 }
 
 /** What settleForm and formFromRead work from. */
-export type SettleFacts = Pick<SnapFacts, 'companies' | 'accounts' | 'vendor' | 'terms' | 'history' | 'read' | 'defaultLocationId' | 'today'>;
+export type SettleFacts = Pick<SnapFacts, 'companies' | 'accounts' | 'vendor' | 'terms' | 'history' | 'read' | 'defaultLocationId' | 'today' | 'po'>;
 
 /**
  * The form with what FleetSuite suggests filled in where nobody has chosen: each line's account until someone picks
  * one, the due date until someone types one, and the location when the company has no such location (it was just
- * switched). Run on the form each time it changes, so a suggestion follows the vendor, the lines and the company. Pure.
+ * switched). A bill that bills a PO is BMG's, and the line for what it's more than the PO is worked out once, named
+ * from the bill's own lines, its account suggested until someone picks one. Run on the form each time it changes, so a
+ * suggestion follows the vendor, the lines, the company and the PO. Pure.
  */
-export function settleForm(form: SnapForm, facts: SettleFacts): SnapForm {
+export function settleForm(given: SnapForm, facts: SettleFacts): SnapForm {
   const label = (id: string) => {
     const a = facts.accounts.get(id);
     return a ? accountLabel(a) : `NetSuite account ${id}`;
   };
+  const po = viewPo(given, facts.po, facts.vendor?.name ?? given.vendorName ?? 'the vendor', facts.today);
+  const form = po.billing && given.company !== PO_COMPANY ? { ...given, company: PO_COMPANY } : given;
+  let extra = form.extra;
+  // Only while it's on the bill: an extra line someone left off has no amount.
+  if (po.billing && po.extraCents > 0 && !extra?.picked) {
+    const description = extra?.description ?? extraWords(form.lines, po.lines, po.extraCents) ?? '';
+    extra = { description, accountId: suggestExtraAccount(description, po.extraCents, facts).accountId, picked: false, leftOff: false };
+  }
   const accounts = suggestAccounts(form.lines, facts.history.bills, {
     company: form.company,
     vendorKnown: !!facts.vendor,
@@ -602,6 +697,7 @@ export function settleForm(form: SnapForm, facts: SettleFacts): SnapForm {
     dueDate: form.duePicked ? form.dueDate : suggestDue(form.billDate, facts.terms, facts.read?.dueDate ?? null, !!facts.vendor, facts.today).date,
     locationId: !company || locationOk ? form.locationId : suggestLocation(company, facts.history.bills, facts.defaultLocationId).id,
     lines: form.lines.map((l, i) => (l.picked ? l : { ...l, accountId: accounts[i]?.accountId ?? null })),
+    extra,
   };
 }
 
@@ -619,6 +715,10 @@ export function formFromRead(read: BillRead, facts: SettleFacts): SnapForm {
     totalCents: read.totalCents,
     locationId: null,
     lines: read.lines.map((l: BillReadLine) => ({ description: l.description, cents: l.cents, accountId: null, picked: false })),
+    poNumber: read.poNumber ?? null,
+    howBilled: null,
+    overrideReason: null,
+    extra: null,
   }, { ...facts, read });
 }
 
@@ -640,7 +740,8 @@ export function storedReadFrom(v: unknown): StoredRead | null {
   const r = (v && typeof v === 'object' ? v : null) as Partial<StoredRead> | null;
   if (!r?.read || typeof r.read !== 'object' || !Array.isArray(r.read.lines) || !r.match || typeof r.match !== 'object') return null;
   return {
-    read: r.read,
+    // A read kept before migration 444 has no PO number.
+    read: { ...r.read, poNumber: typeof r.read.poNumber === 'string' ? r.read.poNumber : null },
     match: {
       vendorId: typeof r.match.vendorId === 'string' ? r.match.vendorId : null,
       how: r.match.how === 'exact' || r.match.how === 'close' ? r.match.how : null,
@@ -692,12 +793,32 @@ export interface SnappedBillRow {
   made_by: string | null;
   made_at: string;
   saved_at: string;
+  po_number: string | null;
+  how_billed: string | null;
+  override_reason: string | null;
+  extra_line: unknown;
+  billed_po_netsuite_id: string | null;
+  billed_po_number: string | null;
+  billed_extra: string | number | null;
 }
 
 export const SNAPPED_BILL_COLUMNS = 'id, company_id, file_path, file_type, file_name, read_result, read_at, read_error, '
   + 'vendor_netsuite_id, vendor_name, bill_number, bill_date, due_date, total, location_netsuite_id, lines, due_picked, '
   + 'status, bill_claimed_at, send_error, netsuite_id, netsuite_number, sent_at, sent_by, thrown_away_at, thrown_away_by, '
-  + 'made_by, made_at, saved_at';
+  + 'made_by, made_at, saved_at, po_number, how_billed, override_reason, extra_line, billed_po_netsuite_id, billed_po_number, '
+  + 'billed_extra';
+
+/** The extra line a saved row holds; null when there's none, or it isn't one. Pure. */
+export function extraOf(v: unknown): SnapExtra | null {
+  const e = (v && typeof v === 'object' && !Array.isArray(v) ? v : null) as Record<string, unknown> | null;
+  if (!e) return null;
+  return {
+    description: typeof e.description === 'string' ? e.description : '',
+    accountId: typeof e.account_netsuite_id === 'string' && /^\d+$/.test(e.account_netsuite_id) ? e.account_netsuite_id : null,
+    picked: e.picked === true,
+    leftOff: e.left_off === true,
+  };
+}
 
 /** The form a saved row holds. Pure. */
 export function formOfRow(row: SnappedBillRow, companies: Pick<SnapCompany, 'id' | 'code'>[]): SnapForm {
@@ -718,6 +839,10 @@ export function formOfRow(row: SnappedBillRow, companies: Pick<SnapCompany, 'id'
       accountId: typeof l.account_netsuite_id === 'string' && /^\d+$/.test(l.account_netsuite_id) ? l.account_netsuite_id : null,
       picked: l.picked === true,
     })),
+    poNumber: row.po_number ?? null,
+    howBilled: row.how_billed === 'po' || row.how_billed === 'plain' ? row.how_billed : null,
+    overrideReason: row.override_reason ?? null,
+    extra: extraOf(row.extra_line),
   };
 }
 
@@ -740,6 +865,12 @@ export function rowOfForm(form: SnapForm, companyId: string): Record<string, unk
       account_netsuite_id: l.accountId,
       picked: l.picked,
     })),
+    po_number: blank(form.poNumber),
+    how_billed: form.howBilled,
+    override_reason: blank(form.overrideReason),
+    extra_line: form.extra
+      ? { description: form.extra.description.trim(), account_netsuite_id: form.extra.accountId, picked: form.extra.picked, left_off: form.extra.leftOff }
+      : null,
   };
 }
 

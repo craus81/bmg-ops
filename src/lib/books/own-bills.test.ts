@@ -180,12 +180,28 @@ describe('saving the copy', () => {
   it("saves a snapped bill's lines without reading the PO copy", async () => {
     const { service, rpc, reads } = fakeService();
     await saveOwnBill(service, made({
-      madeFrom: 'snapped', expense: null, po: { copyId: 'po-1', netsuiteId: null, number: null }, billDate: '2026-10-20',
+      madeFrom: 'snapped', expense: null, billDate: '2026-10-20',
       expenses: [{ accountId: '623', amount: 1284.33, memo: 'Electric service' }, { accountId: '640', amount: 12.5 }],
     }), AT);
     expect(reads).toEqual([]);
-    expect(payloadOf(rpc)).toMatchObject({ made_from: 'snapped', bill_date: '2026-10-20' });
+    expect(payloadOf(rpc)).toMatchObject({ made_from: 'snapped', bill_date: '2026-10-20', po_netsuite_id: null });
     expect(payloadOf(rpc).lines.map((l: Record<string, unknown>) => [l.line_no, l.account_netsuite_id, l.amount])).toEqual([[1, '623', '1284.33'], [2, '640', '12.50']]);
+  });
+
+  it("saves a snapped bill that billed a PO as the PO's open lines, then the line for what it was more than the PO", async () => {
+    const { service, rpc, reads } = fakeService({ poLines: [line()] });
+    await saveOwnBill(service, made({
+      madeFrom: 'snapped', expense: null, locationId: null, billDate: '2026-10-22', po: { copyId: 'po-1', netsuiteId: '5001', number: 'PO453-ACME' },
+      expenses: [{ accountId: '655', amount: 240, memo: 'Freight' }], invoiceTotal: 2380,
+    }), AT);
+    expect(reads.map((r) => r.table)).toEqual(['netsuite_vendor_po_lines']);
+    expect(payloadOf(rpc)).toMatchObject({ made_from: 'snapped', po_netsuite_id: '5001', po_number: 'PO453-ACME', bill_date: '2026-10-22', invoice_total: '2380.00', unknowns: [] });
+    expect(payloadOf(rpc).lines.map((l: Record<string, unknown>) => [l.line_no, l.item_netsuite_id, l.account_netsuite_id, l.description, l.amount]))
+      .toEqual([[1, '9001', null, 'Ladder rack', '2140.00'], [2, null, '655', 'Freight', '240.00']]);
+    // With no line for the difference, it's the PO's lines alone, as a Parts Mail bill is.
+    const plain = fakeService({ poLines: [line()] });
+    await saveOwnBill(plain.service, made({ madeFrom: 'snapped', expense: null, po: { copyId: 'po-1', netsuiteId: '5001', number: 'PO453-ACME' }, expenses: [] }), AT);
+    expect(payloadOf(plain.rpc).lines).toEqual([expect.objectContaining({ line_no: 1, item_netsuite_id: '9001', amount: '2140.00' })]);
   });
 
   it("saves a Parts Mail bill from FleetSuite's copy of the PO", async () => {

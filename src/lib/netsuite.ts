@@ -2905,6 +2905,12 @@ export async function createBillFromPo(payload: {
   purchaseOrderId: string | number;
   referenceNo?: string;
   memo?: string;
+  /** 'YYYY-MM-DD'. Without it NetSuite dates the bill the day it's made. */
+  tranDate?: string;
+  /** 'YYYY-MM-DD'. Without it NetSuite works it out from the vendor's terms. */
+  dueDate?: string;
+  /** Expense lines after the PO's: what a snapped bill has beyond its PO (Snap a bill, migration 444). Account + amount only, like createVendorBill's. */
+  expenses?: VendorBillExpense[];
 }): Promise<{ success: boolean; billId?: string; billNumber?: string; error?: string }> {
   const config = getConfig();
   const baseUrl = getBaseUrl(config.accountId);
@@ -2915,6 +2921,19 @@ export async function createBillFromPo(payload: {
   const body: any = {
     ...(payload.referenceNo ? { tranId: payload.referenceNo } : {}),
     ...(payload.memo ? { memo: payload.memo } : {}),
+    ...(payload.tranDate ? { tranDate: payload.tranDate } : {}),
+    ...(payload.dueDate ? { dueDate: payload.dueDate } : {}),
+    ...(payload.expenses?.length
+      ? {
+        expense: {
+          items: payload.expenses.map((line) => ({
+            account: { id: line.accountId },
+            amount: line.amount,
+            ...(line.memo ? { memo: line.memo } : {}),
+          })),
+        },
+      }
+      : {}),
   };
 
   try {

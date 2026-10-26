@@ -6,11 +6,12 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { z } from '@/lib/validate';
 import { ensureR2Cors, r2Get, r2GetBytes, r2Head, r2PresignPut, r2Upload } from '@/lib/r2';
 import { readRecordFileBody, ROUTE_UPLOAD_MAX_BYTES } from '@/lib/record-file-route';
-import { createVendorBill, findVendorBill, findVendors, transactionUrl } from '@/lib/netsuite';
+import { createBillFromPo, createVendorBill, findVendorBill, findVendors, transactionUrl } from '@/lib/netsuite';
 import { madeOrFound, makeBillOnce, STALE_CLAIM_MS } from '@/lib/bill-once';
 import { saveOwnBill } from '@/lib/books/own-bills';
 import { logAudit } from '@/lib/audit';
 import { BILL_FILE_TYPES, BILL_LINES_MAX, isoDay, readBill, type BillFileType } from '@/lib/books/bill-reader';
+import { readPoFacts } from '@/lib/books/snap-po';
 import {
   accountLabel, billToMarkSent, formFromRead, formOfRow, matchFor, matchVendor, plainSendError, readAccounts, readCompanies,
   readHistory, readNearby, readTerms, readVendor, readVendors, rowOfForm, searchVendors, sendUnfinished, settleForm,
@@ -71,6 +72,16 @@ const FormSchema = z.object({
     accountId: netsuiteId.nullable(),
     picked: z.boolean(),
   })).max(BILL_LINES_MAX),
+  // Migration 444's: a page opened before it sends none of them.
+  poNumber: z.string().max(60).nullable().default(null),
+  howBilled: z.enum(['po', 'plain']).nullable().default(null),
+  overrideReason: z.string().max(500).nullable().default(null),
+  extra: z.object({
+    description: z.string().max(300),
+    accountId: netsuiteId.nullable(),
+    picked: z.boolean(),
+    leftOff: z.boolean(),
+  }).nullable().default(null),
 });
 
 const formFrom = (v: unknown): SnapForm | null => {
@@ -129,16 +140,17 @@ async function askNetsuite(vendorId: string | null, number: string | null): Prom
   }
 }
 
-/** Everything the view of a form is worked out from (src/lib/books/snap-a-bill.ts). */
+/** Everything the view of a snapped bill's form is worked out from (src/lib/books/snap-a-bill.ts). */
 async function gather(
-  service: SupabaseClient, form: SnapForm, stored: StoredRead | null, companies: SnapCompany[], accounts: Map<string, SnapAccount>,
+  service: SupabaseClient, id: string, form: SnapForm, stored: StoredRead | null, companies: SnapCompany[], accounts: Map<string, SnapAccount>,
 ): Promise<SnapFacts> {
   const number = form.billNumber?.trim() || null;
-  const [vendor, history, nearby, asked] = await Promise.all([
+  const [vendor, history, nearby, asked, po] = await Promise.all([
     form.vendorId ? readVendor(service, form.vendorId) : Promise.resolve(null),
     readHistory(service, form.vendorId, number),
     readNearby(service, form.billDate),
     askNetsuite(form.vendorId, number),
+    readPoFacts(service, form, id),
   ]);
   return {
     companies,
@@ -153,6 +165,7 @@ async function gather(
     defaultLocationId: process.env.NETSUITE_DEFAULT_LOCATION_ID || null,
     link,
     today: snapToday(),
+    po,
   };
 }
 
@@ -181,7 +194,7 @@ async function oneBill(service: SupabaseClient, row: SnappedBillRow, given?: Sna
   let form = given ?? formOfRow(row, companies);
   let view = null;
   if (row.status === 'draft') {
-    const facts = await gather(service, form, stored, companies, accounts);
+    const facts = await gather(service, row.id, form, stored, companies, accounts);
     form = settleForm(form, facts);
     view = viewSnapForm(form, facts);
   }
@@ -201,6 +214,8 @@ async function oneBill(service: SupabaseClient, row: SnappedBillRow, given?: Sna
       netsuiteId: row.netsuite_id,
       netsuiteNumber: row.netsuite_number,
       netsuiteUrl: row.netsuite_id ? link('VendBill', row.netsuite_id) : null,
+      billedPo: row.billed_po_number,
+      billedExtraCents: row.billed_extra === null ? null : Math.round(Number(row.billed_extra) * 100),
       sentAt: row.sent_at,
       sentBy: row.sent_by ? names.get(row.sent_by) ?? null : null,
       thrownAwayAt: row.thrown_away_at,
@@ -398,13 +413,14 @@ export async function POST(req: NextRequest) {
       const companies = await readCompanies(service);
       const [accounts, vendors] = await Promise.all([readAccounts(service, companies), readVendors(service)]);
       const match = matchVendor(read.vendorName, vendors);
-      const [terms, history] = await Promise.all([
+      const [terms, history, po] = await Promise.all([
         readTerms(service, match.vendor?.termsId ?? null),
         readHistory(service, match.vendor?.id ?? null, read.billNumber),
+        readPoFacts(service, { poNumber: read.poNumber, vendorId: match.vendor?.id ?? null, totalCents: read.totalCents }, id),
       ]);
       const form = formFromRead(read, {
         companies, accounts, vendor: match.vendor, terms, history, read,
-        defaultLocationId: process.env.NETSUITE_DEFAULT_LOCATION_ID || null, today: snapToday(),
+        defaultLocationId: process.env.NETSUITE_DEFAULT_LOCATION_ID || null, today: snapToday(), po,
       });
       const company = companies.find((c) => c.code === form.company) ?? companies.find((c) => c.code === 'BMG');
       if (!company) throw new Error("couldn't find the BMG company in the books");
@@ -453,7 +469,7 @@ export async function POST(req: NextRequest) {
     if (action === 'check') {
       if (row.status !== 'draft') return refuse(lockedWhy(row) ?? 'This bill changed. Refresh.', 409);
       const accounts = await readAccounts(service, companies);
-      const facts = await gather(service, form, storedReadFrom(row.read_result), companies, accounts);
+      const facts = await gather(service, id, form, storedReadFrom(row.read_result), companies, accounts);
       const settled = settleForm(form, facts);
       return NextResponse.json({ form: settled, view: viewSnapForm(settled, facts) });
     }
@@ -480,7 +496,7 @@ export async function POST(req: NextRequest) {
 
     // ── Send to NetSuite: only what the page showed, checked again here, NetSuite asked again.
     const accounts = await readAccounts(service, companies);
-    const facts = await gather(service, form, storedReadFrom(row.read_result), companies, accounts);
+    const facts = await gather(service, id, form, storedReadFrom(row.read_result), companies, accounts);
     const view = viewSnapForm(form, facts);
     // ── Mark it sent: NetSuite has the bill from a Send here that didn't finish (the connection dropped after
     // NetSuite kept it, or the bill couldn't be marked sent), so it's kept as sent, with Books' own copy, not sent again.
@@ -493,7 +509,15 @@ export async function POST(req: NextRequest) {
     const vendorId = form.vendorId!;
     const referenceNo = form.billNumber!.trim();
     const vendorName = facts.vendor?.name ?? form.vendorName?.trim() ?? `NetSuite vendor ${vendorId}`;
-    const lines = form.lines.map((l) => ({ accountId: l.accountId!, amount: l.cents! / 100, ...(l.description.trim() ? { memo: l.description.trim() } : {}) }));
+    // A bill for an open PO bills the PO (src/lib/books/snap-po.ts): NetSuite takes its lines and prices, and what
+    // the bill is more than the PO goes on after them, to the account picked for it. Else the lines, as typed.
+    const po = view.po.billing ? facts.po?.found ?? null : null;
+    const extra = po && view.po.extraCents > 0 && form.extra?.accountId
+      ? { accountId: form.extra.accountId, amount: view.po.extraCents / 100, ...(form.extra.description.trim() ? { memo: form.extra.description.trim() } : {}) }
+      : null;
+    const lines = po
+      ? (extra ? [extra] : [])
+      : form.lines.map((l) => ({ accountId: l.accountId!, amount: l.cents! / 100, ...(l.description.trim() ? { memo: l.description.trim() } : {}) }));
     let made: { billId: string; billNumber: string; claimedAt: string | null };
     if (marked) {
       made = { billId: marked.bill.netsuiteId, billNumber: marked.bill.number ?? '', claimedAt: null };
@@ -502,16 +526,25 @@ export async function POST(req: NextRequest) {
         vendorId,
         vendorName,
         referenceNo,
-        create: () => madeOrFound(() => createVendorBill({
-          vendorId,
-          referenceNo,
-          subsidiaryId: company.subsidiaryId!,
-          ...(form.locationId ? { locationId: form.locationId } : {}),
-          tranDate: form.billDate!,
-          ...(form.dueDate ? { dueDate: form.dueDate } : {}),
-          memo: MEMO,
-          lines,
-        }), () => findVendorBill(vendorId, referenceNo)),
+        create: () => madeOrFound(() => (po
+          ? createBillFromPo({
+            purchaseOrderId: po.netsuiteId,
+            referenceNo,
+            memo: MEMO,
+            tranDate: form.billDate!,
+            ...(form.dueDate ? { dueDate: form.dueDate } : {}),
+            expenses: lines,
+          })
+          : createVendorBill({
+            vendorId,
+            referenceNo,
+            subsidiaryId: company.subsidiaryId!,
+            ...(form.locationId ? { locationId: form.locationId } : {}),
+            tranDate: form.billDate!,
+            ...(form.dueDate ? { dueDate: form.dueDate } : {}),
+            memo: MEMO,
+            lines,
+          })), () => findVendorBill(vendorId, referenceNo)),
       });
       if (!bill.ok) {
         const error = plainSendError(bill.error);
@@ -531,6 +564,7 @@ export async function POST(req: NextRequest) {
       .update({
         ...rowOfForm(form, company.id),
         status: 'sent', netsuite_id: made.billId, netsuite_number: made.billNumber || null, sent_at: now, sent_by: actorId, send_error: null,
+        billed_po_netsuite_id: po?.netsuiteId ?? null, billed_po_number: po?.number ?? null, billed_extra: extra ? extra.amount.toFixed(2) : null,
         ...(made.claimedAt || marking ? { bill_claimed_at: null } : {}),
       })
       .eq('id', id);
@@ -540,16 +574,30 @@ export async function POST(req: NextRequest) {
       return refuse(`Bill ${number} is in NetSuite, but FleetSuite couldn't mark it sent (${stampErr.message}). Don't send it again.`, 500);
     }
     if (!stamped?.length) return refuse('This bill changed. Refresh to see where it is.', 409);
-    // Books keeps its own copy of what was sent; it never stops the bill.
+    // Books keeps its own copy of what was sent; it never stops the bill. A PO's bill takes the PO's location.
     await saveOwnBill(service, {
       netsuiteId: made.billId, netsuiteNumber: made.billNumber, madeFrom: 'snapped', madeFromId: id, madeBy: actorId,
-      vendorId, vendorName, referenceNo, subsidiaryId: company.subsidiaryId, locationId: form.locationId,
+      vendorId, vendorName, referenceNo, subsidiaryId: company.subsidiaryId, locationId: po ? null : form.locationId,
+      ...(po ? { po: { copyId: po.copyId, netsuiteId: po.netsuiteId, number: po.number } } : {}),
       expenses: lines, billDate: form.billDate, invoiceTotal: form.totalCents! / 100,
     });
     await logAudit(service, {
       actorId, table: 'gl_snapped_bills', recordId: id, action: marking ? 'mark_sent' : 'send',
-      detail: { vendor: vendorName, amount: form.totalCents! / 100, company: company.code, netsuite_bill_id: made.billId, bill_number: number },
+      detail: {
+        vendor: vendorName, amount: form.totalCents! / 100, company: company.code, netsuite_bill_id: made.billId, bill_number: number,
+        ...(po ? { po: po.number, extra: extra?.amount ?? null } : {}),
+      },
     });
+    // A PO billed past a check that didn't pass is the exception Parts Mail's Create bill logs (the weekly digest reads it).
+    if (po && view.po.verdict !== 'green') {
+      await logAudit(service, {
+        actorId, table: 'gl_snapped_bills', recordId: id, action: 'vendor_bill_variance_override',
+        detail: {
+          reason: form.overrideReason?.trim() ?? '', verdict: view.po.verdict, variances: view.po.variances, po: po.number,
+          invoiceNumber: referenceNo, invoiceTotal: form.totalCents! / 100, billNumber: number, extra: extra?.amount ?? null,
+        },
+      });
+    }
     const fresh = await readRow(service, id);
     return NextResponse.json(await oneBill(service, fresh ?? row));
   } catch (e) {

@@ -25,6 +25,7 @@ const ELECTRIC = {
   bill_date: '2026-10-20',
   due_date: '2026-11-19',
   terms: 'Net 30',
+  po_number: null,
   lines: [
     { description: 'Electric service, Sep 18 to Oct 17', amount: 1284.33 },
     { description: 'Late payment charge', amount: 12.5 },
@@ -102,7 +103,12 @@ describe('what the reader read', () => {
       ],
       totalCents: 129683,
       amountDueCents: 251041,
+      poNumber: null,
     });
+    // The buyer's PO, as printed: a parts vendor's invoice names the PO it fills.
+    expect(parseBillRead({ ...ELECTRIC, po_number: '  PO453-ACME\n' }).poNumber).toBe('PO453-ACME');
+    expect(parseBillRead({ ...ELECTRIC, po_number: 'P'.repeat(80) }).poNumber).toHaveLength(60);
+    expect(parseBillRead({ ...ELECTRIC, po_number: 453 }).poNumber).toBeNull();
   });
 
   it('keeps a credit as a negative line, and leaves out a line with no amount', () => {
@@ -126,7 +132,7 @@ describe('what the reader read', () => {
 
   it("is empty, not guessed, where the reader couldn't read", () => {
     expect(parseBillRead({ is_bill: false, vendor_name: null, bill_number: '   ', bill_date: '2026-02-30', due_date: null, terms: null, lines: null, total: Infinity, amount_due: 'n/a' }))
-      .toEqual({ isBill: false, vendorName: null, billNumber: null, billDate: null, dueDate: null, terms: null, lines: [], totalCents: null, amountDueCents: null });
+      .toEqual({ isBill: false, vendorName: null, billNumber: null, billDate: null, dueDate: null, terms: null, lines: [], totalCents: null, amountDueCents: null, poNumber: null });
     expect(parseBillRead(null)).toMatchObject({ isBill: true, lines: [], vendorName: null });
   });
 
