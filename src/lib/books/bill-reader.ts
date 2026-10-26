@@ -8,10 +8,11 @@ import { toCents } from './own-bills';
  *
  * A picture of a vendor's bill, or its PDF, goes to Claude, which answers in
  * a fixed JSON shape (structured outputs): who sent it, its number, date, due
- * date and terms as printed, each charge on it, what its own charges come to,
- * and what it says is due now. Anything it can't read comes back empty rather
- * than guessed. Nothing here decides anything: the super admin checks each box
- * before Send to NetSuite (src/lib/books/snap-a-bill.ts).
+ * date and terms as printed, the purchase order it names (migration 444),
+ * each charge on it, what its own charges come to, and what it says is due
+ * now. Anything it can't read comes back empty rather than guessed. Nothing
+ * here decides anything: the super admin checks each box before Send to
+ * NetSuite (src/lib/books/snap-a-bill.ts).
  */
 
 // Overridable so another model can be tried without a deploy.
@@ -47,6 +48,8 @@ export interface BillRead {
   totalCents: number | null;
   /** What the bill says is due now, in whole cents, which can carry an earlier balance. */
   amountDueCents: number | null;
+  /** The buyer's purchase order number printed on it. Reads kept from before migration 444 have none. */
+  poNumber: string | null;
 }
 
 const nullable = (schema: Record<string, unknown>) => ({ anyOf: [schema, { type: 'null' }] });
@@ -55,7 +58,7 @@ const nullable = (schema: Record<string, unknown>) => ({ anyOf: [schema, { type:
 export const BILL_READ_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['is_bill', 'vendor_name', 'bill_number', 'bill_date', 'due_date', 'terms', 'lines', 'total', 'amount_due'],
+  required: ['is_bill', 'vendor_name', 'bill_number', 'bill_date', 'due_date', 'terms', 'po_number', 'lines', 'total', 'amount_due'],
   properties: {
     is_bill: { type: 'boolean' },
     vendor_name: nullable({ type: 'string' }),
@@ -63,6 +66,7 @@ export const BILL_READ_SCHEMA = {
     bill_date: nullable({ type: 'string', format: 'date' }),
     due_date: nullable({ type: 'string', format: 'date' }),
     terms: nullable({ type: 'string' }),
+    po_number: nullable({ type: 'string' }),
     lines: {
       type: 'array',
       items: {
@@ -88,6 +92,7 @@ export const BILL_READ_PROMPT = `This is a picture or PDF of a bill a vendor sen
 - bill_date: the date of the bill or invoice (a statement's date for a utility), as YYYY-MM-DD.
 - due_date: the date the bill is due, when it's printed, as YYYY-MM-DD.
 - terms: the payment terms as printed, such as "Net 30". Null when none are printed.
+- po_number: the purchase order number of the business the bill is to, as printed (often labelled PO, P.O. #, Your PO or Customer PO). Not the vendor's own order or sales order number. Null when none is printed.
 - lines: each charge on this bill, in the bill's order: what it's for, in a few words as the bill says it (with the service period when the bill gives one), and its amount in dollars. Taxes, fees, freight and late charges are lines of their own. A discount or credit on this bill is a line with a negative amount. Leave out any earlier balance, payments already made, and anything carried over from an earlier bill.
 - total: what this bill's own charges come to, as the bill totals them.
 - amount_due: the amount the bill says is due now, which can include an earlier balance. Null when it doesn't say.
@@ -155,6 +160,7 @@ export function parseBillRead(raw: unknown): BillRead {
     lines,
     totalCents: cents(r.total),
     amountDueCents: cents(r.amount_due),
+    poNumber: text(r.po_number, 60),
   };
 }
 

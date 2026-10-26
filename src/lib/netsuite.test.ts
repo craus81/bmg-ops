@@ -584,6 +584,28 @@ describe('createBillFromPo', () => {
     });
     expect(result).toEqual({ success: true, billId: '700', billNumber: 'VB-88' });
   });
+
+  it("dates a snapped bill's PO bill as the vendor's bill is, with what it has beyond the PO on an expense line (Snap a bill)", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ id: 9133, tranId: 'INV-5521' }));
+    const result = await createBillFromPo({
+      purchaseOrderId: '45310', referenceNo: 'INV-5521', memo: 'FleetSuite Snap a bill', tranDate: '2026-10-22', dueDate: '2026-11-21',
+      expenses: [{ accountId: '511', amount: 240, memo: 'Freight' }],
+    });
+    expect(result).toEqual({ success: true, billId: '9133', billNumber: 'INV-5521' });
+    const [url, init] = fetchMock.mock.calls[0];
+    // No ?replace: the body carries no item lines, so the bill keeps the PO's, and the expense line is added to them.
+    expect(url).toBe('https://1234567-sb1.suitetalk.api.netsuite.com/services/rest/record/v1/purchaseOrder/45310/!transform/vendorBill');
+    expect(JSON.parse(init.body)).toEqual({
+      tranId: 'INV-5521', memo: 'FleetSuite Snap a bill', tranDate: '2026-10-22', dueDate: '2026-11-21',
+      expense: { items: [{ account: { id: '511' }, amount: 240, memo: 'Freight' }] },
+    });
+  });
+
+  it('sends no expense sublist when there is nothing beyond the PO', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ id: 9134, tranId: 'INV-5522' }));
+    await createBillFromPo({ purchaseOrderId: '45310', referenceNo: 'INV-5522', tranDate: '2026-10-22', expenses: [] });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ tranId: 'INV-5522', tranDate: '2026-10-22' });
+  });
 });
 
 describe('createVendorBill', () => {

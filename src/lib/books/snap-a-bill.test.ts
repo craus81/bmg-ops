@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { PoLineRow } from '@/lib/three-way-match';
 import type { BillRead } from './bill-reader';
+import type { SnapPo } from './snap-po';
 import {
   BILL_NUMBER_MAX,
   billToMarkSent,
+  extraOf,
   formFromRead,
   formOfRow,
   matchFor,
@@ -22,6 +25,7 @@ import {
   storedReadOf,
   suggestAccounts,
   suggestDue,
+  suggestExtraAccount,
   suggestLocation,
   usualAccount,
   usualCompany,
@@ -94,6 +98,7 @@ const READ: BillRead = {
   ],
   totalCents: 129683,
   amountDueCents: 129683,
+  poNumber: null,
 };
 
 const facts = (over: Partial<SnapFacts> = {}): SnapFacts => ({
@@ -109,6 +114,7 @@ const facts = (over: Partial<SnapFacts> = {}): SnapFacts => ({
   defaultLocationId: null,
   link: (type, id) => `https://ns.example/${type}/${id}`,
   today: TODAY,
+  po: null,
   ...over,
 });
 
@@ -127,6 +133,10 @@ const form = (over: Partial<SnapForm> = {}): SnapForm => ({
     { description: 'Electric service, Sep 18 to Oct 17', cents: 128433, accountId: '623', picked: false },
     { description: 'Late payment charge', cents: 1250, accountId: null, picked: false },
   ],
+  poNumber: null,
+  howBilled: null,
+  overrideReason: null,
+  extra: null,
   ...over,
 });
 const sendable = (over: Partial<SnapForm> = {}) => form({
@@ -220,15 +230,23 @@ describe("where the vendor's bills keep going", () => {
   });
 
   it('is the one on two thirds of their latest twelve, else nothing', () => {
-    const mixed = [earlier(0, { lines: [{ account: '611', memo: null, amount: '1.00' }] }), ...ELEVEN];
+    const mixed = [earlier(0, { total: '1.00', lines: [{ account: '611', memo: null, amount: '1.00' }] }), ...ELEVEN];
     expect(usualAccount(mixed)).toEqual({ accountId: '623', bills: 11, of: 12 });
-    const split = [...ELEVEN.slice(0, 6), ...ELEVEN.slice(0, 6).map((b) => ({ ...b, lines: [{ account: '611', memo: null, amount: '1.00' }] }))];
+    const split = [...ELEVEN.slice(0, 6), ...ELEVEN.slice(0, 6).map((b) => ({ ...b, total: '1.00', lines: [{ account: '611', memo: null, amount: '1.00' }] }))];
     expect(usualAccount(split)).toBeNull();
     // Only the latest twelve count, however many older ones went elsewhere.
-    const older = [...ELEVEN.slice(0, 8), ...Array.from({ length: 10 }, (_, i) => earlier(i, { lines: [{ account: '611', memo: null, amount: '1.00' }] }))];
+    const older = [...ELEVEN.slice(0, 8), ...Array.from({ length: 10 }, (_, i) => earlier(i, { total: '1.00', lines: [{ account: '611', memo: null, amount: '1.00' }] }))];
     expect(usualAccount(older)).toEqual({ accountId: '623', bills: 8, of: 12 });
     expect(usualAccount([earlier(0, { lines: [], lines_known: false })])).toBeNull();
     expect(usualAccount([])).toBeNull();
+  });
+
+  it("leaves out a bill whose expense lines are under half of it: a PO's bill, its items not in the copy", () => {
+    const poBill = earlier(0, { total: '2380.00', lines: [{ account: '655', memo: 'Freight', amount: '-240.00' }] });
+    expect(usualAccount([poBill])).toBeNull();
+    expect(usualAccount([poBill, ...ELEVEN])).toEqual({ accountId: '623', bills: 11, of: 11 });
+    // Half of it is enough.
+    expect(usualAccount([earlier(0, { total: '480.00', lines: [{ account: '655', memo: 'Freight', amount: '-240.00' }] })])).toEqual({ accountId: '655', bills: 1, of: 1 });
   });
 });
 
@@ -243,7 +261,7 @@ describe("each line's account", () => {
       { accountId: null, text: 'New for this vendor, so pick the account.' },
     ]);
     expect(suggestAccounts(form().lines.slice(0, 1), ELEVEN.slice(0, 1), ctx())[0].text).toBe('Their last bill went to 6230 Utilities.');
-    const mixed = [earlier(0, { lines: [{ account: '611', memo: null, amount: '1.00' }] }), ...ELEVEN];
+    const mixed = [earlier(0, { total: '1.00', lines: [{ account: '611', memo: null, amount: '1.00' }] }), ...ELEVEN];
     expect(suggestAccounts(form().lines.slice(0, 1), mixed, ctx())[0].text).toBe('11 of their last 12 bills went to 6230 Utilities.');
     // The biggest line, wherever it is on the bill.
     expect(suggestAccounts([form().lines[1], form().lines[0]], ELEVEN, ctx())).toEqual([
@@ -270,7 +288,7 @@ describe("each line's account", () => {
   it("asks without a vendor, and for an account the company can't use", () => {
     expect(suggestAccounts(form().lines, ELEVEN, ctx({ vendorKnown: false })).map((s) => s.text))
       .toEqual(Array(2).fill('Pick the account. FleetSuite suggests one once it knows the vendor.'));
-    const toLate = ELEVEN.map((b) => ({ ...b, companies: [], lines: [{ account: '640', memo: 'Service', amount: '1.00' }] }));
+    const toLate = ELEVEN.map((b) => ({ ...b, companies: [], total: '1.00', lines: [{ account: '640', memo: 'Service', amount: '1.00' }] }));
     expect(suggestAccounts(form().lines.slice(0, 1), toLate, ctx({ company: '1084', usable: (id) => !!ACCOUNTS.get(id)?.companies.includes('1084') }))[0])
       .toEqual({ accountId: null, text: "Their earlier bills went to 6400 Late fees, which 1084 can't use on a bill, so pick the account." });
   });
@@ -282,7 +300,7 @@ describe("each line's account", () => {
     ]);
     expect(suggestAccounts(form().lines.slice(0, 1), [], ctx())[0]).toEqual({ accountId: null, text: 'No earlier bills from them, so pick the account.' });
     // Not once they have bills, even ones that go all over.
-    const split = [...ELEVEN.slice(0, 6), ...ELEVEN.slice(0, 6).map((b) => ({ ...b, lines: [{ account: '611', memo: null, amount: '1.00' }] }))];
+    const split = [...ELEVEN.slice(0, 6), ...ELEVEN.slice(0, 6).map((b) => ({ ...b, total: '1.00', lines: [{ account: '611', memo: null, amount: '1.00' }] }))];
     expect(suggestAccounts([{ description: 'Pole rental', cents: 5000 }], split, ctx({ vendorDefault: '640' }))).toEqual([
       { accountId: null, text: 'New for this vendor, so pick the account.' },
     ]);
@@ -431,7 +449,7 @@ describe('what the page shows', () => {
   it("says what each still-empty or wrong box needs", () => {
     const empty = viewSnapForm({
       company: 'BMG', vendorId: null, vendorName: 'Riverbend', billNumber: ' ', billDate: null, dueDate: null, duePicked: false,
-      totalCents: null, locationId: null, lines: [],
+      totalCents: null, locationId: null, lines: [], poNumber: null, howBilled: null, overrideReason: null, extra: null,
     }, facts({ vendor: null, match: null, asked: null, history: NO_HISTORY }));
     expect(empty.problems).toEqual([
       "Pick the vendor from NetSuite's list before sending.",
@@ -519,6 +537,10 @@ describe('the form FleetSuite fills in', () => {
         { description: 'Electric service, Sep 18 to Oct 17', cents: 128433, accountId: '623', picked: false },
         { description: 'Late payment charge', cents: 1250, accountId: null, picked: false },
       ],
+      poNumber: null,
+      howBilled: null,
+      overrideReason: null,
+      extra: null,
     });
   });
 
@@ -553,6 +575,156 @@ describe('the form FleetSuite fills in', () => {
   });
 });
 
+// ── A bill for a PO: a made-up parts bill, two racks' worth of parts and the freight on them ──
+
+const ACME: SnapVendor = { id: '412', name: 'Acme Truck Racks', entityId: null, termsId: null, expenseAccountId: '611' };
+const PO_ACCOUNTS = new Map<string, SnapAccount>([
+  ...ACCOUNTS,
+  account('655', '6550', 'Freight in', ['BMG']),
+  account('656', '6560', 'Freight out', ['1084']),
+  account('130', '13000', 'Inventory', ['BMG'], 'other_current_asset'),
+]);
+/** One of Acme's earlier bills: the parts to inventory, the freight to freight in. */
+const acmeBill = (i: number): HistoryBill => earlier(i, {
+  number: `INV-55${10 + i}`,
+  total: '2380.00',
+  lines: [
+    { account: '130', memo: 'Contractor rack, 8 ft bed', amount: '1940.00' },
+    { account: '130', memo: 'Street side clamp kit', amount: '200.00' },
+    { account: '655', memo: 'Freight', amount: '240.00' },
+  ],
+});
+const PO_ROWS: PoLineRow[] = [
+  { line_id: '1', item_netsuite_id: '1201', item_number: 'RACK-48', description: 'Contractor rack, 8 ft bed', quantity: '4', quantity_received: '4', quantity_billed: '0', rate: '485', amount: '1940.00' },
+  { line_id: '2', item_netsuite_id: '1388', item_number: 'CLAMP-ACX', description: 'Street side clamp kit', quantity: '4', quantity_received: '4', quantity_billed: '0', rate: '50', amount: '200.00' },
+];
+const PO453: SnapPo = {
+  copyId: 'po-1', netsuiteId: '45310', number: 'PO453-ACME', vendorId: '412', vendorName: 'Acme Truck Racks', date: '2026-10-14',
+  status: 'F', statusLabel: 'Purchase Order : Pending Bill', totalCents: 214000,
+  facts: {
+    poTranid: 'PO453-ACME', poTotal: 2140, poIsOpen: true, poStatusLabel: 'Pending Bill',
+    lines: [{ itemNumber: 'RACK-48', ordered: 4, received: 4 }, { itemNumber: 'CLAMP-ACX', ordered: 4, received: 4 }],
+    priorBills: [], earlierBills: [], billedUnits: 0, rows: PO_ROWS,
+  },
+};
+const ACME_READ: BillRead = {
+  isBill: true, vendorName: 'Acme Truck Racks', billNumber: 'INV-5531', billDate: '2026-10-20', dueDate: null, terms: null,
+  lines: [
+    { description: 'RACK-48 Contractor rack, 8 ft bed', cents: 194000 },
+    { description: 'CLAMP-ACX Street side clamp kit', cents: 20000 },
+    { description: 'Freight', cents: 24000 },
+  ],
+  totalCents: 238000, amountDueCents: 238000, poNumber: 'PO453-ACME',
+};
+const poFacts = (over: Partial<SnapFacts> = {}): SnapFacts => facts({
+  accounts: PO_ACCOUNTS, vendor: ACME, match: { vendor: ACME, how: 'exact', others: [] }, terms: null,
+  history: { bills: [acmeBill(0), acmeBill(1)], same_number: [] }, read: ACME_READ, po: { found: PO453, open: [] },
+  ...over,
+});
+const FREIGHT = { description: 'Freight', accountId: '655', picked: false, leftOff: false };
+const poForm = (over: Partial<SnapForm> = {}): SnapForm => ({
+  company: 'BMG', vendorId: '412', vendorName: 'Acme Truck Racks', billNumber: 'INV-5531', billDate: '2026-10-20', dueDate: null,
+  duePicked: false, totalCents: 238000, locationId: null,
+  lines: ACME_READ.lines.map((l) => ({ description: l.description, cents: l.cents, accountId: null, picked: false })),
+  poNumber: 'PO453-ACME', howBilled: null, overrideReason: null, extra: FREIGHT,
+  ...over,
+});
+const WHY = 'Freight is on the bill, not the PO';
+
+describe('a bill for a PO', () => {
+  it("starts from the read as BMG's, the freight its own line, named from the bill and put where their freight goes", () => {
+    expect(formFromRead(ACME_READ, poFacts())).toMatchObject({ company: 'BMG', poNumber: 'PO453-ACME', howBilled: null, overrideReason: null, extra: FREIGHT });
+    // The PO's bill is BMG's, whatever the vendor's usual company.
+    const at1084 = { bills: [acmeBill(0), acmeBill(1)].map((b) => ({ ...b, companies: ['1084'] })), same_number: [] };
+    expect(formFromRead(ACME_READ, poFacts({ history: at1084 })).company).toBe('BMG');
+    // No extra line for a bill that's the PO's total, and none when there's no PO.
+    expect(formFromRead({ ...ACME_READ, totalCents: 214000, lines: ACME_READ.lines.slice(0, 2) }, poFacts()).extra).toBeNull();
+    expect(formFromRead(ACME_READ, poFacts({ po: { found: null, open: [] } })).extra).toBeNull();
+  });
+
+  it("suggests the extra line's account only from a line like it on their earlier bills, never where their parts go", () => {
+    expect(suggestExtraAccount('Freight', 24000, poFacts())).toEqual({ accountId: '655', text: 'Like their earlier line "Freight", which went to 6550 Freight in.' });
+    expect(suggestExtraAccount('Liftgate', 24000, poFacts())).toEqual({ accountId: null, text: 'New for this vendor, so pick the account.' });
+    expect(suggestExtraAccount('', 24000, poFacts())).toMatchObject({ accountId: null });
+    // Their freight went where BMG can't put it: pick another.
+    const elsewhere = { bills: [{ ...acmeBill(0), lines: [{ account: '656', memo: 'Freight', amount: '240.00' }] }], same_number: [] };
+    expect(suggestExtraAccount('Freight', 24000, poFacts({ history: elsewhere })).accountId).toBeNull();
+    // A vendor with no bills yet gets no default for it: it's what the PO left out, not what they sell.
+    expect(suggestExtraAccount('Freight', 24000, poFacts({ history: NO_HISTORY }))).toEqual({ accountId: null, text: 'No earlier bills from them, so pick the account.' });
+    // The plain lines still go where their bills keep going.
+    expect(suggestAccounts([{ description: 'Liftgate', cents: 24000 }], [acmeBill(0), acmeBill(1)], {
+      company: 'BMG', vendorKnown: true, vendorDefault: null, usable: () => true, label: (id) => id,
+    })[0].accountId).toBe('130');
+  });
+
+  it("bills the PO and its freight with one tap: the PO's lines, not the bill's, and no location to pick", () => {
+    const v = viewSnapForm(poForm(), poFacts());
+    expect(v.po).toMatchObject({ billing: true, number: 'PO453-ACME', extraCents: 24000, billsCents: 238000, verdict: 'green', needsReason: false });
+    expect(v.extra).toEqual({ accountId: '655', text: 'Like their earlier line "Freight", which went to 6550 Freight in.' });
+    expect(v).toMatchObject({ problems: [], canSend: true });
+    expect(v.notes.some((n) => n.text.startsWith('The lines add up'))).toBe(false);
+    // A bill for the PO's total needs no reason and has no extra line.
+    const exact = viewSnapForm(poForm({ totalCents: 214000, lines: poForm().lines.slice(0, 2), extra: null }), poFacts());
+    expect(exact).toMatchObject({ extra: null, problems: [], canSend: true });
+    expect(exact.po).toMatchObject({ needsReason: false, extraCents: 0, verdict: 'green' });
+  });
+
+  it("bills the PO once the reason is in, when the bill's lines don't say what's beyond it or it's left off", () => {
+    const lumped = { lines: [{ description: 'Racks, clamps and freight', cents: 238000, accountId: null, picked: false }] };
+    expect(viewSnapForm(poForm(lumped), poFacts()).problems).toEqual(['Say why PO453-ACME is billed anyway, or enter it as a plain bill.']);
+    expect(viewSnapForm(poForm({ ...lumped, overrideReason: WHY }), poFacts())).toMatchObject({ problems: [], canSend: true });
+    expect(viewSnapForm(poForm({ ...lumped, overrideReason: '   ' }), poFacts()).canSend).toBe(false);
+    expect(viewSnapForm(poForm({ extra: { ...FREIGHT, leftOff: true } }), poFacts()).problems).toEqual(['Say why PO453-ACME is billed anyway, or enter it as a plain bill.']);
+  });
+
+  it("asks for the extra line's account, one BMG can use, and nothing for a line left off", () => {
+    const noAccount = viewSnapForm(poForm({ extra: { ...FREIGHT, accountId: null } }), poFacts());
+    expect(noAccount.problems).toEqual(['Pick an account for the freight before sending.']);
+    expect(viewSnapForm(poForm({ extra: null }), poFacts()).problems).toEqual(['Pick an account for the line not on the PO before sending.']);
+    expect(viewSnapForm(poForm({ extra: { ...FREIGHT, accountId: '656', picked: true } }), poFacts()).problems)
+      .toEqual(["6560 Freight out can't be used on BMG's bills: pick another account for the freight."]);
+    const leftOff = viewSnapForm(poForm({ overrideReason: WHY, extra: { ...FREIGHT, accountId: null, leftOff: true } }), poFacts());
+    expect(leftOff).toMatchObject({ extra: null, problems: [], canSend: true });
+    expect(leftOff.po).toMatchObject({ overCents: 24000, extraCents: 0, billsCents: 214000 });
+  });
+
+  it("keeps a PO's bill BMG's, and checks a plain one as any other bill", () => {
+    expect(viewSnapForm(poForm({ company: '1084' }), poFacts()).problems)
+      .toEqual(["A PO's bill is BMG's. To enter it for 1084, make it a plain bill."]);
+    const plain = viewSnapForm(poForm({ howBilled: 'plain' }), poFacts());
+    expect(plain.po).toMatchObject({ billing: false, canBill: true });
+    expect(plain.extra).toBeNull();
+    expect(plain.problems).toEqual(['Pick a location.', 'Pick an account for 3 lines before sending.']);
+    expect(plain.notes[0]).toEqual({ tone: 'green', text: "The lines add up to $2,380.00, the bill's total." });
+  });
+
+  it("offers the PO's vendor while the form has none", () => {
+    const v = viewSnapForm(poForm({ vendorId: null }), poFacts({ vendor: null, match: null }));
+    expect(v.vendor).toEqual({ tone: 'amber', text: 'Not sure which vendor in NetSuite this is. Pick one.', others: [{ id: '412', name: 'Acme Truck Racks' }] });
+    expect(v.po).toMatchObject({ billing: false, text: "PO453-ACME is Acme Truck Racks's PO. Pick the vendor to bill it." });
+    // Not twice, when the read's match offers them too.
+    const offered = viewSnapForm(poForm({ vendorId: null }), poFacts({ vendor: null, match: { vendor: null, how: null, others: [ACME, RIVERBEND] } }));
+    expect(offered.vendor.others).toEqual([{ id: '412', name: 'Acme Truck Racks' }, { id: '77', name: 'Riverbend Electric Co-op' }]);
+  });
+
+  it('settles a PO bill: BMG, the extra line worked out once, and never what someone chose', () => {
+    expect(settleForm(poForm({ company: '1084', extra: null }), poFacts())).toMatchObject({ company: 'BMG', extra: FREIGHT });
+    // What someone typed for it is kept, its account suggested from that.
+    expect(settleForm(poForm({ extra: { ...FREIGHT, description: 'Liftgate' } }), poFacts()).extra).toEqual({ ...FREIGHT, description: 'Liftgate', accountId: null });
+    const picked = { ...FREIGHT, accountId: '611', picked: true };
+    expect(settleForm(poForm({ extra: picked }), poFacts()).extra).toEqual(picked);
+    const leftOff = { ...FREIGHT, leftOff: true };
+    expect(settleForm(poForm({ extra: leftOff }), poFacts()).extra).toEqual(leftOff);
+    // Added back, it's suggested again.
+    expect(settleForm(poForm({ extra: { ...FREIGHT, accountId: null } }), poFacts()).extra).toEqual(FREIGHT);
+    // The bill's lines don't say what it is: it's to be named.
+    expect(settleForm(poForm({ extra: null, lines: [{ description: 'Racks and freight', cents: 238000, accountId: null, picked: false }] }), poFacts()).extra)
+      .toEqual({ description: '', accountId: null, picked: false, leftOff: false });
+    // A plain bill keeps its company, and gets no extra line.
+    expect(settleForm(poForm({ howBilled: 'plain', company: '1084', locationId: '9', extra: null }), poFacts())).toMatchObject({ company: '1084', extra: null });
+  });
+});
+
 describe('the saved row', () => {
   const row = (over: Partial<SnappedBillRow> = {}): SnappedBillRow => ({
     id: 'snap-1', company_id: 'c-bmg', file_path: '0b9e3c1a-5d2f-4e8b-9a71-3c6d2f1e8b40.jpg', file_type: 'image/jpeg', file_name: 'IMG_1042.jpg',
@@ -564,6 +736,8 @@ describe('the saved row', () => {
     ],
     due_picked: false, status: 'draft', bill_claimed_at: null, send_error: null, netsuite_id: null, netsuite_number: null, sent_at: null,
     sent_by: null, thrown_away_at: null, thrown_away_by: null, made_by: 'u-1', made_at: '2026-10-25T05:00:00Z', saved_at: '2026-10-25T05:00:00Z',
+    po_number: null, how_billed: null, override_reason: null, extra_line: null, billed_po_netsuite_id: null, billed_po_number: null,
+    billed_extra: null,
     ...over,
   });
 
@@ -573,9 +747,35 @@ describe('the saved row', () => {
     expect(rowOfForm(f, 'c-bmg')).toEqual({
       company_id: 'c-bmg', vendor_netsuite_id: '77', vendor_name: 'Riverbend Electric Co-op', bill_number: '88213-10', bill_date: '2026-10-20',
       due_date: '2026-11-19', due_picked: false, total: '1296.83', location_netsuite_id: '1', lines: row().lines,
+      po_number: null, how_billed: null, override_reason: null, extra_line: null,
     });
     expect(formOfRow(row({ company_id: 'c-1084', total: 12.5, lines: null }), [BMG, OTHER])).toMatchObject({ company: '1084', totalCents: 1250, lines: [] });
     expect(rowOfForm(form({ totalCents: 129680 }), 'c-bmg').total).toBe('1296.80');
+  });
+
+  it("holds a PO bill's PO, how it's billed, the reason, and the extra line", () => {
+    const po = row({
+      po_number: 'PO453-ACME', how_billed: 'po', override_reason: WHY,
+      extra_line: { description: 'Freight', account_netsuite_id: '655', picked: true, left_off: false },
+    });
+    const f = formOfRow(po, [BMG, OTHER]);
+    expect(f).toMatchObject({ poNumber: 'PO453-ACME', howBilled: 'po', overrideReason: WHY, extra: { ...FREIGHT, picked: true } });
+    expect(rowOfForm(f, 'c-bmg')).toMatchObject({
+      po_number: 'PO453-ACME', how_billed: 'po', override_reason: WHY,
+      extra_line: { description: 'Freight', account_netsuite_id: '655', picked: true, left_off: false },
+    });
+    expect(rowOfForm(form({ poNumber: '  ', overrideReason: ` ${WHY} `, extra: { ...FREIGHT, description: ' Freight ' } }), 'c-bmg')).toMatchObject({
+      po_number: null, override_reason: WHY, extra_line: { description: 'Freight' },
+    });
+    expect(formOfRow(row({ how_billed: 'maybe' }), [BMG]).howBilled).toBeNull();
+  });
+
+  it('keeps an extra line only when it is one, and nothing that is not a NetSuite id as its account', () => {
+    expect(extraOf(null)).toBeNull();
+    expect(extraOf('Freight')).toBeNull();
+    expect(extraOf([{ description: 'Freight' }])).toBeNull();
+    expect(extraOf({ description: 5, account_netsuite_id: 'Freight in', picked: 'yes', left_off: 1 })).toEqual({ description: '', accountId: null, picked: false, leftOff: false });
+    expect(extraOf({ description: 'Freight', account_netsuite_id: '655', left_off: true })).toEqual({ description: 'Freight', accountId: '655', picked: false, leftOff: true });
   });
 
   it('keeps nothing blank as a value, and nothing that is not a NetSuite id as an account', () => {
@@ -589,6 +789,11 @@ describe('the saved row', () => {
     const stored = storedReadOf(READ, { vendor: RIVERBEND, how: 'close', others: [VENDORS[1]] });
     expect(stored).toEqual({ read: READ, match: { vendorId: '77', how: 'close', others: [{ id: '78', name: 'Riverside Plumbing LLC' }] } });
     expect(storedReadFrom(JSON.parse(JSON.stringify(stored)))).toEqual(stored);
+    // One kept before migration 444 has no PO number.
+    const { poNumber: _none, ...before444 } = READ;
+    expect(storedReadFrom({ ...stored, read: before444 })?.read).toEqual(READ);
+    expect(storedReadFrom({ ...stored, read: { ...READ, poNumber: 453 } })?.read.poNumber).toBeNull();
+    expect(storedReadFrom(storedReadOf(ACME_READ, { vendor: ACME, how: 'exact', others: [] }))?.read.poNumber).toBe('PO453-ACME');
     expect(storedReadFrom(null)).toBeNull();
     expect(storedReadFrom({ read: { lines: 'x' }, match: {} })).toBeNull();
     expect(storedReadFrom({ read: READ, match: { vendorId: 77, how: 'maybe', others: [{ id: 1 }, { id: '78', name: 'Riverside' }] } }))

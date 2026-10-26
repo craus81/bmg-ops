@@ -1,18 +1,18 @@
 // Migration 436 keeps each bill snapped in Books → Snap a bill, from its
 // picture to NetSuite, lets Books keep its own copy of a snapped bill, and
-// reads what the copies hold about a vendor's earlier bills. This runs the
-// migrations own-bills-sql.test.ts runs, with 436, in an in-memory Postgres
-// (PGlite) as the app's server login, and holds what gl_snapped_bills takes
-// and refuses, the claim Send to NetSuite takes on it, the copy of a sent
-// bill next to NetSuite's, and what gl_vendor_bill_history gives
-// src/lib/books/snap-a-bill.ts to suggest from.
+// reads what the copies hold about a vendor's earlier bills; migration 444
+// lets a snapped bill bill a PO. This runs the migrations own-bills-sql.test.ts
+// runs, with 436 and 444, in an in-memory Postgres (PGlite) as the app's server
+// login, and holds what gl_snapped_bills takes and refuses, the claim Send to
+// NetSuite takes on it, the copy of a sent bill next to NetSuite's, and what
+// gl_vendor_bill_history gives src/lib/books/snap-a-bill.ts to suggest from.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 
-import { billPayload, workOutOwnBill } from './own-bills';
+import { billPayload, workOutOwnBill, type PoCopyLine } from './own-bills';
 import { checkOwnBills, type BillPairsData } from './own-bill-check';
 import { suggestLocation, usualAccount, usualCompany, type HistoryBill, type VendorHistory } from './snap-a-bill';
 
@@ -51,7 +51,7 @@ async function freshDb(): Promise<PGlite> {
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '384-books-vendor-bills.sql',
     '401-books-stock-by-item.sql', '402-books-stock-values.sql', '403-books-stock-item-setup.sql',
     '404-books-stock-ledger-parts.sql', '405-books-stock-account-items.sql', '435-books-own-bills.sql',
-    '436-books-snap-a-bill.sql',
+    '436-books-snap-a-bill.sql', '444-books-po-bills.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -310,5 +310,74 @@ describe('migration 436: Snap a bill', () => {
     expect(usualCompany(h.bills)).toBe('BMG');
     const bmg = { id: 'bmg', code: 'BMG', name: 'BMG', subsidiaryId: '2', locations: [{ id: OFALLON, name: "O'Fallon" }, { id: '2', name: 'St. Charles' }] };
     expect(suggestLocation(bmg, h.bills, null).id).toBe(OFALLON);
+  });
+});
+
+describe('migration 444: PO bills', () => {
+  let pg: PGlite;
+  const FREIGHT = '655';
+  const ACME: [string, string] = ['412', 'Acme Truck Racks'];
+  const WHY = 'Freight is on the bill, not the PO';
+  beforeAll(async () => {
+    pg = await freshDb();
+    await pg.exec(`INSERT INTO gl_accounts (number, name, account_type, netsuite_account_id) VALUES ('65500', 'Freight In', 'expense', '${FREIGHT}')`);
+  }, 60_000);
+  afterAll(async () => { await pg?.close(); });
+
+  it("keeps the PO a bill names, how it's billed, the reason and the extra line, and refuses what doesn't fit", async () => {
+    const extra = { description: 'Freight', account_netsuite_id: FREIGHT, picked: false, left_off: false };
+    const draft = await snap(pg, { po_number: 'PO453-ACME', how_billed: 'po', override_reason: WHY, extra_line: extra });
+    expect((await pg.query(
+      `SELECT po_number, how_billed, override_reason, extra_line, billed_po_netsuite_id, billed_extra FROM gl_snapped_bills WHERE id = $1`, [draft],
+    )).rows[0]).toEqual({ po_number: 'PO453-ACME', how_billed: 'po', override_reason: WHY, extra_line: extra, billed_po_netsuite_id: null, billed_extra: null });
+
+    const sent = { status: 'sent', netsuite_id: '8950', sent_at: '2026-10-25T22:00:00Z' };
+    for (const [bad, why] of [
+      [{ how_billed: 'maybe' }, 'a way to bill it there is no such thing as'],
+      [{ extra_line: [extra] }, 'an extra line that is not an object'],
+      [{ extra_line: '"Freight"' }, 'an extra line that is only words'],
+      [{ ...sent, billed_po_netsuite_id: 'PO453-ACME' }, "a PO that isn't NetSuite's id"],
+      [{ billed_po_netsuite_id: '45310' }, 'a draft that billed a PO'],
+      [{ ...sent, billed_extra: '240.00' }, 'an extra line on a bill that billed no PO'],
+      [{ ...sent, netsuite_id: '8951', billed_po_netsuite_id: '45310', billed_extra: '0' }, 'an extra line of nothing'],
+      [{ ...sent, netsuite_id: '8952', billed_po_netsuite_id: '45310', billed_extra: '-40.00' }, 'an extra line taking off'],
+    ] as Array<[Record<string, unknown>, string]>) {
+      await expect(snap(pg, bad), why).rejects.toThrow(/violates check constraint/);
+    }
+    const billed = await snap(pg, { ...sent, billed_po_netsuite_id: '45310', billed_po_number: 'PO453-ACME', billed_extra: '240.00' });
+    expect((await pg.query(`SELECT billed_po_number, billed_extra FROM gl_snapped_bills WHERE id = $1`, [billed])).rows[0])
+      .toEqual({ billed_po_number: 'PO453-ACME', billed_extra: '240.00' });
+    // The three-way match finds it by the PO's NetSuite id.
+    expect((await pg.query(`SELECT id FROM gl_snapped_bills WHERE billed_po_netsuite_id = '45310' AND status = 'sent'`)).rows).toEqual([{ id: billed }]);
+  });
+
+  it("keeps Books' own copy of a PO's bill as the PO's lines and the freight, and checks it against NetSuite's", async () => {
+    const poLines: PoCopyLine[] = [
+      { line_id: '1', item_netsuite_id: RACK, item_number: 'RACK-48', description: 'Ladder rack', quantity: '4', quantity_billed: '0', rate: '485', amount: '1940.00' },
+    ];
+    const snapped = await snap(pg, { status: 'sent', netsuite_id: '8960', sent_at: '2026-10-25T22:05:00Z', billed_po_netsuite_id: '45310', billed_po_number: 'PO453-ACME', billed_extra: '240.00' });
+    const made = billPayload(workOutOwnBill({
+      netsuiteId: '8960', netsuiteNumber: 'INV-5531', madeFrom: 'snapped', madeFromId: snapped, madeBy: CRAIG,
+      vendorId: ACME[0], vendorName: ACME[1], referenceNo: 'INV-5531', subsidiaryId: '2', locationId: null,
+      po: { copyId: null, netsuiteId: '45310', number: 'PO453-ACME' },
+      expenses: [{ accountId: FREIGHT, amount: 240, memo: 'Freight' }],
+      billDate: '2026-10-20', invoiceTotal: '2180.00',
+    }, poLines, AT));
+    expect(await saveBill(pg, made)).toEqual({ saved: true, lines: 2 });
+
+    await call(pg, 'gl_netsuite_bills_apply', {
+      rows: [nsBill('8960', 'INV-5531', '2026-10-20', ACME, '2180.00', [
+        { line_id: '1', item: RACK, account: RECEIVED, amount: '-1940.00', own_amount: '-1940.00', quantity: '4', memo: null, tax: false },
+        expense('2', FREIGHT, '240.00', 'Freight'),
+      ])],
+    });
+    await gl(pg, '8960', '2026-10-20', [['0', PAYABLE, -218000, null], ['1', RECEIVED, 194000, null], ['2', FREIGHT, 24000, null]]);
+    const data = await billPairs(pg, '8960');
+    expect(data.bills[0].own).toMatchObject({ made_from: 'snapped', made_from_id: snapped, po_id: '45310', po_number: 'PO453-ACME', invoice_total: '2180.00', unknowns: [] });
+    expect(data.bills[0].own.lines.map((l) => [l.line_no, l.item_id, l.account_id, l.description, l.amount])).toEqual([
+      [1, RACK, null, 'Ladder rack', '1940.00'],
+      [2, null, FREIGHT, 'Freight', '240.00'],
+    ]);
+    expect(checkOwnBills(data, SINCE()).bills[0]).toMatchObject({ status: 'matches', poNumber: 'PO453-ACME', fleetsuiteCents: 218000, netsuiteCents: 218000 });
   });
 });

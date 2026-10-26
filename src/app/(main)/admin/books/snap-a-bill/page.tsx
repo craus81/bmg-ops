@@ -12,7 +12,7 @@ import { shrinkPhotoForUpload } from '@/lib/photo-upload-shrink';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import { parseDollars } from '@/lib/books/typed-dollars';
 import type { BillRead } from '@/lib/books/bill-reader';
-import type { SnapForm, SnapLine, SnapNote, SnapView } from '@/lib/books/snap-a-bill';
+import type { SnapExtra, SnapForm, SnapLine, SnapNote, SnapView } from '@/lib/books/snap-a-bill';
 
 /**
  * Books → Snap a bill (migration 436, src/lib/books/snap-a-bill.ts and
@@ -24,7 +24,10 @@ import type { SnapForm, SnapLine, SnapNote, SnapView } from '@/lib/books/snap-a-
  * the bill number and dates, the due date from their terms, each line with
  * the account their earlier bills went to. Each box is checked against the
  * bill; what's still to do before Send to NetSuite is said under the lines in
- * red, and a bill NetSuite already has can't be sent at all. Sent, the bill
+ * red, and a bill NetSuite already has can't be sent at all. A bill for one
+ * of the vendor's open POs bills that PO instead, after Parts Mail's
+ * three-way match, with what it's more than the PO on a line of its own
+ * (migration 444, src/lib/books/snap-po.ts; "Freight line"). Sent, the bill
  * is in NetSuite and Books keeps its own copy (Own bills). Save for later
  * keeps it here; Throw it away keeps it, picture and all, marked thrown away.
  * Super admins only, as the books are.
@@ -52,6 +55,9 @@ interface Bill {
   netsuiteId: string | null;
   netsuiteNumber: string | null;
   netsuiteUrl: string | null;
+  /** The PO it billed, when it billed one, and what went on the line for what the bill was more than the PO. */
+  billedPo: string | null;
+  billedExtraCents: number | null;
   sentAt: string | null;
   sentBy: string | null;
   thrownAwayAt: string | null;
@@ -153,11 +159,12 @@ function MoneyInput({ cents, onChange, style, placeholder, ariaLabel }: {
 }
 
 /** What a line is for: on a narrow screen it wraps onto more rows, rather than hiding the end of it. */
-function LineText({ value, onChange, ariaLabel, style }: {
+function LineText({ value, onChange, ariaLabel, style, placeholder = "What it's for" }: {
   value: string;
   onChange: (text: string) => void;
   ariaLabel: string;
   style: React.CSSProperties;
+  placeholder?: string;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -180,7 +187,7 @@ function LineText({ value, onChange, ariaLabel, style }: {
       // A line goes to NetSuite as one line: Return does nothing, and a pasted line break is a space.
       onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault(); }}
       onChange={(e) => onChange(e.target.value.replace(/\s*[\r\n]+\s*/g, ' '))}
-      placeholder="What it's for"
+      placeholder={placeholder}
       aria-label={ariaLabel}
       style={{ ...style, resize: 'none', overflow: 'hidden', display: 'block' }}
     />
@@ -406,6 +413,11 @@ export default function BooksSnapBillPage() {
   // A check of other lines (one just added or taken away) says nothing about these until it comes back.
   const linesChecked = !!view && !!form && view.accounts.length === form.lines.length;
   const setLine = (i: number, patch: Partial<SnapLine>) => form && change({ ...form, lines: form.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) });
+  const setExtra = (patch: Partial<SnapExtra>) => form?.extra && change({ ...form, extra: { ...form.extra, ...patch } });
+  // Bill the PO or a plain bill: the tap shows at once, the PO's checks once the check comes back.
+  const billing = !!view?.po.canBill && form?.howBilled !== 'plain';
+  const vendorWho = form?.vendorName?.trim() || 'The vendor';
+  const accountsBmg = setup ? setup.accounts.filter((a) => a.companies.includes('BMG')) : [];
 
   return (
     <div style={{ maxWidth: '640px' }}>
@@ -472,7 +484,10 @@ export default function BooksSnapBillPage() {
           <div style={{ fontSize: '16px', fontWeight: 800, color: GREEN, marginBottom: '4px' }}>Sent to NetSuite</div>
           <div style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
             {bill.form.vendorName ?? 'The vendor'}&apos;s bill {bill.netsuiteNumber ?? bill.form.billNumber}
-            {bill.form.totalCents !== null ? ` for ${fmt(bill.form.totalCents)}` : ''} is in NetSuite for {bill.form.company}
+            {bill.form.totalCents !== null ? ` for ${fmt(bill.form.totalCents)}` : ''} is in NetSuite
+            {bill.billedPo
+              ? `, billing ${bill.billedPo}'s lines${bill.billedExtraCents !== null ? ` and ${fmt(bill.billedExtraCents)} not on the PO` : ''}`
+              : ` for ${bill.form.company}`}
             {bill.form.dueDate ? `, due ${dayText(bill.form.dueDate)}` : ''}. Books keeps{' '}
             {bill.netsuiteId ? <Link href={deepLinks.booksOwnBill(bill.netsuiteId)} style={linkStyle}>its own copy</Link> : 'its own copy'}{' '}
             and checks it against NetSuite&apos;s once the bills copy picks it up, within two hours.
@@ -543,28 +558,33 @@ export default function BooksSnapBillPage() {
               </div>
             </div>
 
-            <div style={label}>Company</div>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-              {setup.companies.map((c) => (
-                <button key={c.code} type="button" onClick={() => change({ ...form, company: c.code })} style={bigButton(form.company === c.code ? 'on' : 'plain')}>
-                  {c.code}
-                </button>
-              ))}
-            </div>
-            {view?.company && <div style={noteText(AMBER)}>{view.company}</div>}
-
-            {company && company.locations.length > 0 && (
+            {/* A PO's bill takes the PO's company and location. */}
+            {!billing && (
               <>
-                <div style={label}>Location</div>
-                <select
-                  value={form.locationId ?? ''}
-                  onChange={(e) => change({ ...form, locationId: e.target.value || null })}
-                  style={input(!form.locationId)}
-                >
-                  {!form.locationId && <option value="">Pick a location</option>}
-                  {company.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
-                {view?.location.text && view.location.id === form.locationId && <div style={noteText()}>{view.location.text}</div>}
+                <div style={label}>Company</div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {setup.companies.map((c) => (
+                    <button key={c.code} type="button" onClick={() => change({ ...form, company: c.code })} style={bigButton(form.company === c.code ? 'on' : 'plain')}>
+                      {c.code}
+                    </button>
+                  ))}
+                </div>
+                {view?.company && <div style={noteText(AMBER)}>{view.company}</div>}
+
+                {company && company.locations.length > 0 && (
+                  <>
+                    <div style={label}>Location</div>
+                    <select
+                      value={form.locationId ?? ''}
+                      onChange={(e) => change({ ...form, locationId: e.target.value || null })}
+                      style={input(!form.locationId)}
+                    >
+                      {!form.locationId && <option value="">Pick a location</option>}
+                      {company.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                    </select>
+                    {view?.location.text && view.location.id === form.locationId && <div style={noteText()}>{view.location.text}</div>}
+                  </>
+                )}
               </>
             )}
 
@@ -639,64 +659,210 @@ export default function BooksSnapBillPage() {
               </button>
             )}
 
-            <div style={label}>Lines</div>
-            <div style={{ border: '1px solid var(--border)', borderRadius: '10px' }}>
-              {form.lines.map((line, i) => {
-                const suggestion = linesChecked ? view!.accounts[i] : null;
-                const showNote = suggestion && (line.accountId ? line.accountId === suggestion.accountId : true);
-                const options = accountsFor.some((a) => a.id === line.accountId) || !line.accountId
-                  ? accountsFor
-                  : [{ id: line.accountId, label: accountLabel(line.accountId), companies: [] }, ...accountsFor];
-                return (
-                  <div key={i} style={{ padding: '10px 12px', borderTop: i ? '1px solid var(--border)' : 'none' }}>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-                      <LineText
-                        value={line.description}
-                        onChange={(description) => setLine(i, { description })}
-                        ariaLabel={`Line ${i + 1}: what it's for`}
-                        style={{ ...input(), flex: 1, fontWeight: 700, background: 'transparent' }}
-                      />
-                      <MoneyInput
-                        key={`line-${i}-${bill.readAt}-${form.lines.length}`}
-                        cents={line.cents}
-                        onChange={(cents) => setLine(i, { cents })}
-                        ariaLabel={`Line ${i + 1}: amount`}
-                        placeholder="$0.00"
-                        style={{ ...input(line.cents === null), width: '120px', textAlign: 'right', fontWeight: 700, background: 'transparent' }}
-                      />
+            <div style={label}>PO</div>
+            <input
+              value={form.poNumber ?? ''}
+              maxLength={60}
+              onChange={(e) => change({ ...form, poNumber: e.target.value || null, howBilled: null, extra: form.extra?.picked ? form.extra : null })}
+              placeholder="The PO number, if it's for one"
+              autoComplete="off"
+              aria-label="PO number"
+              style={input(view?.po.tone === 'amber' || view?.po.tone === 'red')}
+            />
+            {view?.po.text && <div style={noteText(TONE[view.po.tone ?? 'green'])}>{view.po.text}</div>}
+            {view && !form.poNumber?.trim() && view.po.open.length > 0 && (
+              <>
+                <div style={noteText()}>{vendorWho}&apos;s open {view.po.open.length === 1 ? 'PO' : 'POs'} in NetSuite. Tap one if this bill is for it.</div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '6px' }}>
+                  {view.po.open.map((p) => (
+                    <button key={p.number} type="button" onClick={() => change({ ...form, poNumber: p.number, howBilled: null, extra: form.extra?.picked ? form.extra : null })} style={{ ...bigButton(), fontSize: '12px', padding: '5px 10px' }}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            {view?.po.canBill && (
+              <>
+                <div style={label}>How it goes into NetSuite</div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button type="button" onClick={() => change({ ...form, howBilled: 'po' })} style={bigButton(billing ? 'on' : 'plain')}>Bill {view.po.number}</button>
+                  <button type="button" onClick={() => change({ ...form, howBilled: 'plain' })} style={bigButton(billing ? 'plain' : 'on')}>Plain bill</button>
+                </div>
+                {view.po.how && <div style={noteText(view.po.how.tone === 'amber' ? AMBER : undefined)}>{view.po.how.text}</div>}
+              </>
+            )}
+
+            {billing && view ? (
+              <>
+                <div style={label}>From {view.po.number}</div>
+                <div style={{ border: '1px solid var(--border)', borderRadius: '10px' }}>
+                  {view.po.lines.map((l, i) => (
+                    <div key={i} style={{ padding: '10px 12px', borderTop: i ? '1px solid var(--border)' : 'none', display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ fontWeight: 700 }}>{l.item ?? 'Item'}</span>
+                        {l.description && <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)' }}>{l.description}</span>}
+                        <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)' }}>
+                          {l.quantity} × {l.rate === null ? 'no price' : money.format(l.rate)}
+                        </span>
+                      </span>
+                      <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{l.cents === null ? '' : fmt(l.cents)}</span>
                     </div>
-                    <select
-                      value={line.accountId ?? ''}
-                      onChange={(e) => setLine(i, { accountId: e.target.value || null, picked: true })}
-                      aria-label={`Line ${i + 1}: account`}
-                      style={{ ...input(!line.accountId), marginTop: '8px' }}
-                    >
-                      {!line.accountId && <option value="">Pick an account</option>}
-                      {options.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
-                    </select>
-                    <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <div style={noteText(line.accountId ? undefined : AMBER)}>{showNote ? suggestion!.text : ''}</div>
-                      <button
-                        type="button"
-                        onClick={() => change({ ...form, lines: form.lines.filter((_, j) => j !== i) })}
-                        style={{ background: 'none', border: 'none', padding: '4px 0 0', fontSize: '12px', color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}
-                      >
-                        Remove
-                      </button>
+                  ))}
+                  {/* What the bill is more than the PO: its own line, to an account picked for it ("Freight line"). */}
+                  {view.po.overCents > 0 && form.extra && (
+                    <div style={{ padding: '10px 12px', borderTop: '1px solid var(--border)' }}>
+                      {form.extra.leftOff ? (
+                        <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'baseline', fontSize: '13px' }}>
+                          <span style={{ color: 'var(--text-secondary)' }}>The bill&apos;s other {fmt(view.po.overCents)} is left off.</span>
+                          <button type="button" onClick={() => setExtra({ leftOff: false })} style={{ ...linkStyle, background: 'none', border: 'none', padding: 0, fontSize: '13px', cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap' }}>
+                            Add it back
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                            <span style={{ fontWeight: 700 }}>Not on the PO</span>
+                            <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{fmt(view.po.overCents)}</span>
+                          </div>
+                          <LineText
+                            value={form.extra.description}
+                            onChange={(description) => setExtra({ description })}
+                            ariaLabel="Not on the PO: what it's for"
+                            placeholder="What it's for, such as freight"
+                            style={{ ...input(), marginTop: '6px', fontWeight: 700, background: 'transparent' }}
+                          />
+                          <select
+                            value={form.extra.accountId ?? ''}
+                            onChange={(e) => setExtra({ accountId: e.target.value || null, picked: true })}
+                            aria-label="Not on the PO: account"
+                            style={{ ...input(!form.extra.accountId), marginTop: '8px' }}
+                          >
+                            {!form.extra.accountId && <option value="">Pick an account</option>}
+                            {(accountsBmg.some((a) => a.id === form.extra!.accountId) || !form.extra.accountId
+                              ? accountsBmg
+                              : [{ id: form.extra.accountId, label: accountLabel(form.extra.accountId), companies: [] }, ...accountsBmg]
+                            ).map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+                          </select>
+                          <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                            <div style={noteText(form.extra.accountId ? undefined : AMBER)}>
+                              {view.extra && (!form.extra.accountId || form.extra.accountId === view.extra.accountId) ? view.extra.text : ''}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setExtra({ leftOff: true })}
+                              style={{ background: 'none', border: 'none', padding: '4px 0 0', fontSize: '12px', color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                            >
+                              Leave it off
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
+                  )}
+                  <div style={{ padding: '10px 12px', borderTop: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                    <span style={{ color: 'var(--text-secondary)' }}>What NetSuite bills</span>
+                    <span style={{ fontWeight: 800 }}>{view.po.billsCents === null ? '' : fmt(view.po.billsCents)}</span>
                   </div>
-                );
-              })}
-              <div style={{ padding: '10px 12px', borderTop: form.lines.length ? '1px solid var(--border)' : 'none' }}>
-                <button
-                  type="button"
-                  onClick={() => change({ ...form, lines: [...form.lines, { description: '', cents: null, accountId: null, picked: false }] })}
-                  style={{ ...linkStyle, background: 'none', border: 'none', padding: 0, fontSize: '14px', cursor: 'pointer', textDecoration: 'underline' }}
-                >
-                  + Add a line
-                </button>
-              </div>
-            </div>
+                </div>
+                <div style={noteText()}>The company, location and items come from the PO.</div>
+
+                {view.po.verdict && (
+                  <div style={{ border: `1px solid ${TONE[view.po.verdict]}66`, borderRadius: '12px', padding: '12px 14px', marginTop: '14px' }}>
+                    <div style={{ fontSize: '14px', fontWeight: 800, color: TONE[view.po.verdict] }}>
+                      {view.po.verdict === 'green'
+                        ? `✓ The bill, ${view.po.number} and Receiving agree`
+                        : view.po.verdict === 'amber' ? `Check before billing ${view.po.number}` : `The bill doesn't match ${view.po.number}`}
+                    </div>
+                    {view.po.legs.map((leg) => (
+                      <div key={leg.title} style={{ display: 'flex', gap: '8px', marginTop: '8px', fontSize: '13px' }}>
+                        <span style={{ color: TONE[leg.tone], fontWeight: 800, width: '14px', flex: '0 0 auto' }}>{leg.tone === 'green' ? '✓' : leg.tone === 'amber' ? '!' : '✕'}</span>
+                        <span>
+                          <span style={{ fontWeight: 700 }}>{leg.title}. </span>
+                          <span style={{ color: leg.tone === 'green' ? 'var(--text-secondary)' : TONE[leg.tone] }}>{leg.text}</span>
+                        </span>
+                      </div>
+                    ))}
+                    {view.po.needsReason && (
+                      <>
+                        <div style={label}>Why bill it anyway?</div>
+                        <textarea
+                          value={form.overrideReason ?? ''}
+                          maxLength={500}
+                          rows={2}
+                          onChange={(e) => change({ ...form, overrideReason: e.target.value || null })}
+                          placeholder="Say why, for the audit log"
+                          aria-label="Why bill it anyway"
+                          style={{ ...input(!form.overrideReason?.trim()), resize: 'vertical' }}
+                        />
+                        <div style={noteText()}>It goes in the audit log, as a Parts Mail bill anyway does.</div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div style={label}>Lines</div>
+                <div style={{ border: '1px solid var(--border)', borderRadius: '10px' }}>
+                  {form.lines.map((line, i) => {
+                    const suggestion = linesChecked ? view!.accounts[i] : null;
+                    const showNote = suggestion && (line.accountId ? line.accountId === suggestion.accountId : true);
+                    const options = accountsFor.some((a) => a.id === line.accountId) || !line.accountId
+                      ? accountsFor
+                      : [{ id: line.accountId, label: accountLabel(line.accountId), companies: [] }, ...accountsFor];
+                    return (
+                      <div key={i} style={{ padding: '10px 12px', borderTop: i ? '1px solid var(--border)' : 'none' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                          <LineText
+                            value={line.description}
+                            onChange={(description) => setLine(i, { description })}
+                            ariaLabel={`Line ${i + 1}: what it's for`}
+                            style={{ ...input(), flex: 1, fontWeight: 700, background: 'transparent' }}
+                          />
+                          <MoneyInput
+                            key={`line-${i}-${bill.readAt}-${form.lines.length}`}
+                            cents={line.cents}
+                            onChange={(cents) => setLine(i, { cents })}
+                            ariaLabel={`Line ${i + 1}: amount`}
+                            placeholder="$0.00"
+                            style={{ ...input(line.cents === null), width: '120px', textAlign: 'right', fontWeight: 700, background: 'transparent' }}
+                          />
+                        </div>
+                        <select
+                          value={line.accountId ?? ''}
+                          onChange={(e) => setLine(i, { accountId: e.target.value || null, picked: true })}
+                          aria-label={`Line ${i + 1}: account`}
+                          style={{ ...input(!line.accountId), marginTop: '8px' }}
+                        >
+                          {!line.accountId && <option value="">Pick an account</option>}
+                          {options.map((a) => <option key={a.id} value={a.id}>{a.label}</option>)}
+                        </select>
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <div style={noteText(line.accountId ? undefined : AMBER)}>{showNote ? suggestion!.text : ''}</div>
+                          <button
+                            type="button"
+                            onClick={() => change({ ...form, lines: form.lines.filter((_, j) => j !== i) })}
+                            style={{ background: 'none', border: 'none', padding: '4px 0 0', fontSize: '12px', color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div style={{ padding: '10px 12px', borderTop: form.lines.length ? '1px solid var(--border)' : 'none' }}>
+                    <button
+                      type="button"
+                      onClick={() => change({ ...form, lines: [...form.lines, { description: '', cents: null, accountId: null, picked: false }] })}
+                      style={{ ...linkStyle, background: 'none', border: 'none', padding: 0, fontSize: '14px', cursor: 'pointer', textDecoration: 'underline' }}
+                    >
+                      + Add a line
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
 
             {view?.stop ? (
               <div style={{ border: `1px solid ${RED}88`, borderRadius: '12px', padding: '14px', marginTop: '14px' }}>
@@ -744,7 +910,7 @@ export default function BooksSnapBillPage() {
                     onClick={() => act('send')}
                     style={bigButton('go', !view?.canSend || checking || !!busy || stage !== 'idle')}
                   >
-                    {busy === 'send' ? 'Sending…' : 'Send to NetSuite'}
+                    {busy === 'send' ? 'Sending…' : billing && view ? (view.po.needsReason ? 'Bill it anyway' : `Bill ${view.po.number}`) : 'Send to NetSuite'}
                   </button>
                   <button type="button" disabled={!!busy || stage !== 'idle'} onClick={() => act('save')} style={bigButton()}>
                     {busy === 'save' ? 'Saving…' : 'Save for later'}
