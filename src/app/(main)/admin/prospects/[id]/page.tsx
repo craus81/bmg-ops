@@ -65,6 +65,7 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import { looseMatcher, looseSearchRegex } from '@/lib/loose-search';
 import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
 import { MapLink } from '@/components/MapLink';
+import { PartsStageTag, useEstimatePartsStages } from '@/components/EstimatePartsTag';
 
 interface Prospect {
   id: string;
@@ -1996,6 +1997,14 @@ export default function CustomerRecordPage() {
     return rows;
   }, [docs, payments, estimatesList, wrapQuotes, originByNsDoc, qbRows, recordRouteId]);
 
+  // Approved / Parts ordered / Parts in stock on each approved estimate
+  // (Craig, 2026-10-26), so open work stands out from history.
+  const estimateIdsShown = useMemo(
+    () => txns.filter(t => t.origin?.kind === 'estimate').map(t => t.origin!.id),
+    [txns],
+  );
+  const partsStages = useEstimatePartsStages(estimateIdsShown);
+
   // The search box looks past the number: after a pause in typing, ask the
   // server for this customer's transactions whose lines, memo, PO or VIN
   // match (all of history, not just the rows paged in), plus QuickBooks
@@ -3089,6 +3098,9 @@ export default function CustomerRecordPage() {
                           {t.qbo ? (
                             <button onClick={() => setQbOpenId(t.qbo!.id)} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 'inherit', fontWeight: 700, color: 'var(--text-primary)' }}>{t.number}</button>
                           ) : t.number}
+                          {t.origin?.kind === 'estimate' && partsStages[t.origin.id] && (
+                            <span style={{ marginLeft: '6px' }}><PartsStageTag stage={partsStages[t.origin.id]} /></span>
+                          )}
                           {t.origin?.title && (
                             <div title={t.origin.title} style={{ fontSize: '10.5px', fontWeight: 500, color: 'var(--text-label)', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {t.origin.title}

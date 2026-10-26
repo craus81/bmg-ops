@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { usePopout } from '@/components/Popout';
 import { OlderWrapQuotes, QuoteChips, QuoteFollowUpLog, useMarkQuote, useQuoteExtras, wonButtonStyle, lostButtonStyle } from '@/components/EstimateFollowUpExtras';
+import { PartsStageBanner, PartsStageTag, useEstimatePartsStages } from '@/components/EstimatePartsTag';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -4336,6 +4337,18 @@ export default function EstimatesPage() {
     });
   });
 
+  // Approved / Parts ordered / Parts in stock (Craig, 2026-10-26): a tag
+  // on each approved estimate in the list, and the green banner across the
+  // top of the one that's open. One id asks NetSuite for live stock.
+  const approvedIds = useMemo(
+    () => estimates.filter(e => e.customer_approved || e.status === 'accepted').map(e => e.id),
+    [estimates],
+  );
+  const listStages = useEstimatePartsStages(view === 'list' ? approvedIds : []);
+  const bannerStages = useEstimatePartsStages(
+    view === 'builder' && editingId && approvedIds.includes(editingId) ? [editingId] : [],
+  );
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
@@ -4629,6 +4642,7 @@ export default function EstimatesPage() {
                       }}>
                         {display.label}
                       </div>
+                      <PartsStageTag stage={listStages[est.id]} size="md" />
                       {isAdmin && (
                         <button
                           onClick={(e) => { e.stopPropagation(); deleteEstimate(est.id, !!est.netsuite_estimate_id); }}
@@ -4878,6 +4892,15 @@ export default function EstimatesPage() {
           </div>
         )}
       </div>
+
+      {editingId && (
+        <PartsStageBanner
+          stage={bannerStages[editingId]}
+          approvedBy={editingEst?.customer_approved_at
+            ? `By ${editingEst.customer_responder || 'the customer'}, ${new Date(editingEst.customer_approved_at).toLocaleDateString()}`
+            : null}
+        />
+      )}
 
       {isPriceSheet && editingEst?.pricing_request_id && (
         <a
