@@ -7611,10 +7611,12 @@ export default function EstimatesPage() {
         onClose={() => setShowRackKits(false)}
         onAdd={addKitLines}
         onAddBuilt={addBuiltRackLines}
+        onAddLines={lines => setLines(prev => [...prev, ...lines.map(l => ({ ...l, key: genKey() }))])}
         showPrice
         vehicle={{
           platformKey: selectedPlatform?.key || null,
           bodyType: selectedPlatform?.body_type || null,
+          year: vehicleYear,
           label: (() => {
             const name = vehicleMake && vehicleModel ? `${vehicleMake} ${vehicleModel}` : selectedPlatform?.label || vehicleOther;
             return name ? [vehicleYear, name].filter(Boolean).join(' ') : '';

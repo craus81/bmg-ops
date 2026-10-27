@@ -9,6 +9,10 @@ import {
   ADDON_LABOR_HOURS, estimateFitText, estimateFits, isPickup, noKitNote, PICKUP_RACK_VEHICLES, rackVehicleFor,
   type AddonLine, type AddonPart, type ClampChoice, type EstimateRackVehicle, type PickerChoice, type PickerRack, type RackSide,
 } from '@/lib/rack-picker';
+import {
+  loadTopperParts, TOPPER_ADDON_LABOR_HOURS, TOPPER_RACKS, topperAddonsFor, topperFits, topperInNetSuite, topperLines,
+  topperPrice, topperRacksFor, topperVehicles,
+} from '@/lib/topper-racks';
 
 /**
  * Build a rack, one step at a time (src/lib/rack-picker.ts). Every option
@@ -21,13 +25,17 @@ const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDi
 
 interface Opt<V> { value: V; title: string; sub?: string; on: boolean; off?: boolean }
 
-export default function RackStepPicker({ onAdd, showPrice, vehicle }: {
+export default function RackStepPicker({ onAdd, onAddLines, showPrice, vehicle }: {
   onAdd: (kit: KitWithMembers, kitName: string, addons: AddonLine[]) => void;
+  /** A Topper rack and its add-ons: plain lines, rack first. */
+  onAddLines: (lines: AddonLine[]) => void;
   showPrice: boolean;
   vehicle?: EstimateRackVehicle | null;
 }) {
   const [kits, setKits] = useState<KitWithMembers[] | null>(null);
   const [addonParts, setAddonParts] = useState<Map<string, AddonPart>>(new Map());
+  const [topperParts, setTopperParts] = useState<Map<string, AddonPart>>(new Map());
+  const [topperPicks, setTopperPicks] = useState<Record<string, number>>({});
   const [error, setError] = useState('');
   const [c, setC] = useState<PickerChoice>(EMPTY_CHOICE);
   const [clamp, setClamp] = useState<ClampChoice>('none');
@@ -44,6 +52,7 @@ export default function RackStepPicker({ onAdd, showPrice, vehicle }: {
       .then(ks => { if (live) setKits(ks); })
       .catch(e => { if (live) setError(e?.message || 'Could not load rack kits'); });
     loadAddonParts(supabase).then(m => { if (live) setAddonParts(m); }).catch(() => { /* fallback prices */ });
+    loadTopperParts(supabase).then(m => { if (live) setTopperParts(m); }).catch(() => { /* flagged not in NetSuite */ });
     return () => { live = false; };
   }, []);
 
@@ -57,19 +66,33 @@ export default function RackStepPicker({ onAdd, showPrice, vehicle }: {
 
   // The estimate's vehicle: the fit (and a lone finish) it pins down, if any.
   const ownVehicle = rackVehicleFor(vehicle);
+  const fitsFromEstimate = (line: PickerChoice['line'], v: string | null) =>
+    line === 'Topper' ? topperFits(v, vehicle) : estimateFits(racks, line, v, vehicle);
+  const lineVehicles = (line: PickerChoice['line']) => (line === 'Topper' ? topperVehicles() : vehiclesFor(racks, line));
+  const fitCount = (line: PickerChoice['line'], v: string) => (line === 'Topper' ? topperRacksFor(v).length : fitsFor(racks, line, v).length);
+  // A Topper pick resets the add-ons to that rack's defaults.
+  const topperDefaults = (item: string | null) => {
+    const r = TOPPER_RACKS.find(x => x.item_number === item) || null;
+    setTopperPicks(Object.fromEntries(topperAddonsFor(r).filter(a => a.defaultOn).map(a => [a.item_number, 1])));
+  };
   const landFit = (line: PickerChoice['line'], v: string | null): Pick<PickerChoice, 'fit' | 'finish'> => {
-    const ef = estimateFits(racks, line, v, vehicle);
+    const ef = fitsFromEstimate(line, v);
+    if (line === 'Topper') { topperDefaults(ef.length === 1 ? ef[0] : null); return { fit: ef.length === 1 ? ef[0] : null, finish: null }; }
     if (ef.length !== 1) return { fit: null, finish: null };
     const finishes = [...new Set(racks.filter(r => r.line === line && r.vehicle === v && r.fit === ef[0]).map(r => r.finish))];
     return { fit: ef[0], finish: finishes.length === 1 ? finishes[0] : null };
   };
-  const landLine = (line: 'ErgoRack' | 'AluRack'): Partial<PickerChoice> => {
-    if (!ownVehicle || !vehiclesFor(racks, line).includes(ownVehicle)) return {};
+  const landLine = (line: 'ErgoRack' | 'AluRack' | 'Topper'): Partial<PickerChoice> => {
+    if (!ownVehicle || !lineVehicles(line).includes(ownVehicle)) return {};
     return { vehicle: ownVehicle, ...landFit(line, ownVehicle) };
   };
   const vehicleMatches = (v: string) => v === ownVehicle || (isPickup(vehicle) && PICKUP_RACK_VEHICLES.includes(v));
-  const suggested = new Set(estimateFits(racks, c.line, c.vehicle, vehicle));
-  const note = noKitNote(racks, c.line, c.vehicle, vehicle);
+  const suggested = new Set(fitsFromEstimate(c.line, c.vehicle));
+  const note = c.line !== 'Topper' ? noKitNote(racks, c.line, c.vehicle, vehicle)
+    : vehicle && ownVehicle && !topperVehicles().includes(ownVehicle) ? `No Topper rack for a ${ownVehicle}. Pick the vehicle by hand.`
+      : vehicle && c.vehicle && c.vehicle === ownVehicle && (vehicle.wheelbase || vehicle.roof || vehicle.year) && suggested.size === 0
+        ? `No Topper rack for the estimate's ${[vehicle.year, ownVehicle].filter(Boolean).join(' ')} (${estimateFitText(vehicle)}). Pick the closest rack by hand.`
+        : '';
   const first = <T,>(list: T[], hit: (x: T) => boolean) => [...list.filter(hit), ...list.filter(x => !hit(x))];
 
   const optStyle = (o: Opt<unknown>): React.CSSProperties => ({
@@ -96,24 +119,71 @@ export default function RackStepPicker({ onAdd, showPrice, vehicle }: {
   const steps: Step[] = [];
   steps.push({
     id: 'line', label: 'Rack line', value: c.line, reachable: true,
-    body: () => options<'ErgoRack' | 'AluRack'>([
+    body: () => options<'ErgoRack' | 'AluRack' | 'Topper'>([
       { value: 'ErgoRack', title: 'ErgoRack', sub: 'Drop-down ladder rack, 2 or 3 crossbars', on: c.line === 'ErgoRack' },
       { value: 'AluRack', title: 'AluRack', sub: 'Aluminum cargo rack with side rails', on: c.line === 'AluRack' },
-    ], v => pick({ ...EMPTY_CHOICE, line: v, ...landLine(v) })),
+      { value: 'Topper', title: 'Topper', sub: 'Galvanized steel van rack, one part', on: c.line === 'Topper' },
+    ], v => { setTopperPicks({}); pick({ ...EMPTY_CHOICE, line: v, ...landLine(v) }); }),
   });
   steps.push({
     id: 'vehicle', label: 'Vehicle', value: c.vehicle, reachable: !!c.line,
-    body: () => options(first(vehiclesFor(racks, c.line), vehicleMatches).map(v => ({
+    body: () => options(first(lineVehicles(c.line), vehicleMatches).map(v => ({
       value: v, title: v, on: c.vehicle === v,
       sub: [
-        `${fitsFor(racks, c.line, v).length} fit${fitsFor(racks, c.line, v).length === 1 ? '' : 's'}`,
+        `${fitCount(c.line, v)} ${c.line === 'Topper' ? 'rack' : 'fit'}${fitCount(c.line, v) === 1 ? '' : 's'}`,
         vehicleMatches(v) ? (v === ownVehicle ? 'from the estimate' : 'the estimate has a pickup') : '',
       ].filter(Boolean).join(' · '),
     })), v => pick({ vehicle: v, street: null, curb: null, bars: 2, ...landFit(c.line, v) })),
   });
   const fits = fitsFor(racks, c.line, c.vehicle);
   const fitNow = fits.find(f => f.fit === c.fit);
-  steps.push({
+  const topperRack = c.line === 'Topper' ? TOPPER_RACKS.find(r => r.item_number === c.fit) || null : null;
+  const topperAddons = topperAddonsFor(topperRack);
+  const topperOut = topperRack ? topperLines(topperRack, topperPicks, topperParts) : [];
+  const priceText = (item: string, list?: number) => {
+    if (!showPrice) return '';
+    const p = topperPrice(item, topperParts, list);
+    return p == null ? '' : ` · ${money(p)}`;
+  };
+  if (c.line === 'Topper') {
+    const racksHere = topperRacksFor(c.vehicle);
+    steps.push({
+      id: 'fit', label: 'Rack', value: topperRack ? `${topperRack.item_number} · ${topperRack.label}` : null, reachable: !!c.vehicle,
+      body: () => options(first(racksHere, r => suggested.has(r.item_number)).map(r => ({
+        value: r.item_number, title: `${r.item_number} · ${r.label}`, on: c.fit === r.item_number,
+        sub: [r.sub, suggested.has(r.item_number) && racksHere.length > 1 ? 'matches the estimate' : ''].filter(Boolean).join(' · ') + priceText(r.item_number, r.list_price),
+      })), v => { topperDefaults(v); pick({ fit: v }); }, true),
+    });
+    steps.push({
+      id: 'topper-addons', label: 'Add-ons', value: null, reachable: !!topperRack,
+      body: () => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {topperAddons.map(a => {
+            const n = topperPicks[a.item_number] || 0;
+            const set = (q: number) => { setTopperPicks(prev => ({ ...prev, [a.item_number]: Math.max(0, q) })); setAdded(''); };
+            return (
+              <div key={a.item_number} style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                {a.kind === 'check'
+                  ? <input type="checkbox" checked={n > 0} onChange={e => set(e.target.checked ? 1 : 0)} aria-label={a.label} style={{ width: '18px', height: '18px' }} />
+                  : (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <button type="button" aria-label={`One less ${a.label}`} onClick={() => set(n - 1)} style={stepBtn}>−</button>
+                      <span style={{ fontSize: '15px', fontWeight: 800, minWidth: '2ch', textAlign: 'center' }}>{n}</span>
+                      <button type="button" aria-label={`One more ${a.label}`} onClick={() => set(n + 1)} style={stepBtn}>+</button>
+                    </span>
+                  )}
+                <span style={{ fontSize: '12px', minWidth: 0 }}>
+                  <b>{a.item_number}</b> {a.label}
+                  <span style={{ color: 'var(--text-muted)' }}>{priceText(a.item_number, a.list_price)}{a.kind === 'count' ? ' each' : ''}</span>
+                </span>
+              </div>
+            );
+          })}
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Each add-on is its own line under the rack, {TOPPER_ADDON_LABOR_HOURS} hr labor each.</div>
+        </div>
+      ),
+    });
+  } else steps.push({
     id: 'fit', label: c.line === 'AluRack' ? 'Roof / length' : 'Roof / crossbar size',
     value: fitNow ? [fitNow.fitLabel, fitNow.fitSub].filter(Boolean).join(' · ') : null, reachable: !!c.vehicle,
     body: () => options(first(fits, (f: PickerRack) => suggested.has(f.fit)).map(f => ({
@@ -205,6 +275,11 @@ export default function RackStepPicker({ onAdd, showPrice, vehicle }: {
   const active = open || firstOpen || steps[steps.length - 1].id;
 
   const add = () => {
+    if (topperRack) {
+      onAddLines(topperOut);
+      setAdded(topperRack.item_number);
+      return;
+    }
     if (!rack) return;
     onAdd(rack.kit, builtRackName(rack, c), addons);
     setAdded(rack.kit.item_number || rack.kit.name);
@@ -247,6 +322,33 @@ export default function RackStepPicker({ onAdd, showPrice, vehicle }: {
           );
         })}
       </div>
+
+      {topperRack && (
+        <div style={{ border: '1px solid var(--border)', borderRadius: '12px', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '8px', background: 'var(--card)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'baseline', flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '14px', fontWeight: 800 }}>{topperRack.item_number}</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{topperOut[0]?.description}</div>
+            </div>
+            {showPrice && <span style={{ fontSize: '18px', fontWeight: 800, color: '#22c55e' }}>{money(topperOut.reduce((s, l) => s + l.unit_price * l.quantity, 0))}</span>}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '11px' }}>
+            {topperOut.map((l, i) => (
+              <div key={`${l.item_number}-${i}`} style={{ display: 'flex', gap: '6px' }}>
+                <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{l.quantity}× {l.item_number}</span>
+                <span style={{ color: 'var(--text-muted)' }}>
+                  {i > 0 ? `${l.description} · own line, ${TOPPER_ADDON_LABOR_HOURS * l.quantity} hr labor` : 'labor from NetSuite'}{showPrice ? ` · ${money(l.unit_price * l.quantity)}` : ''}
+                  {!topperInNetSuite(l.item_number, topperParts) && <span style={{ color: '#f87171', fontWeight: 700 }}> · not found in NetSuite{l.unit_price ? ', priced at Topper list' : ', no price'}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={add}
+            style={{ alignSelf: 'flex-start', padding: '9px 18px', borderRadius: '8px', border: 'none', background: added ? 'rgba(34,197,94,0.15)' : 'var(--accent, #2563eb)', color: added ? '#22c55e' : '#fff', fontSize: '13px', fontWeight: 800, cursor: 'pointer' }}>
+            {added ? `✓ Added ${added} · add another` : 'Add rack to estimate'}
+          </button>
+        </div>
+      )}
 
       {rack && (
         <div style={{ border: '1px solid var(--border)', borderRadius: '12px', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '8px', background: 'var(--card)' }}>

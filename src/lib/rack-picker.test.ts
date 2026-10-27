@@ -100,8 +100,8 @@ describe('AluRack', () => {
 
 describe('estimate vehicle', () => {
   const van = (platformKey: string, wheelbase = '', roof = '') =>
-    ({ platformKey, bodyType: 'van' as const, label: 'x', wheelbase, roof, bed: '' });
-  const truck = (bed: string) => ({ platformKey: 'f-150', bodyType: 'truck' as const, label: 'x', wheelbase: '', roof: '', bed });
+    ({ platformKey, bodyType: 'van' as const, year: '', label: 'x', wheelbase, roof, bed: '' });
+  const truck = (bed: string) => ({ platformKey: 'f-150', bodyType: 'truck' as const, year: '', label: 'x', wheelbase: '', roof: '', bed });
   const labels = (line: 'ErgoRack' | 'AluRack', vehicle: string, v: Parameters<typeof estimateFits>[3]) =>
     estimateFits(racks, line, vehicle, v).map(f => fitsFor(racks, line, vehicle).find(x => x.fit === f)!.fitLabel);
 

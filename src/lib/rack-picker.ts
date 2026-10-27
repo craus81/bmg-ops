@@ -109,7 +109,8 @@ export function pickerRacks(kits: KitWithMembers[]): PickerRack[] {
 }
 
 export interface PickerChoice {
-  line: 'ErgoRack' | 'AluRack' | null;
+  /** Topper racks (src/lib/topper-racks.ts) are single parts: fit holds the part number. */
+  line: 'ErgoRack' | 'AluRack' | 'Topper' | null;
   vehicle: string | null;
   fit: string | null;
   bars: 2 | 3;
@@ -199,6 +200,7 @@ export interface AddonPart {
   purchase_price?: number | null;
   avg_install_cost?: number | null;
   catalog?: string | null;
+  labor_hours?: number | null;
 }
 
 /** The add-ons' NetSuite items, keyed by upper-case part number. */
@@ -228,7 +230,8 @@ export interface AddonLine {
   description: string;
   quantity: number;
   unit_price: number;
-  labor_hours: number;
+  /** null = the part has no labor hours set (the estimate flags it). */
+  labor_hours: number | null;
   is_custom: boolean;
   catalog?: string;
   purchase_price?: number | null;
@@ -279,6 +282,7 @@ export interface EstimateRackVehicle {
   /** vehicle_platforms.key, e.g. 'transit'. */
   platformKey: string | null;
   bodyType: 'van' | 'truck' | 'other' | null;
+  year: string;
   /** What the estimate shows, e.g. "2024 Ford Transit". */
   label: string;
   roof: string;

@@ -272,11 +272,13 @@ export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice
  * Rack kits list). "Build a rack" walks the kits a step at a time
  * (RackStepPicker); "Search all racks" is the full list with filters.
  */
-export function RackKitBrowserModal({ open, onClose, onAdd, onAddBuilt, showPrice, vehicle }: {
+export function RackKitBrowserModal({ open, onClose, onAdd, onAddBuilt, onAddLines, showPrice, vehicle }: {
   open: boolean;
   onClose: () => void;
   onAdd: (kit: KitWithMembers) => void;
   onAddBuilt: (kit: KitWithMembers, kitName: string, addons: AddonLine[]) => void;
+  /** A Topper rack (one part) and its add-ons. */
+  onAddLines: (lines: AddonLine[]) => void;
   showPrice: boolean;
   /** The estimate's vehicle, which both tabs start from. */
   vehicle?: EstimateRackVehicle | null;
@@ -303,7 +305,7 @@ export function RackKitBrowserModal({ open, onClose, onAdd, onAddBuilt, showPric
         </div>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 16px' }}>
           {tab === 'build'
-            ? <RackStepPicker onAdd={onAddBuilt} showPrice={showPrice} vehicle={vehicle} />
+            ? <RackStepPicker onAdd={onAddBuilt} onAddLines={onAddLines} showPrice={showPrice} vehicle={vehicle} />
             : <RackKitBrowser onAdd={onAdd} showPrice={showPrice} initialVehicle={rackVehicleFor(vehicle) || ''} />}
         </div>
       </div>
