@@ -589,7 +589,7 @@ export default function OpsDashboard() {
       rows(sentEstRes, 'sent estimates').filter(mine).filter(e => quoteQuiet(e.sent_for_approval_at || e.updated_at, e.last_followup_at)).length +
       rows(sentWrapRes, 'sent wrap quotes').filter(mine).filter(w => quoteQuiet(w.sent_at, w.last_followup_at)).length;
     if (quietQuotes > 0) queue.push({
-      key: 'quotes', count: quietQuotes, tone: 'warn', path: '/quotes',
+      key: 'quotes', count: quietQuotes, tone: 'warn', path: deepLinks.quoteFollowUps(),
       title: personalSales ? 'Your quotes needing a follow-up' : 'Quotes needing a follow-up', detail: 'Sent 5+ days ago with no answer',
     });
     const staleProofs = count(staleProofRes, 'stale proofs');
@@ -1008,7 +1008,7 @@ export default function OpsDashboard() {
       </div>
       <div style={card}>
         <div style={cardHead}><h2 style={headTitle}>Coming in</h2><span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>Sales</span></div>
-        {financeTile('Open quotes', fmtMoney(d.sales.openQuotes.value), `${d.sales.openQuotes.count} quotes and estimates out · pipeline ${fmtK(d.pipelineValue.total)}`, '/quotes')}
+        {financeTile('Open quotes', fmtMoney(d.sales.openQuotes.value), `${d.sales.openQuotes.count} quotes and estimates out · pipeline ${fmtK(d.pipelineValue.total)}`, '/estimates')}
       </div>
     </div>
   );
@@ -1224,7 +1224,7 @@ export default function OpsDashboard() {
         </div>
         <div style={{ padding: '12px 16px' }}>
           <div style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', marginBottom: '8px' }}>Quotes &amp; estimates</div>
-          <button onClick={() => router.push('/quotes')} style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}>
+          <button onClick={() => router.push('/estimates')} style={{ display: 'flex', justifyContent: 'space-between', width: '100%', fontSize: '12px', padding: '3px 0', background: 'none', border: 'none', cursor: 'pointer', fontVariantNumeric: 'tabular-nums' }}>
             <span style={{ color: 'var(--text-secondary)', fontWeight: 600 }}>Open quotes</span>
             <span style={{ fontWeight: 800, color: 'var(--text-primary)' }}>{d.sales.openQuotes.count} · {fmtK(d.sales.openQuotes.value)}</span>
           </button>

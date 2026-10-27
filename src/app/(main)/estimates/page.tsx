@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { usePopout } from '@/components/Popout';
+import { OlderWrapQuotes, QuoteChips, QuoteFollowUpLog, useMarkQuote, useQuoteExtras, wonButtonStyle, lostButtonStyle } from '@/components/EstimateFollowUpExtras';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -508,7 +509,7 @@ function estimateDisplayStatus(est: Estimate): { key: string; label: string; col
 const LIST_FILTERS: { key: string; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'draft', label: 'Draft' },
-  { key: 'sent', label: 'Sent' },
+  { key: 'sent', label: 'Waiting on customer' },
   { key: 'pushed', label: 'Pushed to NS' },
   { key: 'needs_so', label: 'Needs sales order' },
   { key: 'sales_order', label: 'Sales orders' },
@@ -540,8 +541,28 @@ export default function EstimatesPage() {
   const [estimates, setEstimates] = useState<Estimate[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  /** One of LIST_FILTERS' keys — matched against estimateDisplayStatus. */
-  const [statusFilter, setStatusFilter] = useState('all');
+  /** One of LIST_FILTERS' keys — matched against estimateDisplayStatus —
+   *  or 'wrap' for the older standalone wrap quotes. ?status= picks one
+   *  (old Quotes links and the dashboard's quiet-quotes card). */
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const st = searchParams.get('status');
+    return st && (st === 'wrap' || LIST_FILTERS.some(f => f.key === st)) ? st : 'all';
+  });
+  const [mineOnly, setMineOnly] = useState(false);
+  // The Quotes page's follow-up picture, folded into this list (Craig,
+  // 2026-10-27): link opens, expiry, reminders, the follow-up log, Won/Lost.
+  const canFollowUp = hasFeature('quotes');
+  const quoteExtras = useQuoteExtras(canFollowUp && view === 'list');
+  const { mark: markQuote, busy: markBusy } = useMarkQuote((item, status) => {
+    if (item.type === 'estimate') {
+      setEstimates(prev => prev.map(e => e.id === item.id ? { ...e, status } : e));
+    }
+    quoteExtras.reload();
+  });
+  // Deep link: ?item=<estimate|wrap>-<id> (follow-up nudges, reminders,
+  // mentions on a follow-up note) switches to the filter holding that row,
+  // then scrolls to and flashes it. ?id= opens the builder instead.
+  const handledItem = useRef<string | null>(null);
   // Deep link: ?q=<term> (universal search "View all") prefills the list search.
   useEffect(() => {
     const q = searchParams.get('q');
@@ -1136,8 +1157,8 @@ export default function EstimatesPage() {
   // Distinct ids still focus (deps include searchParams), so clicking a
   // second estimate's notification from the bell works.
   const handledEstimateId = useRef<string | null>(null);
-  // Opened from the Quotes page (&from=quotes): the builder's back buttons
-  // return to that row there rather than to the Estimates list.
+  // Opened from a follow-up row (&from=quotes): the builder's back buttons
+  // return to that row on the list, flashed.
   const [returnToQuotesFor, setReturnToQuotesFor] = useState<string | null>(null);
   // Opened from a customer's page (&fromCustomer=<route id>, on an existing
   // estimate or a new one): the builder's back buttons return to that
@@ -2897,8 +2918,8 @@ export default function EstimatesPage() {
         await dialog.alert('Failed to log follow-up: ' + (data.error || 'Unknown error'));
       } else {
         const nowIso = new Date().toISOString();
-        // The follow-up log renders on the Quotes page row, so the mention
-        // lands there (quoteFollowUps scroll-flashes the exact estimate).
+        // The follow-up log renders on this list's row, so the mention lands
+        // there (quoteFollowUps scroll-flashes the exact estimate).
         if (fuNote.trim()) {
           reportMentions({
             text: fuNote.trim(),
@@ -4081,6 +4102,28 @@ export default function EstimatesPage() {
     textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '3px',
   };
 
+  useEffect(() => {
+    if (loading) return;
+    const item = searchParams.get('item');
+    if (!item || handledItem.current === item || searchParams.get('id')) return;
+    const m = /^(estimate|wrap)-(.+)$/.exec(item);
+    if (!m) return;
+    if (m[1] === 'estimate') {
+      const est = estimates.find(e => e.id === m[2]);
+      // Not in the list (older than its read cap): open the estimate itself.
+      if (!est) { handledItem.current = item; router.replace(deepLinks.estimate(m[2])); return; }
+      setStatusFilter(estimateDisplayStatus(est).key);
+    } else {
+      // Wrap rows come from the side-load; wait for it.
+      if (!quoteExtras.loaded) return;
+      setStatusFilter('wrap');
+    }
+    handledItem.current = item;
+    setView('list');
+    flashNote(`qfu-${item}`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- estimates/extras only gate the first landing
+  }, [loading, searchParams, estimates, quoteExtras.loaded]);
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
@@ -4094,10 +4137,16 @@ export default function EstimatesPage() {
   if (view === 'list') {
     const s = search.toLowerCase();
     const matchSearch = looseMatcher(search);
+    // "My estimates": the rep the follow-up list names, else who created it.
+    const repOf = (e: Estimate) => quoteExtras.byKey[`estimate-${e.id}`]?.repId ?? e.created_by;
     const searchedEstimates = estimates.filter(e => {
+      if (mineOnly && repOf(e) !== user?.id) return false;
       if (!search) return true;
       return estimateNumberMatches(e, s) || matchSearch(e.customer_name, e.title, e.vin, e.unit_number);
     });
+    const wrapsShown = quoteExtras.wraps
+      .filter(w => !mineOnly || w.repId === user?.id)
+      .filter(w => matchSearch(w.number, w.customer, w.title));
     // Counts come off the searched set, so a chip's number always matches
     // what clicking it shows.
     const filterCounts = searchedEstimates.reduce<Record<string, number>>((acc, e) => {
@@ -4108,6 +4157,10 @@ export default function EstimatesPage() {
     const filteredEstimates = statusFilter === 'all'
       ? searchedEstimates
       : searchedEstimates.filter(e => estimateDisplayStatus(e).key === statusFilter);
+    // Waiting on the customer: quietest first, the order to chase them in.
+    if (statusFilter === 'sent') filteredEstimates.sort((a, b) => (quietDays(b) ?? 0) - (quietDays(a) ?? 0));
+    const waitingTotal = statusFilter === 'sent' ? filteredEstimates.reduce((sum, e) => sum + (Number(e.grand_total) || 0), 0) : 0;
+    const waitingOverdue = statusFilter === 'sent' ? filteredEstimates.filter(e => (quietDays(e) ?? 0) >= 5).length : 0;
 
     return (
       <div>
@@ -4127,6 +4180,10 @@ export default function EstimatesPage() {
           onChange={e => setSearch(e.target.value)}
           style={{ ...inputStyle, marginBottom: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}
         />
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', cursor: 'pointer', marginBottom: '8px' }}>
+          <input type="checkbox" checked={mineOnly} onChange={e => setMineOnly(e.target.checked)} style={{ width: '15px', height: '15px' }} />
+          My estimates only
+        </label>
 
         {/* Pipeline filter. "Needs sales order" is the one that earns its
             keep: approved work waiting on a conversion nobody has done. */}
@@ -4153,9 +4210,40 @@ export default function EstimatesPage() {
               </button>
             );
           })}
+          {/* Older standalone wrap quotes (sent before the Graphics Builder
+              fed estimates) have no estimate row; the chip shows while any
+              remain. */}
+          {(quoteExtras.wraps.length > 0 || statusFilter === 'wrap') && (
+            <button
+              onClick={() => setStatusFilter('wrap')}
+              style={{
+                padding: '5px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700,
+                cursor: 'pointer', whiteSpace: 'nowrap',
+                background: statusFilter === 'wrap' ? 'rgba(238,49,32,0.12)' : 'var(--subtle-bg)',
+                border: `1px solid ${statusFilter === 'wrap' ? 'rgba(238,49,32,0.4)' : 'var(--border)'}`,
+                color: statusFilter === 'wrap' ? theme.orange : 'var(--text-label)',
+              }}
+            >
+              Older wrap quotes {wrapsShown.length}
+            </button>
+          )}
         </div>
 
-        {filteredEstimates.length === 0 ? (
+        {statusFilter === 'sent' && filteredEstimates.length > 0 && (
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+            Quietest first. Log each follow-up so the clock resets; reps get a nudge after 5 quiet days.
+            {' '}<strong style={{ color: 'var(--text-body)' }}>{filteredEstimates.length}</strong> waiting · <strong style={{ color: 'var(--text-body)' }}>{fmt(waitingTotal)}</strong> quoted
+            {waitingOverdue > 0 && <span style={{ color: '#fbbf24', fontWeight: 700 }}> · {waitingOverdue} overdue for a follow-up</span>}
+          </div>
+        )}
+
+        {statusFilter === 'wrap' ? (
+          <OlderWrapQuotes
+            wraps={wrapsShown}
+            onChanged={quoteExtras.reload}
+            onOpen={id => router.push(deepLinks.wrapQuote(id, { from: 'quotes' }))}
+          />
+        ) : filteredEstimates.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-label)', fontSize: '13px' }}>
             {statusFilter !== 'all' ? 'Nothing in this state right now.'
               : search ? 'No matching estimates.'
@@ -4169,6 +4257,7 @@ export default function EstimatesPage() {
               return (
                 <button
                   key={est.id}
+                  id={`qfu-estimate-${est.id}`}
                   onClick={() => openEstimate(est)}
                   style={{
                     width: '100%', textAlign: 'left',
@@ -4194,6 +4283,23 @@ export default function EstimatesPage() {
                         {/* The SO number moved to the status pill — showing it
                             here too put it on the row twice. */}
                       </div>
+                      {est.status === 'sent' && (
+                        <>
+                          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '4px' }}>
+                            <QuoteChips item={quoteExtras.byKey[`estimate-${est.id}`]} />
+                            {canFollowUp && (() => {
+                              const target = { type: 'estimate' as const, id: est.id, number: `#${estimateHeadlineNumber(est)}`, total: Number(est.grand_total) || 0 };
+                              return (
+                                <>
+                                  <button disabled={markBusy === est.id} onClick={e => { e.stopPropagation(); markQuote(target, true); }} title="The customer said yes by phone or PO: mark it accepted" style={wonButtonStyle}>✓ Won</button>
+                                  <button disabled={markBusy === est.id} onClick={e => { e.stopPropagation(); markQuote(target, false); }} title="The customer said no" style={lostButtonStyle}>✕ Lost</button>
+                                </>
+                              );
+                            })()}
+                          </div>
+                          <QuoteFollowUpLog item={quoteExtras.byKey[`estimate-${est.id}`]} />
+                        </>
+                      )}
                     </div>
                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
                       {est.status === 'sent' && (() => {
@@ -4331,8 +4437,11 @@ export default function EstimatesPage() {
   const backToCustomer = !backToQuotes && !!returnToCustomer;
   const leaveBuilder = () => {
     if (backToQuotes) {
+      // Opened from a follow-up row: back to the list, on that row.
+      const id = editingId!;
       setReturnToQuotesFor(null);
-      router.push(deepLinks.quoteFollowUps('estimate', editingId!));
+      setView('list');
+      flashNote(`qfu-estimate-${id}`);
       return;
     }
     if (backToCustomer) {
@@ -4353,7 +4462,7 @@ export default function EstimatesPage() {
           onClick={leaveBuilder}
           style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
         >
-          {backToQuotes ? '← Back to Quotes' : backToCustomer ? `← Back to ${customerName || 'Customer'}` : '← Back to Estimates'}
+          {backToCustomer ? `← Back to ${customerName || 'Customer'}` : '← Back to Estimates'}
         </button>
         {editingId && editingNumber ? (
           <div style={{ textAlign: 'right', minWidth: 0 }}>

@@ -211,7 +211,7 @@ function briefSections(data: OwnerBriefData, toUrl: (path: string) => string | u
   }
   const pipe = data.deltas.open_quotes_value;
   if (pipe?.now != null) {
-    rows.sales.push({ text: `Open quote pipeline ${fmtUsd(pipe.now)} — ${deltaPhrase(pipe)}`, url: toUrl('/quotes') });
+    rows.sales.push({ text: `Open quote pipeline ${fmtUsd(pipe.now)} — ${deltaPhrase(pipe)}`, url: toUrl('/estimates') });
   }
 
   if (!sectionError(data.shipped)) {

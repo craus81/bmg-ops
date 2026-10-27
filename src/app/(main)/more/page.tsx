@@ -60,8 +60,7 @@ export default function MorePage() {
   // lines on a phone.
   const items: (Item & { group: MoreGroupId })[] = [
     { group: 'sales', title: 'Customers', sub: 'Customers & sales pipeline', path: '/admin/prospects', show: F('prospects') },
-    { group: 'sales', title: 'Estimates', sub: 'Build estimates & push to NetSuite', path: '/estimates', show: F('estimates') },
-    { group: 'sales', title: 'Quotes', sub: 'Every estimate in one list · search, chase, mark won or lost', path: '/quotes', show: F('quotes') },
+    { group: 'sales', title: 'Estimates', sub: 'Every estimate · build, chase follow-ups, mark won or lost', path: '/estimates', show: F('estimates') },
     { group: 'sales', title: 'Pricing Requests', sub: 'Masterack pricing requests · pictures, notes, your price and the PO', path: '/pricing-requests', show: F('estimates') },
     { group: 'sales', title: 'Graphics Builder', sub: 'Measure a vehicle, draw the proof and price the graphics as an estimate', path: '/admin/wrap-quote', show: F('graphics_builder') },
     { group: 'sales', title: 'Upfit Designer', sub: 'Design a van upfit in 3D & turn it into an estimate', path: '/upfit-designer', show: F('upfit_configurator') },

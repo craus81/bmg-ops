@@ -43,7 +43,7 @@ const ALLOWED: Record<string, string> = {
   'src/app/(main)/pricing-requests/page.tsx': 'estimates feature (page and API), same wall as the estimate builder',
   'src/components/PoPricingRequestLink.tsx': 'rendered only on the admin PO page; its API is requireAdmin',
   'src/components/MarginCalculator.tsx': 'rendered only on the pricing requests page (estimates feature)',
-  'src/app/(main)/quotes/page.tsx': 'the customer-facing quote view, reached by token',
+  'src/components/EstimateFollowUpExtras.tsx': 'rendered only on the Estimates list (estimates feature) and reads /api/quotes, which needs the quotes feature',
   'src/app/(main)/upfit-designer/page.tsx': 'upfit_configurator — sales/admin',
   'src/components/AddToEstimateModal.tsx': 'opens only from the estimate builder',
   'src/components/PartCatalogBrowser.tsx': 'used by the estimate builder and part_admin, both money-walled',
