@@ -10,9 +10,12 @@
  *
  * Also lists the parts that aren't NetSuite items yet: an estimate prices
  * them at Curt's list price until they are created.
+ *
+ * Admins upload Curt's dealer price file here (migration 445): it sets BMG's
+ * cost per part, which the builder shows as margin.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
@@ -21,6 +24,8 @@ import {
   BRAKE_TIER_LABEL, loadHitchData, matchHitchCatalog,
   type CatalogPart, type HitchData, type HitchPart, type HitchSettings,
 } from '@/lib/hitch-kits';
+
+interface PriceFile { price_file_name: string | null; price_file_date: string | null; price_file_rows: number | null; price_file_loaded_at: string | null }
 
 const money = (n: number | null) => (n == null ? '—' : `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 const ROLE_LABEL: Record<string, string> = {
@@ -46,6 +51,10 @@ export default function HitchKitsPage() {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const [search, setSearch] = useState('');
+  const [priceFile, setPriceFile] = useState<PriceFile | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -57,6 +66,8 @@ export default function HitchKitsPage() {
       setLabels(new Map(((p.data || []) as { key: string; label: string }[]).map(x => [x.key, x.label])));
       setLabor(Object.fromEntries(LABOR_ROWS.map(r => [r.key, String(d.settings[r.key])])));
       setCatalog(await matchHitchCatalog(supabase, d.parts.map(x => x.sku)));
+      const pf = await supabase.from('hitch_settings').select('price_file_name, price_file_date, price_file_rows, price_file_loaded_at').eq('id', 1).maybeSingle();
+      setPriceFile((pf.data as PriceFile) || null);
     } catch (e: any) {
       setError(e?.message || 'Could not load the hitch kit settings');
     }
@@ -83,6 +94,23 @@ export default function HitchKitsPage() {
     const { error: e } = await supabase.from('hitch_parts').update({ active, updated_at: new Date().toISOString() }).eq('sku', p.sku);
     if (e) { setError(`Could not update ${p.sku}: ${e.message}`); return; }
     setData(d => d && { ...d, parts: d.parts.map(x => x.sku === p.sku ? { ...x, active } : x) });
+  };
+
+  const uploadPrices = async (file: File) => {
+    setError(''); setUploadMsg(''); setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch('/api/hitch-kits/curt-prices', { method: 'POST', body: form });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(`Price file not loaded: ${body.error || `error ${res.status}`}`); return; }
+      const missing: string[] = body.hitchMissing || [];
+      setUploadMsg(`Loaded ${Number(body.rows).toLocaleString()} parts${body.reportDate ? ` (file dated ${body.reportDate})` : ''}. ${body.listUpdated} hitch list price${body.listUpdated === 1 ? '' : 's'} changed.${missing.length ? ` Not in the file: ${missing.join(', ')}.` : ''}`);
+      load();
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
   };
 
   const bySku = useMemo(() => new Map((data?.parts || []).map(p => [p.sku, p])), [data]);
@@ -140,6 +168,34 @@ export default function HitchKitsPage() {
             </details>
           )}
 
+          {showPrice && (
+            <div style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <h2 style={h2}>Curt price file</h2>
+                <span style={{ flex: 1 }} />
+                {isAdmin && (
+                  <>
+                    <input ref={fileRef} type="file" accept=".xlsx" aria-label="Curt price file" style={{ display: 'none' }}
+                      onChange={e => { const f = e.target.files?.[0]; if (f) uploadPrices(f); }} />
+                    <button type="button" disabled={uploading} onClick={() => fileRef.current?.click()}
+                      style={{ padding: '7px 14px', borderRadius: '8px', border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: 'pointer', opacity: uploading ? 0.6 : 1 }}>
+                      {uploading ? 'Loading…' : 'Upload Curt price file'}
+                    </button>
+                  </>
+                )}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+                {priceFile?.price_file_loaded_at
+                  ? <>Loaded: <b>{priceFile.price_file_name}</b>{priceFile.price_file_date ? <>, dated <b>{priceFile.price_file_date}</b></> : null}, {Number(priceFile.price_file_rows || 0).toLocaleString()} parts, on {new Date(priceFile.price_file_loaded_at).toLocaleDateString()}.</>
+                  : 'No Curt price file loaded yet.'}
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                The {'"'}Customer Item Prices{'"'} spreadsheet Curt sends (account 10729901). Its Price column is BMG{"'"}s cost; the builder shows it as margin. Estimates sell at Curt List.
+              </div>
+              {uploadMsg && <div style={{ fontSize: '12px', color: '#22c55e', fontWeight: 700 }}>{uploadMsg}</div>}
+            </div>
+          )}
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '12px' }}>
             <div style={card}>
               <h2 style={h2}>Labor hours</h2>
@@ -171,7 +227,7 @@ export default function HitchKitsPage() {
                 <div key={p.sku} style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px' }}>
                   {thumb(p)}
                   <span style={{ flex: 1 }}><b>{p.sku}</b> {p.name}</span>
-                  {showPrice && <span>{money(p.list_price)}</span>}
+                  {showPrice && <span>{money(p.list_price)}<span style={{ color: 'var(--text-muted)', fontSize: '11px' }}> · cost {money(p.dealer_cost)}</span></span>}
                 </div>
               ))}
             </div>
@@ -184,7 +240,7 @@ export default function HitchKitsPage() {
                 {thumb(p)}
                 {p.tier && <span style={{ fontSize: '10px', fontWeight: 800, padding: '1px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.15)', color: '#22c55e' }}>{BRAKE_TIER_LABEL[p.tier]}</span>}
                 <span style={{ flex: 1 }}><b>{p.sku}</b> {p.name}</span>
-                {showPrice && <span>{money(catalog.get(p.sku)?.sales_price ?? p.list_price)}</span>}
+                {showPrice && <span>{money(catalog.get(p.sku)?.sales_price ?? p.list_price)}<span style={{ color: 'var(--text-muted)', fontSize: '11px' }}> · cost {money(p.dealer_cost)}</span></span>}
                 {canEdit && (
                   <label style={{ display: 'flex', gap: '4px', alignItems: 'center', fontSize: '11px', cursor: 'pointer' }}>
                     <input type="checkbox" checked={p.active} onChange={e => setActive(p, e.target.checked)} /> Offered
@@ -207,7 +263,7 @@ export default function HitchKitsPage() {
             </div>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-                <thead><tr><th style={th}>Vehicle</th><th style={th}>Years</th><th style={th}>Part</th><th style={th}></th><th style={th}>Description</th>{showPrice && <th style={{ ...th, textAlign: 'right' }}>Price</th>}</tr></thead>
+                <thead><tr><th style={th}>Vehicle</th><th style={th}>Years</th><th style={th}>Part</th><th style={th}></th><th style={th}>Description</th>{showPrice && <th style={{ ...th, textAlign: 'right' }}>Price</th>}{showPrice && <th style={{ ...th, textAlign: 'right' }}>Cost</th>}</tr></thead>
                 <tbody>
                   {fitRows.map(({ f, part, label }) => (
                     <tr key={`${f.platform_key}-${f.sku}`}>
@@ -223,6 +279,7 @@ export default function HitchKitsPage() {
                         {!catalog.has(f.sku) && <div style={{ fontSize: '10px', color: '#f59e0b', fontWeight: 700 }}>Not in NetSuite yet</div>}
                       </td>
                       {showPrice && <td style={{ ...cell, textAlign: 'right', whiteSpace: 'nowrap' }}>{money(catalog.get(f.sku)?.sales_price ?? part!.list_price)}</td>}
+                      {showPrice && <td style={{ ...cell, textAlign: 'right', whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>{money(part!.dealer_cost)}</td>}
                     </tr>
                   ))}
                 </tbody>

@@ -9,7 +9,7 @@ import { kitComponentShowsPhoto, kitTaggedDescription, toKitDisplayLines } from 
 
 const part = (p: Partial<HitchPart> & Pick<HitchPart, 'sku' | 'role'>): HitchPart => ({
   name: `Part ${p.sku}`, list_price: 10, hitch_class: null, receiver: null, specs: {}, features: [], notes: [],
-  image_url: null, needs_factory_wiring: false, tier: null, sort_order: 0, active: true, ...p,
+  image_url: null, needs_factory_wiring: false, tier: null, sort_order: 0, active: true, dealer_cost: null, ...p,
 });
 
 const data: HitchData = {
@@ -17,7 +17,7 @@ const data: HitchData = {
     part({ sku: '13475', role: 'hitch', hitch_class: '3', list_price: 295.95 }),
     part({ sku: '14017', role: 'hitch', hitch_class: '4', list_price: 387.95 }),
     part({ sku: '56110', role: 'wiring', needs_factory_wiring: true, list_price: 30.95 }),
-    part({ sku: '56465', role: 'wiring', list_price: 110.95 }),
+    part({ sku: '56465', role: 'wiring', list_price: 110.95, dealer_cost: 73.43 }),
     part({ sku: '55515', role: 'wiring', needs_factory_wiring: true, list_price: 22.95 }),
     part({ sku: '57672', role: 'adapter', list_price: 48.95 }),
     part({ sku: '55774', role: 'factory_adapter', needs_factory_wiring: true, list_price: 44.95 }),
@@ -103,6 +103,13 @@ describe('hitchKitLines', () => {
     expect(wiring).toMatchObject({ part_id: null, unit_price: 110.95, is_custom: true, not_in_netsuite: true });
   });
 
+  it('costs a line from NetSuite, else from the Curt price file', () => {
+    const [hitch, wiring, adapter] = hitchKitLines(choices, DEFAULT_HITCH_SETTINGS, catalog);
+    expect(hitch.purchase_price).toBe(190);
+    expect(wiring.purchase_price).toBe(73.43);
+    expect(adapter.purchase_price).toBeNull();
+  });
+
   it('skips the brake harness for the Bluetooth controller', () => {
     const lines = hitchKitLines({ ...choices, brakeController: bySku('51180') }, DEFAULT_HITCH_SETTINGS, catalog);
     expect(lines.map(l => l.item_number)).not.toContain('51436');
@@ -122,6 +129,18 @@ describe('hitchKitLines', () => {
     expect(shown.slice(1).every(l => kitComponentShowsPhoto(l))).toBe(true);
     expect(kitComponentShowsPhoto({ kit_component: true, kit_item_number: 'AR1205-S' })).toBe(false);
     expect(kitTaggedDescription('Hitch', lines[0])).toBe('Hitch [Hitch kit]');
+  });
+});
+
+describe('migration 445 data', () => {
+  const sql = readFileSync(join(__dirname, '../../migrations/445-curt-price-list.sql'), 'utf8');
+  it('makes the Venturer NEXT the Good controller and retires the discontinued Venturer', () => {
+    expect(sql).toMatch(/\('51116', 'brake_controller', [^\n]*'good', 1\)/);
+    expect(sql).toMatch(/UPDATE hitch_parts SET active = false, tier = NULL[^\n]*WHERE sku = '51110'/);
+  });
+  it('seeds the price file with costs for the hitch parts', () => {
+    expect(sql).toMatch(/\('13193', 'CURT Manufacturing', 'CLASS III RECEIVER HITCH', '29', 194\.36, 242\.95, NULL, 285\.95,/);
+    expect((sql.match(/^ {2}\('/gm) || []).length).toBeGreaterThan(6000);
   });
 });
 
