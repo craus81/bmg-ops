@@ -2265,9 +2265,10 @@ export default function WrapQuotePage() {
       return savedQuoteId;
     }
     let insert = await supabase.from('wrap_quotes').insert({ ...row, created_by: user?.id }).select('id').single();
-    if (insert.error?.code === '23505') {
-      // Someone grabbed today's number between our check and the insert —
-      // pick the next free suffix and try once more.
+    // quote_number is UNIQUE; next_job_number skips taken numbers (migration
+    // 446), so a clash only comes from a race or the legacy fallback — draw
+    // a fresh number and try again, same as the worksheet copy.
+    for (let attempt = 0; attempt < 3 && insert.error?.code === '23505'; attempt++) {
       row.quote_number = await nextQuoteNumber();
       setQuoteNumber(row.quote_number);
       insert = await supabase.from('wrap_quotes').insert({ ...row, created_by: user?.id }).select('id').single();
