@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase-browser';
 import { isNativeApp } from '@/lib/native-files';
+import { getAppKind, IOS_APP_QR_PATH, IOS_APP_STORE_URL } from '@/lib/app-store';
 
 // Same-origin path validator — defends the post-login redirect against
 // open-redirect abuse (e.g. /login?next=//evil.com).
@@ -27,6 +28,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [nextPath, setNextPath] = useState<string>('/home');
   const [inApp, setInApp] = useState(false);
+  const [appKind, setAppKind] = useState<'button' | 'qr' | null>(null);
   const supabase = createClient();
 
   useEffect(() => {
@@ -42,7 +44,12 @@ export default function LoginPage() {
   // link opens it in Safari. Apple (guideline 5.1.1(v)) then requires in-app
   // account deletion, which is Settings → Delete my account.
   useEffect(() => {
-    if (!isNativeApp()) return;
+    if (!isNativeApp()) {
+      // The app is unlisted (not in App Store search), so the sign-in page is
+      // where staff find it: a button on an iPhone/iPad, a QR code on a computer.
+      setAppKind(getAppKind(navigator.userAgent, navigator.maxTouchPoints));
+      return;
+    }
     setInApp(true);
     setMode(m => (m === 'signup' ? 'password' : m));
   }, []);
@@ -253,6 +260,26 @@ export default function LoginPage() {
               </p>
             )}
           </form>
+        )}
+
+        {!inApp && appKind && (
+          <div style={{ textAlign: 'center', marginTop: '28px', paddingTop: '20px', borderTop: '1px solid var(--login-input-border, rgba(255,255,255,0.1))' }}>
+            <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--login-text, #fff)' }}>Get the iPhone app</div>
+            {appKind === 'button' ? (
+              <a href={IOS_APP_STORE_URL} style={{ display: 'block', marginTop: '10px', padding: '12px', borderRadius: '12px', background: '#fff', color: '#0a1017', fontSize: '14px', fontWeight: 800, textDecoration: 'none' }}>
+                Get FleetSuite on the App Store
+              </a>
+            ) : (<>
+              <div style={{ fontSize: '12px', color: 'var(--login-text-muted, rgba(255,255,255,0.5))', marginTop: '4px' }}>
+                Scan with your iPhone camera
+              </div>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={IOS_APP_QR_PATH} alt="QR code for the FleetSuite iPhone app" width={132} height={132} style={{ display: 'block', margin: '10px auto 0', borderRadius: '8px', background: '#fff' }} />
+              <a href={IOS_APP_STORE_URL} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-block', marginTop: '8px', fontSize: '12px', color: 'var(--login-text-muted, rgba(255,255,255,0.5))', textDecoration: 'underline' }}>
+                Open in the App Store
+              </a>
+            </>)}
+          </div>
         )}
 
         <div style={{ textAlign: 'center', marginTop: '28px', fontSize: '12px', lineHeight: '1.6', color: 'var(--login-text-muted, rgba(255,255,255,0.4))' }}>
