@@ -2440,6 +2440,10 @@ export async function createDirectInvoice(payload: {
     description?: string;
     /** Not sent to NetSuite; only used to name a rejected line in errors. */
     partNumber?: string;
+    /** FleetSuite's tax rule for the line, sent as isTaxable (nsLineTaxField); absent leaves it to NetSuite. */
+    taxable?: boolean;
+    /** A Discount-type item: its rate is the negative amount, with no quantity or price level. */
+    discountItem?: true;
   }[];
 }): Promise<{
   success: boolean;
@@ -2463,7 +2467,7 @@ export async function createDirectInvoice(payload: {
   // request ("Please enter a value for Amount"). If an item has no price
   // anywhere we surface a clear error instead of the cryptic NetSuite one.
   const missingRateIds = payload.lineItems
-    .filter((li) => !(li.rate > 0))
+    .filter((li) => !li.discountItem && !(li.rate > 0))
     .map((li) => li.itemId);
   const basePrices = missingRateIds.length > 0
     ? await getItemBasePrices(missingRateIds)
@@ -2471,6 +2475,14 @@ export async function createDirectInvoice(payload: {
 
   const noPriceItems: (string | number)[] = [];
   const items = payload.lineItems.map((li) => {
+    if (li.discountItem) {
+      return {
+        item: { id: li.itemId },
+        rate: li.rate,
+        ...(li.description ? { description: li.description } : {}),
+        ...nsLineTaxField(li),
+      };
+    }
     const rate = li.rate > 0 ? li.rate : basePrices[li.itemId?.toString()] || 0;
     if (!(rate > 0)) noPriceItems.push(li.itemId);
     return {
@@ -2486,6 +2498,7 @@ export async function createDirectInvoice(payload: {
       // Omit description when not provided so NetSuite falls back to the item
       // record's standard description instead of blanking the line.
       ...(li.description ? { description: li.description } : {}),
+      ...nsLineTaxField(li),
     };
   });
 

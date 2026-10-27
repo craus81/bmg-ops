@@ -206,6 +206,7 @@ export const MADE_FROM_TEXT: Readonly<Record<MadeFrom, string>> = {
   po: "a PO's open quantities",
   scans: 'the Scan Log',
   graphics: 'a graphics job',
+  typed: 'a new invoice typed in FleetSuite',
 };
 
 export const UNKNOWN_TEXT: Readonly<Record<Unknown, string>> = {
