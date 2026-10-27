@@ -10,7 +10,7 @@ import type { DashboardFocus } from '@/lib/dashboard-focus';
 export const MORE_GROUPS = [
   { id: 'sales', header: 'Sales' },
   { id: 'shop', header: 'Shop & Jobs' },
-  { id: 'purchasing', header: 'Purchasing & Receiving' },
+  { id: 'purchasing', header: 'Purchasing' },
   { id: 'parts', header: 'Parts & Inventory' },
   { id: 'money', header: 'Money & Books' },
   { id: 'cni', header: 'CNI Network' },

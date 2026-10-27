@@ -61,6 +61,12 @@ export default function MorePage() {
   const items: (Item & { group: MoreGroupId })[] = [
     { group: 'sales', title: 'Customers', sub: 'Customers & sales pipeline', path: '/admin/prospects', show: F('prospects') },
     { group: 'sales', title: 'Estimates', sub: 'Every estimate · build, chase follow-ups, mark won or lost', path: '/estimates', show: F('estimates') },
+    { group: 'sales', title: 'Sales Orders', sub: 'Every NetSuite sales order · open, billed or closed · open one to edit or invoice it', path: '/sales-orders', show: F('estimates') },
+    { group: 'sales', title: 'Invoices', sub: 'Every invoice · search, open the PDF, email, past due', path: '/invoices?tab=sent', show: F('invoicing') },
+    { group: 'sales', title: 'Ready to Invoice', sub: 'Finished graphics jobs and scanned vehicles waiting for an invoice', path: '/invoices', show: F('invoicing') },
+    { group: 'sales', title: 'New Invoice', sub: 'Pick a customer, type the lines and make a NetSuite invoice · no order needed', path: '/invoices/new', show: F('invoicing') },
+    { group: 'sales', title: 'Customer POs', sub: 'POs customers send us (Masterack and others) · import, match, invoice', path: '/admin/pos', show: F('purchase_orders') },
+    { group: 'sales', title: 'Unmatched Sales Orders', sub: 'NetSuite orders with no estimate · accept or reject the best guesses', path: '/admin/so-matches', show: F('quotes') },
     { group: 'sales', title: 'Pricing Requests', sub: 'Masterack pricing requests · pictures, notes, your price and the PO', path: '/pricing-requests', show: F('estimates') },
     { group: 'sales', title: 'Graphics Builder', sub: 'Measure a vehicle, draw the proof and price the graphics as an estimate', path: '/admin/wrap-quote', show: F('graphics_builder') },
     { group: 'sales', title: 'Upfit Designer', sub: 'Design a van upfit in 3D & turn it into an estimate', path: '/upfit-designer', show: F('upfit_configurator') },
@@ -75,8 +81,8 @@ export default function MorePage() {
     { group: 'shop', title: 'Client Files', sub: 'Every file in Dropbox › OFFICE › Clients · search, open or download', path: '/client-files', show: F('client_files') },
     { group: 'shop', title: 'Proof Search', sub: 'Find proof artwork in Dropbox by customer or part', path: '/admin/proof-search', show: F('proof_search') },
 
-    { group: 'purchasing', title: 'Purchasing', sub: 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering'), badge: badgeFor('purchase_requests') },
-    { group: 'purchasing', title: 'Purchase Orders', sub: 'Manage POs', path: '/admin/pos', show: F('purchase_orders') },
+    { group: 'purchasing', title: 'Purchase Requests', sub: 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering'), badge: badgeFor('purchase_requests') },
+    { group: 'purchasing', title: 'Purchase Orders', sub: 'Every vendor PO · + New PO, open, undo', path: '/admin/purchasing?tab=vendor-pos', show: F('parts_ordering') },
     { group: 'purchasing', title: 'Receiving', sub: 'Check arriving parts in against vendor POs · the badge counts receipts still to enter in NetSuite by hand', path: '/admin/receiving', show: F('parts_ordering'), badge: badgeFor('manual_receipts') },
     { group: 'purchasing', title: 'Parts Mail', sub: 'Incoming parts & ETAs vs. stock and job allocations', path: '/admin/parts-mail', show: F('upfit_projects') },
     { group: 'purchasing', title: 'Scan Log', sub: 'Review scans, match POs, export & invoice', path: '/admin/scans', show: F('reports') },
@@ -87,9 +93,6 @@ export default function MorePage() {
     { group: 'parts', title: 'Rack Kits', sub: 'How many of each rack kit we can build from the parts on the shelf', path: '/admin/inventory/rack-kits', show: F('parts_catalog') },
     { group: 'parts', title: 'Hitch Kits', sub: 'Labor hours, brake controllers and Curt fitment for the hitch kit builder', path: '/admin/inventory/hitch-kits', show: F('parts_catalog') },
 
-    { group: 'money', title: 'New invoice', sub: 'Pick a customer, type the lines and make a NetSuite invoice · no order needed', path: '/invoices/new', show: F('invoicing') },
-    { group: 'money', title: 'Invoicing', sub: 'Create & email NetSuite invoices from graphics production jobs and scans', path: '/invoices', show: F('invoicing') },
-    { group: 'money', title: 'Unmatched Sales Orders', sub: 'NetSuite orders with no estimate · accept or reject the best guesses', path: '/admin/so-matches', show: F('quotes') },
     { group: 'money', title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: F('vendor_payments') },
     { group: 'money', title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
     { group: 'money', title: 'Books', sub: 'FleetSuite’s own books · reports, accounts, trial balance & NetSuite lists', path: '/admin/books', show: hasRole('super_admin') },
