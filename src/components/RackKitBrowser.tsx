@@ -7,7 +7,7 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
 import { kitBuildableFor, loadKits, loadKitStock, type KitStock, type KitWithMembers } from '@/lib/part-kits';
 import { rackBaseNumber, rackFacets, rackMatchesSearch, type RackFacets } from '@/lib/rack-kit-facets';
-import type { AddonLine } from '@/lib/rack-picker';
+import { rackVehicleFor, type AddonLine, type EstimateRackVehicle } from '@/lib/rack-picker';
 import RackStepPicker from '@/components/RackStepPicker';
 
 /**
@@ -31,16 +31,18 @@ interface Row {
   photo: string | null;
 }
 
-export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice }: {
+export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice, initialVehicle = '' }: {
   onAdd?: (kit: KitWithMembers) => void;
   addLabel?: string;
   showPrice: boolean;
+  /** Vehicle filter to open on (the estimate's van). */
+  initialVehicle?: string;
 }) {
   const [kits, setKits] = useState<KitWithMembers[] | null>(null);
   const [stock, setStock] = useState<Map<string, KitStock> | null>(null);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
-  const [vehicle, setVehicle] = useState('');
+  const [vehicle, setVehicle] = useState(initialVehicle);
   const [line, setLine] = useState('');
   const [finish, setFinish] = useState('');
   const [style, setStyle] = useState('');
@@ -270,12 +272,16 @@ export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice
  * Rack kits list). "Build a rack" walks the kits a step at a time
  * (RackStepPicker); "Search all racks" is the full list with filters.
  */
-export function RackKitBrowserModal({ open, onClose, onAdd, onAddBuilt, showPrice }: {
+export function RackKitBrowserModal({ open, onClose, onAdd, onAddBuilt, onAddLines, showPrice, vehicle }: {
   open: boolean;
   onClose: () => void;
   onAdd: (kit: KitWithMembers) => void;
   onAddBuilt: (kit: KitWithMembers, kitName: string, addons: AddonLine[]) => void;
+  /** A Topper rack (one part) and its add-ons. */
+  onAddLines: (lines: AddonLine[]) => void;
   showPrice: boolean;
+  /** The estimate's vehicle, which both tabs start from. */
+  vehicle?: EstimateRackVehicle | null;
 }) {
   const [tab, setTab] = useState<'build' | 'search'>('build');
   if (!open) return null;
@@ -299,8 +305,8 @@ export function RackKitBrowserModal({ open, onClose, onAdd, onAddBuilt, showPric
         </div>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '14px 16px' }}>
           {tab === 'build'
-            ? <RackStepPicker onAdd={onAddBuilt} showPrice={showPrice} />
-            : <RackKitBrowser onAdd={onAdd} showPrice={showPrice} />}
+            ? <RackStepPicker onAdd={onAddBuilt} onAddLines={onAddLines} showPrice={showPrice} vehicle={vehicle} />
+            : <RackKitBrowser onAdd={onAdd} showPrice={showPrice} initialVehicle={rackVehicleFor(vehicle) || ''} />}
         </div>
       </div>
     </div>
