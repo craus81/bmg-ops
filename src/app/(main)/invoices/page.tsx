@@ -633,6 +633,10 @@ export default function InvoicingHubPage() {
         </div>
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
           <button
+            onClick={() => router.push('/invoices/new')}
+            style={smallBtn('#22c55e', 'rgba(34,197,94,0.10)', 'rgba(34,197,94,0.35)')}
+          >+ New invoice</button>
+          <button
             onClick={() => router.push('/invoices/past-due')}
             style={smallBtn('#f87171', 'rgba(239,68,68,0.08)', 'rgba(239,68,68,0.25)')}
           >Past Due →</button>

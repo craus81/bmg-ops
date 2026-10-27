@@ -87,6 +87,7 @@ export default function MorePage() {
     { group: 'parts', title: 'Rack Kits', sub: 'How many of each rack kit we can build from the parts on the shelf', path: '/admin/inventory/rack-kits', show: F('parts_catalog') },
     { group: 'parts', title: 'Hitch Kits', sub: 'Labor hours, brake controllers and Curt fitment for the hitch kit builder', path: '/admin/inventory/hitch-kits', show: F('parts_catalog') },
 
+    { group: 'money', title: 'New invoice', sub: 'Pick a customer, type the lines and make a NetSuite invoice · no order needed', path: '/invoices/new', show: F('invoicing') },
     { group: 'money', title: 'Invoicing', sub: 'Create & email NetSuite invoices from graphics production jobs and scans', path: '/invoices', show: F('invoicing') },
     { group: 'money', title: 'Unmatched Sales Orders', sub: 'NetSuite orders with no estimate · accept or reject the best guesses', path: '/admin/so-matches', show: F('quotes') },
     { group: 'money', title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: F('vendor_payments') },

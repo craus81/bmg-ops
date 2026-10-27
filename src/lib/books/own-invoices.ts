@@ -49,7 +49,7 @@ export const OWN_TAX_RULE = 'tax@1';
 /** The company FleetSuite makes its invoices for, so the one its own copies are of. */
 export const OWN_COMPANY: BooksCompany = 'BMG';
 
-export type MadeFrom = 'vehicle' | 'sales_order' | 'po' | 'scans' | 'graphics';
+export type MadeFrom = 'vehicle' | 'sales_order' | 'po' | 'scans' | 'graphics' | 'typed';
 export type TaxBasis = 'rate' | 'exempt_customer' | 'georgia';
 export type Unknown = 'lines' | 'customer' | 'terms' | 'prices' | 'location';
 
