@@ -127,13 +127,14 @@ export const deepLinks = {
   wrapQuotePdf: (quoteId: string) => `/api/wrap-quote/${quoteId}/pdf`,
   /** Install guide editor — the dimensioned placement guide record page. */
   installGuide: (guideId: string) => `/graphics/install-guides/${guideId}`,
-  /** Combined quotes list — optionally scroll-flashes one quote's row
-   *  (the page switches to the filter holding it). This is where Log
-   *  Follow-Up / Won / Lost live, so quote-followup notifications land
-   *  here, on the exact row they're about. The old
-   *  /admin/quote-followups URL redirects here with params intact. */
+  /** The Estimates list (Quotes was folded into it, 2026-10-27) —
+   *  optionally scroll-flashes one quote's row (the list switches to the
+   *  filter holding it); with no quote, the "Waiting on customer" filter.
+   *  This is where Log Follow-Up / Won / Lost live, so quote-followup
+   *  notifications land here, on the exact row they're about. The old
+   *  /quotes and /admin/quote-followups URLs redirect here. */
   quoteFollowUps: (type?: 'estimate' | 'wrap', quoteId?: string) =>
-    `/quotes${type && quoteId ? `?item=${type}-${quoteId}` : ''}`,
+    `/estimates${type && quoteId ? `?item=${type}-${quoteId}` : '?status=sent'}`,
   /** AP queue — jumps to the vendor invoice's status tab and highlights it. */
   apInvoice: (invoiceId: string) => `/admin/ap?invoice=${invoiceId}`,
   /** Installer portal invoice list — expands and scrolls to the invoice. */
