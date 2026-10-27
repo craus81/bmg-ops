@@ -6,21 +6,25 @@ import { loadKits, type KitWithMembers } from '@/lib/part-kits';
 import {
   addonLines, addonPicks, addonPrice, builtRackName, chosenRack, CURB_CLAMP, EMPTY_CHOICE, fitsFor, loadAddonParts,
   pairsFor, pickerRacks, racksForFit, SIDE_HINT, SIDE_LABEL, sideOffered, STREET_CLAMP, TIE_DOWN, vehiclesFor,
-  ADDON_LABOR_HOURS, type AddonLine, type AddonPart, type ClampChoice, type PickerChoice, type RackSide,
+  ADDON_LABOR_HOURS, estimateFitText, estimateFits, isPickup, noKitNote, PICKUP_RACK_VEHICLES, rackVehicleFor,
+  type AddonLine, type AddonPart, type ClampChoice, type EstimateRackVehicle, type PickerChoice, type PickerRack, type RackSide,
 } from '@/lib/rack-picker';
 
 /**
  * Build a rack, one step at a time (src/lib/rack-picker.ts). Every option
- * that isn't a real Prime/Ranger kit is greyed out.
+ * that isn't a real Prime/Ranger kit is greyed out. It starts from the
+ * estimate's vehicle: after the rack line it lands on the vehicle and, when
+ * the roof / wheelbase / bed pin it down, the fit.
  */
 
 const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 interface Opt<V> { value: V; title: string; sub?: string; on: boolean; off?: boolean }
 
-export default function RackStepPicker({ onAdd, showPrice }: {
+export default function RackStepPicker({ onAdd, showPrice, vehicle }: {
   onAdd: (kit: KitWithMembers, kitName: string, addons: AddonLine[]) => void;
   showPrice: boolean;
+  vehicle?: EstimateRackVehicle | null;
 }) {
   const [kits, setKits] = useState<KitWithMembers[] | null>(null);
   const [addonParts, setAddonParts] = useState<Map<string, AddonPart>>(new Map());
@@ -51,6 +55,23 @@ export default function RackStepPicker({ onAdd, showPrice }: {
 
   const pick = (patch: Partial<PickerChoice>) => { setC(prev => ({ ...prev, ...patch })); setOpen(null); setAdded(''); };
 
+  // The estimate's vehicle: the fit (and a lone finish) it pins down, if any.
+  const ownVehicle = rackVehicleFor(vehicle);
+  const landFit = (line: PickerChoice['line'], v: string | null): Pick<PickerChoice, 'fit' | 'finish'> => {
+    const ef = estimateFits(racks, line, v, vehicle);
+    if (ef.length !== 1) return { fit: null, finish: null };
+    const finishes = [...new Set(racks.filter(r => r.line === line && r.vehicle === v && r.fit === ef[0]).map(r => r.finish))];
+    return { fit: ef[0], finish: finishes.length === 1 ? finishes[0] : null };
+  };
+  const landLine = (line: 'ErgoRack' | 'AluRack'): Partial<PickerChoice> => {
+    if (!ownVehicle || !vehiclesFor(racks, line).includes(ownVehicle)) return {};
+    return { vehicle: ownVehicle, ...landFit(line, ownVehicle) };
+  };
+  const vehicleMatches = (v: string) => v === ownVehicle || (isPickup(vehicle) && PICKUP_RACK_VEHICLES.includes(v));
+  const suggested = new Set(estimateFits(racks, c.line, c.vehicle, vehicle));
+  const note = noKitNote(racks, c.line, c.vehicle, vehicle);
+  const first = <T,>(list: T[], hit: (x: T) => boolean) => [...list.filter(hit), ...list.filter(x => !hit(x))];
+
   const optStyle = (o: Opt<unknown>): React.CSSProperties => ({
     display: 'flex', flexDirection: 'column', gap: '1px', textAlign: 'left', minWidth: 0,
     padding: '8px 12px', borderRadius: '8px', cursor: o.off ? 'not-allowed' : 'pointer',
@@ -78,20 +99,27 @@ export default function RackStepPicker({ onAdd, showPrice }: {
     body: () => options<'ErgoRack' | 'AluRack'>([
       { value: 'ErgoRack', title: 'ErgoRack', sub: 'Drop-down ladder rack, 2 or 3 crossbars', on: c.line === 'ErgoRack' },
       { value: 'AluRack', title: 'AluRack', sub: 'Aluminum cargo rack with side rails', on: c.line === 'AluRack' },
-    ], v => pick({ ...EMPTY_CHOICE, line: v })),
+    ], v => pick({ ...EMPTY_CHOICE, line: v, ...landLine(v) })),
   });
   steps.push({
     id: 'vehicle', label: 'Vehicle', value: c.vehicle, reachable: !!c.line,
-    body: () => options(vehiclesFor(racks, c.line).map(v => ({
-      value: v, title: v, sub: `${fitsFor(racks, c.line, v).length} fit${fitsFor(racks, c.line, v).length === 1 ? '' : 's'}`, on: c.vehicle === v,
-    })), v => pick({ vehicle: v, fit: null, street: null, curb: null, finish: null, bars: 2 })),
+    body: () => options(first(vehiclesFor(racks, c.line), vehicleMatches).map(v => ({
+      value: v, title: v, on: c.vehicle === v,
+      sub: [
+        `${fitsFor(racks, c.line, v).length} fit${fitsFor(racks, c.line, v).length === 1 ? '' : 's'}`,
+        vehicleMatches(v) ? (v === ownVehicle ? 'from the estimate' : 'the estimate has a pickup') : '',
+      ].filter(Boolean).join(' · '),
+    })), v => pick({ vehicle: v, street: null, curb: null, bars: 2, ...landFit(c.line, v) })),
   });
   const fits = fitsFor(racks, c.line, c.vehicle);
   const fitNow = fits.find(f => f.fit === c.fit);
   steps.push({
     id: 'fit', label: c.line === 'AluRack' ? 'Roof / length' : 'Roof / crossbar size',
     value: fitNow ? [fitNow.fitLabel, fitNow.fitSub].filter(Boolean).join(' · ') : null, reachable: !!c.vehicle,
-    body: () => options(fits.map(f => ({ value: f.fit, title: f.fitLabel, sub: f.fitSub, on: c.fit === f.fit })), v => {
+    body: () => options(first(fits, (f: PickerRack) => suggested.has(f.fit)).map(f => ({
+      value: f.fit, title: f.fitLabel, on: c.fit === f.fit,
+      sub: [f.fitSub, suggested.has(f.fit) && fits.length > 1 ? 'matches the estimate' : ''].filter(Boolean).join(' · '),
+    })), v => {
       const finishes = [...new Set(racks.filter(r => r.line === c.line && r.vehicle === c.vehicle && r.fit === v).map(r => r.finish))];
       pick({ fit: v, street: null, curb: null, bars: 2, finish: finishes.length === 1 ? finishes[0] : null });
     }),
@@ -185,8 +213,15 @@ export default function RackStepPicker({ onAdd, showPrice }: {
   if (error) return <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'rgba(248,113,113,0.1)', color: '#f87171', fontSize: '12px' }}>{error}</div>;
   if (kits === null) return <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '20px 0' }}>Loading rack kits…</div>;
 
+  const fromText = vehicle?.label ? [vehicle.label, estimateFitText(vehicle)].filter(Boolean).join(' · ') : '';
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+        {fromText
+          ? <>From the estimate: <b>{fromText}</b>{isPickup(vehicle) && c.line ? <> · pick cap or open bed</> : null}</>
+          : 'No vehicle on the estimate yet. Pick it below.'}
+      </div>
+      {note && <div style={{ color: '#f87171', fontSize: '12px', fontWeight: 700 }}>{note}</div>}
       <div style={{ border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden' }}>
         {steps.map((s, i) => {
           const isOpen = s.id === active && s.reachable;

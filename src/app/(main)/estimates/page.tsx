@@ -7606,7 +7606,24 @@ export default function EstimatesPage() {
       )}
 
       {/* Rack kit browser — Add rack drops the kit in with its components */}
-      <RackKitBrowserModal open={showRackKits} onClose={() => setShowRackKits(false)} onAdd={addKitLines} onAddBuilt={addBuiltRackLines} showPrice />
+      <RackKitBrowserModal
+        open={showRackKits}
+        onClose={() => setShowRackKits(false)}
+        onAdd={addKitLines}
+        onAddBuilt={addBuiltRackLines}
+        showPrice
+        vehicle={{
+          platformKey: selectedPlatform?.key || null,
+          bodyType: selectedPlatform?.body_type || null,
+          label: (() => {
+            const name = vehicleMake && vehicleModel ? `${vehicleMake} ${vehicleModel}` : selectedPlatform?.label || vehicleOther;
+            return name ? [vehicleYear, name].filter(Boolean).join(' ') : '';
+          })(),
+          roof: vehicleRoof,
+          wheelbase: vehicleWheelbase,
+          bed: vehicleBed,
+        }}
+      />
       <HitchKitBuilderModal
         open={showHitchKits}
         onClose={() => setShowHitchKits(false)}

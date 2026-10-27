@@ -4,7 +4,7 @@ import { join } from 'path';
 import type { KitWithMembers } from './part-kits';
 import {
   addonLines, addonPicks, aluRackFit, builtRackName, chosenRack, EMPTY_CHOICE, fitsFor, pairsFor, pickerRacks,
-  sideOffered, sidePair, vehiclesFor, type AddonPart, type PickerChoice,
+  sideOffered, sidePair, vehiclesFor, estimateFits, noKitNote, rackVehicleFor, type AddonPart, type PickerChoice,
 } from './rack-picker';
 
 // The real Prime/Ranger kits, read from the migration that loads them.
@@ -95,5 +95,50 @@ describe('AluRack', () => {
     expect(lines.every(l => !('kit_group_id' in l))).toBe(true);
     expect(addonPicks('none', 0)).toEqual([]);
     expect(addonPicks('curb', -2).map(p => p.addon.item_number)).toEqual(['AXC']);
+  });
+});
+
+describe('estimate vehicle', () => {
+  const van = (platformKey: string, wheelbase = '', roof = '') =>
+    ({ platformKey, bodyType: 'van' as const, label: 'x', wheelbase, roof, bed: '' });
+  const truck = (bed: string) => ({ platformKey: 'f-150', bodyType: 'truck' as const, label: 'x', wheelbase: '', roof: '', bed });
+  const labels = (line: 'ErgoRack' | 'AluRack', vehicle: string, v: Parameters<typeof estimateFits>[3]) =>
+    estimateFits(racks, line, vehicle, v).map(f => fitsFor(racks, line, vehicle).find(x => x.fit === f)!.fitLabel);
+
+  it('maps vans to the picker vehicle and pickups to none', () => {
+    expect(rackVehicleFor(van('transit'))).toBe('Ford Transit');
+    expect(rackVehicleFor(van('express-savana'))).toBe('Chevy Express / GMC Savana');
+    expect(rackVehicleFor(truck('6.5'))).toBeNull();
+    expect(vehiclesFor(racks, 'AluRack')).toContain('Ford Transit');
+  });
+
+  it('lands an AluRack Transit on its L#H#', () => {
+    expect(labels('AluRack', 'Ford Transit', van('transit', '148', 'high'))).toEqual(['L3H3']);
+    expect(labels('AluRack', 'Ford Transit', van('transit', '130', 'low'))).toEqual(['L2H1']);
+    expect(labels('AluRack', 'Ford Transit', van('transit', '', 'high')).sort()).toEqual(['L3H3', 'L4H3']);
+    expect(labels('AluRack', 'Ram ProMaster', van('promaster', '159 EXT', 'high'))).toEqual(['L5H2']);
+    expect(labels('AluRack', 'Mercedes Sprinter', van('sprinter', '170', 'high'))).toEqual(['L3H2 / L4H2']);
+    expect(estimateFits(racks, 'AluRack', 'Ford Transit', van('transit'))).toEqual([]);
+  });
+
+  it('lands an ErgoRack Transit by roof, and leaves a Sprinter to ask', () => {
+    expect(labels('ErgoRack', 'Ford Transit', van('transit', '148', 'low'))).toEqual(['Low roof']);
+    expect(labels('ErgoRack', 'Ford Transit', van('transit', '148', 'medium'))).toEqual(['Medium / high roof']);
+    expect(estimateFits(racks, 'ErgoRack', 'Mercedes Sprinter', van('sprinter', '144', 'high'))).toEqual([]);
+    expect(noKitNote(racks, 'ErgoRack', 'Mercedes Sprinter', van('sprinter', '144', 'high'))).toBe('');
+  });
+
+  it('matches a pickup cap by bed length', () => {
+    expect(new Set(labels('ErgoRack', 'Pickup cap', truck('6.5')))).toEqual(new Set(['6 ft bed'])); // 62 and 68 in crossbars
+    expect(new Set(labels('ErgoRack', 'Pickup cap', truck('8')))).toEqual(new Set(['8 ft bed']));
+    expect(estimateFits(racks, 'AluRack', 'Pickup cap', truck('6.5')).sort()).toEqual(['AR1205-S', 'AR1213']);
+    expect(estimateFits(racks, 'AluRack', 'Pickup cap', truck('4.5'))).toEqual(['AR1215']);
+  });
+
+  it('says so in red when there is no kit', () => {
+    expect(noKitNote(racks, 'ErgoRack', null, van('metris'))).toMatch(/No ErgoRack kit for a Mercedes Metris/);
+    expect(noKitNote(racks, 'ErgoRack', 'Ram ProMaster', van('promaster', '136', 'low'))).toMatch(/No ErgoRack kit for the estimate's Ram ProMaster/);
+    expect(noKitNote(racks, 'ErgoRack', 'Ram ProMaster', van('promaster', '136', 'high'))).toBe('');
+    expect(noKitNote(racks, 'AluRack', 'Ford Transit', van('transit', '148', 'high'))).toBe('');
   });
 });

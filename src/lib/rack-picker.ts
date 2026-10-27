@@ -266,3 +266,120 @@ export function addonLines(picks: { addon: RackAddon; quantity: number }[], part
     };
   });
 }
+
+// ── The estimate's vehicle (Craig 2026-10-26) ───────────────────────────
+// The picker starts from the vehicle already on the estimate: once the
+// rack line is picked it lands on the vehicle and, when the estimate's
+// roof / wheelbase / bed narrow it to one, the fit. A pickup asks cap or
+// open bed (the estimate doesn't say), and a Sprinter ErgoRack asks
+// whether the van has the factory roof channel. When there's no kit for
+// the vehicle the picker says so in red and leaves the choice to hand.
+
+export interface EstimateRackVehicle {
+  /** vehicle_platforms.key, e.g. 'transit'. */
+  platformKey: string | null;
+  bodyType: 'van' | 'truck' | 'other' | null;
+  /** What the estimate shows, e.g. "2024 Ford Transit". */
+  label: string;
+  roof: string;
+  wheelbase: string;
+  bed: string;
+}
+
+const PLATFORM_RACK_VEHICLE: Record<string, string> = {
+  transit: 'Ford Transit',
+  'transit-connect': 'Ford Transit Connect',
+  promaster: 'Ram ProMaster',
+  'promaster-city': 'Ram ProMaster City',
+  sprinter: 'Mercedes Sprinter',
+  metris: 'Mercedes Metris',
+  'express-savana': 'Chevy Express / GMC Savana',
+  'city-express': 'Nissan NV200',
+};
+
+export const PICKUP_RACK_VEHICLES = ['Pickup cap', 'Pickup, open bed'];
+
+/** The picker's vehicle for a van on the estimate; null for a pickup or none. */
+export const rackVehicleFor = (v: EstimateRackVehicle | null | undefined): string | null =>
+  (v?.platformKey && PLATFORM_RACK_VEHICLE[v.platformKey]) || null;
+
+export const isPickup = (v: EstimateRackVehicle | null | undefined) => v?.bodyType === 'truck';
+
+/** "148 · high roof" — the parts of the estimate's vehicle the fit reads. */
+export function estimateFitText(v: EstimateRackVehicle | null | undefined): string {
+  if (!v) return '';
+  const wb = v.wheelbase && (/^\d/.test(v.wheelbase) ? `${v.wheelbase} wheelbase` : v.wheelbase);
+  return [wb, v.roof && `${v.roof} roof`, v.bed && `${v.bed} ft bed`].filter(Boolean).join(' · ');
+}
+
+// AluRack L#H# codes per platform: wheelbase → L, roof → H.
+const LENGTH_CODE: Record<string, Record<string, string>> = {
+  transit: { '130': 'L2', '148': 'L3', '148 EL': 'L4' },
+  promaster: { '118': 'L1', '136': 'L2', '159': 'L4', '159 EXT': 'L5' },
+  sprinter: { '144': 'L2', '170': 'L3', '170 EXT': 'L4' },
+  'transit-connect': { SWB: 'L1', LWB: 'L2' },
+  metris: { '126': 'L2', '135': 'L3' },
+};
+const HEIGHT_CODE: Record<string, Record<string, string>> = {
+  transit: { low: 'H1', medium: 'H2', high: 'H3' },
+  promaster: { low: 'H1', high: 'H2', 'super high': 'H3' },
+  sprinter: { standard: 'H1', high: 'H2' },
+};
+
+/** Feet a pickup fit is for, from "5 ft bed", "6.5 FT", "5-6 FT", "4.5 - 5 FT". */
+function fitFeet(r: PickerRack): number | null {
+  const text = r.line === 'ErgoRack' ? r.fitLabel : `${r.kit.description || ''} ${r.kit.name}`;
+  const m = text.match(/(\d+(?:\.\d+)?)(?:\s*-\s*(\d+(?:\.\d+)?))?\s*ft/i);
+  if (!m) return null;
+  const lo = Number(m[1]);
+  const hi = m[2] ? Number(m[2]) : lo;
+  return (lo + hi) / 2;
+}
+
+/**
+ * The fits that match the estimate's roof / wheelbase / bed, in the
+ * picker's order. Empty when the estimate doesn't narrow it (no roof
+ * known, a Sprinter's roof channel) or nothing fits.
+ */
+export function estimateFits(racks: PickerRack[], line: PickerChoice['line'], vehicle: string | null, v: EstimateRackVehicle | null | undefined): string[] {
+  const fits = fitsFor(racks, line, vehicle);
+  if (!v || !vehicle) return [];
+  // ErgoRack's ProMaster kit is high roof only.
+  if (line === 'ErgoRack' && v.platformKey === 'promaster' && v.roof && v.roof.toLowerCase() !== 'high') return [];
+  if (fits.length === 1) return [fits[0].fit];
+  if (PICKUP_RACK_VEHICLES.includes(vehicle)) {
+    const bed = parseFloat(v.bed);
+    if (!bed) return [];
+    const scored = fits.map(f => ({ f, d: (() => { const ft = fitFeet(f); return ft == null ? Infinity : Math.abs(ft - bed); })() }));
+    const best = Math.min(...scored.map(s => s.d));
+    return best <= 1 ? scored.filter(s => s.d === best).map(s => s.f.fit) : [];
+  }
+  const key = v.platformKey || '';
+  if (line === 'ErgoRack') {
+    const roof = v.roof.toLowerCase();
+    if (!roof) return [];
+    if (key === 'transit') return fits.filter(f => f.fit === (roof === 'low' ? 'FT-78' : 'FT-72')).map(f => f.fit);
+    if (key === 'promaster') return roof === 'high' ? fits.filter(f => f.fit.startsWith('PM-')).map(f => f.fit) : [];
+    return [];
+  }
+  const L = LENGTH_CODE[key]?.[v.wheelbase] || '';
+  const H = HEIGHT_CODE[key]?.[v.roof.toLowerCase()] || (key === 'transit-connect' || key === 'metris' ? 'H1' : '');
+  if (!L && !H) return [];
+  return fits.filter(f => {
+    const codes = f.fitLabel.toUpperCase().match(/L\dH\d/g) || [];
+    return codes.some(c => (!L || c.startsWith(L)) && (!H || c.endsWith(H)));
+  }).map(f => f.fit);
+}
+
+/** Red note when the estimate's vehicle has no kit at this step, else ''. */
+export function noKitNote(racks: PickerRack[], line: PickerChoice['line'], vehicle: string | null, v: EstimateRackVehicle | null | undefined): string {
+  if (!line || !v) return '';
+  const own = rackVehicleFor(v);
+  if (own && !vehiclesFor(racks, line).includes(own)) return `No ${line} kit for a ${own}. Pick the vehicle by hand.`;
+  if (!vehicle || vehicle !== own) return '';
+  const known = line === 'ErgoRack' ? !!v.roof : !!(v.roof || v.wheelbase);
+  // A Sprinter ErgoRack is picked by roof channel, which the estimate doesn't know.
+  if (!known || (line === 'ErgoRack' && !['transit', 'promaster'].includes(v.platformKey || ''))) return '';
+  if (estimateFits(racks, line, vehicle, v).length) return '';
+  return `No ${line} kit for the estimate's ${own} (${estimateFitText(v)}). Pick the closest fit by hand.`;
+}
