@@ -50,8 +50,11 @@ const STATUS_COLORS: Record<string, string> = {
 const money = (v: number | null | undefined) =>
   `$${Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
 
+/** The part fields an estimate line needs — any catalog part row fits. */
+export type AddToEstimatePart = Pick<BrowsePart, 'id' | 'netsuite_id' | 'item_number' | 'display_name' | 'description' | 'sales_price' | 'labor_hours'>;
+
 export default function AddToEstimateModal({ part, kit, onClose }: {
-  part?: BrowsePart;
+  part?: AddToEstimatePart;
   kit?: KitWithMembers;
   onClose: () => void;
 }) {
