@@ -6,6 +6,7 @@ import { useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { ensureScheme } from '@/lib/vendor-catalog-import';
+import BuyersCatalogPhotos from '@/components/BuyersCatalogPhotos';
 
 /**
  * Admin front-end for /api/parts/import-vendor-assets (N4-A): pull product
@@ -411,6 +412,8 @@ export default function ImportVendorAssetsPage() {
         so the estimate browser looks like the vendor&apos;s own site. Matching is by exact part number (SKU), so the worst case
         is &quot;no match&quot;, never a wrong photo. Works for any vendor whose parts we carry (Ranger Design, Masterack, …).
       </p>
+
+      <BuyersCatalogPhotos />
 
       {/* Saved imports — load a recipe (site + teach URLs + vendor tag) and
           its cached page list, then jump straight to Run. */}
