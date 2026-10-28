@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { requireAdmin } from '@/lib/api-auth';
+import { requireAdmin, getProfileRoles } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { deepLinks, inviteLinkFrom } from '@/lib/deep-links';
+import { appStoreEmailBlock, usesStaffApp } from '@/lib/app-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +23,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = await validateBody(req, ResendInviteSchema);
   if (parsed.error) return parsed.error;
-  const { email, fullName } = parsed.data;
+  const { userId, email, fullName } = parsed.data;
 
   try {
 
@@ -45,6 +46,13 @@ export async function POST(req: NextRequest) {
       inviteLink = inviteLinkFrom(linkData, appUrl, '/home') || inviteLink;
     } catch (linkErr: any) {
       return NextResponse.json({ error: 'Magic link generation error: ' + linkErr.message }, { status: 500 });
+    }
+
+    // Staff get the "Get the iPhone app" block; customer-portal-only accounts don't.
+    let withApp = true;
+    if (userId) {
+      const { data: profile } = await supabase.from('profiles').select('role, roles').eq('id', userId).maybeSingle();
+      if (profile) withApp = usesStaffApp(getProfileRoles(profile));
     }
 
     // Send the invite email
@@ -75,6 +83,7 @@ export async function POST(req: NextRequest) {
                 This link expires in 24 hours. If it doesn't work, ask your admin for a new one.
               </p>
             </div>
+            ${withApp ? appStoreEmailBlock(appUrl) : ''}
 
             <div style="text-align: center; font-size: 11px; color: #e8f0f8;">
               BMG Fleet Graphics &amp; Upfitting

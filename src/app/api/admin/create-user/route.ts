@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin, getProfileRoles } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { deepLinks, inviteLinkFrom } from '@/lib/deep-links';
+import { appStoreEmailBlock, usesStaffApp } from '@/lib/app-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +30,7 @@ const supabase = createServiceClient();
 
 const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://go.bmgfleet.com';
 
-function buildInviteEmailHtml(fullName: string, email: string, password: string, inviteLink: string): string {
+function buildInviteEmailHtml(fullName: string, email: string, password: string, inviteLink: string, withApp: boolean): string {
   return `
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; background: #0a1017; color: #f5f8fc; padding: 32px; border-radius: 16px;">
       <div style="text-align: center; margin-bottom: 24px;">
@@ -61,6 +62,7 @@ function buildInviteEmailHtml(fullName: string, email: string, password: string,
           We recommend changing your password after your first login.
         </p>
       </div>
+      ${withApp ? appStoreEmailBlock(appUrl) : ''}
 
       <div style="text-align: center; margin-top: 20px; font-size: 11px; color: #e8f0f8;">
         BMG Fleet Graphics &amp; Upfitting
@@ -159,7 +161,7 @@ export async function POST(req: NextRequest) {
         emailSent = await sendEmail(
           email,
           'Welcome to FleetSuite — Your Account is Ready',
-          buildInviteEmailHtml(fullName, email, password, inviteLink),
+          buildInviteEmailHtml(fullName, email, password, inviteLink, usesStaffApp(userRoles)),
           undefined,
           undefined,
           undefined,

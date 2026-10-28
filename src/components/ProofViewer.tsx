@@ -387,6 +387,9 @@ export default function ProofViewer({ url, loadFile, filename, noun = 'proof', d
       // Portal events still bubble up the React tree; keep taps in here from
       // reaching the vehicle window's handlers.
       onClick={(e) => e.stopPropagation()}
+      // .proof-viewer: on the iPhone Duo the bar and buttons step left of
+      // Apple's clock/camera bubble (globals.css).
+      className="proof-viewer"
       style={{
         position: 'fixed', inset: 0, zIndex: 3000, background: '#111',
         display: 'flex', flexDirection: 'column',

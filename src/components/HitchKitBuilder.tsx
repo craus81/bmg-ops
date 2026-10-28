@@ -65,6 +65,8 @@ function HitchKitBuilder({ platformId, vehicleYear, laborRate, showPrice, onAdd 
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [error, setError] = useState('');
   const [platformKey, setPlatformKey] = useState('');
+  // What the estimate's vehicle came to: picked, not one Curt lists, or none.
+  const [fromEstimate, setFromEstimate] = useState<'picked' | 'unlisted' | 'none'>('none');
   const [year, setYear] = useState<number>(() => {
     const y = parseInt(vehicleYear, 10);
     return y >= 1990 && y <= 2100 ? y : new Date().getFullYear();
@@ -89,8 +91,9 @@ function HitchKitBuilder({ platformId, vehicleYear, laborRate, showPrice, onAdd 
         const keys = new Set(d.fitment.map(f => f.platform_key));
         const list = ((p.data || []) as Platform[]).filter(x => keys.has(x.key));
         setPlatforms(list);
-        const fromEstimate = list.find(x => x.id === platformId);
-        setPlatformKey(fromEstimate?.key || '');
+        const own = list.find(x => x.id === platformId);
+        setPlatformKey(own?.key || '');
+        setFromEstimate(own ? 'picked' : platformId ? 'unlisted' : 'none');
       })
       .catch(e => { if (live) setError(e?.message || 'Could not load the hitch parts'); });
     return () => { live = false; };
@@ -233,6 +236,9 @@ function HitchKitBuilder({ platformId, vehicleYear, laborRate, showPrice, onAdd 
           </div>
         </div>
 
+        {fromEstimate === 'picked' && <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{/^\d{4}$/.test(vehicleYear.trim()) ? 'Vehicle and year from the estimate. Change them here if they\'re wrong.' : 'Vehicle from the estimate. The estimate has no year, so check the year.'}</div>}
+        {fromEstimate === 'unlisted' && <div style={{ fontSize: '12px', fontWeight: 700, color: RED }}>Curt doesn&apos;t list hitches for the estimate&apos;s vehicle. Pick the vehicle by hand.</div>}
+        {fromEstimate === 'none' && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No vehicle on the estimate yet.</div>}
         {!platformKey && <div style={{ color: 'var(--text-muted)', fontSize: '13px', padding: '12px 0' }}>Pick the vehicle to see the hitches that fit it.</div>}
 
         {options && (
