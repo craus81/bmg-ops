@@ -7,7 +7,7 @@ import { reconcileLinkedWrapQuotes } from '@/lib/wrap-quote-reconcile';
 import { sendEmailDetailed, repFromName } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { sendSMS } from '@/lib/sms-provider';
-import { renderEstimateDocument, type FleetDocVehicle } from '@/lib/estimate-document';
+import { renderEstimateDocument, renderEstimateBatchDocument, vehicleDescription, type FleetDocVehicle, type BatchDocEstimate } from '@/lib/estimate-document';
 import { getEmailSignature } from '@/lib/email-signature';
 import { enrichLinesWithPartAssets } from '@/lib/estimate-line-parts';
 import { loadEstimateGraphics, loadEstimateProofs, proofBlocksForEmail, type EstimateProofBlock } from '@/lib/estimate-graphics';
@@ -26,6 +26,7 @@ import { notify, notifyMany, getSuperAdminIds } from '@/lib/notify';
 import { enforceCustomerHold } from '@/lib/customer-hold-server';
 import { fleetMembers, compareUnits } from '@/lib/estimate-fleet';
 import { estimateIsLocked } from '@/lib/estimate-copy';
+import { estimateCustomerKey, MAX_BATCH_ESTIMATES } from '@/lib/estimate-batch';
 import { randomUUID } from 'crypto';
 
 // R3-22: proof images are presigned at the 7-day SigV4 maximum. Only the
@@ -80,6 +81,13 @@ const SendForApprovalSchema = z.object({
   // keeps its own token and approval; the email lists them all and links
   // the order's approval page. Ignored for an estimate with no order.
   fleet: z.boolean().optional().default(false),
+  // Several of the same customer's estimates picked on the Estimates list
+  // (Craig, 2026-10-28): these go in the same email as this one, sent the
+  // way a fleet order is (one token each, a shared batch id, the
+  // approve-all page), but listed as separate estimates, not as the same
+  // build on several vehicles. Every one must be for this estimate's
+  // customer and still open for approval. Takes the place of `fleet`.
+  alsoIds: z.array(z.string().uuid()).max(MAX_BATCH_ESTIMATES - 1).optional(),
 });
 
 /**
@@ -257,10 +265,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   // The other vehicles of a fleet order going in this same email, and every
   // vehicle in unit order. With none open, this is an ordinary single send.
-  const siblings = body.fleet && estimate.fleet_group_id ? await sendableSiblings(estimate) : [];
+  // Or, picked on the Estimates list, the customer's other estimates in
+  // the order picked.
+  const alsoIds = [...new Set((body.alsoIds || []).filter(id => id !== estimate.id))];
+  let siblings: any[];
+  if (alsoIds.length > 0) {
+    const picked = await batchSiblings(estimate, alsoIds);
+    if ('error' in picked) return NextResponse.json({ error: picked.error }, { status: 400 });
+    siblings = picked.rows;
+  } else {
+    siblings = body.fleet && estimate.fleet_group_id ? await sendableSiblings(estimate) : [];
+  }
   const fleetSend = siblings.length > 0;
-  const orderEstimates = [estimate, ...siblings].sort((a, b) => compareUnits(a.unit_number, b.unit_number));
-  if (fleetSend) {
+  const batchSend = fleetSend && alsoIds.length > 0;
+  const orderEstimates = batchSend
+    ? [estimate, ...siblings]
+    : [estimate, ...siblings].sort((a, b) => compareUnits(a.unit_number, b.unit_number));
+  if (batchSend) {
+    subject = `[BMG Fleet] ${orderEstimates.length} estimates (${orderEstimates.map(e => `#${e.estimate_number}`).join(', ')}) — Ready for your approval`;
+  } else if (fleetSend) {
     subject = `[BMG Fleet] Estimates for ${orderEstimates.length} vehicles (${orderEstimates.map(e => `#${e.estimate_number}`).join(', ')}) — Ready for your approval`;
   }
   // Every vehicle's PDF is listed (each is that vehicle's transaction),
@@ -279,6 +302,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       })),
     }
     : null);
+  // A batch email's rows: each estimate with what it's for.
+  const batchRows = (urls?: Map<string, { reviewUrl: string; pdfUrl: string }>): BatchDocEstimate[] => orderEstimates.map(e => ({
+    estimateNumber: e.estimate_number,
+    title: e.title || null,
+    vehicle: [vehicleDescription(e), e.unit_number ? `Unit ${e.unit_number}` : null].filter(Boolean).join(' · ') || null,
+    grandTotal: e.grand_total,
+    reviewUrl: urls?.get(e.id)?.reviewUrl || null,
+    pdfUrl: urls?.get(e.id)?.pdfUrl || null,
+  }));
 
   // Preview: show exactly what would go out (message, line items, totals,
   // Approve button) without minting a token, sending, or touching status.
@@ -286,7 +318,19 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (body.preview) {
     // The PDF is generated on the real send, not here — the preview only
     // names it so the compose screen can say so.
-    const html = renderEstimateDocument(estimate, lineItems || [], {
+    const html = batchSend
+      ? renderEstimateBatchDocument(batchRows(), estimate.customer_name, {
+        company,
+        logoUrl,
+        message,
+        ctaUrl: `${appUrl}/approve/fleet/`,
+        ctaLabel: `Review & approve all ${orderEstimates.length}`,
+        ctaNote: `A unique, secure link is generated for each person when you send. It expires in ${expiryDays} days.`,
+        ...approvalEmailExtras(true, `${appUrl}/approve/estimate/`),
+        signature,
+        attachmentNames,
+      })
+      : renderEstimateDocument(estimate, lineItems || [], {
       company,
       logoUrl,
       message,
@@ -323,7 +367,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   for (const e of orderEstimates) {
     const discountBlock = await checkDiscountApproval(supabase, e, rawLinesById.get(e.id) || [], { id: auth.user.id, roles: getProfileRoles(auth.profile) }, 'sent');
     if (discountBlock) {
-      const error = fleetSend ? `Estimate #${e.estimate_number} (unit ${e.unit_number || '?'}): ${discountBlock.error}` : discountBlock.error;
+      const error = batchSend
+        ? `Estimate #${e.estimate_number}: ${discountBlock.error}`
+        : fleetSend ? `Estimate #${e.estimate_number} (unit ${e.unit_number || '?'}): ${discountBlock.error}` : discountBlock.error;
       return NextResponse.json({ error, step: 'discount_approval', discountApproval: discountBlock.status }, { status: 409 });
     }
   }
@@ -338,7 +384,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (under.length > 0 && !floorReason) {
     const lowest = under.map(e => margins.get(e.id)!).sort((a, b) => (a.quotedMargin.marginPct ?? 0) - (b.quotedMargin.marginPct ?? 0))[0];
     const which = fleetSend
-      ? `${under.length} of the ${orderEstimates.length} vehicles (${under.map(e => `#${e.estimate_number}`).join(', ')}) have a parts margin as low as`
+      ? `${under.length} of the ${orderEstimates.length} ${batchSend ? 'estimates' : 'vehicles'} (${under.map(e => `#${e.estimate_number}`).join(', ')}) have a parts margin as low as`
       : 'This quote\'s parts margin is';
     return NextResponse.json({
       error: `${which} ${lowest.quotedMargin.marginPct}%, below the ${lowest.floorPct}% floor. Give a reason to send anyway — it's recorded and the owner is notified.`,
@@ -420,7 +466,25 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       // The real estimate document, not a notification card: the old email
       // carried a one-line summary and no quantities, rates, or line totals
       // at all — the fields customers kept asking about.
-      const html = renderEstimateDocument(estimate, lineItems || [], {
+      const attachmentLinks = [
+        ...(fleetSend
+          ? orderEstimates.map((e, n) => ({ name: pdfNames[n], url: vehiclePdfUrls.get(e.id)! }))
+          : [{ name: pdfFilename, url: downloadUrls.pdf }]),
+        ...picked.rows.map(r => ({ name: r.file_name, url: downloadUrls.file(r.id) })),
+      ];
+      const html = batchSend
+        ? renderEstimateBatchDocument(batchRows(vehicleUrls), estimate.customer_name, {
+          company,
+          logoUrl,
+          message,
+          ctaUrl: link,
+          ctaLabel: `Review & approve all ${orderEstimates.length}`,
+          ctaNote: approvalCtaNote(expiryDays, people.filter(p => p !== person)),
+          ...approvalEmailExtras(true, downloadUrls.pdf),
+          signature,
+          attachmentNames: attachmentLinks,
+        })
+        : renderEstimateDocument(estimate, lineItems || [], {
         company,
         logoUrl,
         message,
@@ -434,12 +498,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         proofs: proofBlocksForEmail(proofBlocks, appUrl, token),
         // Download links behind this send's token, for the customer and
         // whoever they forward the email to.
-        attachmentNames: [
-          ...(fleetSend
-            ? orderEstimates.map((e, n) => ({ name: pdfNames[n], url: vehiclePdfUrls.get(e.id)! }))
-            : [{ name: pdfFilename, url: downloadUrls.pdf }]),
-          ...picked.rows.map(r => ({ name: r.file_name, url: downloadUrls.file(r.id) })),
-        ],
+        attachmentNames: attachmentLinks,
       });
       try {
         const { ok, id: resendId } = await sendEmailDetailed(
@@ -489,7 +548,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (phone) {
     const link = `${appUrl}/approve/${fleetSend ? 'fleet' : 'estimate'}/${token}?via=sms&to=${encodeURIComponent(phone)}&own=1`;
-    const smsBody = fleetSend
+    const smsBody = batchSend
+      ? `[BMG Fleet] ${orderEstimates.length} estimates ready for approval. ${link}`
+      : fleetSend
       ? `[BMG Fleet] Estimates for ${orderEstimates.length} vehicles ready for approval. ${link}`
       : `[BMG Fleet] Estimate #${estimate.estimate_number} ready for approval. ${link}`;
     try {
@@ -522,8 +583,34 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     status: 'sent',
     expiresAt,
     dispatch,
-    fleet: fleetSend ? { count: orderEstimates.length } : null,
+    fleet: fleetSend ? { count: orderEstimates.length, batch: batchSend } : null,
   });
+}
+
+/**
+ * The estimates picked on the Estimates list to go in this one's email
+ * (Craig, 2026-10-28): every one must exist, be for this estimate's
+ * customer, and still be open for approval. Anything else is refused with
+ * its number rather than quietly left out, since the sender picked it.
+ */
+async function batchSiblings(estimate: any, ids: string[]): Promise<{ rows: any[] } | { error: string }> {
+  const { data, error } = await supabase.from('estimates').select('*, vehicle_platforms(label)').in('id', ids);
+  if (error) return { error: 'Could not load the other estimates: ' + error.message };
+  const byId = new Map((data || []).map(e => [e.id, e]));
+  const rows: any[] = [];
+  const customer = estimateCustomerKey(estimate);
+  for (const id of ids) {
+    const e = byId.get(id);
+    if (!e) return { error: 'One of the picked estimates no longer exists. Reload the list and try again.' };
+    if (estimateCustomerKey(e) !== customer) {
+      return { error: `Estimate #${e.estimate_number} is for ${e.customer_name || 'another customer'}, not ${estimate.customer_name || 'this customer'}. Each customer gets their own email.` };
+    }
+    if (estimateIsLocked(e)) {
+      return { error: `Estimate #${e.estimate_number} is already approved or on a sales order, so it can't be sent for approval again.` };
+    }
+    rows.push({ ...e, vehicle_platform_label: (e as any).vehicle_platforms?.label || null });
+  }
+  return { rows };
 }
 
 /**

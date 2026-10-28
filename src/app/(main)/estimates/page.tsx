@@ -19,6 +19,8 @@ import type { AddonLine } from '@/lib/rack-picker';
 import { gatherKitGroups } from '@/lib/estimate-kits';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import EstimateOrderStatusCard from '@/components/EstimateOrderStatusCard';
+import EstimateBatchSend from '@/components/EstimateBatchSend';
+import { canSendForApproval, groupByCustomer, MAX_BATCH_ESTIMATES } from '@/lib/estimate-batch';
 import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeContact, type EmailComposeFields } from '@/components/EmailComposeModal';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import {
@@ -558,6 +560,12 @@ export default function EstimatesPage() {
     return st && (st === 'wrap' || LIST_FILTERS.some(f => f.key === st)) ? st : 'all';
   });
   const [mineOnly, setMineOnly] = useState(false);
+  // Several estimates emailed at once (Craig, 2026-10-28): Select mode on
+  // the list, then Send for approval or Email PDFs, one compose screen per
+  // customer (EstimateBatchSend).
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchMode, setBatchMode] = useState<'approval' | 'pdfs' | null>(null);
   // The Quotes page's follow-up picture, folded into this list (Craig,
   // 2026-10-27): link opens, expiry, reminders, the follow-up log, Won/Lost.
   const canFollowUp = hasFeature('quotes');
@@ -4316,12 +4324,21 @@ export default function EstimatesPage() {
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
           <div style={{ fontSize: '22px', fontWeight: 800 }}>Estimates</div>
+          <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            onClick={() => { setSelecting(v => !v); setSelectedIds([]); }}
+            title="Pick several estimates to send for approval or email as PDFs"
+            style={{ padding: '8px 12px', borderRadius: '10px', background: selecting ? 'rgba(52,211,153,0.12)' : 'var(--subtle-bg)', color: selecting ? '#34d399' : 'var(--text-label)', fontWeight: 800, fontSize: '12px', border: `1px solid ${selecting ? 'rgba(52,211,153,0.4)' : 'var(--border)'}`, cursor: 'pointer' }}
+          >
+            {selecting ? 'Done' : '☐ Select'}
+          </button>
           <button
             onClick={() => { openNewEstimate(); }}
             style={{ padding: '8px 14px', borderRadius: '10px', background: theme.accent, color: '#fff', fontWeight: 800, fontSize: '12px', border: 'none', cursor: 'pointer', boxShadow: '0 2px 8px rgba(238,49,32,0.3)' }}
           >
             + New Estimate
           </button>
+          </div>
         </div>
 
         <input
@@ -4404,19 +4421,33 @@ export default function EstimatesPage() {
             {filteredEstimates.map(est => {
               const display = estimateDisplayStatus(est);
               const statusColor = display.color;
+              const picked = selecting && selectedIds.includes(est.id);
               return (
                 <button
                   key={est.id}
                   id={`qfu-estimate-${est.id}`}
-                  onClick={() => openEstimate(est)}
+                  onClick={() => {
+                    if (!selecting) { openEstimate(est); return; }
+                    setSelectedIds(ids => (ids.includes(est.id) ? ids.filter(x => x !== est.id) : [...ids, est.id]));
+                  }}
+                  aria-pressed={selecting ? picked : undefined}
                   style={{
                     width: '100%', textAlign: 'left',
                     borderRadius: '12px', overflow: 'hidden',
-                    border: `1px solid var(--border)`, background: 'var(--subtle-bg)',
+                    border: `1px solid ${picked ? 'rgba(52,211,153,0.45)' : 'var(--border)'}`,
+                    background: picked ? 'rgba(52,211,153,0.08)' : 'var(--subtle-bg)',
                     padding: '12px', cursor: 'pointer',
                   }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                    {selecting && (
+                      <span aria-hidden style={{
+                        width: '20px', height: '20px', borderRadius: '6px', flexShrink: 0, marginTop: '1px',
+                        display: 'grid', placeItems: 'center', fontSize: '13px', fontWeight: 900, color: '#fff',
+                        border: `2px solid ${picked ? '#34d399' : 'var(--border-strong)'}`,
+                        background: picked ? '#34d399' : 'transparent',
+                      }}>{picked ? '✓' : ''}</span>
+                    )}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '3px' }}>
                         <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-body)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -4563,6 +4594,83 @@ export default function EstimatesPage() {
               );
             })}
           </div>
+        )}
+
+        {/* Select mode's bar: what's picked, and the two ways to send it. */}
+        {selecting && (() => {
+          const picked = selectedIds.map(id => estimates.find(e => e.id === id)).filter(Boolean) as Estimate[];
+          const customers = groupByCustomer(picked);
+          const sendable = picked.filter(canSendForApproval);
+          const leftOut = picked.length - sendable.length;
+          const tooMany = customers.find(g => g.length > MAX_BATCH_ESTIMATES);
+          const total = picked.reduce((sum, e) => sum + (Number(e.grand_total) || 0), 0);
+          const barButton = (color: string, bg: string): React.CSSProperties => ({
+            flex: '1 1 auto', padding: '11px 10px', borderRadius: '10px', fontWeight: 800, fontSize: '12px',
+            border: `1px solid ${color}`, background: bg, color: bg === 'transparent' ? color : '#fff', cursor: 'pointer',
+          });
+          return (
+            <div style={{
+              position: 'sticky', bottom: 'calc(env(safe-area-inset-bottom, 0px) + 64px)', zIndex: 5, marginTop: '10px',
+              padding: '12px', borderRadius: '12px', background: 'var(--card)', border: '1px solid var(--border-strong)',
+              boxShadow: '0 -4px 20px rgba(0,0,0,0.25)', display: 'flex', flexDirection: 'column', gap: '8px',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap', fontSize: '13px', fontWeight: 800, color: 'var(--text-body)' }}>
+                <span>{picked.length} selected{picked.length > 0 ? ` · ${fmt(total)}` : ''}</span>
+                <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                  {picked.length === 0 ? 'Tap estimates to select them'
+                    : customers.length === 1 ? (picked[0].customer_name || 'No customer')
+                    : `${customers.length} customers · one email each`}
+                </span>
+              </div>
+              {leftOut > 0 && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                  {leftOut} approved or on a sales order, so {leftOut === 1 ? 'it is' : 'they are'} left out of Send for approval.
+                </div>
+              )}
+              {tooMany && (
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#ef4444' }}>
+                  {tooMany[0].customer_name || 'One customer'} has {tooMany.length} picked. One email can carry {MAX_BATCH_ESTIMATES} at most.
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => setBatchMode('approval')}
+                  disabled={sendable.length === 0 || !!tooMany}
+                  style={{ ...barButton('#059669', '#059669'), opacity: sendable.length === 0 || tooMany ? 0.45 : 1 }}
+                >✉ Send for approval{sendable.length ? ` (${sendable.length})` : ''}</button>
+                <button
+                  onClick={() => setBatchMode('pdfs')}
+                  disabled={picked.length === 0 || !!tooMany}
+                  style={{ ...barButton('#60a5fa', 'transparent'), opacity: picked.length === 0 || tooMany ? 0.45 : 1 }}
+                >📄 Email PDFs{picked.length ? ` (${picked.length})` : ''}</button>
+                <button
+                  onClick={() => { setSelecting(false); setSelectedIds([]); }}
+                  style={barButton('var(--text-muted)', 'transparent')}
+                >Cancel</button>
+              </div>
+            </div>
+          );
+        })()}
+
+        {batchMode && (
+          <EstimateBatchSend
+            mode={batchMode}
+            estimates={selectedIds.map(id => estimates.find(e => e.id === id)).filter(Boolean) as Estimate[]}
+            onFinished={async ({ sent, skipped }) => {
+              const mode = batchMode;
+              setBatchMode(null);
+              if (sent.length > 0) {
+                setSelecting(false);
+                setSelectedIds([]);
+                loadEstimates(true);
+              }
+              if (sent.length === 0 && skipped.length === 0) return;
+              await dialog.alert([
+                sent.length > 0 ? `${mode === 'approval' ? 'Sent for approval' : 'PDFs emailed'}:\n${sent.join('\n')}` : 'Nothing was sent.',
+                skipped.length > 0 && sent.length > 0 ? `Not sent:\n${skipped.join('\n')}` : '',
+              ].filter(Boolean).join('\n\n'));
+            }}
+          />
         )}
       </div>
     );

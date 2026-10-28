@@ -6,11 +6,22 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import { deepLinks } from '@/lib/deep-links';
 import type { FleetMember } from '@/lib/estimate-fleet';
 
+interface JoinableEstimate {
+  id: string;
+  estimate_number: string;
+  title: string | null;
+  unit_number: string | null;
+  grand_total: number | null;
+  status: string | null;
+}
+
 /**
  * Fleet orders on the estimate builder (Craig, 2026-10-19): the same build
  * on several vehicles, one estimate per vehicle (each becomes its own sales
  * order and work order). Shows the other estimates of this one's order and
- * the "Copy for more vehicles" button that makes them.
+ * the "Copy for more vehicles" button that makes them, and "Join an
+ * existing estimate" (Craig, 2026-10-28), which pulls in the same
+ * customer's estimates that were built on their own.
  *
  * Server side: /api/estimates/[id]/fleet-copies and /fleet-group,
  * src/lib/estimate-fleet.ts, migration 410.
@@ -41,6 +52,10 @@ export default function EstimateFleetGroup({
 }) {
   const dialog = useDialog();
   const [members, setMembers] = useState<FleetMember[]>([]);
+  const [joinable, setJoinable] = useState<JoinableEstimate[]>([]);
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [joinPick, setJoinPick] = useState<string[]>([]);
+  const [joining, setJoining] = useState(false);
   const [job, setJob] = useState<{ id: string; job_number: string | null; status: string } | null>(null);
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<{ unit: string; vin: string }[]>([{ unit: '', vin: '' }]);
@@ -55,8 +70,10 @@ export default function EstimateFleetGroup({
       const d = await res.json().catch(() => ({}));
       setMembers(res.ok && Array.isArray(d.members) ? d.members : []);
       setJob(res.ok && d.job ? d.job : null);
+      setJoinable(res.ok && Array.isArray(d.joinable) ? d.joinable : []);
     } catch {
       setMembers([]);
+      setJoinable([]);
       setJob(null);
     }
   }, [estimateId]);
@@ -102,6 +119,37 @@ export default function EstimateFleetGroup({
       await dialog.alert('Network error. Nothing new was saved, try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const startJoin = () => {
+    setJoinPick([]);
+    setJoinOpen(true);
+    load();
+  };
+
+  const joinOrder = async () => {
+    if (joinPick.length === 0 || joining) return;
+    setJoining(true);
+    try {
+      if (!(await prepare())) return;
+      const res = await fetch(`/api/estimates/${estimateId}/fleet-group`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ joinIds: joinPick }),
+      });
+      const d = await res.json().catch(() => ({}));
+      await load();
+      if (!res.ok || !d.success) {
+        await dialog.alert(d.error || 'Could not join them to the order.');
+        return;
+      }
+      setJoinOpen(false);
+      onCopied(null);
+    } catch {
+      await dialog.alert('Network error. Nothing was joined, try again.');
+    } finally {
+      setJoining(false);
     }
   };
 
@@ -200,6 +248,96 @@ export default function EstimateFleetGroup({
       >
         {inGroup ? '+ Add a vehicle to this order' : 'Copy for more vehicles'}
       </button>
+
+      {!locked && (
+        <button
+          onClick={startJoin}
+          disabled={busy || joining}
+          title="Pull in this customer's other estimates that were built on their own, so they become one order and can be sent for approval in one email."
+          style={{
+            width: '100%', padding: '10px', borderRadius: '10px',
+            background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.25)',
+            color: '#60a5fa', fontWeight: 700, fontSize: '12px', cursor: 'pointer',
+            opacity: busy || joining ? 0.5 : 1,
+          }}
+        >
+          ⇄ Join an existing estimate{inGroup ? ' to this order' : ''}
+        </button>
+      )}
+
+      {joinOpen && (
+        <div
+          ref={closeOnEscape(() => !joining && setJoinOpen(false))}
+          onClick={() => !joining && setJoinOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', zIndex: 70 }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px', width: '100%', maxWidth: '520px', maxHeight: 'calc(88vh / var(--ts))', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}
+          >
+            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>
+              Join estimates to {estimateNumber}&rsquo;s fleet order
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              They become one order, the same as Copy for more vehicles. Send for Approval then offers them all in one email, the order&rsquo;s graphics job gets a kit for each, and saving the graphics in Graphics Builder updates all of them. Only this customer&rsquo;s open estimates that aren&rsquo;t in another order are listed.
+            </div>
+            {joinable.length === 0 ? (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '10px', borderRadius: '8px', background: 'var(--subtle-bg)', border: '1px solid var(--border)' }}>
+                No other open estimates for this customer.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {joinable.map(j => {
+                  const on = joinPick.includes(j.id);
+                  return (
+                    <label
+                      key={j.id}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 10px', borderRadius: '8px', cursor: 'pointer',
+                        border: `1px solid ${on ? 'rgba(52,211,153,0.45)' : 'var(--border)'}`,
+                        background: on ? 'rgba(52,211,153,0.08)' : 'var(--subtle-bg)', color: 'var(--text-primary)', fontSize: '12px',
+                      }}
+                    >
+                      <input
+                        id={`fleet-join-${j.id}`}
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => setJoinPick(p => (on ? p.filter(x => x !== j.id) : [...p, j.id]))}
+                        style={{ width: '16px', height: '16px', accentColor: '#34d399', flexShrink: 0 }}
+                      />
+                      <span style={{ flex: 1, minWidth: 0 }}>
+                        <span style={{ display: 'block', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {j.estimate_number}{j.unit_number ? ` · Unit ${j.unit_number}` : ''}
+                        </span>
+                        {j.title && <span style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.title}</span>}
+                      </span>
+                      <span style={{ fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                        ${(Number(j.grand_total) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+              <button
+                onClick={() => setJoinOpen(false)}
+                disabled={joining}
+                style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={joinOrder}
+                disabled={joinPick.length === 0 || joining}
+                style={{ padding: '8px 14px', borderRadius: '8px', border: 'none', background: '#059669', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: joinPick.length ? 'pointer' : 'default', opacity: joinPick.length === 0 || joining ? 0.5 : 1 }}
+              >
+                {joining ? 'Joining…' : `Join ${joinPick.length || ''} to this order`.replace('  ', ' ')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {open && (
         <div

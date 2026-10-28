@@ -10,6 +10,11 @@
  * what was sent and snapshotted on its own estimate exactly like a single
  * approval, and each can become its own sales order. Changes are requested
  * per vehicle from its estimate page.
+ *
+ * The same page serves several of one customer's estimates picked together
+ * on the Estimates list (`batch`, Craig 2026-10-28): different jobs, so it
+ * says "estimates", lists what each is for, and leaves the items to each
+ * estimate's own page.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -24,6 +29,8 @@ type VehicleState = 'open' | 'approved' | 'rejected' | 'expired';
 interface Vehicle {
   token: string;
   estimateNumber: string;
+  title?: string | null;
+  vehicle?: string | null;
   unitNumber: string | null;
   vin: string | null;
   grandTotal: number;
@@ -32,6 +39,8 @@ interface Vehicle {
 }
 
 interface Payload {
+  batch?: boolean;
+  anyProofs?: boolean;
   customerName: string | null;
   title: string | null;
   vehicle: string | null;
@@ -108,7 +117,9 @@ export default function FleetApprovalPage() {
   const allSame = vehicles.every(v => Math.abs(v.grandTotal - shownTotal) < 0.005);
   // The same sentence each vehicle's own page shows (and its accept route
   // stamps): the order shares one graphics job, so its proofs ride on all.
-  const agreement = data.shown.proofs?.length ? COMBINED_AGREEMENT_TEXT : AGREEMENT_TEXT;
+  const batch = !!data.batch;
+  const agreement = (batch ? data.anyProofs : data.shown.proofs?.length) ? COMBINED_AGREEMENT_TEXT : AGREEMENT_TEXT;
+  const nameOf = (v: Vehicle) => (batch ? `#${v.estimateNumber}` : `Unit ${v.unitNumber || '?'} (#${v.estimateNumber})`);
 
   const approve = async (list: Vehicle[]) => {
     if (busy) return;
@@ -135,10 +146,10 @@ export default function FleetApprovalPage() {
         if (res.ok || json.error === 'Already approved') {
           setData(d => d && ({ ...d, vehicles: d.vehicles.map(x => (x.token === v.token ? { ...x, state: 'approved', decidedAt: new Date().toISOString() } : x)) }));
         } else {
-          failures.push(`Unit ${v.unitNumber || '?'} (#${v.estimateNumber}): ${json.error || 'could not be approved'}`);
+          failures.push(`${nameOf(v)}: ${json.error || 'could not be approved'}`);
         }
       } catch {
-        failures.push(`Unit ${v.unitNumber || '?'} (#${v.estimateNumber}): network error, try again`);
+        failures.push(`${nameOf(v)}: network error, try again`);
       }
     }
     if (failures.length) setError(failures.join('\n'));
@@ -149,9 +160,9 @@ export default function FleetApprovalPage() {
 
   return (
     <ApprovalFrame>
-      <ApprovalHeader title={`Estimates for ${vehicles.length} vehicles`}>
+      <ApprovalHeader title={batch ? `${vehicles.length} estimates for your approval` : `Estimates for ${vehicles.length} vehicles`}>
         {data.customerName && <div style={{ fontSize: '13px', color: '#64748b', marginTop: '2px' }}>Prepared for {data.customerName}</div>}
-        {(data.title || data.vehicle) && (
+        {!batch && (data.title || data.vehicle) && (
           <div style={{ fontSize: '12px', color: '#334155', marginTop: '6px', fontWeight: 600 }}>
             {[data.title, data.vehicle].filter(Boolean).join(' · ')}
           </div>
@@ -161,20 +172,25 @@ export default function FleetApprovalPage() {
       {open.length === 0 && (
         <div style={{ padding: '12px 14px', background: approvedCount ? '#dcfce7' : '#f8fafc', border: `1px solid ${approvedCount ? '#86efac' : '#e2e8f0'}`, borderRadius: '12px', fontSize: '14px', fontWeight: 700, color: '#14532d', marginBottom: '14px' }}>
           {approvedCount === vehicles.length
-            ? `Thank you. All ${vehicles.length} vehicles are approved and work is authorized.`
+            ? `Thank you. All ${vehicles.length} ${batch ? 'estimates' : 'vehicles'} are approved and work is authorized.`
             : `Thank you. Nothing is left to approve here.`}
         </div>
       )}
 
-      <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>Vehicles in this order</div>
+      <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>{batch ? 'Estimates' : 'Vehicles in this order'}</div>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontVariantNumeric: 'tabular-nums' }}>
         <tbody>
           {vehicles.map(v => (
             <tr key={v.token}>
               <td style={{ ...td, paddingLeft: 0 }}>
-                <div style={{ fontWeight: 800, color: '#0f172a' }}>Unit {v.unitNumber || '?'}</div>
+                <div style={{ fontWeight: 800, color: '#0f172a' }}>{batch ? `#${v.estimateNumber}` : `Unit ${v.unitNumber || '?'}`}</div>
+                {batch && (v.title || v.vehicle || v.unitNumber) && (
+                  <div style={{ fontSize: '12px', color: '#334155', overflowWrap: 'anywhere' }}>
+                    {[v.title, v.vehicle, v.unitNumber ? `Unit ${v.unitNumber}` : null].filter(Boolean).join(' · ')}
+                  </div>
+                )}
                 <div style={{ fontSize: '11px', color: '#64748b' }}>
-                  #{v.estimateNumber} · <a href={`/approve/estimate/${encodeURIComponent(v.token)}${linkQuery}`} style={{ color: '#1d4ed8', fontWeight: 600 }}>Open the estimate</a>
+                  {batch ? '' : `#${v.estimateNumber} · `}<a href={`/approve/estimate/${encodeURIComponent(v.token)}${linkQuery}`} style={{ color: '#1d4ed8', fontWeight: 600 }}>Open the estimate</a>
                 </div>
                 {v.vin && <div style={{ fontSize: '11px', color: '#64748b', fontFamily: 'ui-monospace, monospace', overflowWrap: 'anywhere' }}>VIN {v.vin}</div>}
               </td>
@@ -197,7 +213,7 @@ export default function FleetApprovalPage() {
             </tr>
           ))}
           <tr>
-            <td style={{ ...td, paddingLeft: 0, fontWeight: 800, borderTop: '2px solid #cbd5e1' }}>Order total ({vehicles.length} vehicles)</td>
+            <td style={{ ...td, paddingLeft: 0, fontWeight: 800, borderTop: '2px solid #cbd5e1' }}>{batch ? `Total (${vehicles.length} estimates)` : `Order total (${vehicles.length} vehicles)`}</td>
             <td style={{ ...td, textAlign: 'right', fontWeight: 800, borderTop: '2px solid #cbd5e1', whiteSpace: 'nowrap' }}>{money(orderTotal)}</td>
             <td style={{ ...td, borderTop: '2px solid #cbd5e1' }} />
           </tr>
@@ -239,7 +255,9 @@ export default function FleetApprovalPage() {
             </span>
           </label>
           <div style={{ fontSize: '11px', color: '#64748b', marginTop: '6px', paddingLeft: '23px' }}>
-            Tick once. It covers each vehicle you approve here, and each approval is recorded on that vehicle&apos;s own estimate.
+            {batch
+              ? 'Tick once. It covers each estimate you approve here, and each approval is recorded on its own estimate.'
+              : <>Tick once. It covers each vehicle you approve here, and each approval is recorded on that vehicle&apos;s own estimate.</>}
           </div>
           <button
             onClick={() => approve(open)}
@@ -249,7 +267,7 @@ export default function FleetApprovalPage() {
             {busy === 'all' ? 'Approving…' : approvedCount > 0 ? `Approve the other ${open.length}` : `Approve all ${open.length}`}
           </button>
           <div style={{ fontSize: '12px', color: '#64748b', marginTop: '8px', textAlign: 'center' }}>
-            To ask for changes on one vehicle, open its estimate.
+            {batch ? 'To ask for changes on one, open that estimate.' : 'To ask for changes on one vehicle, open its estimate.'}
           </div>
         </div>
       )}
@@ -260,7 +278,7 @@ export default function FleetApprovalPage() {
         </div>
       )}
 
-      <div style={{ marginTop: '22px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
+      {!batch && <div style={{ marginTop: '22px', paddingTop: '14px', borderTop: '1px solid #e2e8f0' }}>
         <div style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '8px' }}>
           {allSame
             ? 'What each vehicle gets'
@@ -273,7 +291,7 @@ export default function FleetApprovalPage() {
           proofs={data.shown.proofs}
           downloads={data.shown.downloads}
         />
-      </div>
+      </div>}
 
       <div style={{ textAlign: 'center', marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #e2e8f0', fontSize: '11px', color: '#94a3b8' }}>
         BMG Fleet Installations LLC · FleetSuite

@@ -55,9 +55,16 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     .sort((a, b) => compareUnits(a.unit_number, b.unit_number));
   if (members.length === 0) return NextResponse.json({ status: 'invalid', error: 'not_found' }, { status: 404 });
 
+  // Picked together on the Estimates list (Craig, 2026-10-28) rather than
+  // one fleet order: different jobs, so the page lists each estimate with
+  // what it is for and shows no single estimate's items as everyone's.
+  const batch = !members.every(e => e.fleet_group_id && e.fleet_group_id === members[0].fleet_group_id);
+
   const vehicles = members.map(e => ({
     token: e.approval_token as string,
     estimateNumber: e.estimate_number,
+    title: e.title || null,
+    vehicle: vehicleDescription(e) || null,
     unitNumber: e.unit_number || null,
     vin: e.vin || null,
     grandTotal: Number(e.grand_total) || 0,
@@ -75,6 +82,11 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     loadEstimateGraphics(supabase, shown.id),
     loadEstimateProofs(supabase, shown.id, undefined),
   ]);
+  // A batch's estimates carry their own proofs: the agreement names proofs
+  // when any of them has some (each accept stamps its own anyway).
+  const anyProofs = proofs.length > 0 || (batch && (await Promise.all(
+    members.filter(e => e.id !== shown.id).map(e => loadEstimateProofs(supabase, e.id, undefined)),
+  )).some(p => p.length > 0));
 
   if (vehicles.some(v => v.state === 'open')) {
     await recordQuoteView(supabase, {
@@ -83,13 +95,15 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
       req,
       sentAt: shown.sent_for_approval_at || null,
       repIds: [shown.sent_for_approval_by, shown.created_by],
-      label: `Fleet order of ${members.length} (${members.map(e => `#${e.estimate_number}`).join(', ')})`,
+      label: `${batch ? 'Estimates' : 'Fleet order'} of ${members.length} (${members.map(e => `#${e.estimate_number}`).join(', ')})`,
       customerName: shown.customer_name || null,
     });
   }
 
   return NextResponse.json({
     status: 'ready',
+    batch,
+    anyProofs,
     customerName: shown.customer_name || null,
     title: shown.title || null,
     vehicle: vehicleDescription(shown) || null,

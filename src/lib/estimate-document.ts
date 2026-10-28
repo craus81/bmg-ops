@@ -309,6 +309,95 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
   );
 }
 
+/** One estimate of a batch sent in one email (src/lib/estimate-batch.ts). */
+export interface BatchDocEstimate {
+  estimateNumber: string | number | null;
+  title: string | null;
+  /** vehicleDescription() of the estimate, plus its unit number. */
+  vehicle: string | null;
+  grandTotal: number | string | null;
+  /** That estimate's own approval page; absent on the compose preview. */
+  reviewUrl?: string | null;
+  /** That estimate's PDF behind its own token. */
+  pdfUrl?: string | null;
+}
+
+/**
+ * Several of one customer's estimates sent for approval in one email
+ * (Craig, 2026-10-28). Unlike a fleet order they are different jobs, so the
+ * email lists each estimate with its own total, Review and PDF links instead
+ * of one estimate's items; the customer opens each one to see its items.
+ */
+export function renderEstimateBatchDocument(
+  estimates: BatchDocEstimate[],
+  customerName: string | null,
+  opts: Omit<EstimateDocumentOptions, 'fleet' | 'graphics' | 'proofs' | 'signedBlockHtml'> = {},
+): string {
+  const td = 'padding:7px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;color:#111827;vertical-align:top;';
+  const th = 'text-align:left;padding:0 8px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#6b7280;';
+  const total = estimates.reduce((sum, e) => sum + (Number(e.grandTotal) || 0), 0);
+  const rows = estimates.map(e => {
+    const links = [
+      e.reviewUrl ? `<a href="${escHtml(e.reviewUrl)}" style="color:#1d4ed8;font-weight:700;text-decoration:underline;">Review</a>` : '',
+      e.pdfUrl ? `<a href="${escHtml(e.pdfUrl)}" style="color:#1d4ed8;text-decoration:underline;">PDF</a>` : '',
+    ].filter(Boolean).join(' &middot; ');
+    const about = [e.title, e.vehicle].filter(Boolean).map(s => escHtml(s)).join(' &middot; ');
+    return `<tr>
+      <td style="${td}font-weight:700;white-space:nowrap;">#${escHtml(e.estimateNumber ?? '')}</td>
+      <td style="${td}">${about || '&mdash;'}${links ? `<div style="font-size:12px;margin-top:3px;">${links}</div>` : ''}</td>
+      <td style="${td}text-align:right;white-space:nowrap;">${money(e.grandTotal)}</td>
+    </tr>`;
+  }).join('');
+  const noteHtml = `<div style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Estimates in this email</div>
+  <table style="width:100%;border-collapse:collapse;">
+    <thead><tr><th style="${th}">Estimate</th><th style="${th}">For</th><th style="${th}text-align:right;">Total</th></tr></thead>
+    <tbody>${rows}
+      <tr><td colspan="2" style="padding:8px;font-size:14px;font-weight:800;color:#111827;border-top:2px solid #d1d5db;">Total (${estimates.length} estimates)</td><td style="padding:8px;font-size:14px;font-weight:800;color:#111827;border-top:2px solid #d1d5db;text-align:right;white-space:nowrap;">${money(total)}</td></tr>
+    </tbody>
+  </table>
+  <div style="font-size:12px;color:#374151;margin-top:8px;">Use Review to see each estimate's items. You can approve them all at once or one at a time.</div>`;
+
+  const sections: QuoteDocSection[] = [];
+  if (opts.attachmentNames && opts.attachmentNames.length > 0) {
+    const items = opts.attachmentNames.map(a => (typeof a === 'string' ? { name: a, url: null } : a));
+    const linked = items.some(a => a.url);
+    sections.push({
+      title: opts.attachmentsTitle || 'Attached',
+      bodyHtml: items
+        .map(a => (a.url
+          ? `<a href="${escHtml(a.url)}" style="color:#1d4ed8;font-weight:600;text-decoration:underline;">${escHtml(a.name)}</a>`
+          : escHtml(a.name)))
+        .join(' &middot; ')
+        + (linked ? `<div style="margin-top:6px;font-size:11px;color:#64748b;">Click a name to download a full-size copy. These links keep working for a year.</div>` : ''),
+    });
+  }
+
+  return renderQuoteDocument(
+    {
+      docTitle: `${estimates.length} estimates for your approval`,
+      subtitleHtml: estimates.map(e => `#${escHtml(e.estimateNumber ?? '')}`).join(', '),
+      noteHtml,
+      preparedForHtml: `Prepared for ${escHtml(customerName || 'you')}`,
+      identityLinesHtml: [],
+      columns: null,
+      rows: [],
+      totals: null,
+      sections,
+    },
+    {
+      company: opts.company,
+      logoUrl: opts.logoUrl,
+      message: opts.message,
+      ctaUrl: opts.ctaUrl,
+      ctaLabel: opts.ctaLabel,
+      ctaNote: opts.ctaNote,
+      ctaTop: opts.ctaTop,
+      forwardNote: opts.forwardNote,
+      signature: opts.signature,
+    },
+  );
+}
+
 /**
  * The fleet order's vehicle table: one row per vehicle with its estimate,
  * unit number, VIN, total and its own Review link, then the order total.
