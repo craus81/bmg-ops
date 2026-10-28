@@ -58,7 +58,7 @@ export default function EstimateFleetGroup({
   const [joining, setJoining] = useState(false);
   const [job, setJob] = useState<{ id: string; job_number: string | null; status: string } | null>(null);
   const [open, setOpen] = useState(false);
-  const [rows, setRows] = useState<{ unit: string; vin: string }[]>([{ unit: '', vin: '' }]);
+  const [rows, setRows] = useState<{ unit: string; stock: string; vin: string }[]>([{ unit: '', stock: '', vin: '' }]);
   const [sourceUnit, setSourceUnit] = useState('');
   const [keepPo, setKeepPo] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -84,7 +84,7 @@ export default function EstimateFleetGroup({
   const needsSourceUnit = !unitNumber.trim();
 
   const startCopy = () => {
-    setRows([{ unit: '', vin: '' }]);
+    setRows([{ unit: '', stock: '', vin: '' }]);
     setSourceUnit('');
     setKeepPo(true);
     setOpen(true);
@@ -102,7 +102,7 @@ export default function EstimateFleetGroup({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          vehicles: filled.map(r => ({ unitNumber: r.unit.trim(), vin: r.vin.trim() || null })),
+          vehicles: filled.map(r => ({ unitNumber: r.unit.trim(), stockNumber: r.stock.trim() || null, vin: r.vin.trim() || null })),
           sourceUnitNumber: needsSourceUnit ? sourceUnit.trim() : null,
           keepPo: !!poNumber.trim() && keepPo,
         }),
@@ -215,7 +215,7 @@ export default function EstimateFleetGroup({
                   }}
                 >
                   <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    <b>Unit {m.unit_number || '?'}</b> · {m.estimate_number}
+                    <b>Unit {m.unit_number || '?'}</b>{m.stock_number ? ` · Stock ${m.stock_number}` : ''} · {m.estimate_number}
                   </span>
                   <span style={{ fontSize: '11px', fontWeight: 700, color: c.color, whiteSpace: 'nowrap' }}>{c.text}</span>
                 </button>
@@ -366,16 +366,23 @@ export default function EstimateFleetGroup({
             )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.6fr) 28px', gap: '6px', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                <span>Unit #</span><span>VIN (can add later)</span><span />
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.6fr) 28px', gap: '6px', fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                <span>Unit #</span><span>Stock #</span><span>VIN (can add later)</span><span />
               </div>
               {rows.map((r, i) => (
-                <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.6fr) 28px', gap: '6px', alignItems: 'center' }}>
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.6fr) 28px', gap: '6px', alignItems: 'center' }}>
                   <input
                     id={`fleet-unit-${i}`}
                     value={r.unit}
                     onChange={e => setRows(rs => rs.map((x, j) => j === i ? { ...x, unit: e.target.value } : x))}
                     placeholder="Unit #"
+                    style={input}
+                  />
+                  <input
+                    id={`fleet-stock-${i}`}
+                    value={r.stock}
+                    onChange={e => setRows(rs => rs.map((x, j) => j === i ? { ...x, stock: e.target.value } : x))}
+                    placeholder="Stock #"
                     style={input}
                   />
                   <input
@@ -387,7 +394,7 @@ export default function EstimateFleetGroup({
                     style={{ ...input, fontFamily: 'ui-monospace, monospace' }}
                   />
                   <button
-                    onClick={() => setRows(rs => rs.length > 1 ? rs.filter((_, j) => j !== i) : [{ unit: '', vin: '' }])}
+                    onClick={() => setRows(rs => rs.length > 1 ? rs.filter((_, j) => j !== i) : [{ unit: '', stock: '', vin: '' }])}
                     title="Remove this vehicle"
                     style={{ border: 'none', background: 'none', color: 'var(--text-muted)', fontSize: '16px', cursor: 'pointer' }}
                   >
@@ -396,7 +403,7 @@ export default function EstimateFleetGroup({
                 </div>
               ))}
               <button
-                onClick={() => setRows(rs => [...rs, { unit: '', vin: '' }])}
+                onClick={() => setRows(rs => [...rs, { unit: '', stock: '', vin: '' }])}
                 disabled={rows.length >= 25}
                 style={{ alignSelf: 'flex-start', padding: '6px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
               >

@@ -18,6 +18,7 @@ export interface JobKit {
   estimateId: string;
   estimateNumber: string;
   unitNumber: string | null;
+  stockNumber: string | null;
   vin: string | null;
   soNumber: string | null;
   van: KitVan;
@@ -90,6 +91,7 @@ export async function loadJobKits(
       estimateId: m.id,
       estimateNumber: m.estimate_number,
       unitNumber: m.unit_number,
+      stockNumber: m.stock_number || null,
       vin: m.vin,
       soNumber: m.netsuite_so_number,
       van,

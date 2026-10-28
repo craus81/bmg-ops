@@ -126,7 +126,7 @@ export async function syncShopInboundForSalesOrder(
 ): Promise<void> {
   const { data: est } = await service
     .from('estimates')
-    .select('id, estimate_number, title, customer_name, status, netsuite_so_id, netsuite_so_number, vin, unit_number')
+    .select('id, estimate_number, title, customer_name, status, netsuite_so_id, netsuite_so_number, vin, unit_number, stock_number')
     .eq('id', estimateId)
     .maybeSingle();
   if (!est) return;
@@ -141,7 +141,8 @@ export async function syncShopInboundForSalesOrder(
 
   // K5: the estimate now carries the VIN, so the Arriving row gets it from
   // the estimate chain instead of hoping a NetSuite rep typed one on the SO.
-  const unitSuffix = est.unit_number ? ` (Unit ${est.unit_number})` : '';
+  const ids = [est.unit_number ? `Unit ${est.unit_number}` : null, est.stock_number ? `Stock ${est.stock_number}` : null].filter(Boolean);
+  const unitSuffix = ids.length ? ` (${ids.join(' · ')})` : '';
   await upsertInbound(service, 'sales_order', est.id, qualifies, {
     vehicle_desc: (est.title || `Estimate ${est.estimate_number}`) + unitSuffix,
     customer_name: est.customer_name || null,

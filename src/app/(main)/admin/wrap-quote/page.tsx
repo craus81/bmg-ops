@@ -508,7 +508,7 @@ const polyMetrics = (points: { x: number; y: number }[], ppi: number) => {
 // The estimate's vehicle as the builder reads it: the banner line, and the
 // make / model text the template matcher searches with when the estimate
 // has no template of its own.
-const ESTIMATE_VEHICLE_COLUMNS = 'vehicle_year, vehicle_roof, vehicle_wheelbase, vehicle_platform_id, vehicle_other, vehicle_template_id, vehicle_make, vehicle_model, vin, unit_number, vehicle_platforms(label)';
+const ESTIMATE_VEHICLE_COLUMNS = 'vehicle_year, vehicle_roof, vehicle_wheelbase, vehicle_platform_id, vehicle_other, vehicle_template_id, vehicle_make, vehicle_model, vin, unit_number, stock_number, vehicle_platforms(label)';
 const estimateVehicleText = (est: any) => {
   const makeModel = [est.vehicle_make, est.vehicle_model].filter(Boolean).join(' ');
   const label = makeModel || est.vehicle_platforms?.label || est.vehicle_other || '';
@@ -518,6 +518,7 @@ const estimateVehicleText = (est: any) => {
     est.vehicle_roof ? `${est.vehicle_roof} roof` : null,
     est.vehicle_wheelbase ? `${est.vehicle_wheelbase}" WB` : null,
     est.unit_number ? `Unit ${est.unit_number}` : null,
+    est.stock_number ? `Stock ${est.stock_number}` : null,
     est.vin ? `VIN ${est.vin}` : null,
   ].filter(Boolean).join(' · ') || null;
   return { label, banner };

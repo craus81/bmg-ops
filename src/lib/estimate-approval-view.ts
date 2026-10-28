@@ -29,6 +29,7 @@ export function publicEstimate(est: any) {
     // page must identify the same vehicle the customer is approving.
     vin: est.vin,
     unit_number: est.unit_number,
+    stock_number: est.stock_number,
     vehicle_year: est.vehicle_year,
     vehicle_other: est.vehicle_other,
     vehicle_wheelbase: est.vehicle_wheelbase,

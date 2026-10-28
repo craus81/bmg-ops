@@ -366,6 +366,7 @@ interface Estimate {
   vin: string | null;
   vehicle_other: string | null;
   unit_number: string | null;
+  stock_number?: string | null;
   vehicle_platform_id: string | null;
   // Migration 410: the template-library pick.
   vehicle_template_id?: string | null;
@@ -951,6 +952,7 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- decode purely from vin
   }, [vin]);
   const [unitNumber, setUnitNumber] = useState('');
+  const [stockNumber, setStockNumber] = useState('');
   // N4-A: the visual faceted catalog browser (Ranger-style pick-from-list).
   const [showCatalogBrowser, setShowCatalogBrowser] = useState(false);
   const [showRackKits, setShowRackKits] = useState(false);
@@ -1410,7 +1412,7 @@ export default function EstimatesPage() {
   const draftFields = {
     editingId, title, notes, customerId, prospectId, customerName, customerNsId,
     taxRate, taxExempt, vehicleCount, laborRate, laborOverride, discountType, discountInput, discountDescription, lines,
-    vin, unitNumber, vehiclePlatformId, vehicleOther, vehicleOtherMode,
+    vin, unitNumber, stockNumber, vehiclePlatformId, vehicleOther, vehicleOtherMode,
     vehicleYear, vehicleWheelbase, vehicleRoof, vehicleCab, vehicleBed,
     vehicleTemplateId: vehicleTemplate?.id || null, vehicleMake, vehicleModel,
     installInstructions, onSiteContactName, onSiteContactPhone,
@@ -1457,7 +1459,7 @@ export default function EstimatesPage() {
     // Content gate: a customer arriving via deep link (?new=1&customer=) or a
     // lone dropdown change isn't worth a restore prompt later.
     const meaningful = lines.length > 0 || !!(title.trim() || notes.trim() || internalNotes.trim()
-      || installInstructions.trim() || vin.trim() || unitNumber.trim() || poNumber.trim());
+      || installInstructions.trim() || vin.trim() || unitNumber.trim() || stockNumber.trim() || poNumber.trim());
     if (!meaningful) { pendingDraftRef.current = null; return; }
     pendingDraftRef.current = { id: editingId, fields: draftFields };
     const t = setTimeout(() => {
@@ -1498,6 +1500,7 @@ export default function EstimatesPage() {
       : []);
     setVin(f.vin || '');
     setUnitNumber(f.unitNumber || '');
+    setStockNumber(f.stockNumber || '');
     setVehiclePlatformId(f.vehiclePlatformId ?? null);
     setVehicleOther(f.vehicleOther || '');
     setVehicleOtherMode(!!f.vehicleOtherMode);
@@ -2258,6 +2261,7 @@ export default function EstimatesPage() {
         internal_notes: internalNotes,
         vin,
         unit_number: unitNumber,
+        stock_number: stockNumber,
         po_number: poNumber,
         expiration_date: expirationDate || null,
         fleet_checkin_id: fleetCheckinId,
@@ -3592,6 +3596,7 @@ export default function EstimatesPage() {
     setDiscountApprovalMsg('');
     setVin(est.vin || '');
     setUnitNumber(est.unit_number || '');
+    setStockNumber(est.stock_number || '');
     setVehiclePlatformId(est.vehicle_platform_id || null);
     setVehicleOther(est.vehicle_other || '');
     setVehicleOtherMode(!est.vehicle_platform_id && !!est.vehicle_other);
@@ -3990,6 +3995,7 @@ export default function EstimatesPage() {
     setCustResults([]);
     setVin('');
     setUnitNumber('');
+    setStockNumber('');
     setVehiclePlatformId(null);
     setVehicleOther('');
     setVehicleOtherMode(false);
@@ -4307,7 +4313,7 @@ export default function EstimatesPage() {
     const searchedEstimates = estimates.filter(e => {
       if (mineOnly && repOf(e) !== user?.id) return false;
       if (!search) return true;
-      return estimateNumberMatches(e, s) || matchSearch(e.customer_name, e.title, e.vin, e.unit_number);
+      return estimateNumberMatches(e, s) || matchSearch(e.customer_name, e.title, e.vin, e.unit_number, e.stock_number);
     });
     const wrapsShown = quoteExtras.wraps
       .filter(w => !mineOnly || w.repId === user?.id)
@@ -4951,8 +4957,8 @@ export default function EstimatesPage() {
       {/* ── Vehicle (K5 + N4-B2) — identity prints on the estimate + pushes
           to the NS VIN field; platform/qualifiers gate the catalog browser.
           A VIN auto-fills what it encodes, but every field works by hand. ── */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px', marginBottom: '8px' }}>
-        <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+        <div style={{ minWidth: 0 }}>
           <div style={labelStyle}>VIN</div>
           <input
             style={{ ...inputStyle, textTransform: 'uppercase' }}
@@ -4997,13 +5003,22 @@ export default function EstimatesPage() {
             </div>
           )}
         </div>
-        <div>
-          <div style={labelStyle}>Unit/Stock #</div>
+        <div style={{ minWidth: 0 }}>
+          <div style={labelStyle}>Unit #</div>
           <input
             style={inputStyle}
             value={unitNumber}
             onChange={e => setUnitNumber(e.target.value)}
-            placeholder="Customer's unit or stock #"
+            placeholder="Customer's unit #"
+          />
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div style={labelStyle}>Stock #</div>
+          <input
+            style={inputStyle}
+            value={stockNumber}
+            onChange={e => setStockNumber(e.target.value)}
+            placeholder="Stock #"
           />
         </div>
       </div>

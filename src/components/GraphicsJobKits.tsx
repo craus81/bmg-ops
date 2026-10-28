@@ -152,7 +152,10 @@ export default function GraphicsJobKits({ jobId, status, cardStyle, labelStyle, 
                   : <Chip text={`Done ${shortDate(k.van.since)}`} tone="ok" />;
               return (
                 <tr key={k.estimateId}>
-                  <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontWeight: 700 }}>{k.unitNumber || '?'}</td>
+                  <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontWeight: 700 }}>
+                    {k.unitNumber || '?'}
+                    {k.stockNumber ? <div style={{ fontSize: '11px', fontWeight: 400, color: 'var(--text-muted)' }}>Stock {k.stockNumber}</div> : null}
+                  </td>
                   <td style={td}>
                     <a href={deepLinks.estimate(k.estimateId)} style={{ color: 'var(--text-body)' }}>{k.estimateNumber}</a>
                     {k.soNumber ? <span style={{ color: 'var(--text-muted)' }}> · SO {k.soNumber}</span> : null}

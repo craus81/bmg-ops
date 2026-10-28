@@ -274,7 +274,8 @@ export async function POST(req: NextRequest) {
           if (!vinKey || seenVins.has(vinKey)) continue;
           seenVins.add(vinKey);
           const desc = [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ');
-          vehicleLines.push([desc, `VIN ${s.vin}`, s.unit_number ? `(Unit ${s.unit_number})` : null].filter(Boolean).join(' '));
+          const ids = [s.unit_number ? `Unit ${s.unit_number}` : null, s.stock_number ? `Stock ${s.stock_number}` : null].filter(Boolean);
+          vehicleLines.push([desc, `VIN ${s.vin}`, ids.length ? `(${ids.join(' · ')})` : null].filter(Boolean).join(' '));
         }
         const MEMO_VEHICLE_CAP = 15;
         const shownVehicles = vehicleLines.slice(0, MEMO_VEHICLE_CAP);

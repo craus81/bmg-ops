@@ -32,12 +32,13 @@ export default function EstimateApprovalDocument({ estimate: est, lines, graphic
         <div style={{ fontSize: '12px', color: '#64748b', marginTop: '6px' }}>For {est.customer_name || 'customer'}</div>
         {/* Vehicle identity — the emailed document shows it, so the page the
             customer approves on must identify the same vehicle. */}
-        {(est.vehicle_year || est.vehicle_other || est.vin || est.unit_number) && (
+        {(est.vehicle_year || est.vehicle_other || est.vin || est.unit_number || est.stock_number) && (
           <div style={{ fontSize: '12px', color: '#334155', marginTop: '4px', fontWeight: 600 }}>
             {[
               [est.vehicle_year, est.vehicle_other].filter(Boolean).join(' '),
               est.vin ? `VIN ${est.vin}` : '',
               est.unit_number ? `Unit ${est.unit_number}` : '',
+              est.stock_number ? `Stock ${est.stock_number}` : '',
             ].filter(Boolean).join(' · ')}
           </div>
         )}

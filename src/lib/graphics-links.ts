@@ -15,7 +15,7 @@ import { fmtInches } from '@/lib/format';
 
 /** The estimate columns the helpers below read. */
 export const ESTIMATE_LINK_COLUMNS =
-  'id, estimate_number, customer_id, customer_name, customer_netsuite_id, title, notes, vin, unit_number, vehicle_year, vehicle_other, po_number, netsuite_so_number, created_by, vehicle_platforms(label)';
+  'id, estimate_number, customer_id, customer_name, customer_netsuite_id, title, notes, vin, unit_number, stock_number, vehicle_year, vehicle_other, po_number, netsuite_so_number, created_by, vehicle_platforms(label)';
 
 /** The wrap quote columns the helpers below read. */
 export const WRAP_QUOTE_LINK_COLUMNS =
@@ -29,6 +29,7 @@ export function estimateVehicleLine(est: any): string | null {
   const parts = [
     ymm || null,
     est.unit_number ? `Unit ${est.unit_number}` : null,
+    est.stock_number ? `Stock ${est.stock_number}` : null,
     est.vin ? `VIN ${est.vin}` : null,
   ].filter(Boolean);
   return parts.length > 0 ? parts.join(' · ') : null;

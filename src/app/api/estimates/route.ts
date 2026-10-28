@@ -72,9 +72,11 @@ const UpsertEstimateSchema = z.object({
   delivery_preferences: z.string().max(2000).optional().nullable(),
   internal_notes: z.string().max(5000).optional().nullable(),
   // K5: header VIN (full 17 or a partial, matching the scanner's tolerance)
-  // and the customer's unit/stock number.
+  // and the customer's unit number; the stock number has its own field
+  // (migration 451).
   vin: z.string().max(32).optional().nullable(),
   unit_number: z.string().max(60).optional().nullable(),
+  stock_number: z.string().max(60).optional().nullable(),
   // Customer's PO number (→ NetSuite otherRefNum) and the quote's
   // expiration date (YYYY-MM-DD → NetSuite estimate dueDate/"Expires").
   po_number: z.string().max(60).optional().nullable(),
@@ -185,7 +187,7 @@ export async function POST(req: NextRequest) {
     // T1.6 install context
     install_instructions, on_site_contact_name, on_site_contact_phone,
     delivery_preferences, internal_notes,
-    vin, unit_number, po_number, expiration_date, fleet_checkin_id,
+    vin, unit_number, stock_number, po_number, expiration_date, fleet_checkin_id,
     vehicle_platform_id, vehicle_other, vehicle_year, vehicle_wheelbase,
     vehicle_roof, vehicle_cab, vehicle_bed,
     vehicle_template_id, vehicle_make, vehicle_model,
@@ -198,6 +200,10 @@ export async function POST(req: NextRequest) {
     // vin-match suffix comparisons work across estimates and scan_logs.
     const normalizedVin = vin?.trim().toUpperCase() || null;
     const normalizedUnit = unit_number?.trim() || null;
+    const normalizedStock = stock_number?.trim() || null;
+    // A client from before the field existed sends no stock_number; leave
+    // the saved one alone rather than blanking it.
+    const stockField = stock_number === undefined ? {} : { stock_number: normalizedStock };
 
     const requestLines = line_items || [];
     // Sales tax rate is NEVER taken from the request body: it is one company
@@ -353,6 +359,7 @@ export async function POST(req: NextRequest) {
           internal_notes: internal_notes || null,
           vin: normalizedVin,
           unit_number: normalizedUnit,
+          ...stockField,
           po_number: po_number?.trim() || null,
           expiration_date: expiration_date || null,
           fleet_checkin_id: fleet_checkin_id || null,
@@ -478,6 +485,7 @@ export async function POST(req: NextRequest) {
           internal_notes: internal_notes || null,
           vin: normalizedVin,
           unit_number: normalizedUnit,
+          ...stockField,
           po_number: po_number?.trim() || null,
           expiration_date: expiration_date || null,
           fleet_checkin_id: fleet_checkin_id || null,

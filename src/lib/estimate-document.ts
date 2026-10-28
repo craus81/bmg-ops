@@ -75,6 +75,7 @@ export function estimateContextMemo(est: any): string {
   const onSite = [est.on_site_contact_name, est.on_site_contact_phone].filter(Boolean).join(' ');
   if (onSite) ctxLines.push(`On-site: ${onSite}`);
   if (est.unit_number?.trim()) ctxLines.push(`Unit: ${est.unit_number.trim()}`);
+  if (est.stock_number?.trim()) ctxLines.push(`Stock: ${est.stock_number.trim()}`);
   if (ctxLines.length > 0) memoParts.push(ctxLines.join(' · '));
   memoParts.push(`FleetSuite Estimate #${est.estimate_number}`);
   return memoParts.join('\n');
@@ -94,6 +95,7 @@ export interface EstimateDocumentCompany {
 export interface FleetDocVehicle {
   estimateNumber: string | number | null;
   unitNumber: string | null;
+  stockNumber?: string | null;
   vin: string | null;
   grandTotal: number | string | null;
   /** That vehicle's own approval page; absent on the compose preview. */
@@ -249,6 +251,7 @@ export function renderEstimateDocument(est: any, lines: any[], opts: EstimateDoc
     escHtml(vehicleDescription(est)),
     !fleet && est.vin ? `VIN ${escHtml(est.vin)}` : '',
     !fleet && est.unit_number ? `Unit ${escHtml(est.unit_number)}` : '',
+    !fleet && est.stock_number ? `Stock ${escHtml(est.stock_number)}` : '',
   ].filter(Boolean).join(' &middot; ');
   if (vehicleLine) identityLinesHtml.push(vehicleLine);
   const refLine = [
@@ -415,7 +418,7 @@ function fleetVehiclesHtml(vehicles: FleetDocVehicle[], shown: any): string {
       v.pdfUrl ? `<a href="${escHtml(v.pdfUrl)}" style="color:#1d4ed8;text-decoration:underline;">PDF</a>` : '',
     ].filter(Boolean).join(' &middot; ');
     return `<tr>
-      <td style="${td}font-weight:700;">${escHtml(v.unitNumber || '—')}</td>
+      <td style="${td}font-weight:700;">${escHtml(v.unitNumber || '—')}${v.stockNumber ? `<div style="font-size:11px;font-weight:400;color:#6b7280;">Stock ${escHtml(v.stockNumber)}</div>` : ''}</td>
       <td style="${td}">#${escHtml(v.estimateNumber ?? '')}${v.vin ? `<div style="font-size:11px;color:#6b7280;font-family:ui-monospace,monospace;word-break:break-all;">VIN ${escHtml(v.vin)}</div>` : ''}${links ? `<div style="font-size:12px;margin-top:3px;">${links}</div>` : ''}</td>
       <td style="${td}text-align:right;white-space:nowrap;">${money(v.grandTotal)}</td>
     </tr>`;

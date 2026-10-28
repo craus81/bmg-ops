@@ -52,6 +52,7 @@ interface ScanLog {
   part_description: string | null;
   billable_customer: string | null;
   unit_number: string | null;
+  stock_number?: string | null;
   serial_number: string | null;
   imei: string | null;
   iccid: string | null;
@@ -665,6 +666,7 @@ export default function AdminScansPage() {
       s.part_number,
       s.billable_customer,
       s.unit_number,
+      s.stock_number,
       s.location_name,
       s.po_number,
       cniByScanId[s.id],
@@ -922,13 +924,13 @@ export default function AdminScansPage() {
       }
     } catch { /* vendor columns are best-effort — the export still works */ }
 
-    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'Vendor', 'Vendor Invoice #', 'Vendor Cost', 'Vendor Invoice Total', 'CNI Job', 'Installer(s)', 'Installer Company', 'Scanned By', 'Scanner Company', 'Date', 'Status'];
+    const headers = ['VIN', 'Year', 'Make', 'Model', 'Part Number', 'Description', 'Billable Customer', 'Unit #', 'Stock #', 'Serial #', 'IMEI', 'CCID', 'Location', 'PO Number', 'Vendor', 'Vendor Invoice #', 'Vendor Cost', 'Vendor Invoice Total', 'CNI Job', 'Installer(s)', 'Installer Company', 'Scanned By', 'Scanner Company', 'Date', 'Status'];
     const data = rows.map(s => {
       const inv = invById.get(s.vendor_invoice_id || '');
       return [
         s.vin, s.vehicle_year || '', s.vehicle_make || '', s.vehicle_model || '',
         s.part_number || '', s.part_description || '', s.billable_customer || '',
-        s.unit_number || '', s.serial_number || '', s.imei || '', s.iccid || '',
+        s.unit_number || '', s.stock_number || '', s.serial_number || '', s.imei || '', s.iccid || '',
         s.location_name || '', s.po_number || '',
         s.installer_name || inv?.vendor_name || '', inv?.invoice_number || '',
         s.install_cost != null ? Number(s.install_cost).toFixed(2) : '',
@@ -1150,6 +1152,7 @@ export default function AdminScansPage() {
   const [bulkEditMake, setBulkEditMake] = useState('');
   const [bulkEditModel, setBulkEditModel] = useState('');
   const [bulkEditUnit, setBulkEditUnit] = useState('');
+  const [bulkEditStock, setBulkEditStock] = useState('');
   const [bulkEditSerial, setBulkEditSerial] = useState('');
   const [bulkEditImei, setBulkEditImei] = useState('');
   const [bulkEditIccid, setBulkEditIccid] = useState('');
@@ -1197,6 +1200,7 @@ export default function AdminScansPage() {
     setBulkEditMake(one?.vehicle_make || '');
     setBulkEditModel(one?.vehicle_model || '');
     setBulkEditUnit(one?.unit_number || '');
+    setBulkEditStock(one?.stock_number || '');
     setBulkEditSerial(one?.serial_number || '');
     setBulkEditImei(one?.imei || '');
     setBulkEditIccid(one?.iccid || '');
@@ -1310,6 +1314,7 @@ export default function AdminScansPage() {
       updates.vehicle_make = bulkEditMake.trim() || null;
       updates.vehicle_model = bulkEditModel.trim() || null;
       updates.unit_number = bulkEditUnit.trim() || null;
+      updates.stock_number = bulkEditStock.trim() || null;
       updates.serial_number = bulkEditSerial.trim().toUpperCase() || null;
       updates.imei = bulkEditImei.trim() || null;
       updates.iccid = bulkEditIccid.trim() || null;
@@ -1376,6 +1381,7 @@ export default function AdminScansPage() {
     setBulkEditMake('');
     setBulkEditModel('');
     setBulkEditUnit('');
+    setBulkEditStock('');
     setBulkEditSerial('');
     setBulkEditImei('');
     setBulkEditIccid('');
@@ -2125,6 +2131,10 @@ export default function AdminScansPage() {
               <div>
                 <div style={fieldLabel}>Unit #</div>
                 <input value={bulkEditUnit} onChange={e => setBulkEditUnit(e.target.value)} style={fieldBox} />
+              </div>
+              <div>
+                <div style={fieldLabel}>Stock #</div>
+                <input value={bulkEditStock} onChange={e => setBulkEditStock(e.target.value)} style={fieldBox} />
               </div>
             </div>
           )}
@@ -3074,6 +3084,11 @@ export default function AdminScansPage() {
                         Unit {scan.unit_number}
                       </span>
                     )}
+                    {scan.stock_number && (
+                      <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                        Stock {scan.stock_number}
+                      </span>
+                    )}
                     {scan.po_number && <PoChip poId={scan.po_id} poNumber={scan.po_number} size={8} />}
                     {cniByScanId[scan.id] && (
                       <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(6,182,212,0.12)', color: '#06b6d4' }}>
@@ -3425,6 +3440,11 @@ export default function AdminScansPage() {
                                   {scan.unit_number && (
                                     <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
                                       Unit {scan.unit_number}
+                                    </span>
+                                  )}
+                                  {scan.stock_number && (
+                                    <span style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                                      Stock {scan.stock_number}
                                     </span>
                                   )}
                                   {scan.po_number && <PoChip poId={scan.po_id} poNumber={scan.po_number} size={8} />}

@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
 
   const { data: sources, error: srcErr } = await service
     .from('scan_logs')
-    .select('id, vin, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, body_class, billable_customer, unit_number, location_id, location_name, installer_name, scanned_at, scanned_by, scanned_by_company')
+    .select('id, vin, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, body_class, billable_customer, unit_number, stock_number, location_id, location_name, installer_name, scanned_at, scanned_by, scanned_by_company')
     .in('id', scanIds);
   if (srcErr) return NextResponse.json({ error: srcErr.message }, { status: 500 });
   if (!sources || sources.length === 0) {
@@ -98,6 +98,7 @@ export async function POST(req: NextRequest) {
         part_description: partDescription || catalogPart?.display_name || null,
         billable_customer: source.billable_customer ?? catalogPart?.billable_customer ?? null,
         unit_number: source.unit_number,
+        stock_number: source.stock_number,
         location_id: source.location_id,
         location_name: source.location_name,
         installer_name: source.installer_name,

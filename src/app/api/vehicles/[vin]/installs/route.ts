@@ -58,7 +58,7 @@ export async function GET(req: NextRequest, { params }: { params: { vin: string 
     // The install spine: every scan of this VIN, newest first.
     const { data: scans, error: scanErr } = await supabase
       .from('scan_logs')
-      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, serial_number, imei, iccid, location_name, scanned_by, scanned_by_company, scanned_at')
+      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, part_number, part_description, billable_customer, unit_number, stock_number, serial_number, imei, iccid, location_name, scanned_by, scanned_by_company, scanned_at')
       .ilike('vin', vin)
       .order('scanned_at', { ascending: false })
       .limit(MAX_INSTALLS);
@@ -172,6 +172,7 @@ export async function GET(req: NextRequest, { params }: { params: { vin: string 
         partNumber: s.part_number || null,
         partDescription: s.part_description || null,
         unitNumber: s.unit_number || null,
+        stockNumber: (s as any).stock_number || null,
         serialNumber: s.serial_number || null,
         imei: s.imei || null,
         iccid: s.iccid || null,
@@ -201,6 +202,7 @@ export async function GET(req: NextRequest, { params }: { params: { vin: string 
           partNumber: null,
           partDescription: null,
           unitNumber: null,
+          stockNumber: null,
           serialNumber: null,
           imei: null,
           iccid: null,

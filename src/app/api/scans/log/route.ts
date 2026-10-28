@@ -21,6 +21,7 @@ const Schema = z.object({
   part_description: z.string().trim().max(500).optional().nullable(),
   billable_customer: z.string().trim().max(200).optional().nullable(),
   unit_number: z.string().trim().max(60).optional().nullable(),
+  stock_number: z.string().trim().max(60).optional().nullable(),
   serial_number: z.string().trim().max(64).optional().nullable(),
   imei: z.string().trim().max(32).optional().nullable(),
   iccid: z.string().trim().max(32).optional().nullable(),

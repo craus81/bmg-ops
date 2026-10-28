@@ -7,6 +7,10 @@ describe('estimateVehicleLine', () => {
       vehicle_year: 2025, vehicle_platforms: { label: 'Ford Transit 148' }, unit_number: '12', vin: '1FTBR3X8XRKA12345',
     })).toBe('2025 Ford Transit 148 · Unit 12 · VIN 1FTBR3X8XRKA12345');
   });
+  it('adds the stock number after the unit', () => {
+    expect(estimateVehicleLine({ vehicle_year: 2025, vehicle_other: 'Transit', unit_number: '12', stock_number: 'F24-0912' }))
+      .toBe('2025 Transit · Unit 12 · Stock F24-0912');
+  });
   it('falls back to the typed vehicle and drops what is missing', () => {
     expect(estimateVehicleLine({ vehicle_other: 'Box truck', vin: null })).toBe('Box truck');
     expect(estimateVehicleLine({})).toBeNull();

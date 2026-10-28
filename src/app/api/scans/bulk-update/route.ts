@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     const allowedFields = [
       ...singleScanOnlyFields,
       'part_number', 'part_description', 'billable_customer',
-      'unit_number', 'location_id', 'location_name', 'installer_name',
+      'unit_number', 'stock_number', 'location_id', 'location_name', 'installer_name',
       'po_id', 'po_number', 'po_line_item_id',
       'invoice_number', 'date_invoiced', 'is_paid',
       'archived_at', 'exported_at', 'exported_by',

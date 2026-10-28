@@ -22,6 +22,14 @@ describe('renderEstimateDocument vehicle identity (K5)', () => {
     expect(html).toContain('Unit T-204');
   });
 
+  it('prints the stock number beside the unit number', () => {
+    const html = renderEstimateDocument(
+      { ...baseEst, vin: '1FTBW3XM5PKA12345', unit_number: '4417', stock_number: 'F24-0912' },
+      []
+    );
+    expect(html).toContain('Unit 4417 &middot; Stock F24-0912');
+  });
+
   it('prints VIN alone without a dangling separator', () => {
     const html = renderEstimateDocument({ ...baseEst, vin: 'PKA12345' }, []);
     expect(html).toContain('VIN PKA12345');
@@ -233,6 +241,11 @@ describe('estimateContextMemo', () => {
       'Vehicle: 2026 Ford Transit · medium roof · Delivery: Deliver to site · Unit: T-204',
       'FleetSuite Estimate #EST-2608-ABCD',
     ].join('\n'));
+  });
+
+  it('carries the stock number into the memo after the unit', () => {
+    expect(estimateContextMemo({ estimate_number: 'EST-1', unit_number: '4417', stock_number: ' F24-0912 ' }))
+      .toBe('Unit: 4417 · Stock: F24-0912\nFleetSuite Estimate #EST-1');
   });
 
   it('collapses to just the estimate number when nothing else is set', () => {
