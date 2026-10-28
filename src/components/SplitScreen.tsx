@@ -16,9 +16,10 @@ import { useNavTabs } from '@/components/useNavTabs';
 import { useAuth } from '@/components/AuthProvider';
 import { AI_TAB_ID } from '@/lib/nav-tabs';
 import { getTextZoom } from '@/lib/text-size';
+import type { DroppedLines } from '@/lib/pane-drop-targets';
 import {
   defaultSplitState, dropLabel, otherPane, paneAt, paneName, parseSplitState, safePaneUrl, splitAvailable, splitDirection, splitOn,
-  SPLIT_STORAGE_KEY, type HostMessage, type PaneId, type PaneMessage, type PaneRect, type SplitState,
+  SPLIT_STORAGE_KEY, type DragKind, type HostMessage, type PaneId, type PaneMessage, type PaneRect, type SplitState,
 } from '@/lib/split-screen';
 
 interface SplitCtx {
@@ -210,11 +211,18 @@ export function SplitPanes() {
   const areaRef = useRef<HTMLDivElement>(null);
   const wrapRefs = useRef<Record<PaneId, HTMLDivElement | null>>({ a: null, b: null });
   const frameRefs = useRef<Record<PaneId, HTMLIFrameElement | null>>({ a: null, b: null });
-  const [drag, setDrag] = useState<{ from: PaneId; id: string; name: string; x: number; y: number; over: PaneId | null } | null>(null);
+  const [drag, setDrag] = useState<{
+    from: PaneId; kind: DragKind; id: string; name: string; lines?: DroppedLines; x: number; y: number; over: PaneId | null;
+  } | null>(null);
   const dragRef = useRef(drag);
   dragRef.current = drag;
-  // What a Client Files drop does on each pane (PaneBridge reports it).
-  const [hints, setHints] = useState<Record<PaneId, string | null>>({ a: null, b: null });
+  // What a drop does on each pane (PaneBridge reports it).
+  type Hint = { clientFile: string | null; lines: string | null };
+  const [hints, setHints] = useState<Record<PaneId, Hint>>({ a: { clientFile: null, lines: null }, b: { clientFile: null, lines: null } });
+  const hintsRef = useRef(hints);
+  hintsRef.current = hints;
+  // The pane a part or kit in hand was last shown over, so it hears when it leaves.
+  const overSent = useRef<PaneId | null>(null);
   const pages = usePickerPages();
 
   // Where each pane's frame sits in the split area, in the area's px.
@@ -227,14 +235,34 @@ export function SplitPanes() {
     return { a: r('a'), b: r('b') };
   }, []);
 
+  const sendTo = (p: PaneId, msg: HostMessage) => frameRefs.current[p]?.contentWindow?.postMessage(msg, window.location.origin);
+
+  // A part or kit in hand: tell the pane under it where it is (to show
+  // where it would land), and the one it left that it's gone.
+  const showOver = useCallback((d: { kind: DragKind; from: PaneId; x: number; y: number; over: PaneId | null } | null) => {
+    const target = d && d.kind === 'lines' && d.over && d.over !== d.from && hintsRef.current[d.over].lines ? d.over : null;
+    if (overSent.current && overSent.current !== target) sendTo(overSent.current, { type: 'fs-host-drag-over', at: null });
+    overSent.current = target;
+    if (d && target) {
+      const r = frameRects()[target];
+      if (r.width && r.height) sendTo(target, { type: 'fs-host-drag-over', at: { fx: (d.x - r.left) / r.width, fy: (d.y - r.top) / r.height } });
+    }
+  }, [frameRects]);
+
   const drop = useCallback((d: NonNullable<typeof drag>) => {
     setDrag(null);
-    if (d.over && d.over !== d.from && panes) {
+    showOver(null);
+    if (!d.over || d.over === d.from || !panes) return;
+    if (d.kind === 'lines') {
+      if (!d.lines || !hintsRef.current[d.over].lines) return; // no estimate open there
       panes.setActive(d.over);
-      const w = frameRefs.current[d.over]?.contentWindow;
-      w?.postMessage({ type: 'fs-host-open-client-file', id: d.id, name: d.name, dropped: true } satisfies HostMessage, window.location.origin);
+      const r = frameRects()[d.over];
+      sendTo(d.over, { type: 'fs-host-drop-lines', lines: d.lines, fx: r.width ? (d.x - r.left) / r.width : 0, fy: r.height ? (d.y - r.top) / r.height : 1 });
+      return;
     }
-  }, [panes]);
+    panes.setActive(d.over);
+    sendTo(d.over, { type: 'fs-host-open-client-file', id: d.id, name: d.name, dropped: true });
+  }, [panes, frameRects, showOver]);
 
   useEffect(() => {
     if (!panes) return;
@@ -252,8 +280,11 @@ export function SplitPanes() {
         const url = safePaneUrl(msg.url);
         if (url) panes.setPaneUrl(p, url);
       } else if (msg?.type === 'fs-pane-drop-hint') {
-        const hint = typeof msg.clientFile === 'string' ? msg.clientFile : null;
-        setHints(h => (h[p] === hint ? h : { ...h, [p]: hint }));
+        const hint: Hint = {
+          clientFile: typeof msg.clientFile === 'string' ? msg.clientFile : null,
+          lines: typeof msg.lines === 'string' ? msg.lines : null,
+        };
+        setHints(h => (h[p].clientFile === hint.clientFile && h[p].lines === hint.lines ? h : { ...h, [p]: hint }));
       } else if (msg?.type === 'fs-pane-touch') {
         panes.setActive(p);
       } else if (msg?.type === 'fs-pane-send-client-file' && typeof msg.id === 'string') {
@@ -266,21 +297,26 @@ export function SplitPanes() {
         const x = rect.left + msg.fx * rect.width;
         const y = rect.top + msg.fy * rect.height;
         const over = paneAt(x, y, frameRects());
-        if (msg.phase === 'start' && msg.id) {
-          setDrag({ from: p, id: msg.id, name: msg.name || 'File', x, y, over });
+        if (msg.phase === 'start' && msg.kind === 'lines' && Array.isArray(msg.lines?.lines)) {
+          setDrag({ from: p, kind: 'lines', id: '', name: msg.lines.name || msg.name || 'Part', lines: msg.lines, x, y, over });
+        } else if (msg.phase === 'start' && msg.id) {
+          setDrag({ from: p, kind: 'client-file', id: msg.id, name: msg.name || 'File', x, y, over });
         } else if (msg.phase === 'move') {
-          setDrag(d => (d ? { ...d, x, y, over } : d));
+          const d = dragRef.current;
+          if (d) showOver({ ...d, x, y, over });
+          setDrag(prev => (prev ? { ...prev, x, y, over } : prev));
         } else if (msg.phase === 'end') {
           const d = dragRef.current;
           if (d) drop({ ...d, x, y, over });
         } else {
           setDrag(null);
+          showOver(null);
         }
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [panes, frameRects, drop]);
+  }, [panes, frameRects, drop, showOver]);
 
   // A mouse that leaves the frame it started in reports here instead.
   useEffect(() => {
@@ -292,7 +328,10 @@ export function SplitPanes() {
     };
     const onMove = (e: MouseEvent) => {
       const { x, y } = toArea(e);
-      setDrag(d => (d ? { ...d, x, y, over: paneAt(x, y, frameRects()) } : d));
+      const over = paneAt(x, y, frameRects());
+      const d = dragRef.current;
+      if (d) showOver({ ...d, x, y, over });
+      setDrag(prev => (prev ? { ...prev, x, y, over } : prev));
     };
     const onUp = (e: MouseEvent) => {
       const d = dragRef.current;
@@ -303,7 +342,7 @@ export function SplitPanes() {
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
-  }, [drag, frameRects, drop]);
+  }, [drag, frameRects, drop, showOver]);
 
   if (!panes) return null;
   const { state, srcs, direction } = panes;
@@ -312,12 +351,15 @@ export function SplitPanes() {
   const half = cols ? `calc(50vw / var(--ts) - ${GAP / 2}px)` : `calc(50vh / var(--ts) - var(--hdr-h, 60px) - ${GAP / 2}px)`;
   const after = cols ? `calc(50vw / var(--ts) + ${GAP / 2}px)` : `calc(50vh / var(--ts) - var(--hdr-h, 60px) + ${GAP / 2}px)`;
 
+  // Letting go over this pane does something (a part needs an estimate open there).
+  const canDropOn = (p: PaneId | null) => !!drag && !!p && p !== drag.from && (drag.kind === 'client-file' || !!hints[p].lines);
+
   const paneStyle = (p: PaneId): React.CSSProperties => {
     const first = p === 'a';
     const base: React.CSSProperties = {
       position: 'absolute', display: 'flex', flexDirection: 'column', overflow: 'hidden',
       background: 'var(--bg)', boxSizing: 'border-box',
-      border: `2px solid ${drag?.over === p && drag.from !== p ? 'var(--success, #16a34a)' : state.active === p ? 'rgba(59,130,246,0.55)' : 'transparent'}`,
+      border: `2px solid ${drag?.over === p && canDropOn(p) ? 'var(--success, #16a34a)' : state.active === p ? 'rgba(59,130,246,0.55)' : 'transparent'}`,
       borderRadius: '6px',
     };
     return cols
@@ -383,13 +425,15 @@ export function SplitPanes() {
         <div style={{ position: 'absolute', inset: 0, zIndex: 3, cursor: 'grabbing', touchAction: 'none' }}>
           <div style={{
             position: 'absolute', left: drag.x, top: drag.y, transform: 'translate(-50%, -120%)', pointerEvents: 'none',
-            background: 'var(--card)', border: `2px solid ${drag.over && drag.over !== drag.from ? 'var(--success, #16a34a)' : 'var(--accent, #2563eb)'}`,
+            background: 'var(--card)', border: `2px solid ${canDropOn(drag.over) ? 'var(--success, #16a34a)' : 'var(--accent, #2563eb)'}`,
             borderRadius: '10px', padding: '8px 12px', boxShadow: '0 6px 20px rgba(0,0,0,0.25)', maxWidth: '260px',
             fontSize: '12.5px', fontWeight: 700, color: 'var(--text-primary)',
           }}>
-            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {drag.name}</div>
+            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{drag.kind === 'lines' ? '🔩' : '📄'} {drag.name}</div>
             <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', marginTop: '2px' }}>
-              {drag.over && drag.over !== drag.from ? dropLabel(hints[drag.over]) : 'Drag to the other side'}
+              {drag.over && drag.over !== drag.from
+                ? dropLabel(drag.kind === 'lines' ? hints[drag.over].lines : hints[drag.over].clientFile, drag.kind)
+                : 'Drag to the other side'}
             </div>
           </div>
         </div>

@@ -59,7 +59,8 @@ import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import EstimateFilesSection from '@/components/EstimateFilesSection';
 import { LinkedClientFiles } from '@/components/GraphicsJobClientFiles';
-import { useClientFileDropTarget } from '@/lib/pane-drop-targets';
+import { useClientFileDropTarget, useDropTarget, type DropPoint, type DroppedLines } from '@/lib/pane-drop-targets';
+import { dropIndex, duplicateKit, duplicatePartLine, insertAt, type DropAnchor } from '@/lib/estimate-line-drop';
 import EstimateReviewRequest from '@/components/EstimateReviewRequest';
 import { bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
 import EstimatePartsRequestModal from '@/components/EstimatePartsRequestModal';
@@ -1830,12 +1831,28 @@ export default function EstimatesPage() {
   // decrement on invoice, exactly like hand-picked parts. A rack kit's lines
   // also share a kit group, so the estimate shows them under one priced
   // rack line; a plain package just explodes.
-  const addKitLines = (kit: KitWithMembers) => {
+  const addKitLines = async (kit: KitWithMembers) => {
     const added = kitEstimateLines(kit).map(l => ({ ...l, key: genKey() }));
-    setLines(prev => [...prev, ...added]);
     setPartSearch('');
     setPartResults([]);
     setKitResults([]);
+    const dup = await confirmDuplicateKit(added);
+    if (dup !== 'none') return;
+    setLines(prev => [...prev, ...added]);
+  };
+
+  // The same rack or hitch kit twice (Craig, 2026-10-28): warn, and put it
+  // on the kit's quantity instead of a second kit. 'none' = not on yet.
+  const confirmDuplicateKit = async (added: LineItem[]): Promise<'none' | 'added' | 'cancelled'> => {
+    const dup = duplicateKit(lines, added);
+    if (!dup) return 'none';
+    const ok = await dialog.confirm(
+      `${dup.name} is already on this estimate (qty ${dup.quantity}). This adds 1 to that kit's quantity instead of a second kit.`,
+      { title: 'Duplicate kit', confirmLabel: 'Add 1 to quantity' },
+    );
+    if (!ok) return 'cancelled';
+    setKitQuantity(dup.groupId, dup.quantity + 1);
+    return 'added';
   };
 
   // A rack from the Build a rack picker (src/lib/rack-picker.ts): the kit's
@@ -4131,6 +4148,67 @@ export default function EstimatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- estimates/extras only gate the first landing
   }, [loading, searchParams, estimates, quoteExtras.loaded]);
 
+  // ── Split screen: parts and kits dropped from the catalog on the other side ──
+  // They land where they're let go (Craig, 2026-10-28): above or below the
+  // line under the point, never inside a kit, at the end anywhere else. A
+  // part already on its own line goes on that line's quantity after a warning.
+  const [lineDropAt, setLineDropAt] = useState<DropAnchor | 'end' | null>(null);
+  const lineDropAnchor = (at: DropPoint): DropAnchor | null => {
+    if (estSortCol) return null; // a column sort has no "where"
+    const row = document.elementsFromPoint(at.x, at.y)
+      .map(el => (el as HTMLElement).closest?.('[data-linekey]') as HTMLElement | null)
+      .find(Boolean);
+    if (row?.dataset.linekey) {
+      const r = row.getBoundingClientRect();
+      return { key: row.dataset.linekey, before: at.y < r.top + r.height / 2 };
+    }
+    const first = document.querySelector<HTMLElement>('[data-linekey]');
+    if (first?.dataset.linekey && at.y < first.getBoundingClientRect().top) return { key: first.dataset.linekey, before: true };
+    return null;
+  };
+  const flashLines = (keys: string[]) => {
+    window.setTimeout(() => {
+      const els = keys.map(k => document.querySelector<HTMLElement>(`[data-linekey="${k}"]`)).filter((el): el is HTMLElement => !!el);
+      els[0]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      els.forEach(el => { el.classList.remove('note-flash'); void el.offsetWidth; el.classList.add('note-flash'); });
+      window.setTimeout(() => els.forEach(el => el.classList.remove('note-flash')), 2200);
+    }, 50);
+  };
+  const dropLines = async (dropped: DroppedLines, at: DropPoint) => {
+    setLineDropAt(null);
+    const same = dropped.partId ? duplicatePartLine(lines, dropped.partId) : null;
+    if (same) {
+      const add = dropped.lines[0]?.quantity || 1;
+      const ok = await dialog.confirm(
+        `${same.item_number} is already on this estimate (qty ${same.quantity}). This adds ${add} to that line's quantity instead of a second line.`,
+        { title: 'Duplicate part', confirmLabel: `Add ${add} to quantity` },
+      );
+      if (!ok) return;
+      setLines(prev => prev.map(l => (l.key === same.key ? { ...l, quantity: Math.round((l.quantity + add) * 10000) / 10000 } : l)));
+      flashLines([same.key]);
+      return;
+    }
+    const added: LineItem[] = dropped.lines.map(l => ({ ...l, key: genKey() }));
+    const dupKit = duplicateKit(lines, added);
+    if (dupKit) {
+      if ((await confirmDuplicateKit(added)) === 'added') {
+        flashLines(lines.filter(l => l.kit_group_id === dupKit.groupId).map(l => l.key));
+      }
+      return;
+    }
+    const anchor = lineDropAnchor(at);
+    setLines(prev => insertAt(prev, added, dropIndex(prev, anchor)));
+    flashLines(added.map(l => l.key));
+  };
+  useDropTarget('lines', view === 'builder' ? 'Let go to add it here' : null, dropLines, at => {
+    if (!at) { setLineDropAt(null); return; }
+    const anchor = lineDropAnchor(at);
+    setLineDropAt(prev => {
+      const next = anchor ?? 'end';
+      return prev === next || (prev && next !== 'end' && prev !== 'end' && prev.key === next.key && prev.before === next.before) ? prev : next;
+    });
+  });
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: '40px 0' }}>
@@ -5293,8 +5371,8 @@ export default function EstimatesPage() {
 
         {/* Line item rows */}
         {lines.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-label)', fontSize: '12px', border: '1px dashed var(--border)', borderRadius: '8px' }}>
-            Search for parts above or add a custom line item
+          <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-label)', fontSize: '12px', border: `1px dashed ${lineDropAt ? '#3b82f6' : 'var(--border)'}`, borderRadius: '8px' }}>
+            {lineDropAt ? 'Let go to add it here' : 'Search for parts above or add a custom line item'}
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -5327,6 +5405,9 @@ export default function EstimatesPage() {
                 data-linekey={line.key}
                 style={{
                   ...(draggingKey === line.key ? { background: 'rgba(96,165,250,0.08)', borderRadius: '8px' } : {}),
+                  // Where a part dragged from the other side of split screen would land.
+                  ...(lineDropAt && lineDropAt !== 'end' && lineDropAt.key === line.key
+                    ? { boxShadow: lineDropAt.before ? '0 -3px 0 0 #3b82f6' : '0 3px 0 0 #3b82f6' } : {}),
                   // Components sit indented under their rack's heading.
                   ...(kitGroup ? { paddingLeft: '14px', borderLeft: '2px solid rgba(96,165,250,0.35)', marginLeft: '4px' } : {}),
                 }}
@@ -5749,6 +5830,7 @@ export default function EstimatesPage() {
               </div>
               );
             })}
+            {lineDropAt === 'end' && <div aria-hidden="true" style={{ height: '3px', borderRadius: '2px', background: '#3b82f6' }} />}
           </div>
         )}
       </div>
