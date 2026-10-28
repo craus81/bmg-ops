@@ -200,6 +200,88 @@ export async function addWrapQuoteToEstimate(
   });
 }
 
+/**
+ * Take a Graphics Builder worksheet back off an estimate (Craig,
+ * 2026-10-28): its 3M Vinyl / Graphics Install Labor / custom lines come
+ * off, the estimate's totals are recomputed, and the worksheet is unpinned
+ * (estimate_id cleared) so the next builder save can't put the lines back.
+ * The worksheet itself is kept in the builder's Worksheets list, and a
+ * graphics job made from it is left as it is.
+ *
+ * Fleet copies of the estimate that still carry this worksheet's lines lose
+ * them too, unless they're approved or on a sales order (reported).
+ */
+export async function removeWrapQuoteFromEstimate(
+  supabase: SupabaseClient,
+  estimateId: string,
+  wrapQuoteId: string,
+): Promise<{ status: number; body: any }> {
+  const [{ data: estimate }, { data: quote }] = await Promise.all([
+    supabase.from('estimates').select('id, tax_rate, tax_exempt, labor_rate, labor_hours_override, customer_approved, status, netsuite_so_id, vehicle_count, discount_type, discount_value, fleet_group_id').eq('id', estimateId).maybeSingle(),
+    supabase.from('wrap_quotes').select('id, quote_number, estimate_id').eq('id', wrapQuoteId).maybeSingle(),
+  ]);
+  if (!estimate) return result({ error: 'Estimate not found' }, { status: 404 });
+  if (!quote || quote.estimate_id !== estimateId) {
+    return result({ error: 'That graphics worksheet is not on this estimate. If it came with a fleet order, remove it from the estimate it was built on.' }, { status: 404 });
+  }
+  if (estimate.netsuite_so_id) {
+    return result({ error: 'This estimate was already converted to a Sales Order — its graphics can\'t be removed.' }, { status: 409 });
+  }
+  if (estimate.customer_approved || estimate.status === 'accepted') {
+    return result({ error: 'The customer already approved this estimate — its graphics can\'t be removed. Start a new estimate instead.' }, { status: 409 });
+  }
+
+  const reviewedBefore = await snapshotReviewedContent(supabase, estimateId);
+
+  const { data: removed, error: delErr } = await supabase
+    .from('estimate_line_items')
+    .delete()
+    .eq('estimate_id', estimateId)
+    .eq('wrap_quote_id', wrapQuoteId)
+    .select('id');
+  if (delErr) return result({ error: delErr.message }, { status: 500 });
+
+  const { error: unpinErr } = await supabase
+    .from('wrap_quotes')
+    .update({ estimate_id: null, updated_at: new Date().toISOString() })
+    .eq('id', wrapQuoteId);
+  if (unpinErr) return result({ error: unpinErr.message }, { status: 500 });
+
+  await refreshEstimateTotals(supabase, estimate, !!estimate.tax_exempt);
+  const reviewCleared = await clearReviewIfContentChanged(supabase, estimateId, reviewedBefore, null);
+
+  const fleet: FleetSync = { updated: [], locked: [] };
+  if (estimate.fleet_group_id) {
+    const { data: siblings } = await supabase
+      .from('estimates')
+      .select('id, estimate_number, tax_rate, tax_exempt, labor_rate, labor_hours_override, customer_approved, status, netsuite_so_id, vehicle_count, discount_type, discount_value')
+      .eq('fleet_group_id', estimate.fleet_group_id)
+      .neq('id', estimateId);
+    const { data: carrying } = siblings && siblings.length > 0
+      ? await supabase.from('estimate_line_items').select('estimate_id').eq('wrap_quote_id', wrapQuoteId).in('estimate_id', siblings.map(s => s.id))
+      : { data: [] as { estimate_id: string }[] };
+    const withLines = new Set((carrying || []).map(l => l.estimate_id));
+    for (const sib of siblings || []) {
+      if (!withLines.has(sib.id)) continue;
+      if (sib.netsuite_so_id || sib.customer_approved || sib.status === 'accepted') {
+        fleet.locked.push(sib.estimate_number);
+        continue;
+      }
+      await supabase.from('estimate_line_items').delete().eq('estimate_id', sib.id).eq('wrap_quote_id', wrapQuoteId);
+      await refreshEstimateTotals(supabase, sib, !!sib.tax_exempt);
+      fleet.updated.push(sib.estimate_number);
+    }
+  }
+
+  return result({
+    success: true,
+    quoteNumber: quote.quote_number,
+    linesRemoved: (removed || []).length,
+    reviewCleared,
+    fleet: fleet.updated.length || fleet.locked.length ? fleet : null,
+  });
+}
+
 /** The worksheet's Tax exempt switch, or null when it was never set. */
 function worksheetTaxExempt(quote: { pricing_overrides?: unknown }): boolean | null {
   return readPricingOverrides(quote.pricing_overrides)?.tax_exempt ?? null;

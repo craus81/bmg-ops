@@ -6,6 +6,7 @@ import { fleetWorksheetIds, worksheetFilter } from '@/lib/estimate-fleet';
 import { sanitizePhotoProofs } from '@/lib/coverage-proof';
 import { coveragePictures } from '@/lib/estimate-graphics';
 import { sameOriginStorageUrl } from '@/lib/r2';
+import { removeWrapQuoteFromEstimate } from '@/lib/wrap-quote-estimate';
 
 export const dynamic = 'force-dynamic';
 
@@ -100,8 +101,20 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     .order('created_at', { ascending: true });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Graphics jobs made from each worksheet, so Remove can say they stay.
+  const ids = (data || []).map((q: any) => q.id);
+  const { data: jobs } = ids.length > 0
+    ? await supabase.from('graphics_jobs').select('id, job_number, wrap_quote_id').in('wrap_quote_id', ids)
+    : { data: [] as any[] };
+
   const sharedSet = new Set(shared);
-  return NextResponse.json({ quotes: (data || []).map((q: any) => ({ ...describeQuote(q), sharedFromFleet: sharedSet.has(q.id) })) });
+  return NextResponse.json({
+    quotes: (data || []).map((q: any) => ({
+      ...describeQuote(q),
+      sharedFromFleet: sharedSet.has(q.id),
+      jobs: (jobs || []).filter((j: any) => j.wrap_quote_id === q.id).map((j: any) => ({ id: j.id, jobNumber: j.job_number })),
+    })),
+  });
 }
 
 /**
@@ -164,4 +177,26 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     .maybeSingle();
 
   return NextResponse.json({ success: true, quote: fresh ? describeQuote(fresh) : null });
+}
+
+const DeleteSchema = z.object({ wrapQuoteId: z.string().uuid() });
+
+/**
+ * DELETE /api/estimates/[id]/graphics-attach — take a worksheet off this
+ * estimate: its lines come off, totals are recomputed, and the worksheet
+ * stays in the Graphics Builder unpinned. Same locks as PATCH.
+ */
+export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
+  const auth = await requireFeature(req, 'estimates');
+  if (auth.error) return auth.error;
+
+  const parsed = await validateBody(req, DeleteSchema);
+  if (parsed.error) return parsed.error;
+
+  try {
+    const { status, body } = await removeWrapQuoteFromEstimate(supabase, params.id, parsed.data.wrapQuoteId);
+    return NextResponse.json(body, { status });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
 }
