@@ -5232,7 +5232,7 @@ export default function EstimatesPage() {
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
                 background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
                 boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-                maxHeight: 'min(65vh, 560px)', overflowY: 'auto', marginTop: '2px',
+                maxHeight: 'min(calc(65vh / var(--ts)), 560px)', overflowY: 'auto', marginTop: '2px',
               }}>
                 {/* Rack kits first: one click adds the rack with its
                     components beneath it. */}
