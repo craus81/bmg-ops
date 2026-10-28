@@ -245,6 +245,10 @@ interface WrapAttachQuote {
   laborTotal: number;
   total: number;
   attach: { diagram?: boolean; attachments?: boolean; films?: boolean } | null;
+  /** Pinned to another estimate of this fleet order — removed there. */
+  sharedFromFleet?: boolean;
+  /** Graphics jobs made from this worksheet (they stay when it's removed). */
+  jobs?: { id: string; jobNumber: string | null }[];
 }
 
 /** A linked job's file as the approval compose proof picker lists it. */
@@ -1118,6 +1122,8 @@ export default function EstimatesPage() {
   // own. See /api/estimates/[id]/graphics-attach.
   const [wrapAttachQuotes, setWrapAttachQuotes] = useState<WrapAttachQuote[]>([]);
   const [wrapAttachSaving, setWrapAttachSaving] = useState<string | null>(null);
+  // Why Remove failed on a worksheet card, shown in red under its buttons.
+  const [wrapRemoveError, setWrapRemoveError] = useState<{ id: string; message: string } | null>(null);
   // Just back from the wrap builder's Save & add (&wrapAdded=<quote id>):
   // that quote's card says it was saved and added.
   const [wrapJustAdded, setWrapJustAdded] = useState<string | null>(null);
@@ -3818,6 +3824,48 @@ export default function EstimatesPage() {
     }
   };
 
+  // Take a worksheet off this estimate: its lines come off and the totals
+  // follow; the worksheet stays in the Graphics Builder (Craig, 2026-10-28).
+  const removeWrapQuote = async (q: WrapAttachQuote) => {
+    if (!editingId || wrapAttachSaving) return;
+    setWrapRemoveError(null);
+    const lineCount = lines.filter(l => l.wrap_quote_id === q.id).length;
+    const jobNames = (q.jobs || []).map(j => j.jobNumber || 'a graphics job');
+    const message = [
+      `Remove ${q.quoteNumber} from this estimate?`,
+      lineCount > 0
+        ? `Its ${lineCount} line${lineCount === 1 ? '' : 's'}${q.total > 0 ? ` (${fmt(q.total)})` : ''} come off and the estimate total updates.`
+        : 'It has no lines on this estimate, so the total doesn\'t change.',
+      'The worksheet stays in Graphics Builder → Worksheets.',
+      jobNames.length > 0 ? `${jobNames.join(', ')} made from it stays as it is.` : '',
+    ].filter(Boolean).join('\n\n');
+    if (!(await dialog.confirm(message, { destructive: true, confirmLabel: 'Remove' }))) return;
+    setWrapAttachSaving(q.id);
+    try {
+      const res = await fetch(`/api/estimates/${editingId}/graphics-attach`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wrapQuoteId: q.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        setWrapRemoveError({ id: q.id, message: apiErrorMessage(data, 'Could not remove this worksheet from the estimate.') });
+        return;
+      }
+      // The server already took the lines off; drop them here too so the
+      // next save doesn't write them back.
+      setLines(prev => prev.filter(l => l.wrap_quote_id !== q.id));
+      setWrapAttachQuotes(prev => prev.filter(x => x.id !== q.id));
+      if (data.fleet?.locked?.length) {
+        await dialog.alert(`Removed. ${data.fleet.locked.join(', ')} in this fleet order ${data.fleet.locked.length === 1 ? 'is' : 'are'} approved or on a sales order, so ${data.fleet.locked.length === 1 ? 'it keeps' : 'they keep'} these graphics.`);
+      }
+    } catch {
+      setWrapRemoveError({ id: q.id, message: 'Network error — please try again.' });
+    } finally {
+      setWrapAttachSaving(null);
+    }
+  };
+
   const removeCopiedProof = async (jobId: string) => {
     if (!editingId) return;
     try {
@@ -5972,6 +6020,25 @@ export default function EstimatesPage() {
                           }}
                         >Edit in Graphics Builder</button>
                       </div>
+                      {!q.sharedFromFleet && (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '4px' }}>
+                          <button
+                            onClick={() => removeWrapQuote(q)}
+                            disabled={saving || busy}
+                            title="Take this worksheet and its lines off this estimate; the worksheet stays in the Graphics Builder"
+                            style={{
+                              padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 700,
+                              background: 'transparent', border: '1px solid rgba(239,68,68,0.5)',
+                              color: '#ef4444', cursor: saving || busy ? 'wait' : 'pointer', whiteSpace: 'nowrap',
+                            }}
+                          >Remove from estimate</button>
+                        </div>
+                      )}
+                      {wrapRemoveError?.id === q.id && (
+                        <div style={{ fontSize: '11px', fontWeight: 600, color: '#ef4444', marginBottom: '4px' }}>
+                          {wrapRemoveError.message}
+                        </div>
+                      )}
                       <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                         {q.filmNames.length > 0
                           ? q.filmNames.join(', ')
