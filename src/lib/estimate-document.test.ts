@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderEstimateDocument, vehicleDescription, estimateContextMemo } from './estimate-document';
+import { renderEstimateDocument, renderEstimateBatchDocument, vehicleDescription, estimateContextMemo } from './estimate-document';
 
 // The estimate document is the legal record the customer approves — the
 // send-for-approval email and the frozen signed snapshot both come from this
@@ -349,5 +349,33 @@ describe('renderEstimateDocument fleet order', () => {
     const html = renderEstimateDocument(est, [], { fleet: { vehicles: [vehicles[0]] } });
     expect(html).toContain('Estimate #EST-1450');
     expect(html).toContain('Unit 101');
+  });
+});
+
+// Several of one customer's estimates in one approval email (Craig,
+// 2026-10-28): different jobs, so each is a row with its own links and no
+// one estimate's items stand in for the rest.
+describe('renderEstimateBatchDocument', () => {
+  const estimates = [
+    { estimateNumber: 'EST-2610-041', title: 'Upfit + decals', vehicle: '2026 Transit 250 · Unit 4417', grandTotal: 6842.1, reviewUrl: 'https://x/approve/estimate/t1', pdfUrl: 'https://x/p1' },
+    { estimateNumber: 'EST-2610-045', title: 'Ladder rack', vehicle: null, grandTotal: 4315.55, reviewUrl: 'https://x/approve/estimate/t2', pdfUrl: 'https://x/p2' },
+  ];
+
+  it('lists each estimate with its links and the total of all of them', () => {
+    const html = renderEstimateBatchDocument(estimates, 'Metro Plumbing', { ctaUrl: 'https://x/approve/fleet/t1', ctaLabel: 'Review & approve all 2' });
+    expect(html).toContain('2 estimates for your approval');
+    expect(html).toContain('#EST-2610-041, #EST-2610-045');
+    expect(html).toContain('Prepared for Metro Plumbing');
+    expect(html).toContain('https://x/approve/estimate/t2');
+    expect(html).toContain('https://x/p1');
+    expect(html).toContain('Total (2 estimates)');
+    expect(html).toContain('$11157.65');
+    expect(html).toContain('Review &amp; approve all 2');
+    expect(html).not.toContain('vehicles');
+  });
+
+  it('escapes what staff typed', () => {
+    const html = renderEstimateBatchDocument([{ ...estimates[0], title: '<b>x</b>' }], null);
+    expect(html).toContain('&lt;b&gt;x&lt;/b&gt;');
   });
 });
