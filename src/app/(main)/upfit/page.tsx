@@ -316,12 +316,16 @@ export default function UpfitProjectsPage() {
     // already-open project (same-route push, no remount) still flashes.
     const noteId = searchParams.get('note');
     const taskId = searchParams.get('task');
-    const subKey = `${projectId}:${noteId || ''}:${taskId || ''}`;
+    // Scheduling alerts (migration 450) land on the parts or dates card.
+    const focus = searchParams.get('focus');
+    const subKey = `${projectId}:${noteId || ''}:${taskId || ''}:${focus || ''}`;
     const focusSubRecords = () => {
       if (flashedSubRecordKey.current === subKey) return;
       flashedSubRecordKey.current = subKey;
       if (noteId) flashNote(`upnote-${noteId}`);
       if (taskId) flashNote(`uptask-${taskId}`);
+      if (focus === 'parts') flashNote('upfit-parts-readiness');
+      if (focus === 'dates') flashNote('upfit-key-dates');
     };
     if (selected?.id === projectId) {
       // Project already open — just focus the linked note/task.
@@ -1035,7 +1039,7 @@ export default function UpfitProjectsPage() {
         {/* Key dates — parts + customer schedule. Anyone who talks to the
             customer fills in drop-off / need-back; those two drive the shop
             arrival schedule. */}
-        <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
+        <div id="upfit-key-dates" style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
           <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Key Dates</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '10px' }}>
             {([
@@ -1047,6 +1051,7 @@ export default function UpfitProjectsPage() {
               <div key={field}>
                 <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
                 <input
+                  id={`upfit-date-${field}`}
                   type="date"
                   value={(selected[field] || '').slice(0, 10)}
                   onChange={e => saveDate(field, e.target.value)}
@@ -1117,7 +1122,7 @@ export default function UpfitProjectsPage() {
             NetSuite) vs on order (synced vendor POs, matched by part
             number since vendor POs aren't linked to the SO). */}
         {selected.netsuite_so_id && (
-          <div style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
+          <div id="upfit-parts-readiness" style={{ background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '12px', marginBottom: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
               <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                 Parts Readiness{readiness?.soNumber ? ` · ${readiness.soNumber}` : ''}
@@ -1177,8 +1182,36 @@ export default function UpfitProjectsPage() {
                       fontSize: '11px', fontWeight: 800, padding: '7px 10px', borderRadius: '8px', marginBottom: '8px',
                       background: `${color}1f`, color, border: `1px solid ${color}59`,
                     }}>
-                      {v === 'reserved' && '✓ All parts reserved for this job — ready to schedule'}
+                      {v === 'reserved' && (selected.customer_dropoff_date
+                        ? `✓ All parts reserved — drop-off set for ${fmt(selected.customer_dropoff_date)}`
+                        : '✓ All parts reserved for this job — ready to schedule')}
+                      {v === 'reserved' && !selected.customer_dropoff_date && (
+                        <>
+                          <div style={{ marginTop: '3px', fontWeight: 600, color: theme.textMuted }}>Call the customer and set the drop-off date.</div>
+                          <button
+                            onClick={() => {
+                              flashNote('upfit-key-dates');
+                              setTimeout(() => (document.getElementById('upfit-date-customer_dropoff_date') as HTMLInputElement | null)?.focus(), 400);
+                            }}
+                            style={{ display: 'block', marginTop: '6px', padding: '6px 10px', borderRadius: '7px', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.4)', color: '#22c55e', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+                          >
+                            📅 Set drop-off date
+                          </button>
+                        </>
+                      )}
                       {v === 'ready' && '✓ All parts available — reserve them so another job can\'t claim them'}
+                      {v === 'ready' && (
+                        <>
+                          <div style={{ marginTop: '3px', fontWeight: 600, color: theme.textMuted }}>Check the shelf first. Once they&apos;re reserved, whoever schedules installs is told to book it.</div>
+                          <button
+                            onClick={() => allocate({ action: 'allocate_all' })}
+                            disabled={readinessLoading}
+                            style={{ display: 'block', marginTop: '6px', padding: '6px 10px', borderRadius: '7px', background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.4)', color: '#22c55e', fontSize: '11px', fontWeight: 800, cursor: readinessLoading ? 'default' : 'pointer', opacity: readinessLoading ? 0.6 : 1 }}
+                          >
+                            📦 Reserve all parts
+                          </button>
+                        </>
+                      )}
                       {v === 'waiting' && `⏳ Waiting on parts already on order${readiness.summary.lastEta ? ` — last ETA ${fmt(readiness.summary.lastEta)}` : ''}`}
                       {v === 'short' && `✗ ${readiness.summary.short} part${readiness.summary.short !== 1 ? 's' : ''} not in stock or on order — don't schedule yet`}
                       {v === 'short' && (() => {

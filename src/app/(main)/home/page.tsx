@@ -7,6 +7,7 @@ import MentionsInbox from '@/components/MentionsInbox';
 import MyHome from '@/components/MyHome';
 import { resolveDashboardFocus } from '@/lib/dashboard-focus';
 import NeedsInstallDate from '@/components/NeedsInstallDate';
+import ReadyToSchedule from '@/components/ReadyToSchedule';
 
 const OpsDashboard = lazy(() => import('@/components/OpsDashboard'));
 const FinancialsDashboard = lazy(() => import('@/components/FinancialsDashboard'));
@@ -53,6 +54,7 @@ function AdminDashboard() {
     <div>
       <MentionsInbox />
       <NeedsInstallDate />
+      <ReadyToSchedule />
       {showMyWeek && <MyHome role="sales" embedded />}
       {bothTabs && (
         <div style={{ display: 'flex', gap: '4px', marginBottom: '14px', background: 'var(--card)', borderRadius: '10px', padding: '3px' }}>

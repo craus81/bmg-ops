@@ -183,6 +183,10 @@
     {
       "path": "/api/cron/outreach-draft",
       "schedule": "28 11-23 * * 1-5"
+    },
+    {
+      "path": "/api/cron/job-schedule-alerts",
+      "schedule": "49 12-23 * * 1-5"
     }
   ],
   "headers": [

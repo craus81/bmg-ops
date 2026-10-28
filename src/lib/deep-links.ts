@@ -69,9 +69,10 @@ export const deepLinks = {
       : `/upfit?id=${task.projectId}&task=${task.taskId}`,
   /** The FleetSuite sales order page (read live from NetSuite; admins edit). */
   salesOrder: (netsuiteId: string | number) => `/sales-orders/${encodeURIComponent(String(netsuiteId))}`,
-  /** Upfit board — opens the project detail (optionally flashing a note or task). */
-  upfitProject: (projectId: string, opts?: { noteId?: string | null; taskId?: string | null }) =>
-    `/upfit?id=${projectId}${opts?.noteId ? `&note=${opts.noteId}` : ''}${opts?.taskId ? `&task=${opts.taskId}` : ''}`,
+  /** Upfit board — opens the project detail (optionally flashing a note or
+   *  task, or the Parts Readiness / Key Dates card for scheduling alerts). */
+  upfitProject: (projectId: string, opts?: { noteId?: string | null; taskId?: string | null; focus?: 'parts' | 'dates' }) =>
+    `/upfit?id=${projectId}${opts?.noteId ? `&note=${opts.noteId}` : ''}${opts?.taskId ? `&task=${opts.taskId}` : ''}${opts?.focus ? `&focus=${opts.focus}` : ''}`,
   /** Estimates page — opens the estimate in the builder view; flashNotes
    *  scroll-flashes the Internal Notes field (estimate-note mentions).
    *  from: 'quotes' makes the builder's back button return to that row on
