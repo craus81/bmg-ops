@@ -31,6 +31,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import NetsuiteVendorSearch from '@/components/NetsuiteVendorSearch';
+import VendorPickModal from '@/components/VendorPickModal';
 import PartsDemandTab from '@/components/PartsDemandTab';
 import CreatePoReviewModal, { type CreatePoResult, type ReviewRequest } from '@/components/CreatePoReviewModal';
 import { theme } from '@/lib/theme';
@@ -149,6 +150,7 @@ export default function PurchasingQueuePage() {
   const [pickerOpen, setPickerOpen] = useState<string | null>(null);
   const [creatingPo, setCreatingPo] = useState<string | null>(null);
   const [lastPo, setLastPo] = useState<CreatePoResult | null>(null);
+  const [vendorFor, setVendorFor] = useState<RequestRow | null>(null);
   const [review, setReview] = useState<{ vendor: string; gv: { id: string; name: string }; rows: RequestRow[] } | null>(null);
   // Ticked queue rows, for Mark ordered and to pre-tick the PO review.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -310,10 +312,27 @@ export default function PurchasingQueuePage() {
     await patch(r.id, { quantity: qty });
   };
 
-  const editVendor = async (r: RequestRow) => {
-    const name = await dialog.prompt(`Vendor for ${r.item_number} (as named in NetSuite):`, r.vendor_name || '');
-    if (name === null) return;
-    await patch(r.id, { vendorName: name });
+  // The row's Vendor button picks from the NetSuite vendor list (or keeps
+  // a typed name), so the request carries the id Create PO needs.
+  const editVendor = (r: RequestRow) => setVendorFor(r);
+
+  /** A vendor picked on a group is saved to every row in it, so it is
+   *  still there after a reload (it used to live only in this page). */
+  const saveGroupVendor = async (vendor: string, rows: RequestRow[], v: { id: string; name: string }) => {
+    setVendorSel(prev => ({ ...prev, [vendor]: v }));
+    setPickerOpen(null);
+    try {
+      const res = await fetch('/api/purchase-requests', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: rows.map(r => r.id), vendorName: v.name, vendorNetsuiteId: v.id }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      setVendorSel(prev => { const next = { ...prev }; delete next[vendor]; return next; });
+      await load();
+    } catch (e: any) {
+      await dialog.alert(`The vendor is picked for now, but it didn't save: ${e?.message || 'unknown error'}`);
+    }
   };
 
   /** The NetSuite vendor a group's PO would go to: an explicit pick wins;
@@ -629,6 +648,9 @@ export default function PurchasingQueuePage() {
                       </button>
                     </span>
                   )}
+                  {!gv && !unassigned && pickerOpen !== vendor && (
+                    <span style={{ fontSize: '10px', fontWeight: 700, color: '#f59e0b' }}>No NetSuite match for “{vendor}”</span>
+                  )}
                   {!gv && pickerOpen !== vendor && (
                     <button onClick={() => setPickerOpen(vendor)}
                       style={{ padding: '5px 10px', borderRadius: '7px', background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
@@ -660,10 +682,8 @@ export default function PurchasingQueuePage() {
                     style={{ background: 'none', border: 'none', color: theme.textMuted, cursor: 'pointer', fontSize: '12px', padding: 0 }}>✕</button>
                 </div>
                 <NetsuiteVendorSearch autoFocus placeholder={unassigned ? 'Search NetSuite vendors by name…' : `Search NetSuite for “${vendor}”…`}
-                  onSelect={v => {
-                    setVendorSel(prev => ({ ...prev, [vendor]: { id: v.id, name: v.companyName || v.entityId } }));
-                    setPickerOpen(null);
-                  }} />
+                  initialQuery={unassigned ? '' : vendor}
+                  onSelect={v => saveGroupVendor(vendor, rows, { id: v.id, name: v.companyName || v.entityId })} />
               </div>
             )}
             <div style={{ overflowX: 'auto' }}>
@@ -879,6 +899,18 @@ export default function PurchasingQueuePage() {
             </table>
           </div>
         </div>
+      )}
+      {vendorFor && (
+        <VendorPickModal
+          title={`Vendor for ${vendorFor.item_number}`}
+          initialName={vendorFor.vendor_name || ''}
+          onClose={() => setVendorFor(null)}
+          onPick={v => {
+            const r = vendorFor;
+            setVendorFor(null);
+            patch(r.id, { vendorName: v.name, vendorNetsuiteId: v.netsuiteId });
+          }}
+        />
       )}
       {review && (
         <CreatePoReviewModal
