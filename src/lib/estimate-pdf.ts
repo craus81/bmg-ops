@@ -128,6 +128,7 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     vehicleDescription(est),
     est.vin ? `VIN ${est.vin}` : '',
     est.unit_number ? `Unit ${est.unit_number}` : '',
+    est.stock_number ? `Stock ${est.stock_number}` : '',
   ].filter(Boolean).join(' · ');
   doc.setFontSize(9.5).setTextColor(55, 65, 81);
   if (vehicleLine) {

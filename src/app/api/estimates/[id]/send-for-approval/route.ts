@@ -295,6 +295,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       vehicles: orderEstimates.map(e => ({
         estimateNumber: e.estimate_number,
         unitNumber: e.unit_number || null,
+        stockNumber: e.stock_number || null,
         vin: e.vin || null,
         grandTotal: e.grand_total,
         reviewUrl: urls?.get(e.id)?.reviewUrl || null,
@@ -306,7 +307,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const batchRows = (urls?: Map<string, { reviewUrl: string; pdfUrl: string }>): BatchDocEstimate[] => orderEstimates.map(e => ({
     estimateNumber: e.estimate_number,
     title: e.title || null,
-    vehicle: [vehicleDescription(e), e.unit_number ? `Unit ${e.unit_number}` : null].filter(Boolean).join(' · ') || null,
+    vehicle: [vehicleDescription(e), e.unit_number ? `Unit ${e.unit_number}` : null, e.stock_number ? `Stock ${e.stock_number}` : null].filter(Boolean).join(' · ') || null,
     grandTotal: e.grand_total,
     reviewUrl: urls?.get(e.id)?.reviewUrl || null,
     pdfUrl: urls?.get(e.id)?.pdfUrl || null,

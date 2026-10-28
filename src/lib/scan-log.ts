@@ -28,6 +28,7 @@ export interface ScanRecordInput {
   part_description?: string | null;
   billable_customer?: string | null;
   unit_number?: string | null;
+  stock_number?: string | null;
   serial_number?: string | null;
   imei?: string | null;
   iccid?: string | null;
@@ -164,6 +165,7 @@ export async function logScan(
       part_description: rec.part_description ?? null,
       billable_customer: rec.billable_customer ?? null,
       unit_number: rec.unit_number ?? null,
+      stock_number: rec.stock_number ?? null,
       serial_number: serial,
       imei,
       iccid,

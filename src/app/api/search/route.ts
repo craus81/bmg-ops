@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 const supabase = createServiceClient();
 
 const MAX_PER_GROUP = 5;
-const ESTIMATE_COLS = 'id, estimate_number, netsuite_estimate_number, customer_id, prospect_id, customer_name, title, vin, unit_number, status, total, created_at';
+const ESTIMATE_COLS = 'id, estimate_number, netsuite_estimate_number, customer_id, prospect_id, customer_name, title, vin, unit_number, stock_number, status, total, created_at';
 /** Rows per text group (memos, notes) on the full results page (?full=1). */
 const FULL_PER_GROUP = 25;
 
@@ -136,12 +136,13 @@ export async function GET(req: NextRequest) {
     // Estimates — search by either estimate number (FleetSuite's own and
     // NetSuite's, since staff may have written down either, with or without
     // the dashes), the SO number it became, customer name, title, the
-    // customer's PO, VIN and unit number
+    // customer's PO, VIN, unit number and stock number (a number column, so
+    // F24-0912 is found typed as F240912)
     supabase
       .from('estimates')
       .select(ESTIMATE_COLS, { count: 'exact' })
       .or(anyOfWithNumbers(
-        ['estimate_number', 'netsuite_estimate_number', 'netsuite_so_number'],
+        ['estimate_number', 'netsuite_estimate_number', 'netsuite_so_number', 'stock_number'],
         ['customer_name', 'title', 'po_number', 'vin', 'unit_number'],
       ))
       .order('created_at', { ascending: false })

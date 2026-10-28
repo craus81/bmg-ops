@@ -66,6 +66,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     title: e.title || null,
     vehicle: vehicleDescription(e) || null,
     unitNumber: e.unit_number || null,
+    stockNumber: e.stock_number || null,
     vin: e.vin || null,
     grandTotal: Number(e.grand_total) || 0,
     state: e.customer_approved

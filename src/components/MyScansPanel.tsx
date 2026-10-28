@@ -23,6 +23,7 @@ interface MyScan {
   vehicle: string | null;
   parts: string[];
   unitNumber: string | null;
+  stockNumber?: string | null;
   customer: string | null;
   location: string | null;
   scannedAt: string;
@@ -147,7 +148,7 @@ export default function MyScansPanel({ onClose, waitingPhotos = 0 }: {
                   </span>
                 </div>
                 <div style={{ fontSize: '12px', color: theme.textSecondary }}>
-                  {[s.vehicle, s.parts.join(' + '), s.unitNumber ? `Unit ${s.unitNumber}` : null].filter(Boolean).join(' · ')}
+                  {[s.vehicle, s.parts.join(' + '), s.unitNumber ? `Unit ${s.unitNumber}` : null, s.stockNumber ? `Stock ${s.stockNumber}` : null].filter(Boolean).join(' · ')}
                   {s.customer && <span style={{ color: '#a78bfa', fontWeight: 600 }}> · {s.customer}</span>}
                 </div>
                 {s.photos.length === 0 ? (

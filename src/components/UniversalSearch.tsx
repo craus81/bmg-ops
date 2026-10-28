@@ -183,7 +183,7 @@ export function renderResult(group: string, item: any, onSelect: (group: string,
             </div>
           </div>
           <div style={subtitleStyle}>
-            {[item.customer_name || '', item.title || '', estimateAltNumber(item), item.vin ? `VIN ${item.vin}` : '', item.created_at ? formatDate(item.created_at) : ''].filter(Boolean).join(' · ')}
+            {[item.customer_name || '', item.title || '', estimateAltNumber(item), item.unit_number ? `Unit ${item.unit_number}` : '', item.stock_number ? `Stock ${item.stock_number}` : '', item.vin ? `VIN ${item.vin}` : '', item.created_at ? formatDate(item.created_at) : ''].filter(Boolean).join(' · ')}
           </div>
         </button>
       );

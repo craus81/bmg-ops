@@ -45,6 +45,7 @@ interface ScanEntry {
   vehicle_make: string | null;
   vehicle_model: string | null;
   unit_number: string | null;
+  stock_number?: string | null;
   serial_number: string | null;
   imei: string | null;
   iccid: string | null;
@@ -105,6 +106,7 @@ export default function ScanPage() {
   // Scanning
   const [vin, setVin] = useState('');
   const [unitNumber, setUnitNumber] = useState('');
+  const [stockNumber, setStockNumber] = useState('');
   const [vinLoading, setVinLoading] = useState(false);
   const [scans, setScans] = useState<ScanEntry[]>([]);
   const [scanError, setScanError] = useState('');
@@ -420,7 +422,7 @@ export default function ScanPage() {
     setScans([]);
     setShowCustom(false);
     setVin('');
-    setUnitNumber('');
+    setUnitNumber(''); setStockNumber('');
     setPendingScan(null);
     try { localStorage.removeItem('scan_session'); } catch {}
     prefillCustomJobDefaults();
@@ -550,7 +552,7 @@ export default function ScanPage() {
 
     let query = supabase
       .from('scan_logs')
-      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, unit_number, serial_number, imei, iccid, scanned_at')
+      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, unit_number, stock_number, serial_number, imei, iccid, scanned_at')
       .eq('scanned_by', user?.id)
       .gte('scanned_at', todayStart.toISOString())
       .order('scanned_at', { ascending: false });
@@ -575,15 +577,15 @@ export default function ScanPage() {
     formTel.markStarted();
     setScanError('');
     setScanSuccess('');
-    setUnitNumber('');
+    setUnitNumber(''); setStockNumber('');
     setPendingScan(scannedVin);
     setTimeout(() => unitRef.current?.focus(), 100);
   };
 
   const confirmPendingScan = async () => {
     if (!pendingScan) return;
-    const ok = await processVin(pendingScan, unitNumber);
-    if (ok) { setPendingScan(null); setUnitNumber(''); }
+    const ok = await processVin(pendingScan, unitNumber, undefined, stockNumber);
+    if (ok) { setPendingScan(null); setUnitNumber(''); setStockNumber(''); }
     // On failure (e.g. duplicate) keep the card open so the error is visible
     // and the user can discard.
   };
@@ -591,7 +593,7 @@ export default function ScanPage() {
   const discardPendingScan = () => {
     formTel.markAbandoned('close');
     setPendingScan(null);
-    setUnitNumber('');
+    setUnitNumber(''); setStockNumber('');
     setScanError('');
   };
 
@@ -626,8 +628,10 @@ export default function ScanPage() {
     v: string,
     unit?: string,
     deviceFields?: { serial_number: string; imei: string; iccid: string },
+    stock?: string,
   ): Promise<{ ok: boolean; error?: string; entry?: ScanEntry; label?: string; parts: number; offline: boolean; createdIds: string[] }> => {
     const unitClean = unit?.trim() || null;
+    const stockClean = stock?.trim() || null;
 
     const partsToScan = selectedParts.length > 0
       ? selectedParts.map(p => ({ partNumber: p.item_number, partDesc: p.display_name || p.description || p.item_number, billable: p.billable_customer || customCustomer || null }))
@@ -663,6 +667,7 @@ export default function ScanPage() {
         part_description: pt.partDesc,
         billable_customer: explicitCustomer ?? locationOverrideCustomer ?? pt.billable,
         unit_number: unitClean,
+        stock_number: stockClean,
         serial_number: deviceFields?.serial_number ?? null,
         imei: deviceFields?.imei ?? null,
         iccid: deviceFields?.iccid ?? null,
@@ -681,6 +686,7 @@ export default function ScanPage() {
         vehicle_make: vehicleData.vehicle_make ?? null,
         vehicle_model: vehicleData.vehicle_model ?? null,
         unit_number: unitClean,
+        stock_number: stockClean,
         serial_number: record.serial_number,
         imei: record.imei,
         iccid: record.iccid,
@@ -708,24 +714,25 @@ export default function ScanPage() {
   const handleScan = async () => {
     const v = vin.trim().toUpperCase();
     formTel.markStarted();
-    const ok = await processVin(v, unitNumber);
-    if (ok) setUnitNumber('');
+    const ok = await processVin(v, unitNumber, undefined, stockNumber);
+    if (ok) setUnitNumber(''); setStockNumber('');
   };
 
   const processVin = async (
     v: string,
     unit?: string,
     deviceFields?: { serial_number: string; imei: string; iccid: string },
+    stock?: string,
   ): Promise<boolean> => {
     if (v.length < 5) { setScanError('VIN too short'); return false; }
     setScanError('');
     setScanSuccess('');
     setVinLoading(true);
-    const r = await logVehicle(v, unit, deviceFields);
+    const r = await logVehicle(v, unit, deviceFields, stock);
     setVinLoading(false);
     if (!r.ok) { setScanError(r.error || 'Failed to save'); return false; }
     if (r.entry) setScans(prev => [r.entry!, ...prev]);
-    const unitSuffix = unit?.trim() ? ` · Unit ${unit.trim()}` : '';
+    const unitSuffix = `${unit?.trim() ? ` · Unit ${unit.trim()}` : ''}${stock?.trim() ? ` · Stock ${stock.trim()}` : ''}`;
     setScanSuccess(`${r.offline ? 'Saved offline: ' : ''}${r.label}${unitSuffix}${r.parts > 1 ? ` (${r.parts} parts)` : ''}`);
     setPhotoTargets(r.offline ? [] : r.createdIds);
     setPhotoCount(0);
@@ -1275,7 +1282,7 @@ export default function ScanPage() {
               </div>
             )}
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-              <button onClick={() => { closeServerShift(); setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); try { localStorage.removeItem('scan_session'); } catch {} prefillCustomJobDefaults(); }} style={{
+              <button onClick={() => { closeServerShift(); setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); setStockNumber(''); try { localStorage.removeItem('scan_session'); } catch {} prefillCustomJobDefaults(); }} style={{
                 padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                 background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
                 color: '#6b7280', cursor: 'pointer',
@@ -1365,6 +1372,20 @@ export default function ScanPage() {
                       color: theme.textPrimary, marginBottom: '10px',
                     }}
                   />
+                  <div style={{ fontSize: '10px', fontWeight: 700, color: theme.textMuted, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '4px' }}>
+                    Stock # (optional)
+                  </div>
+                  <input
+                    value={stockNumber}
+                    onChange={e => setStockNumber(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !vinLoading) confirmPendingScan(); }}
+                    placeholder="e.g. F24-0912"
+                    style={{
+                      width: '100%', padding: '12px 14px', borderRadius: '10px', fontSize: '15px',
+                      fontWeight: 700, border: `1px solid ${theme.border}`, background: theme.card,
+                      color: theme.textPrimary, marginBottom: '10px',
+                    }}
+                  />
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button onClick={confirmPendingScan} disabled={vinLoading} style={{
                       flex: 1, padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: 800,
@@ -1404,17 +1425,30 @@ export default function ScanPage() {
                 opacity: vinLoading || !vin.trim() ? 0.5 : 1,
               }}>{vinLoading ? '...' : 'Log'}</button>
             </div>
-            <input
-              value={unitNumber}
-              onChange={e => setUnitNumber(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && vin.trim()) handleScan(); }}
-              placeholder="Unit # (optional)"
-              style={{
-                width: '100%', padding: '10px 14px', borderRadius: '10px', fontSize: '13px',
-                fontWeight: 600, border: `1px solid ${theme.border}`, background: theme.card,
-                color: theme.textPrimary,
-              }}
-            />
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <input
+                value={unitNumber}
+                onChange={e => setUnitNumber(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && vin.trim()) handleScan(); }}
+                placeholder="Unit # (optional)"
+                style={{
+                  flex: 1, minWidth: 0, padding: '10px 14px', borderRadius: '10px', fontSize: '13px',
+                  fontWeight: 600, border: `1px solid ${theme.border}`, background: theme.card,
+                  color: theme.textPrimary,
+                }}
+              />
+              <input
+                value={stockNumber}
+                onChange={e => setStockNumber(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && vin.trim()) handleScan(); }}
+                placeholder="Stock # (optional)"
+                style={{
+                  flex: 1, minWidth: 0, padding: '10px 14px', borderRadius: '10px', fontSize: '13px',
+                  fontWeight: 600, border: `1px solid ${theme.border}`, background: theme.card,
+                  color: theme.textPrimary,
+                }}
+              />
+            </div>
           </div>
           )}
 
@@ -1577,6 +1611,11 @@ export default function ScanPage() {
                       {s.unit_number && (
                         <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
                           Unit {s.unit_number}
+                        </span>
+                      )}
+                      {s.stock_number && (
+                        <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', background: 'rgba(167,139,250,0.12)', color: '#a78bfa' }}>
+                          Stock {s.stock_number}
                         </span>
                       )}
                       <div style={{ fontSize: '10px', color: theme.textMuted }}>

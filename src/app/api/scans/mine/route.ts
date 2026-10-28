@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
 
   const scansRes = await fetchAllRows<MyScanRow>((from, to) => supabase
     .from('scan_logs')
-    .select('id, vin, part_number, unit_number, billable_customer, location_name, vehicle_year, vehicle_make, vehicle_model, scanned_at')
+    .select('id, vin, part_number, unit_number, stock_number, billable_customer, location_name, vehicle_year, vehicle_make, vehicle_model, scanned_at')
     .eq('scanned_by', auth.user.id)
     .gte('scanned_at', since)
     .order('scanned_at', { ascending: false })

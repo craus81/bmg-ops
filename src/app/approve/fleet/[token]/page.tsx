@@ -32,6 +32,7 @@ interface Vehicle {
   title?: string | null;
   vehicle?: string | null;
   unitNumber: string | null;
+  stockNumber?: string | null;
   vin: string | null;
   grandTotal: number;
   state: VehicleState;
@@ -184,10 +185,13 @@ export default function FleetApprovalPage() {
             <tr key={v.token}>
               <td style={{ ...td, paddingLeft: 0 }}>
                 <div style={{ fontWeight: 800, color: '#0f172a' }}>{batch ? `#${v.estimateNumber}` : `Unit ${v.unitNumber || '?'}`}</div>
-                {batch && (v.title || v.vehicle || v.unitNumber) && (
+                {batch && (v.title || v.vehicle || v.unitNumber || v.stockNumber) && (
                   <div style={{ fontSize: '12px', color: '#334155', overflowWrap: 'anywhere' }}>
-                    {[v.title, v.vehicle, v.unitNumber ? `Unit ${v.unitNumber}` : null].filter(Boolean).join(' · ')}
+                    {[v.title, v.vehicle, v.unitNumber ? `Unit ${v.unitNumber}` : null, v.stockNumber ? `Stock ${v.stockNumber}` : null].filter(Boolean).join(' · ')}
                   </div>
+                )}
+                {!batch && v.stockNumber && (
+                  <div style={{ fontSize: '12px', color: '#334155', overflowWrap: 'anywhere' }}>Stock {v.stockNumber}</div>
                 )}
                 <div style={{ fontSize: '11px', color: '#64748b' }}>
                   {batch ? '' : `#${v.estimateNumber} · `}<a href={`/approve/estimate/${encodeURIComponent(v.token)}${linkQuery}`} style={{ color: '#1d4ed8', fontWeight: 600 }}>Open the estimate</a>

@@ -14,6 +14,7 @@ const supabase = createServiceClient();
 const Schema = z.object({
   vehicles: z.array(z.object({
     unitNumber: z.string().trim().min(1, 'Every vehicle needs a unit number').max(40),
+    stockNumber: z.string().trim().max(60).optional().nullable(),
     vin: z.string().trim().max(17).optional().nullable(),
   })).min(1).max(25),
   /** The estimate's own unit number, when it has none yet. */
@@ -86,6 +87,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       const r = await copyEstimate(supabase, source.id, auth.user.id, {
         groupId,
         unitNumber: v.unitNumber,
+        stockNumber: String(v.stockNumber || '').trim() || null,
         vin,
         keepPo: !!keepPo,
       });

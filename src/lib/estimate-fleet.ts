@@ -9,6 +9,7 @@ export interface FleetMember {
   id: string;
   estimate_number: string;
   unit_number: string | null;
+  stock_number?: string | null;
   vin: string | null;
   status: string | null;
   customer_approved: boolean | null;
@@ -17,7 +18,7 @@ export interface FleetMember {
   grand_total: number | null;
 }
 
-const MEMBER_COLUMNS = 'id, estimate_number, unit_number, vin, status, customer_approved, netsuite_so_id, netsuite_so_number, grand_total, supersedes_estimate_id, created_at';
+const MEMBER_COLUMNS = 'id, estimate_number, unit_number, stock_number, vin, status, customer_approved, netsuite_so_id, netsuite_so_number, grand_total, supersedes_estimate_id, created_at';
 
 /** Natural order on unit numbers, so 9 sorts before 10. */
 export function compareUnits(a: string | null, b: string | null): number {

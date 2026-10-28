@@ -40,7 +40,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     job.estimate_id
       ? supabase
           .from('estimates')
-          .select('id, estimate_number, netsuite_estimate_number, netsuite_so_number, po_number, vin, unit_number, vehicle_year, vehicle_other, created_by, vehicle_platforms(label)')
+          .select('id, estimate_number, netsuite_estimate_number, netsuite_so_number, po_number, vin, unit_number, stock_number, vehicle_year, vehicle_other, created_by, vehicle_platforms(label)')
           .eq('id', job.estimate_id)
           .maybeSingle()
       : Promise.resolve({ data: null as any }),

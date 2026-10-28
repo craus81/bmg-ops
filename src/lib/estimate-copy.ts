@@ -43,6 +43,8 @@ const DROP_PREFIXES = /^(netsuite_|approval_|customer_approved|customer_reject|s
 export interface FleetCopyTarget {
   groupId: string;
   unitNumber: string;
+  /** Each vehicle's own stock number (migration 451); null leaves it blank. */
+  stockNumber?: string | null;
   vin: string | null;
   /** Keep the source's customer PO number (one PO for the whole order). */
   keepPo: boolean;
@@ -135,6 +137,7 @@ export async function copyEstimate(
   if (fleet) {
     copy.fleet_group_id = fleet.groupId;
     copy.unit_number = fleet.unitNumber;
+    copy.stock_number = fleet.stockNumber ?? null;
     copy.vin = fleet.vin;
   }
 

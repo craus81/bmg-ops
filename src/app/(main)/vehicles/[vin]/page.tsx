@@ -36,6 +36,7 @@ interface Install {
   partNumber: string | null;
   partDescription: string | null;
   unitNumber: string | null;
+  stockNumber?: string | null;
   serialNumber: string | null;
   imei: string | null;
   iccid: string | null;
@@ -212,6 +213,7 @@ export default function VehicleRecordPage() {
               ? `${install.partNumber}${install.partDescription ? ` — ${install.partDescription}` : ''}`
               : null)}
             {field('Unit #', install.unitNumber)}
+            {field('Stock #', install.stockNumber || null)}
             {field('Installed by', [install.byName, install.companyName].filter(Boolean).join(' · ') || null)}
             {field('Serial', install.serialNumber)}
             {field('IMEI', install.imei)}

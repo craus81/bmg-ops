@@ -7,6 +7,7 @@ export interface MyScanRow {
   vin: string;
   part_number: string | null;
   unit_number: string | null;
+  stock_number?: string | null;
   billable_customer: string | null;
   location_name: string | null;
   vehicle_year: number | string | null;
@@ -28,6 +29,7 @@ export interface MyScanGroup {
   vehicle: string | null;
   parts: string[];
   unitNumber: string | null;
+  stockNumber: string | null;
   customer: string | null;
   location: string | null;
   /** Earliest scan time in the group. */
@@ -65,6 +67,7 @@ export function groupMyScans(scans: MyScanRow[], photos: MyScanPhotoRow[], dayKe
         vehicle: [s.vehicle_year, s.vehicle_make, s.vehicle_model].filter(Boolean).join(' ') || null,
         parts: [],
         unitNumber: s.unit_number,
+        stockNumber: s.stock_number ?? null,
         customer: s.billable_customer,
         location: s.location_name,
         scannedAt: s.scanned_at,
@@ -75,6 +78,7 @@ export function groupMyScans(scans: MyScanRow[], photos: MyScanPhotoRow[], dayKe
     if (s.part_number && !g.parts.includes(s.part_number)) g.parts.push(s.part_number);
     if (s.scanned_at < g.scannedAt) g.scannedAt = s.scanned_at;
     g.unitNumber = g.unitNumber || s.unit_number;
+    g.stockNumber = g.stockNumber || s.stock_number || null;
     g.customer = g.customer || s.billable_customer;
     for (const p of photosByScan.get(s.id) || []) {
       if (!g.photoPaths.includes(p.storage_path)) g.photoPaths.push(p.storage_path);
