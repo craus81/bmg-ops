@@ -14,7 +14,8 @@
 //
 // A Client Files proof can go from one pane to the other: its 🎨 Builder
 // button, or press and hold and drag it across, opens it in the Graphics
-// Builder on the other side.
+// Builder on the other side. Dropped on a graphics job or a saved estimate
+// it's linked there instead (src/lib/pane-drop-targets.ts).
 
 export type PaneId = 'a' | 'b';
 
@@ -114,11 +115,17 @@ export type PaneMessage =
   | { type: 'fs-pane-url'; url: string }
   | { type: 'fs-pane-touch' }
   | { type: 'fs-pane-send-client-file'; id: string }
+  /** What a Client Files drop does on this pane now; null = opens the Graphics Builder. */
+  | { type: 'fs-pane-drop-hint'; clientFile: string | null }
   | { type: 'fs-pane-drag'; phase: 'start' | 'move' | 'end' | 'cancel'; fx: number; fy: number; id?: string; name?: string };
 
 export type HostMessage =
   | { type: 'fs-host-go'; url: string }
-  | { type: 'fs-host-open-client-file'; id: string };
+  /** dropped: let go over this pane (a page that takes drops gets it), not the 🎨 Builder button. */
+  | { type: 'fs-host-open-client-file'; id: string; dropped?: boolean; name?: string };
+
+/** What the file in hand says over the other pane. */
+export const dropLabel = (hint: string | null | undefined) => hint || 'Let go to open it in the Graphics Builder';
 
 /** Window event the Graphics Builder listens for, to read a dropped file onto the open worksheet. */
 export const OPEN_CLIENT_FILE_EVENT = 'fs-open-client-file';
