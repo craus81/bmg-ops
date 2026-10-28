@@ -22,6 +22,8 @@ import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-cus
 import { isPartTaxable, partTaxReason } from '@/lib/line-taxability';
 import { marginPct, priceForMargin } from '@/lib/pricing-request';
 import { looseMatcher, partNumberIncludes } from '@/lib/loose-search';
+import { paneLinesSource, useInPane } from '@/lib/pane-drop-targets';
+import { partDropped } from '@/lib/estimate-line-drop';
 
 interface Part {
   id: string;
@@ -117,6 +119,8 @@ const partScore = (p: Part) =>
 const bestKeeperId = (g: Part[]) => [...g].sort((a, b) => partScore(b) - partScore(a))[0].id;
 
 export default function PartsPage() {
+  // Split screen: rows drag onto an estimate on the other side.
+  const inPane = useInPane();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, isAdmin, isSales, hasFeature, canSeeMoney, loading: authLoading } = useAuth();
@@ -1160,7 +1164,7 @@ export default function PartsPage() {
               : null;
 
             return (
-              <div key={part.id} id={`part-row-${part.id}`} style={{
+              <div key={part.id} id={`part-row-${part.id}`} {...paneLinesSource(`part:${part.id}`, () => partDropped(part), inPane)} style={{
                 borderRadius: '10px',
                 background: 'var(--card)',
                 border: highlightId === part.id ? '1px solid #60a5fa' : '1px solid var(--border)',

@@ -11,7 +11,9 @@
  *  - lets a proof be pressed and held (or dragged with a mouse) and dropped
  *    on the other pane, which opens it in the Graphics Builder there — or,
  *    on a page that takes drops (src/lib/pane-drop-targets.ts), hands it
- *    to that page, whose label it reports ahead of time.
+ *    to that page, whose label it reports ahead of time;
+ *  - does the same for a part or kit from the catalog (data-pane-lines),
+ *    which an open estimate on the other side adds where it's let go.
  */
 
 import { useEffect, useRef } from 'react';
@@ -20,7 +22,7 @@ import {
   builderUrlFor, clientFileFromBuilderLink, OPEN_CLIENT_FILE_EVENT, safePaneUrl,
   type HostMessage, type PaneMessage,
 } from '@/lib/split-screen';
-import { currentClientFileDropTarget, onClientFileDropTargetsChange } from '@/lib/pane-drop-targets';
+import { currentDropTarget, linesFromSource, onDropTargetsChange, type DroppedLines } from '@/lib/pane-drop-targets';
 
 const HOLD_MS = 400;
 const MOVE_SLOP = 10;
@@ -48,9 +50,13 @@ export default function PaneBridge() {
 
   // What a drop does here, for the label on the file in hand.
   useEffect(() => {
-    const report = () => post({ type: 'fs-pane-drop-hint', clientFile: currentClientFileDropTarget()?.label ?? null });
+    const report = () => post({
+      type: 'fs-pane-drop-hint',
+      clientFile: currentDropTarget('client-file')?.label ?? null,
+      lines: currentDropTarget('lines')?.label ?? null,
+    });
     report();
-    return onClientFileDropTargetsChange(report);
+    return onDropTargetsChange(report);
   }, []);
 
   useEffect(() => {
@@ -85,21 +91,28 @@ export default function PaneBridge() {
         const url = safePaneUrl(msg.url);
         if (url) router.push(url);
       } else if (msg?.type === 'fs-host-open-client-file' && typeof msg.id === 'string') {
-        const target = msg.dropped ? currentClientFileDropTarget() : null;
+        const target = msg.dropped ? currentDropTarget('client-file') : null;
         if (target) {
-          target.onDrop({ id: msg.id, name: typeof msg.name === 'string' ? msg.name : 'File' });
+          target.onDrop({ id: msg.id, name: typeof msg.name === 'string' ? msg.name : 'File' }, { x: 0, y: 0 });
         } else if (pathRef.current.startsWith('/admin/wrap-quote')) {
           window.dispatchEvent(new CustomEvent(OPEN_CLIENT_FILE_EVENT, { detail: { id: msg.id } }));
         } else {
           router.push(builderUrlFor(msg.id));
         }
+      } else if (msg?.type === 'fs-host-drag-over') {
+        currentDropTarget('lines')?.onOver?.(msg.at ? toPoint(msg.at.fx, msg.at.fy) : null);
+      } else if (msg?.type === 'fs-host-drop-lines' && Array.isArray(msg.lines?.lines)) {
+        const target = currentDropTarget('lines');
+        target?.onOver?.(null);
+        target?.onDrop(msg.lines, toPoint(msg.fx, msg.fy));
       }
     };
     window.addEventListener('message', onMessage);
 
-    // ── Drag a proof across ──
+    // ── Drag a proof, part or kit across ──
+    type Source = { kind: 'client-file'; id: string; name: string } | { kind: 'lines'; key: string; name: string };
     let hold: number | null = null;
-    let start: { x: number; y: number; id: string; name: string } | null = null;
+    let start: ({ x: number; y: number } & Source) | null = null;
     let dragging = false;
     const frac = (x: number, y: number) => ({ fx: x / window.innerWidth, fy: y / window.innerHeight });
     const reset = () => {
@@ -109,14 +122,26 @@ export default function PaneBridge() {
     };
     const begin = (x: number, y: number) => {
       if (!start) return;
+      let lines: DroppedLines | null = null;
+      if (start.kind === 'lines') {
+        lines = linesFromSource(start.key);
+        if (!lines || lines.lines.length === 0) { reset(); return; }
+      }
       dragging = true;
       document.documentElement.setAttribute('data-fs-dragging', '');
-      post({ type: 'fs-pane-drag', phase: 'start', id: start.id, name: start.name, ...frac(x, y) });
+      post(start.kind === 'lines'
+        ? { type: 'fs-pane-drag', phase: 'start', kind: 'lines', name: lines!.name, lines: lines!, ...frac(x, y) }
+        : { type: 'fs-pane-drag', phase: 'start', kind: 'client-file', id: start.id, name: start.name, ...frac(x, y) });
     };
-    const sourceOf = (t: EventTarget | null) => {
-      const el = (t as Element | null)?.closest?.('[data-client-file-id]') as HTMLElement | null;
-      const id = el?.dataset.clientFileId;
-      return id ? { id, name: el!.dataset.clientFileName || 'File' } : null;
+    const sourceOf = (t: EventTarget | null): Source | null => {
+      const at = t as Element | null;
+      // Typing, picking and ticking stay what they are.
+      if (at?.closest?.('input, textarea, select, [contenteditable="true"]')) return null;
+      const el = at?.closest?.('[data-client-file-id], [data-pane-lines]') as HTMLElement | null;
+      if (!el) return null;
+      if (el.dataset.paneLines) return { kind: 'lines', key: el.dataset.paneLines, name: '' };
+      const id = el.dataset.clientFileId;
+      return id ? { kind: 'client-file', id, name: el.dataset.clientFileName || 'File' } : null;
     };
 
     // Touch: press and hold, then drag. Moving first is a scroll.
@@ -210,4 +235,9 @@ function post(msg: PaneMessage) {
   try {
     window.parent.postMessage(msg, window.location.origin);
   } catch { /* the page around us went away */ }
+}
+
+/** A point the page around us sent as fractions of this frame, in this pane's viewport px. */
+function toPoint(fx: number, fy: number) {
+  return { x: fx * window.innerWidth, y: fy * window.innerHeight };
 }

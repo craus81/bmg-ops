@@ -26,6 +26,8 @@ import { useImageDrop } from '@/lib/use-image-drop';
 import { rackBaseNumber } from '@/lib/rack-kit-facets';
 import { partNumberIncludes } from '@/lib/loose-search';
 import { kitBuildableFor, loadKits, loadKitStock, normItem, type KitBuildable, type KitWithMembers } from '@/lib/part-kits';
+import { paneLinesSource, useInPane } from '@/lib/pane-drop-targets';
+import { kitDropped } from '@/lib/estimate-line-drop';
 
 interface RackRow {
   kit: KitWithMembers;
@@ -42,6 +44,8 @@ export default function RackKitsPage() {
   const canEditPhotos = isAdmin || hasFeature('parts_ordering');
   const supabase = createClient();
   const [rows, setRows] = useState<RackRow[]>([]);
+  // Split screen: a rack drags onto an estimate on the other side.
+  const inPane = useInPane();
   const [missingParts, setMissingParts] = useState<{ item_number: string; description: string | null; racks: number }[]>([]);
   // Prime Design merged into Ranger Design (Craig 2026-09-30): every rack
   // component is ordered from Ranger. The buy list, purchasing queue and PO
@@ -208,7 +212,7 @@ export default function RackKitsPage() {
                   const limit = r.build.components.find(c => c.item_number === r.build.bottleneck);
                   return (
                     <Fragment key={id}>
-                      <tr onClick={() => setOpen(open === id ? null : id)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
+                      <tr {...paneLinesSource(`kit:${id}`, () => kitDropped(r.kit), inPane)} onClick={() => setOpen(open === id ? null : id)} style={{ borderTop: '1px solid var(--border)', cursor: 'pointer' }}>
                         <td style={{ padding: '7px 10px' }}>
                           <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{open === id ? '▾' : '▸'} {r.kit.item_number}</div>
                           <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{r.kit.name}</div>
