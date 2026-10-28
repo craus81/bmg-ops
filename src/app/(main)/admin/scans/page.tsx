@@ -30,6 +30,8 @@ import { archiveWindowStart, fetchByIdChunks, isHistoryTab } from '@/lib/scan-lo
 import { type EmailedInfo, fetchEmailedByNumber, isBadDelivery } from '@/lib/invoice-emails';
 import { InvoiceEmailedBadge } from '@/components/InvoiceEmailedBadge';
 import { closeOnEscape } from '@/lib/modal-escape';
+import AddScanPhotosModal from '@/components/AddScanPhotosModal';
+import { dragHasFiles } from '@/components/useClientFileUploads';
 import { looseMatcher, looseOrFilter } from '@/lib/loose-search';
 
 /** One completion photo (K8, migration 190) attached to a scan. */
@@ -143,6 +145,10 @@ export default function AdminScansPage() {
   const [photosByScanId, setPhotosByScanId] = useState<Record<string, ScanPhoto[]>>({});
   // Which scan's photos are open in the lightbox, and at which one.
   const [photoViewer, setPhotoViewer] = useState<{ scanId: string; idx: number } | null>(null);
+  // "+ Photo" on a row, or photos dropped on it (Craig, 2026-10-28: photos
+  // texted and emailed in after the scan). rowDropId = row a file hovers over.
+  const [addPhotosFor, setAddPhotosFor] = useState<{ scanId: string; files?: File[] } | null>(null);
+  const [rowDropId, setRowDropId] = useState<string | null>(null);
   // scan_log_id → CNI job number, for the source column/filter (a scan is "CNI"
   // when a cni_job_vins row points at it). See docs/cni-redesign.md §3.4.
   const [cniByScanId, setCniByScanId] = useState<Record<string, string>>({});
@@ -2962,7 +2968,7 @@ export default function AdminScansPage() {
               opacity: scanningWorksheet ? 0.6 : 1,
             }}>
               {scanningWorksheet ? 'Scanning...' : 'Scan Worksheet (OCR)'}
-              <input type="file" accept="image/*,.pdf" capture="environment" onChange={handleWorksheetScan} disabled={scanningWorksheet} style={{ display: 'none' }} />
+              <input type="file" accept="image/*,.pdf" onChange={handleWorksheetScan} disabled={scanningWorksheet} style={{ display: 'none' }} />
             </label>
             </DropZone>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)', flex: 1 }}>
@@ -3368,10 +3374,30 @@ export default function AdminScansPage() {
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', paddingLeft: '10px' }}>
                             {groupScans.map(scan => (
                               <div key={scan.id}>
-                              <div className="scan-row" style={{
+                              <div
+                                className="scan-row"
+                                onDragOver={e => {
+                                  if (!dragHasFiles(e)) return;
+                                  e.preventDefault();
+                                  e.dataTransfer.dropEffect = 'copy';
+                                  if (rowDropId !== scan.id) setRowDropId(scan.id);
+                                }}
+                                onDragLeave={e => {
+                                  if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+                                  setRowDropId(id => (id === scan.id ? null : id));
+                                }}
+                                onDrop={e => {
+                                  if (!dragHasFiles(e)) return;
+                                  e.preventDefault();
+                                  setRowDropId(null);
+                                  const files = Array.from(e.dataTransfer.files || []);
+                                  if (files.length > 0) setAddPhotosFor({ scanId: scan.id, files });
+                                }}
+                                style={{
                                 display: 'flex', alignItems: 'center', gap: '8px',
                                 padding: '6px 10px', borderRadius: '6px',
-                                background: 'var(--card)', border: `1px solid ${scan.po_id ? 'rgba(34,197,94,0.15)' : 'var(--border)'}`,
+                                background: rowDropId === scan.id ? 'rgba(34,197,94,0.1)' : 'var(--card)',
+                                border: rowDropId === scan.id ? '2px dashed #22c55e' : `1px solid ${scan.po_id ? 'rgba(34,197,94,0.15)' : 'var(--border)'}`,
                               }}>
                                 <input type="checkbox" className="scan-row-chk" checked={selectedScans.has(scan.id)} onChange={() => toggleSelect(scan.id)} style={{ width: '14px', height: '14px', flexShrink: 0 }} />
                                 <div className="scan-row-main" style={{ flex: 1, minWidth: 0 }}>
@@ -3432,6 +3458,15 @@ export default function AdminScansPage() {
                                       {photosByScanId[scan.id].length} photo{photosByScanId[scan.id].length !== 1 ? 's' : ''}
                                     </button>
                                   )}
+                                  <button
+                                    type="button"
+                                    className="scan-row-add-photo"
+                                    onClick={e => { e.stopPropagation(); setAddPhotosFor({ scanId: scan.id }); }}
+                                    title="Add photos to this scan: choose files, drag them onto this line, or paste"
+                                    style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'transparent', color: '#22c55e', border: '1px dashed rgba(34,197,94,0.5)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                                  >
+                                    {rowDropId === scan.id ? 'Drop photos' : '+ Photo'}
+                                  </button>
                                   {scan.install_cost != null && (
                                     <span title={scan.installer_name ? `Paid to ${scan.installer_name}` : 'Installer cost'} style={{ fontSize: '8px', fontWeight: 700, padding: '2px 5px', borderRadius: '4px', background: 'rgba(244,114,182,0.12)', color: '#f472b6' }}>
                                       ${Number(scan.install_cost).toFixed(2)}
@@ -3487,6 +3522,28 @@ export default function AdminScansPage() {
           }}
         />
       )}
+
+      {addPhotosFor && (() => {
+        const scan = [...scans, ...archivedScans].find(s => s.id === addPhotosFor.scanId);
+        if (!scan) return null;
+        const label = [[scan.vehicle_year, scan.vehicle_make, scan.vehicle_model].filter(Boolean).join(' '), scan.part_number].filter(Boolean).join(' · ');
+        return (
+          <AddScanPhotosModal
+            scanId={scan.id}
+            vin={scan.vin}
+            label={label || undefined}
+            initialFiles={addPhotosFor.files}
+            onAdded={rows => setPhotosByScanId(prev => {
+              const next = { ...prev };
+              for (const r of rows) {
+                next[r.scan_log_id] = [...(next[r.scan_log_id] || []), { id: r.id, storage_path: r.storage_path, created_at: r.created_at, taken_by: r.taken_by }];
+              }
+              return next;
+            })}
+            onClose={() => setAddPhotosFor(null)}
+          />
+        );
+      })()}
 
       {/* Completion photos (K8) for one scan — every photo on the row, not
           just the first. Built from the open scan so paging stays inside

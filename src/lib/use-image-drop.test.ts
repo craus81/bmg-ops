@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { firstImageFile, namePastedImage } from './use-image-drop';
+import { firstImageFile, imageFiles, namePastedImage } from './use-image-drop';
 
 const file = (name: string, type: string) => new File(['x'], name, { type });
 
@@ -25,5 +25,15 @@ describe('namePastedImage', () => {
   it('keeps real file names', () => {
     const f = file('rack.jpg', 'image/jpeg');
     expect(namePastedImage(f)).toBe(f);
+  });
+});
+
+describe('imageFiles', () => {
+  it('keeps every picture in order and drops the rest', () => {
+    const out = imageFiles([file('a.jpg', 'image/jpeg'), file('notes.pdf', 'application/pdf'), file('IMG_2.HEIC', ''), file('b.png', 'image/png')]);
+    expect(out.map(f => f.name)).toEqual(['a.jpg', 'IMG_2.HEIC', 'b.png']);
+  });
+  it('is empty for nothing', () => {
+    expect(imageFiles(null)).toEqual([]);
   });
 });
