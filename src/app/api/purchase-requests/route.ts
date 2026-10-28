@@ -6,6 +6,7 @@ import { notifyMany, getAlertOwnerIds } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { computePartsReadiness } from '@/lib/parts-readiness';
 import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
+import { resolveVendorNames, vendorKey } from '@/lib/purchase-request-vendor';
 
 const supabase = createServiceClient();
 
@@ -46,13 +47,19 @@ const CreateSchema = z.object({
 });
 
 const UpdateSchema = z.object({
-  id: z.string().uuid(),
+  id: z.string().uuid().optional(),
+  /** A vendor picked on a whole Purchasing group lands on every row in it,
+   *  so the pick survives a reload. Only the vendor fields go with `ids`. */
+  ids: z.array(z.string().uuid()).min(1).max(500).optional(),
   quantity: z.number().positive().max(100000).optional(),
   vendorName: z.string().max(200).optional().nullable(),
+  /** The NetSuite vendor picked from the list. Left out with a typed
+   *  vendorName, the name is matched against the NetSuite vendor mirror. */
+  vendorNetsuiteId: z.string().regex(/^\d+$/).optional().nullable(),
   neededBy: z.string().max(20).optional().nullable(),
   note: z.string().max(1000).optional().nullable(),
   cancel: z.boolean().optional().default(false),
-});
+}).refine(b => !!b.id !== !!b.ids, { message: 'id or ids is required' });
 
 const ORDERED_PO_SELECT = 'id, netsuite_id, tranid, vendor_name, status, status_label, trandate, eta_date, tracking_number, carrier';
 
@@ -105,6 +112,23 @@ export async function GET(req: NextRequest) {
     .limit(500);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const rows = (data || []) as any[];
+  // Rows saved with a vendor name but no NetSuite id (typed before the
+  // match existed, or the mirror lacked the vendor then) get matched now
+  // and saved, so their group already knows its PO vendor.
+  if (status === 'pending') {
+    const unresolved = rows.filter(r => r.vendor_name && !r.vendor_netsuite_id);
+    if (unresolved.length > 0) {
+      const resolved = await resolveVendorNames(supabase, unresolved.map(r => r.vendor_name));
+      for (const r of unresolved) {
+        const hit = resolved.get(vendorKey(r.vendor_name));
+        if (!hit) continue;
+        const { error: upErr } = await supabase.from('purchase_requests')
+          .update({ vendor_name: hit.name, vendor_netsuite_id: hit.id })
+          .eq('id', r.id).eq('status', 'pending').is('vendor_netsuite_id', null);
+        if (!upErr) { r.vendor_name = hit.name; r.vendor_netsuite_id = hit.id; }
+      }
+    }
+  }
   // The Create PO review screen starts each line at the catalog's purchase
   // price (the same price create-po uses when nobody edits it).
   if (status === 'pending' && rows.length > 0) {
@@ -205,6 +229,13 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // A catalog vendor is only a name; match it to a NetSuite vendor so the
+  // request carries the id Create PO needs (the last-PO fallback has one).
+  const typedVendors = itemNumbers
+    .map(n => catalog.get(n)?.vendor as string | undefined)
+    .filter((v): v is string => !!v);
+  const resolvedVendors = await resolveVendorNames(supabase, typedVendors);
+
   // Existing pending rows for idempotence.
   let dupQuery = supabase
     .from('purchase_requests')
@@ -253,8 +284,8 @@ export async function POST(req: NextRequest) {
       netsuite_item_id: item.netsuiteItemId || cat?.netsuite_id || null,
       description: item.description || cat?.description || cat?.display_name || null,
       quantity: item.quantity,
-      vendor_name: cat?.vendor || lastVendor.get(key)?.name || null,
-      vendor_netsuite_id: lastVendor.get(key)?.id || null,
+      vendor_name: (cat?.vendor && resolvedVendors.get(vendorKey(cat.vendor))?.name) || cat?.vendor || lastVendor.get(key)?.name || null,
+      vendor_netsuite_id: (cat?.vendor ? resolvedVendors.get(vendorKey(cat.vendor))?.id : lastVendor.get(key)?.id) || null,
       source_project_id: body.projectId || null,
       source_estimate_id: body.estimateId || null,
       needed_by: body.neededBy || null,
@@ -307,7 +338,8 @@ export async function POST(req: NextRequest) {
   });
 }
 
-/** PATCH — edit quantity/vendor/date/note, or cancel. */
+/** PATCH — edit quantity/vendor/date/note, or cancel. With `ids`, sets
+ *  the vendor on every pending row of a Purchasing group. */
 export async function PATCH(req: NextRequest) {
   const auth = await requireFeature(req, 'parts_ordering');
   if (auth.error) return auth.error;
@@ -316,21 +348,51 @@ export async function PATCH(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const body = parsed.data;
 
+  // Vendor fields: a picked NetSuite vendor is taken as is; a typed name is
+  // matched against the vendor mirror, and a name with no match clears the
+  // old id (it belonged to whatever vendor was there before).
+  const vendorPatch: Record<string, unknown> = {};
+  if (body.vendorName !== undefined) {
+    const typed = body.vendorName?.trim() || null;
+    if (body.vendorNetsuiteId) {
+      vendorPatch.vendor_name = typed;
+      vendorPatch.vendor_netsuite_id = body.vendorNetsuiteId;
+    } else if (typed) {
+      const hit = (await resolveVendorNames(supabase, [typed])).get(vendorKey(typed));
+      vendorPatch.vendor_name = hit?.name || typed;
+      vendorPatch.vendor_netsuite_id = hit?.id || null;
+    } else {
+      vendorPatch.vendor_name = null;
+      vendorPatch.vendor_netsuite_id = null;
+    }
+  }
+
+  if (body.ids) {
+    if (body.vendorName === undefined) {
+      return NextResponse.json({ error: 'Only the vendor can be set on several requests at once' }, { status: 400 });
+    }
+    const { data: updated, error } = await supabase.from('purchase_requests')
+      .update({ ...vendorPatch, updated_at: new Date().toISOString() })
+      .in('id', body.ids).eq('status', 'pending')
+      .select('id');
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, updated: (updated || []).length, vendor: vendorPatch });
+  }
+
   const { data: row } = await supabase
-    .from('purchase_requests').select('id, status').eq('id', body.id).maybeSingle();
+    .from('purchase_requests').select('id, status').eq('id', body.id!).maybeSingle();
   if (!row) return NextResponse.json({ error: 'Request not found' }, { status: 404 });
   if (row.status !== 'pending') {
     return NextResponse.json({ error: `This request is already ${row.status} — only pending requests can change.` }, { status: 409 });
   }
 
-  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString(), ...vendorPatch };
   if (body.cancel) patch.status = 'cancelled';
   if (body.quantity !== undefined) patch.quantity = body.quantity;
-  if (body.vendorName !== undefined) patch.vendor_name = body.vendorName?.trim() || null;
   if (body.neededBy !== undefined) patch.needed_by = body.neededBy || null;
   if (body.note !== undefined) patch.note = body.note || null;
 
-  const { error } = await supabase.from('purchase_requests').update(patch).eq('id', body.id);
+  const { error } = await supabase.from('purchase_requests').update(patch).eq('id', body.id!);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, vendor: vendorPatch });
 }
