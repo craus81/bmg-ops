@@ -7,13 +7,15 @@ import {
   BRAKE_TIER_LABEL, adapterFor, hitchKitLines, hitchKitName, hitchLabor, hitchOptionsFor, loadHitchData, matchHitchCatalog,
   needsSevenWay, type CatalogPart, type HitchData, type HitchKitLine, type HitchPart,
 } from '@/lib/hitch-kits';
+import { marginPct } from '@/lib/curt-prices';
 
 /**
  * Trailer hitch kit builder (Craig 2026-10-25), opened from the estimate's
  * "Hitch Kit" button. Four steps: hitch, 4-way wiring harness, optional
  * 7/4-way adapter, brake controller. Every option shows its photo, specs,
  * features and fitment notes, so the right part gets ordered. The picks
- * land on the estimate as one hitch kit (src/lib/hitch-kits.ts).
+ * land on the estimate as one hitch kit (src/lib/hitch-kits.ts). With
+ * prices shown, each part also shows BMG's Curt dealer cost and margin.
  */
 
 const money = (n: number) => `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -142,6 +144,9 @@ function HitchKitBuilder({ platformId, vehicleYear, laborRate, showPrice, onAdd 
   const partsTotal = lines.reduce((s, l) => s + l.unit_price * l.quantity, 0);
   const labor = hitchLabor(lines);
   const missing = lines.filter(l => l.not_in_netsuite);
+  const costed = lines.every(l => l.purchase_price != null);
+  const partsCost = lines.reduce((s, l) => s + (Number(l.purchase_price) || 0) * l.quantity, 0);
+  const partsMargin = costed ? marginPct(partsTotal, partsCost) : null;
   const priceOf = (p: HitchPart) => {
     const ns = catalog.get(p.sku);
     return ns?.sales_price != null ? Number(ns.sales_price) : Number(p.list_price) || 0;
@@ -182,6 +187,11 @@ function HitchKitBuilder({ platformId, vehicleYear, laborRate, showPrice, onAdd 
           <div style={{ fontSize: '13px', lineHeight: 1.35 }}>
             <span style={{ fontWeight: 800 }}>{p.sku}</span> <span style={{ fontWeight: 600 }}>{p.name}</span>
             {showPrice && <span style={{ color: '#22c55e', fontWeight: 800 }}> {money(priceOf(p))}</span>}
+            {showPrice && (ns?.purchase_price ?? p.dealer_cost) != null && (
+              <span style={{ color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600 }}>
+                {' '}· cost {money(Number(ns?.purchase_price ?? p.dealer_cost))} ({marginPct(priceOf(p), Number(ns?.purchase_price ?? p.dealer_cost))}%)
+              </span>
+            )}
             {extra}
           </div>
           {specs.length > 0 && (
@@ -282,6 +292,7 @@ function HitchKitBuilder({ platformId, vehicleYear, laborRate, showPrice, onAdd 
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
             {showPrice && <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Parts <b>{money(partsTotal)}</b></span>}
+            {showPrice && partsMargin != null && <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Cost <b>{money(partsCost)}</b> · margin <b>{partsMargin}%</b></span>}
             <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Labor <b>{labor} hr</b>{showPrice && laborRate > 0 ? <> · <b>{money(labor * laborRate)}</b></> : null}</span>
             {showPrice && <span style={{ fontSize: '14px', fontWeight: 800, color: '#22c55e' }}>{money(partsTotal + labor * laborRate)}</span>}
             <span style={{ flex: 1 }} />

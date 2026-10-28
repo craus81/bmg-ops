@@ -16,12 +16,17 @@
  * number: "13193", "C13193" as etrailer sells it, or "CURT-13193"). One that
  * isn't in NetSuite yet lands as a custom line at Curt's list price and is
  * flagged, so it can be created before the sales order.
+ *
+ * BMG's dealer cost comes from Curt's price file (curt_prices, migration
+ * 445): the builder shows margin from it, and a line's cost falls back to it
+ * when NetSuite has no purchase price.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { KitEstimateLine, KitLineFields } from './part-kits';
 import { partNumberKey } from './loose-search';
 import { HITCH_KIT_ITEM_NUMBER } from './estimate-kits';
+import { loadCurtCosts } from './curt-prices';
 
 export { HITCH_KIT_ITEM_NUMBER };
 
@@ -43,6 +48,8 @@ export interface HitchPart {
   tier: BrakeTier | null;
   sort_order: number;
   active: boolean;
+  /** BMG's dealer cost from Curt's price file; null when unknown or not staff. */
+  dealer_cost: number | null;
 }
 
 export interface HitchFitment {
@@ -97,10 +104,11 @@ function normPart(p: any): HitchPart {
     tier: p.tier || null,
     sort_order: num(p.sort_order),
     active: p.active !== false,
+    dealer_cost: null,
   };
 }
 
-/** Everything the builder needs, in three small reads. */
+/** Everything the builder needs, in a few small reads. */
 export async function loadHitchData(supabase: SupabaseClient): Promise<HitchData> {
   const [partsRes, fitRes, setRes] = await Promise.all([
     supabase.from('hitch_parts').select('*').order('sort_order').order('sku'),
@@ -110,8 +118,11 @@ export async function loadHitchData(supabase: SupabaseClient): Promise<HitchData
   if (partsRes.error) throw new Error(partsRes.error.message);
   if (fitRes.error) throw new Error(fitRes.error.message);
   const s = setRes.data;
+  const parts = (partsRes.data || []).map(normPart);
+  const costs = await loadCurtCosts(supabase, parts.map(p => p.sku)).catch(() => new Map<string, number>());
+  for (const p of parts) p.dealer_cost = costs.get(p.sku) ?? null;
   return {
-    parts: (partsRes.data || []).map(normPart),
+    parts,
     fitment: (fitRes.data || []).map((f: any) => ({ ...f, year_start: num(f.year_start), year_end: num(f.year_end) })),
     settings: s
       ? { labor_hitch: num(s.labor_hitch), labor_wiring: num(s.labor_wiring), labor_adapter: num(s.labor_adapter), labor_brake: num(s.labor_brake) }
@@ -277,7 +288,7 @@ export function hitchKitLines(c: HitchChoices, settings: HitchSettings, catalog:
         labor_hours: labor,
         is_custom: false,
         catalog: ns.catalog || undefined,
-        purchase_price: ns.purchase_price ?? null,
+        purchase_price: ns.purchase_price ?? part.dealer_cost,
         avg_install_cost: ns.avg_install_cost ?? null,
         ...group,
       };
@@ -292,6 +303,7 @@ export function hitchKitLines(c: HitchChoices, settings: HitchSettings, catalog:
       labor_hours: labor,
       is_custom: true,
       not_in_netsuite: true,
+      purchase_price: part.dealer_cost,
       ...group,
     };
   });
