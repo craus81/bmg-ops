@@ -186,7 +186,7 @@
     },
     {
       "path": "/api/cron/job-schedule-alerts",
-      "schedule": "47 12-23 * * 1-5"
+      "schedule": "49 12-23 * * 1-5"
     }
   ],
   "headers": [
