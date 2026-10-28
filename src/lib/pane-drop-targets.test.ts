@@ -33,3 +33,19 @@ describe('Client Files drop targets', () => {
     expect(seen).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('parts and kits to pick up', () => {
+  it('only marks rows inside a pane, and builds what is in hand when the drag starts', async () => {
+    const { paneLinesSource, linesFromSource, currentDropTarget, registerDropTarget } = await import('./pane-drop-targets');
+    const build = () => ({ name: 'Clamp', partId: 'p1', lines: [] });
+    expect(paneLinesSource('part:p1', build, false)).toEqual({});
+    expect(paneLinesSource('part:p1', build, true)).toEqual({ 'data-pane-lines': 'part:p1' });
+    expect(linesFromSource('part:p1')?.name).toBe('Clamp');
+    expect(linesFromSource('part:nope')).toBeNull();
+    // Parts and Client Files have their own targets.
+    const off = registerDropTarget('lines', { label: 'Let go to add it here', onDrop: () => {} });
+    expect(currentDropTarget('lines')?.label).toBe('Let go to add it here');
+    expect(currentDropTarget('client-file')).toBeNull();
+    off();
+  });
+});

@@ -29,6 +29,9 @@ import ClientFolderMatches from '@/components/ClientFolderMatches';
 import { ZipBar, FolderZipList } from '@/components/ClientFilesDownload';
 import ClientFolderBrowser, { type BrowserRoot } from '@/components/ClientFolderBrowser';
 import FleetSuiteClientFolders from '@/components/FleetSuiteClientFolders';
+import { dragHasFiles } from '@/components/useClientFileUploads';
+import { looseMatcher } from '@/lib/loose-search';
+import { closeOnEscape } from '@/lib/modal-escape';
 
 const PAGE_SIZE = 50;
 
@@ -111,6 +114,12 @@ function ClientFilesInner() {
   const [layout, setLayout] = useState<'folders' | 'newest'>('folders');
   const [customerRoots, setCustomerRoots] = useState<BrowserRoot[] | null>(null);
   const [browserFiles, setBrowserFiles] = useState<ClientFile[]>([]);
+  // Uploads (Craig, 2026-10-28): files dropped (or picked with ⬆ Upload)
+  // with no folder open ask which client first, then go into its folder.
+  const [choosing, setChoosing] = useState<File[] | null>(null);
+  const [pendingUpload, setPendingUpload] = useState<{ files: File[]; nonce: number } | null>(null);
+  const [pageDragOver, setPageDragOver] = useState(false);
+  const uploadInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setQ(qInput.trim()), 300);
@@ -305,8 +314,39 @@ function ClientFilesInner() {
     </div>
   );
 
+  const takeFiles = (list: File[]) => {
+    if (!list.length) return;
+    // A folder is open: it takes them. Otherwise, ask which client.
+    if (browsing) setPendingUpload({ files: list, nonce: Date.now() });
+    else setChoosing(list);
+  };
+  const uploadTo = (f: FolderOption) => {
+    const list = choosing || [];
+    setChoosing(null);
+    setCustomer(null);
+    setFolder(f);
+    setLayout('folders');
+    setPendingUpload({ files: list, nonce: Date.now() });
+  };
+
   return (
-    <div style={{ padding: '16px', maxWidth: '1400px', margin: '0 auto', paddingBottom: '40px' }}>
+    <div
+      style={{ padding: '16px', maxWidth: '1400px', margin: '0 auto', paddingBottom: '40px', position: 'relative' }}
+      onDragOver={e => { if (!dragHasFiles(e)) return; e.preventDefault(); setPageDragOver(true); }}
+      onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setPageDragOver(false); }}
+      onDrop={e => { if (!dragHasFiles(e)) return; e.preventDefault(); setPageDragOver(false); takeFiles(Array.from(e.dataTransfer.files)); }}
+    >
+      {pageDragOver && !browsing && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 20, pointerEvents: 'none', borderRadius: '12px',
+          border: '2px dashed var(--accent, #2563eb)', background: 'rgba(37,99,235,0.08)',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '120px',
+          fontSize: '15px', fontWeight: 800, color: 'var(--accent, #2563eb)',
+        }}>Drop to upload, then pick which client</div>
+      )}
+      {choosing && (
+        <UploadClientChooser folders={folders} files={choosing} onPick={uploadTo} onClose={() => setChoosing(null)} />
+      )}
       {header}
 
       {sync?.error && isAdmin && (
@@ -389,6 +429,7 @@ function ClientFilesInner() {
               selectedId={wide ? selectedId : null}
               onSelect={wide ? f => setSelectedId(f.id) : undefined}
               onShown={onBrowserShown}
+              pendingUpload={pendingUpload}
             />
           </div>
           {wide && preview}
@@ -396,6 +437,11 @@ function ClientFilesInner() {
       ) : (<>
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' }}>
         <button onClick={() => setMode(m => (m === 'pick' ? null : 'pick'))} style={chip(mode === 'pick')}>☑ Pick files to zip</button>
+        <button onClick={() => uploadInput.current?.click()} title="Put files into a client's Dropbox folder. You can also drag them in from Files, Finder or Photos." style={chip(false)}>⬆ Upload</button>
+        <input
+          ref={uploadInput} type="file" multiple hidden
+          onChange={e => { const list = Array.from(e.target.files || []); e.target.value = ''; takeFiles(list); }}
+        />
         <button
           onClick={() => setMode(m => (m === 'folders' ? null : 'folders'))}
           disabled={!folder}
@@ -461,5 +507,46 @@ export default function ClientFilesPage() {
     <Suspense fallback={<div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>}>
       <ClientFilesInner />
     </Suspense>
+  );
+}
+
+/** Which client's folder dropped or picked files go into, when none is open. */
+function UploadClientChooser({ folders, files, onPick, onClose }: {
+  folders: FolderOption[];
+  files: File[];
+  onPick: (f: FolderOption) => void;
+  onClose: () => void;
+}) {
+  const [q, setQ] = useState('');
+  const match = looseMatcher(q.trim());
+  const shown = (q.trim() ? folders.filter(f => match(f.name)) : folders).slice(0, 60);
+  return (
+    <div
+      ref={closeOnEscape(onClose)}
+      role="dialog" aria-modal="true" aria-label="Which client are these for?"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '60px 16px' }}
+    >
+      <div style={{ width: '100%', maxWidth: '460px', background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: 'calc(80vh / var(--ts))' }}>
+        <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Which client are these for?</div>
+        <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>
+          {files.length === 1 ? files[0].name : `${files.length} files`} go into the client&apos;s Dropbox folder. You can move them into a folder inside it later.
+        </div>
+        <input
+          type="search" autoFocus value={q} onChange={e => setQ(e.target.value)} placeholder="🔍 Client folder"
+          style={{ ...inputStyle, width: '100%' }}
+        />
+        <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', minHeight: 0 }}>
+          {shown.length === 0 && <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '6px 0' }}>No client folder matches.</div>}
+          {shown.map(f => (
+            <button
+              key={f.id} onClick={() => onPick(f)}
+              style={{ textAlign: 'left', padding: '9px 10px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text-primary)', fontSize: '13.5px', fontWeight: 700, cursor: 'pointer' }}
+            >📁 {f.name}</button>
+          ))}
+        </div>
+        <button onClick={onClose} style={{ alignSelf: 'flex-end', padding: '6px 14px', borderRadius: '8px', border: '1px solid var(--border-strong)', background: 'transparent', color: 'var(--text-primary)', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
+      </div>
+    </div>
   );
 }

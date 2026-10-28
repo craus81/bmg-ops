@@ -15,7 +15,11 @@
 // A Client Files proof can go from one pane to the other: its 🎨 Builder
 // button, or press and hold and drag it across, opens it in the Graphics
 // Builder on the other side. Dropped on a graphics job or a saved estimate
-// it's linked there instead (src/lib/pane-drop-targets.ts).
+// it's linked there instead (src/lib/pane-drop-targets.ts). Parts and kits
+// from the catalog drag across the same way and land on an open estimate
+// where they're let go.
+
+import type { DroppedLines } from '@/lib/pane-drop-targets';
 
 export type PaneId = 'a' | 'b';
 
@@ -115,17 +119,28 @@ export type PaneMessage =
   | { type: 'fs-pane-url'; url: string }
   | { type: 'fs-pane-touch' }
   | { type: 'fs-pane-send-client-file'; id: string }
-  /** What a Client Files drop does on this pane now; null = opens the Graphics Builder. */
-  | { type: 'fs-pane-drop-hint'; clientFile: string | null }
-  | { type: 'fs-pane-drag'; phase: 'start' | 'move' | 'end' | 'cancel'; fx: number; fy: number; id?: string; name?: string };
+  /** What a drop does on this pane now: clientFile null = opens the Graphics Builder, lines null = nothing. */
+  | { type: 'fs-pane-drop-hint'; clientFile: string | null; lines: string | null }
+  | {
+    type: 'fs-pane-drag'; phase: 'start' | 'move' | 'end' | 'cancel'; fx: number; fy: number;
+    /** start only: a Client Files file (id) or parts/kit lines (lines). */
+    kind?: DragKind; id?: string; name?: string; lines?: DroppedLines;
+  };
 
 export type HostMessage =
   | { type: 'fs-host-go'; url: string }
   /** dropped: let go over this pane (a page that takes drops gets it), not the 🎨 Builder button. */
-  | { type: 'fs-host-open-client-file'; id: string; dropped?: boolean; name?: string };
+  | { type: 'fs-host-open-client-file'; id: string; dropped?: boolean; name?: string }
+  /** Parts or a kit let go over this pane, at fx/fy of its frame. */
+  | { type: 'fs-host-drop-lines'; lines: DroppedLines; fx: number; fy: number }
+  /** Parts or a kit in hand over this pane (fx/fy), or gone from it (null). */
+  | { type: 'fs-host-drag-over'; at: { fx: number; fy: number } | null };
+
+export type DragKind = 'client-file' | 'lines';
 
 /** What the file in hand says over the other pane. */
-export const dropLabel = (hint: string | null | undefined) => hint || 'Let go to open it in the Graphics Builder';
+export const dropLabel = (hint: string | null | undefined, kind: DragKind = 'client-file') =>
+  hint || (kind === 'lines' ? 'Open an estimate on this side to add it' : 'Let go to open it in the Graphics Builder');
 
 /** Window event the Graphics Builder listens for, to read a dropped file onto the open worksheet. */
 export const OPEN_CLIENT_FILE_EVENT = 'fs-open-client-file';

@@ -11,6 +11,8 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import { useImageDrop } from '@/lib/use-image-drop';
 import RackKitBrowser from '@/components/RackKitBrowser';
 import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
+import { paneLinesSource, useInPane } from '@/lib/pane-drop-targets';
+import { kitDropped, partDropped } from '@/lib/estimate-line-drop';
 
 /**
  * The Ranger-Design-style catalog browser (roadmap N4-A): a faceted,
@@ -100,6 +102,8 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   initialRoof?: string;
 }) {
   const [q, setQ] = useState('');
+  // Split screen: part and package cards drag onto an estimate on the other side.
+  const inPane = useInPane();
   const [categoryId, setCategoryId] = useState('');
   const [vendor, setVendor] = useState('');
   const [catalog, setCatalog] = useState('');
@@ -372,7 +376,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
   const renderKitCard = (k: KitWithMembers, inGrid: boolean) => {
     const photo = k.image_path || k.members.find(m => m.part.image_path)?.part.image_path || null;
     return (
-      <div key={k.id} style={{ ...(inGrid ? {} : { minWidth: '230px', maxWidth: '230px', flexShrink: 0 }), background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div key={k.id} {...paneLinesSource(`kit:${k.id}`, () => kitDropped(k), inPane)} style={{ ...(inGrid ? {} : { minWidth: '230px', maxWidth: '230px', flexShrink: 0 }), background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{ ...(inGrid ? { aspectRatio: '4/3' } : { height: '110px' }), background: 'var(--subtle-bg, rgba(128,128,128,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
           {photo ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -729,7 +733,7 @@ export default function PartCatalogBrowser({ open, onClose, onAdd, onAddKit, isA
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '10px' }}>
             {gridItems.map(({ part: p, kit }) => kit ? renderKitCard(kit, true) : (
-              <div key={p.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <div key={p.id} {...paneLinesSource(`part:${p.id}`, () => partDropped(p), inPane)} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 <div
                   onClick={() => (p.image_path ? openGridPhoto(p.id) : setDetail(p))}
                   title={p.image_path ? 'Tap to enlarge the picture' : 'View part record'}

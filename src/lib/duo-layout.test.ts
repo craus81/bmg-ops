@@ -27,7 +27,8 @@ describe('computeDuoLayout', () => {
     expect(computeDuoLayout(920, 720, IPHONE)).toEqual({ sideNav: true, wide: true, statusOnSide: true });
     // Upright, the big screen has a normal status bar across the top.
     expect(computeDuoLayout(720, 920, IPHONE)).toEqual({ sideNav: true, wide: true, statusOnSide: false });
-    expect(computeDuoLayout(640, 860, IPHONE)).toEqual({ sideNav: true, wide: false, statusOnSide: false });
+    expect(computeDuoLayout(640, 860, IPHONE)).toEqual({ sideNav: true, wide: true, statusOnSide: false });
+    expect(computeDuoLayout(560, 760, IPHONE)).toEqual({ sideNav: true, wide: true, statusOnSide: false });
   });
 
   it('never changes iPads or computers', () => {

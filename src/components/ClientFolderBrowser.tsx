@@ -16,15 +16,20 @@
  * a client is picked, and in the graphics job picker (ClientFilePicker), which
  * passes `pick` to tick files for the job instead of zipping them.
  * Reads GET /api/client-files/tree?browse=1 and /api/client-files?sub=.
+ *
+ * Outside the picker, ⬆ Upload, or pictures and PDFs dragged in from Files,
+ * Finder or Photos, put files into the folder that's open (Craig,
+ * 2026-10-28; src/components/useClientFileUploads.ts).
  */
 
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type ReactNode } from 'react';
 import { apiFetch } from '@/lib/api-client';
 import { formatBytes } from '@/lib/client-files';
 import { MAX_ZIP_BYTES, MAX_ZIP_FILES, type ZipEntry } from '@/lib/client-files-zip';
 import type { LevelFolder } from '@/lib/client-files-tree';
 import ClientFileRow, { type ClientFile } from '@/components/ClientFileRow';
 import { ZipBar, useZipDownload } from '@/components/ClientFilesDownload';
+import { dragHasFiles, useClientFileUploads } from '@/components/useClientFileUploads';
 
 export interface BrowserRoot {
   /** dropbox_client_folders.id */
@@ -59,6 +64,8 @@ interface Props {
   onSelect?: (f: ClientFile) => void;
   /** Files on screen right now (for the preview panel's default). */
   onShown?: (files: ClientFile[]) => void;
+  /** Files dropped on the page before a folder was open: upload them into the first folder that opens. */
+  pendingUpload?: { files: File[]; nonce: number } | null;
 }
 
 const btn = (disabled = false): CSSProperties => ({
@@ -73,7 +80,7 @@ const crumbBtn: CSSProperties = {
   color: '#60a5fa', fontWeight: 700, fontSize: 'inherit',
 };
 
-export default function ClientFolderBrowser({ roots, rootLabel, rootSearch, start, compact, pick, selectedId, onSelect, onShown }: Props) {
+export default function ClientFolderBrowser({ roots, rootLabel, rootSearch, start, compact, pick, selectedId, onSelect, onShown, pendingUpload }: Props) {
   const single = roots.length === 1;
   const [loc, setLoc] = useState<Loc>(() => start ?? { folderId: single ? roots[0].id : null, sub: '' });
   const [level, setLevel] = useState<Level | null>(null);
@@ -87,6 +94,12 @@ export default function ClientFolderBrowser({ roots, rootLabel, rootSearch, star
   const [picked, setPicked] = useState<Map<string, ClientFile>>(new Map());
   const [zipping, setZipping] = useState<string | null>(null);
   const { busy, notice, run } = useZipDownload();
+  // Bumped after an upload, to show the new files.
+  const [reload, setReload] = useState(0);
+  const uploads = useClientFileUploads(useCallback(() => setReload(n => n + 1), []));
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const canUpload = !pick;
 
   // A new set of roots (another customer, or a folder picked in the filter) starts over.
   const rootKey = roots.map(r => r.id).join(',');
@@ -120,7 +133,7 @@ export default function ClientFolderBrowser({ roots, rootLabel, rootSearch, star
       }
     })();
     return () => { live = false; };
-  }, [loc]);
+  }, [loc, reload]);
 
   // Search inside the folder on screen and everything below it.
   useEffect(() => {
@@ -153,8 +166,25 @@ export default function ClientFolderBrowser({ roots, rootLabel, rootSearch, star
   const shown = useMemo(() => hits ?? level?.files ?? [], [hits, level]);
   useEffect(() => { onShown?.(shown); }, [shown, onShown]);
 
-  const go = (next: Loc) => { setLoc(next); setQInput(''); setQ(''); };
+  const go = (next: Loc) => { setLoc(next); setQInput(''); setQ(''); uploads.clear(); };
   const rootName = (id: string | null) => roots.find(r => r.id === id)?.name ?? 'Client files';
+
+  const uploadHere = (files: File[]) => {
+    if (!files.length || uploads.status.busy) return;
+    if (!loc.folderId) { setError('Open one of the folders first, then put the files in it.'); return; }
+    setError(null);
+    const segs = loc.sub ? loc.sub.split('/') : [];
+    uploads.upload(files, loc.folderId, loc.sub, segs.length ? segs[segs.length - 1] : rootName(loc.folderId));
+  };
+  const uploadHereRef = useRef(uploadHere);
+  uploadHereRef.current = uploadHere;
+  // Dropped on Client Files before a client was picked: the folder that opens takes them.
+  const pendingDone = useRef<number | null>(null);
+  useEffect(() => {
+    if (!pendingUpload || !loc.folderId || pendingDone.current === pendingUpload.nonce) return;
+    pendingDone.current = pendingUpload.nonce;
+    uploadHereRef.current(pendingUpload.files);
+  }, [pendingUpload, loc.folderId]);
 
   const zip = async (folderId: string, sub: string, label: string) => {
     setZipping(`${folderId}/${sub}`);
@@ -251,8 +281,30 @@ export default function ClientFolderBrowser({ roots, rootLabel, rootSearch, star
     />
   );
 
+  const dropProps = canUpload ? {
+    onDragOver: (e: DragEvent) => { if (!dragHasFiles(e)) return; e.preventDefault(); e.stopPropagation(); setDragOver(true); },
+    onDragLeave: (e: DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false); },
+    onDrop: (e: DragEvent) => {
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDragOver(false);
+      uploadHere(Array.from(e.dataTransfer.files));
+    },
+  } : {};
+
   return (
-    <div>
+    <div {...dropProps} style={{ position: 'relative' }}>
+      {dragOver && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 5, pointerEvents: 'none', borderRadius: '12px',
+          border: '2px dashed var(--accent, #2563eb)', background: 'rgba(37,99,235,0.08)',
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '60px',
+          fontSize: '14px', fontWeight: 800, color: 'var(--accent, #2563eb)',
+        }}>
+          {loc.folderId ? `Drop to upload into ${here}` : 'Open a folder first, then drop the files in it'}
+        </div>
+      )}
       <nav aria-label="Folder path" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px', fontSize: compact ? '12.5px' : '13.5px', marginBottom: '6px', minWidth: 0 }}>
         {crumbs.map((c, i) => (
           <span key={i} style={{ display: 'inline-flex', alignItems: 'center', minWidth: 0 }}>
@@ -279,6 +331,29 @@ export default function ClientFolderBrowser({ roots, rootLabel, rootSearch, star
         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: compact ? '4px' : '10px' }}>
           {loc.folderId && level && zipButton(loc.folderId, loc.sub, segs.length ? `${rootName(loc.folderId)} – ${segs[segs.length - 1]}` : rootName(loc.folderId), level.total)}
           <button onClick={() => setPicking(p => !p)} style={{ ...btn(), ...(picking ? { borderColor: 'var(--accent, #2563eb)', color: 'var(--accent, #2563eb)' } : {}) }}>☑ Pick files</button>
+          {canUpload && loc.folderId && (
+            <>
+              <button
+                onClick={() => fileInput.current?.click()}
+                disabled={!!uploads.status.busy}
+                title={`Put files into ${here} in Dropbox. You can also drag them in from Files, Finder or Photos.`}
+                style={btn(!!uploads.status.busy)}
+              >⬆ Upload</button>
+              <input
+                ref={fileInput} type="file" multiple hidden
+                onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ''; uploadHere(files); }}
+              />
+            </>
+          )}
+        </div>
+      )}
+      {(uploads.status.busy || uploads.status.done || uploads.status.error) && (
+        <div role="status" style={{
+          fontSize: '12.5px', fontWeight: 700, marginBottom: compact ? '4px' : '10px',
+          color: uploads.status.error ? 'var(--error, #ef4444)' : uploads.status.busy ? 'var(--text-muted)' : 'var(--success, #16a34a)',
+        }}>
+          {uploads.status.busy || (uploads.status.error ? uploads.status.error : `✓ ${uploads.status.done}`)}
+          {uploads.status.error && uploads.status.done && <div style={{ color: 'var(--success, #16a34a)' }}>✓ {uploads.status.done}</div>}
         </div>
       )}
 

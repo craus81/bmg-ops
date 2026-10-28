@@ -17,6 +17,9 @@ import { r2GetBytes } from './r2';
 import { uploadFile } from './dropbox';
 import { ESTIMATE_FILE_PREFIX } from './estimate-attachments';
 import { normalizeCompanyName } from './customer-dupes';
+import { dropboxPathPart } from './dropbox-path';
+
+export { dropboxPathPart };
 
 type Db = SupabaseClient<any, any, any>;
 
@@ -25,10 +28,6 @@ export const DROPBOX_RETRY_MS = 60 * 60 * 1000;
 
 export interface LinkedFolder { id: string; name: string; path_lower: string; file_count?: number | null }
 
-/** Keep a path part safe for Dropbox (no slashes, no trailing dots or spaces). */
-export function dropboxPathPart(s: string): string {
-  return s.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/[. ]+$/, '').slice(0, 120) || 'file';
-}
 
 /**
  * Which of a customer's linked folders gets the copy. Most customers have

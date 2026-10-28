@@ -433,3 +433,47 @@ export async function uploadFile(path: string, bytes: Buffer | Uint8Array): Prom
   const meta = await res.json();
   return { pathDisplay: meta.path_display || path, id: meta.id };
 }
+
+// ── Upload session (Client Files uploads, any size) ──
+// The browser sends a file in pieces small enough for a Vercel function
+// body, and each piece goes on to Dropbox here: start, append, then finish
+// with where it goes. Never overwrites, the same as uploadFile.
+
+async function sessionCall(url: string, arg: unknown, bytes: Buffer | Uint8Array): Promise<Response> {
+  const res = await dropboxFetch(url, (token) => ({
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/octet-stream',
+      'Dropbox-API-Arg': dropboxApiArg(arg),
+    },
+    body: bytes as any,
+  }));
+  if (!res.ok) throw new Error(dropboxUploadErrorText(res.status, await res.text()));
+  return res;
+}
+
+/** Start an upload session with the file's first piece. Returns the session id. */
+export async function uploadSessionStart(bytes: Buffer | Uint8Array): Promise<string> {
+  const res = await sessionCall('https://content.dropboxapi.com/2/files/upload_session/start', { close: false }, bytes);
+  const data = await res.json();
+  if (!data?.session_id) throw new Error('Dropbox returned no upload session');
+  return data.session_id as string;
+}
+
+/** Add the next piece; offset is how many bytes Dropbox already has. */
+export async function uploadSessionAppend(sessionId: string, offset: number, bytes: Buffer | Uint8Array): Promise<void> {
+  await sessionCall('https://content.dropboxapi.com/2/files/upload_session/append_v2',
+    { cursor: { session_id: sessionId, offset }, close: false }, bytes);
+}
+
+/** Save the session's bytes at `path` (a taken name gets Dropbox's "(1)" rename). */
+export async function uploadSessionFinish(sessionId: string, offset: number, path: string): Promise<DropboxListEntry> {
+  const res = await sessionCall('https://content.dropboxapi.com/2/files/upload_session/finish', {
+    cursor: { session_id: sessionId, offset },
+    commit: { path, mode: 'add', autorename: true, mute: false },
+  }, new Uint8Array(0));
+  const entry = toListEntry({ '.tag': 'file', ...(await res.json()) });
+  if (!entry) throw new Error('Dropbox did not say where it saved the file');
+  return entry;
+}

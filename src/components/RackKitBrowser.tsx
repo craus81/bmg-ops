@@ -9,6 +9,8 @@ import { kitBuildableFor, loadKits, loadKitStock, type KitStock, type KitWithMem
 import { rackBaseNumber, rackFacets, rackMatchesSearch, type RackFacets } from '@/lib/rack-kit-facets';
 import { rackVehicleFor, type AddonLine, type EstimateRackVehicle } from '@/lib/rack-picker';
 import RackStepPicker from '@/components/RackStepPicker';
+import { paneLinesSource, useInPane } from '@/lib/pane-drop-targets';
+import { kitDropped } from '@/lib/estimate-line-drop';
 
 /**
  * Browse every rack kit (Craig 2026-10-20): one list with a search box and
@@ -39,6 +41,8 @@ export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice
   initialVehicle?: string;
 }) {
   const [kits, setKits] = useState<KitWithMembers[] | null>(null);
+  // Split screen: a rack card drags onto an estimate on the other side.
+  const inPane = useInPane();
   const [stock, setStock] = useState<Map<string, KitStock> | null>(null);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -179,7 +183,7 @@ export default function RackKitBrowser({ onAdd, addLabel = 'Add rack', showPrice
           const partsOpen = !!openParts[kit.id];
           const partCount = kit.members.length + kit.missing.length;
           return (
-            <div key={kit.id} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div key={kit.id} {...paneLinesSource(`kit:${kit.id}`, () => kitDropped(kit), inPane)} style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
               <div style={{ height: '120px', background: 'var(--subtle-bg, rgba(128,128,128,0.08))', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 {photo ? (
                   // eslint-disable-next-line @next/next/no-img-element
