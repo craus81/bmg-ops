@@ -6,7 +6,7 @@ import { validateBody, z } from '@/lib/validate';
 import { generateEstimatePdf } from '@/lib/estimate-pdf-server';
 import { sendEmailDetailed, repFromName, buildNotificationEmail } from '@/lib/resend';
 import { getEmailSignature } from '@/lib/email-signature';
-import { estimatePdfFilename } from '@/lib/estimate-pdf';
+import { estimatePdfFilename, proFormaInvoiceNumber } from '@/lib/estimate-pdf';
 import { deepLinks } from '@/lib/deep-links';
 import { loadEstimateAttachmentRows, fetchEstimateAttachments, recordEstimateFilesSent } from '@/lib/estimate-attachments';
 import { resolveEstimateEmail } from '@/lib/estimate-recipients';
@@ -84,15 +84,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const proForma = !!body.proForma;
   const filename = estimatePdfFilename(estimate, { proForma });
   const docName = proForma
-    ? `Pro Forma Invoice for Estimate #${estimate.estimate_number}`
+    ? `Invoice #${proFormaInvoiceNumber(estimate.estimate_number)}`
     : `Estimate #${estimate.estimate_number}`;
   const subject = `[BMG Fleet] ${docName}${estimate.title ? ` — ${estimate.title}` : ''}`;
   const total = Number(estimate.grand_total || 0);
-  const bodyText = `Attached is ${proForma ? 'a pro forma invoice' : `Estimate #${estimate.estimate_number}`}`
+  const bodyText = `Attached is ${docName}`
     + `${estimate.title ? ` (${estimate.title})` : ''} from ${companyName}`
     + `${estimate.customer_name ? ` for ${estimate.customer_name}` : ''}`
-    + `${total > 0 ? ` — total $${total.toFixed(2)}` : ''}.`
-    + (proForma ? ' It is for submitting for financing and is not a bill. We will send the final invoice when the work is complete.' : '');
+    + `${total > 0 ? ` — total $${total.toFixed(2)}` : ''}.`;
   const signature = await getEmailSignature(supabase, auth.user?.id);
   const html = buildNotificationEmail(
     docName,
