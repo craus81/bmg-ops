@@ -12,6 +12,8 @@ import { CreateNetsuiteItemModal } from '@/components/CreateNetsuiteItemModal';
 import { useAddToCatalog, offerAddToCatalog } from '@/components/AddToCatalog';
 import { DropZone } from '@/components/DropZone';
 import PartCatalogBrowser from '@/components/PartCatalogBrowser';
+import PartRecordCatalog from '@/components/PartRecordCatalog';
+import AddToEstimateModal from '@/components/AddToEstimateModal';
 import CatalogHealthPanel from '@/components/CatalogHealthPanel';
 import InstalledPhotosGrid from '@/components/InstalledPhotosGrid';
 import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
@@ -71,6 +73,7 @@ interface Part {
   image_path: string | null;
   marketing_description: string | null;
   product_url: string | null;
+  product_category_id: string | null;
 }
 
 interface SyncLog {
@@ -139,11 +142,13 @@ export default function PartsPage() {
   const [loading, setLoading] = useState(true);
   // Suggestions for the Billable Customer editor (canonical NetSuite names).
   const [billableCustomerOpts, setBillableCustomerOpts] = useState<BillableCustomer[]>([]);
-  // The visual catalog (same component as the estimate builder's Browse
-  // Catalog) is the default face of this page; the ops list keeps the
-  // sync/edit/stats tooling. Deep links (?q=) land on the list view so the
-  // focused-row behavior keeps working.
-  const [view, setView] = useState<'gallery' | 'list'>('gallery');
+  // One Parts list (Craig 2026-10-28): the Visual Catalog tab is gone and
+  // its record (photo, fits, category, Add to estimate) lives in the row's
+  // record below. Browse Catalog (photo grid, packages, rack kits) opens
+  // from Tools, the same component as the estimate builder's.
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [addToEstimatePart, setAddToEstimatePart] = useState<Part | null>(null);
   const [catalog, setCatalog] = useState<'upfit' | 'graphics'>('upfit');
   const [search, setSearch] = useState('');
   const [syncing, setSyncing] = useState(false);
@@ -251,9 +256,8 @@ export default function PartsPage() {
     const q = params.get('q');
     const partId = params.get('part');
     if (c === 'graphics' || c === 'upfit') setCatalog(c);
-    if (q) { setSearch(q); setPendingFocus(q.toUpperCase()); setView('list'); }
+    if (q) { setSearch(q); setPendingFocus(q.toUpperCase()); }
     if (partId && !q) {
-      setView('list');
       (async () => {
         const { data } = await supabase
           .from('netsuite_parts')
@@ -886,22 +890,42 @@ export default function PartsPage() {
             {parts.length} {catalog} parts {lastSync?.completed_at ? `· Last synced ${new Date(lastSync.completed_at).toLocaleString()}` : ''}
           </div>
         </div>
-        {isAdmin && (
+        <div style={{ position: 'relative' }}>
           <button
-            onClick={handleSync}
-            disabled={syncing}
+            onClick={() => setToolsOpen(o => !o)}
+            aria-expanded={toolsOpen}
             style={{
               padding: '8px 14px', borderRadius: '10px',
               background: 'var(--accent)',
               color: '#fff', fontWeight: 800, fontSize: '12px',
-              border: 'none', cursor: syncing ? 'not-allowed' : 'pointer',
-              opacity: syncing ? 0.6 : 1,
-              whiteSpace: 'nowrap',
+              border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
             }}
           >
-            {syncing ? 'Syncing...' : 'Sync Now'}
+            {syncing ? 'Syncing...' : 'Tools ▾'}
           </button>
-        )}
+          {toolsOpen && (
+            <div style={{
+              position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 20, minWidth: '240px',
+              background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '10px',
+              padding: '6px', boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+            }}>
+              {([
+                { label: 'Browse catalog', desc: 'Photo grid, packages and rack kits', show: true, run: () => setBrowseOpen(true) },
+                { label: syncing ? 'Syncing…' : 'Sync now', desc: 'Pull the latest parts from NetSuite', show: isAdmin, run: () => { if (!syncing) handleSync(); } },
+                { label: 'Import vendor assets', desc: 'Photos from vendor sites and the Buyers catalog', show: isAdmin, run: () => router.push('/admin/import-vendor-assets') },
+              ]).filter(t => t.show).map(t => (
+                <button
+                  key={t.desc}
+                  onClick={() => { setToolsOpen(false); t.run(); }}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none', padding: '8px 10px', borderRadius: '6px', cursor: 'pointer', color: 'var(--text-primary)' }}
+                >
+                  <div style={{ fontSize: '13px', fontWeight: 700 }}>{t.label}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{t.desc}</div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Sync message. A message flagged with ⚠ (e.g. a price that saved here
@@ -918,41 +942,6 @@ export default function PartsPage() {
         </div>
       )}
 
-      {/* View toggle: the visual catalog (same component as the estimate
-          builder's Browse Catalog) vs. the ops list with sync/edit tooling. */}
-      <div style={{
-        display: 'flex', gap: '4px', padding: '4px',
-        background: 'var(--card)', border: '1px solid var(--border)',
-        borderRadius: '12px', marginBottom: '10px',
-      }}>
-        {([
-          { id: 'gallery' as const, label: 'Visual Catalog', desc: 'Photos, categories, browse' },
-          { id: 'list' as const, label: '≡ Ops List', desc: 'Prices, labor, stats, files' },
-        ]).map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setView(tab.id)}
-            style={{
-              flex: 1, padding: '10px 8px', borderRadius: '10px',
-              fontSize: '13px', fontWeight: 700, textAlign: 'center',
-              background: view === tab.id ? 'var(--tab-active-bg)' : 'transparent',
-              border: view === tab.id ? '1px solid var(--tab-active-border)' : '1px solid transparent',
-              color: view === tab.id ? 'var(--text-primary)' : 'var(--text-muted)',
-              cursor: 'pointer', transition: 'all 0.15s',
-            }}
-          >
-            <div>{tab.label}</div>
-            <div style={{ fontSize: '9px', fontWeight: 400, marginTop: '1px', color: 'var(--text-muted)' }}>{tab.desc}</div>
-          </button>
-        ))}
-      </div>
-
-      {/* Visual catalog — the shared browser, embedded (no Add button here) */}
-      {view === 'gallery' && (
-        <PartCatalogBrowser open variant="inline" isAdmin={isAdmin} />
-      )}
-
-      {view === 'list' && (<>
       {/* Catalog tabs */}
       <div style={{
         display: 'flex', gap: '4px', padding: '4px',
@@ -1221,6 +1210,15 @@ export default function PartsPage() {
                 {/* Expanded detail */}
                 {isExpanded && (
                   <div style={{ padding: '0 12px 12px', borderTop: '1px solid var(--border)' }}>
+                    <div style={{ marginTop: '10px' }}>
+                      <button
+                        onClick={() => setAddToEstimatePart(part)}
+                        title="Add to an existing estimate, or start a new estimate from this part"
+                        style={{ padding: '8px 16px', borderRadius: '9px', border: 'none', background: 'var(--accent)', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: 'pointer' }}
+                      >
+                        + Add to estimate…
+                      </button>
+                    </div>
                     {((isRealNsPart(part) && canSeeMoney) || canOrderParts) && (
                       <div style={{ marginTop: '10px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                         {canOrderParts && (
@@ -1406,39 +1404,18 @@ export default function PartsPage() {
                       </div>
                     </div>
 
-                    {/* Catalog photo + marketing description — stocked by the
-                        vendor-asset import / visual catalog; part of the record. */}
                     {/* R6-10: the part actually installed on real vehicles
                         (the unshipped half of PR #463). */}
                     <InstalledPhotosGrid partNumber={part.item_number} />
 
-                    {(part.image_path || part.marketing_description) && (
-                      <div style={{ display: 'flex', gap: '10px', marginTop: '12px', alignItems: 'flex-start' }}>
-                        {part.image_path && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={storage.from('photos').getPublicUrl(part.image_path).data.publicUrl}
-                            alt={part.item_number}
-                            onClick={() => setPhotoZoom({
-                              id: part.id,
-                              url: storage.from('photos').getPublicUrl(part.image_path!).data.publicUrl,
-                              title: part.item_number,
-                              subtitle: part.display_name || null,
-                            })}
-                            title="Tap to enlarge the picture"
-                            style={{ width: '132px', height: '99px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border)', flexShrink: 0, cursor: 'zoom-in' }}
-                          />
-                        )}
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
-                            Marketing Description
-                          </div>
-                          <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                            {part.marketing_description || '—'}
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                    <PartRecordCatalog
+                      part={part}
+                      canEditPhoto={isAdmin || hasFeature('part_admin')}
+                      isAdmin={isAdmin}
+                      onPhotoSaved={path => setParts(prev => prev.map(p => p.id === part.id ? { ...p, image_path: path } : p))}
+                      onCategorySaved={id => setParts(prev => prev.map(p => p.id === part.id ? { ...p, product_category_id: id } : p))}
+                      onZoom={setPhotoZoom}
+                    />
 
                     {/* Vendor product page — shown to the customer on the
                         enhanced estimate ("View product"). Local-only field. */}
@@ -1741,9 +1718,17 @@ export default function PartsPage() {
           Showing {filtered.length} of {parts.length} {catalog} parts
         </div>
       )}
-      </>)}
 
       {addToCatalog.modal}
+
+      {/* Browse Catalog (Tools): the photo grid, packages and rack kits —
+          the same browser the estimate builder opens. */}
+      <PartCatalogBrowser open={browseOpen} onClose={() => setBrowseOpen(false)} isAdmin={isAdmin} />
+
+      {/* "+ Add to estimate…" from a part record: pick an estimate or start one. */}
+      {addToEstimatePart && (
+        <AddToEstimateModal part={addToEstimatePart} onClose={() => setAddToEstimatePart(null)} />
+      )}
 
       {/* Create-in-NetSuite modal for a local-only catalog part */}
       {nsCreatePart && (
