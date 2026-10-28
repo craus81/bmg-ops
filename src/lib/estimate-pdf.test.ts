@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildEstimatePdf, estimatePdfFilename, proFormaIssuedDate, type EstimatePdfData } from './estimate-pdf';
+import { buildEstimatePdf, estimatePdfFilename, proFormaInvoiceNumber, proFormaIssuedDate, type EstimatePdfData } from './estimate-pdf';
 
 // 1×1 PNG — enough for jsPDF to parse and embed.
 const PNG_1PX =
@@ -120,14 +120,17 @@ describe('buildEstimatePdf', () => {
     expect(out.toString('latin1')).toContain('Exempt');
   });
 
-  it('renders the pro forma invoice version for a lender', () => {
+  it('renders the lender version as a plain invoice numbered PF-…', () => {
     const raw = Buffer.from(buildEstimatePdf({ ...data, proForma: { issuedDate: 'October 20, 2026' } })
       .output('arraybuffer')).toString('latin1');
-    expect(raw).toContain('Pro Forma Invoice');
-    expect(raw).toContain('For Estimate #EST-1042');
+    expect(raw).toContain('(Invoice)');
+    expect(raw).toContain('Invoice #PF-1042');
     expect(raw).toContain('Issued October 20, 2026');
     expect(raw).toContain('Bill to Acme Fleet Services');
-    expect(raw).toContain('PRO FORMA - NOT A BILL');
+    // Ford won't fund anything labeled pro forma.
+    expect(raw.toLowerCase()).not.toContain('pro forma');
+    expect(raw).not.toContain('NOT A BILL');
+    expect(raw).not.toContain('Estimate #');
     // The lender may take weeks; a pro forma doesn't expire.
     expect(raw).not.toContain('Expires 2026-09-30');
   });
@@ -148,7 +151,21 @@ describe('estimatePdfFilename', () => {
   });
 
   it('names the pro forma version', () => {
-    expect(estimatePdfFilename({ estimate_number: '1042' }, { proForma: true })).toBe('Pro-Forma-Invoice-1042.pdf');
+    expect(estimatePdfFilename({ estimate_number: 'EST-2610-022' }, { proForma: true })).toBe('Invoice-PF-2610-022.pdf');
+    expect(estimatePdfFilename({ estimate_number: '1042' }, { proForma: true })).toBe('Invoice-PF-1042.pdf');
+  });
+});
+
+describe('proFormaInvoiceNumber', () => {
+  it('swaps EST for PF', () => {
+    expect(proFormaInvoiceNumber('EST-2610-022')).toBe('PF-2610-022');
+    expect(proFormaInvoiceNumber('est-7')).toBe('PF-7');
+  });
+
+  it('prefixes PF when there is no EST', () => {
+    expect(proFormaInvoiceNumber('1042')).toBe('PF-1042');
+    expect(proFormaInvoiceNumber('ESTATE-1')).toBe('PF-ESTATE-1');
+    expect(proFormaInvoiceNumber(null)).toBe('PF');
   });
 });
 

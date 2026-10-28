@@ -6679,10 +6679,10 @@ export default function EstimatesPage() {
           };
           return (
             <div style={{ display: 'flex', gap: '6px' }}>
-              <button onClick={() => openFleetsuitePdf(false, true)} style={pfBtn} title="A pro forma invoice for a dealer or lender to submit for financing. Not a bill.">
+              <button onClick={() => openFleetsuitePdf(false, true)} style={pfBtn} title="An invoice numbered PF-… for a dealer or lender to submit for financing. Nothing posts to NetSuite.">
                 Pro Forma Invoice
               </button>
-              <button onClick={() => openPdfEmailModal(true)} style={pfBtn} title="Email the pro forma invoice for financing">
+              <button onClick={() => openPdfEmailModal(true)} style={pfBtn} title="Email the PF invoice for financing">
                 Email Pro Forma
               </button>
             </div>
@@ -7767,7 +7767,7 @@ export default function EstimatesPage() {
       {pdfEmailModal && (
         <EmailComposeModal
           title={pdfEmailProForma ? 'Email Pro Forma Invoice' : 'Email Estimate PDF'}
-          intro={pdfEmailProForma ? 'For a dealer or lender to submit for financing. It says plainly that it is not a bill, and nothing is posted to NetSuite.' : undefined}
+          intro={pdfEmailProForma ? 'For a dealer or lender to submit for financing. It reads as a plain invoice numbered PF-…, and nothing is posted to NetSuite.' : undefined}
           customerId={customerId}
           offerNewContacts={{ customerId, prospectId }}
           stateKey={`estimate-pdf:${editingId}${pdfEmailProForma ? ':proforma' : ''}`}

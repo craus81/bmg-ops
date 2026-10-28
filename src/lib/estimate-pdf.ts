@@ -64,9 +64,10 @@ export interface EstimatePdfData {
   graphics?: EstimatePdfGraphics[];
   /** Pro forma invoice (Craig, 2026-10-20): a dealer's lender wants an
    *  invoice before the work so it can fund the customer. Same content as
-   *  the estimate, retitled, with a "not a bill" notice. Nothing is posted
-   *  to NetSuite or Books — the real invoice still comes off the SO when
-   *  the work is done. */
+   *  the estimate, titled a plain "Invoice" numbered PF-… (Craig,
+   *  2026-10-28: Ford won't fund anything labeled pro forma). Nothing is
+   *  posted to NetSuite or Books — the real invoice still comes off the SO
+   *  when the work is done. */
   proForma?: { issuedDate: string } | null;
 }
 
@@ -113,11 +114,11 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   }
 
   doc.setFontSize(20).setFont('helvetica', 'bold').setTextColor(17, 24, 39);
-  doc.text(proForma ? 'Pro Forma Invoice' : `Estimate #${est.estimate_number ?? ''}`, margin, y + 12);
+  doc.text(proForma ? 'Invoice' : `Estimate #${est.estimate_number ?? ''}`, margin, y + 12);
   let leftY = y + 26;
   doc.setFontSize(10).setFont('helvetica', 'normal').setTextColor(107, 114, 128);
   if (proForma) {
-    doc.text(`For Estimate #${est.estimate_number ?? ''} · Issued ${proForma.issuedDate}`, margin, leftY);
+    doc.text(`Invoice #${proFormaInvoiceNumber(est.estimate_number)} · Issued ${proForma.issuedDate}`, margin, leftY);
     leftY += 13;
   }
   if (est.title) { doc.text(String(est.title), margin, leftY, { maxWidth: pageW * 0.55 }); leftY += 13; }
@@ -317,22 +318,6 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
     cursorY += bold ? 17 : 14;
   }
 
-  // ── Pro forma notice — right under the total the lender will read ─────
-  if (proForma) {
-    const boxW = pageW - margin * 2;
-    const body = doc.setFontSize(9.5).splitTextToSize(PRO_FORMA_NOTICE, boxW - 24);
-    const boxH = 30 + body.length * 12;
-    ensureRoom(boxH + 12);
-    cursorY += 6;
-    doc.setFillColor(255, 247, 237).setDrawColor(251, 146, 60).setLineWidth(1);
-    doc.roundedRect(margin, cursorY, boxW, boxH, 4, 4, 'FD');
-    doc.setFontSize(9).setFont('helvetica', 'bold').setTextColor(154, 52, 18);
-    doc.text('PRO FORMA - NOT A BILL', margin + 12, cursorY + 16);
-    doc.setFontSize(9.5).setFont('helvetica', 'normal').setTextColor(17, 24, 39);
-    doc.text(body, margin + 12, cursorY + 30);
-    cursorY += boxH + 8;
-  }
-
   // ── Context sections — mirror the HTML document's order ────────────────
   const sections: [string, string][] = [];
   if (est.install_instructions) sections.push(['Install Instructions', String(est.install_instructions)]);
@@ -382,14 +367,20 @@ export function buildEstimatePdf(data: EstimatePdfData): jsPDF {
   return doc;
 }
 
-export const PRO_FORMA_NOTICE = 'This pro forma invoice shows the price of the work listed above so it can be '
-  + 'submitted for financing. It is not a request for payment. We will send the final invoice when the work '
-  + 'is complete, and the final amount will change only if the work changes.';
+/** Invoice number on the pro forma: the estimate number with EST swapped
+ *  for PF (EST-2610-022 → PF-2610-022), so staff can tell where it came
+ *  from while the lender just sees an invoice number. */
+export function proFormaInvoiceNumber(estimateNumber: unknown): string {
+  const num = String(estimateNumber ?? '').trim();
+  if (!num) return 'PF';
+  return /^EST(?=[-\s_]|\d|$)/i.test(num) ? num.replace(/^EST/i, 'PF') : `PF-${num}`;
+}
 
 /** File name for the generated PDF, shared by the view and email routes. */
 export function estimatePdfFilename(est: any, opts: { proForma?: boolean } = {}): string {
   const num = String(est?.estimate_number ?? 'estimate').replace(/[^\w\-]+/g, '_');
-  return opts.proForma ? `Pro-Forma-Invoice-${num}.pdf` : `Estimate-${num}.pdf`;
+  if (opts.proForma) return `Invoice-${proFormaInvoiceNumber(est?.estimate_number).replace(/[^\w\-]+/g, '_')}.pdf`;
+  return `Estimate-${num}.pdf`;
 }
 
 /** "October 20, 2026" in BMG's own time zone — the pro forma's issue date. */
