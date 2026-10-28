@@ -132,8 +132,8 @@ describe('hitchKitLines', () => {
   });
 });
 
-describe('migration 445 data', () => {
-  const sql = readFileSync(join(__dirname, '../../migrations/445-curt-price-list.sql'), 'utf8');
+describe('migration 447 data', () => {
+  const sql = readFileSync(join(__dirname, '../../migrations/447-curt-price-list.sql'), 'utf8');
   it('makes the Venturer NEXT the Good controller and retires the discontinued Venturer', () => {
     expect(sql).toMatch(/\('51116', 'brake_controller', [^\n]*'good', 1\)/);
     expect(sql).toMatch(/UPDATE hitch_parts SET active = false, tier = NULL[^\n]*WHERE sku = '51110'/);

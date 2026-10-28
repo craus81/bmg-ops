@@ -1,5 +1,5 @@
 /**
- * Curt dealer price file (migration 445, Craig 2026-10-27).
+ * Curt dealer price file (migration 447, Craig 2026-10-27).
  *
  * Curt sends BMG a "Customer Item Prices" spreadsheet (account 10729901)
  * covering every CURT Group brand: CURT, ARIES, LUVERNE, UWS, LIPPERT. Its

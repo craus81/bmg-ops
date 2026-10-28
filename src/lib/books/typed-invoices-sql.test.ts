@@ -51,7 +51,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await pg?.close(); });
 
-describe('migration 445', () => {
+describe('migration 447', () => {
   it('lets Books keep a copy of a typed invoice', async () => {
     const typed = workOutNewInvoice([
       { itemId: '55', itemNumber: 'SHELF-1', itemType: 'InvtPart', taxableOverride: null, description: 'Shelf', quantity: 2, price: 100 },

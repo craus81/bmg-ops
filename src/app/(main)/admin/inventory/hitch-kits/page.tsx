@@ -11,7 +11,7 @@
  * Also lists the parts that aren't NetSuite items yet: an estimate prices
  * them at Curt's list price until they are created.
  *
- * Admins upload Curt's dealer price file here (migration 445): it sets BMG's
+ * Admins upload Curt's dealer price file here (migration 447): it sets BMG's
  * cost per part, which the builder shows as margin.
  */
 
