@@ -59,6 +59,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'outreach_draft', label: 'Outreach email drafts (weekdays, hourly)', intervalMinutes: 5760 },
   // Weekdays only, so the Friday→Monday gap must not read as stale.
   { syncType: 'ar_past_due_check', label: 'Past-due invoice reminders (weekdays 7 AM)', intervalMinutes: 2880 },
+  { syncType: 'job_schedule_alerts', label: 'Ready-to-schedule job alerts (weekdays, hourly)', intervalMinutes: 2880 },
   { syncType: 'graphics_reminders', label: 'Graphics job reminder digests (weekdays 8:20 AM)', intervalMinutes: 2880 },
   { syncType: 'staff_email_digest', label: 'Daily staff email digest', intervalMinutes: 1440 },
   { syncType: 'pickup_nudges', label: 'Ready-for-pickup nudge sweep', intervalMinutes: 1440 },

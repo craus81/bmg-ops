@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { computePartsReadiness } from '@/lib/parts-readiness';
+import { afterReservationChange } from '@/lib/job-schedule-alerts';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -82,5 +83,7 @@ export async function POST(req: NextRequest) {
   }
 
   const readiness = await computePartsReadiness(service, body.projectId);
+  // Every part reserved now: tell the scheduler to book it (migration 450).
+  if (readiness.available) await afterReservationChange(service, body.projectId, readiness.summary?.verdict);
   return NextResponse.json(readiness);
 }

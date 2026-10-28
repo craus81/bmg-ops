@@ -30,6 +30,8 @@ interface Prefs {
   /** Audience opt-in (migration 430): books installs — gets "Schedule
    *  install" alerts and the Needs install date list on Home. */
   schedules_installs: boolean;
+  /** Audience opt-in (migration 450): copied on newly built alerts. */
+  copy_new_alerts: boolean;
   /** Audience opt-in (migration 433): every new graphics job. */
   new_graphics_jobs: boolean;
   notify_invoicing: boolean;
@@ -53,7 +55,7 @@ interface Prefs {
 
 const DEFAULT_PREFS: Prefs = {
   notify_new_job: true, notify_status_change: true, notify_ready: true,
-  notify_ready_for_install: false, schedules_installs: false, new_graphics_jobs: false, notify_invoicing: false, notify_shipped: true,
+  notify_ready_for_install: false, schedules_installs: false, copy_new_alerts: false, new_graphics_jobs: false, notify_invoicing: false, notify_shipped: true,
   notify_new_po: false, notify_in_app: true, notify_email: false, notify_sms: false,
   sms_messages: false, email_messages: false, email_mentions: true, notify_weekly_brief: true,
   sms_messages_mode: 'always', phone_number: null, custom_statuses: null,
@@ -74,7 +76,8 @@ const DEFAULT_PREFS: Prefs = {
 const ALERT_TOGGLES: [keyof Prefs, string][] = [
   ['notify_ready_for_install', 'Install-Ready Alerts (all vehicles)'],
   ['new_graphics_jobs', 'New graphics jobs (every job, not only ones they are on)'],
-  ['schedules_installs', 'Schedules installs (alert when a customer approves a proof on an installed job, plus the Needs install date list on Home)'],
+  ['schedules_installs', 'Schedules installs (alert when a customer approves a proof on an installed job or a job\'s parts are ready, plus the Needs install date and Ready to schedule lists on Home)'],
+  ['copy_new_alerts', 'Copy me on new alerts (newly built alerts also come to this person, to watch how they work)'],
   ['notify_invoicing', 'Invoicing Alerts'],
   ['notify_new_po', 'New Purchase Orders'],
 ];
@@ -147,6 +150,7 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
             notify_ready: prefs.notify_ready,
             notify_ready_for_install: prefs.notify_ready_for_install,
             schedules_installs: prefs.schedules_installs,
+            copy_new_alerts: prefs.copy_new_alerts,
             new_graphics_jobs: prefs.new_graphics_jobs,
             notify_invoicing: prefs.notify_invoicing,
             notify_shipped: prefs.notify_shipped,
