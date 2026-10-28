@@ -70,6 +70,7 @@ import EstimateFleetGroup from '@/components/EstimateFleetGroup';
 import CreatedBy from '@/components/CreatedBy';
 import OrderTeamChat from '@/components/OrderTeamChat';
 import { looseMatcher, looseOrFilter, looseSearchRegex, partNumberIncludes, partNumberKey, partSearchOrFilter } from '@/lib/loose-search';
+import { PART_RESULTS_FETCH, PART_RESULTS_PAGE, rankPartResults } from '@/lib/part-search-rank';
 import { holdAwareFetch } from '@/lib/hold-aware-fetch';
 import { CustomerHoldBanner, OnHoldBadge } from '@/components/CustomerHold';
 import { DeliveryPicker } from '@/components/DeliveryPicker';
@@ -1077,6 +1078,10 @@ export default function EstimatesPage() {
   const [partSearch, setPartSearch] = useState('');
   const [partResults, setPartResults] = useState<Part[]>([]);
   const [partSearching, setPartSearching] = useState(false);
+  // Best matches first, PART_RESULTS_PAGE at a time with "Show more".
+  const [partShown, setPartShown] = useState(PART_RESULTS_PAGE);
+  const [partResultsCapped, setPartResultsCapped] = useState(false);
+  const partSearchSeq = useRef(0);
   const partSearchRef = useRef<HTMLInputElement>(null);
   // Rack kits matching the same search box (loaded once, filtered locally —
   // a few hundred rows at most).
@@ -1566,7 +1571,8 @@ export default function EstimatesPage() {
 
   // ── Part search ──
   const searchParts = useCallback(async (q: string) => {
-    if (q.length < 2) { setPartResults([]); setKitResults([]); return; }
+    const seq = ++partSearchSeq.current;
+    if (q.length < 2) { setPartResults([]); setKitResults([]); setPartSearching(false); return; }
     setPartSearching(true);
     if (!rackKitsRef.current) {
       rackKitsRef.current = loadKits(supabase)
@@ -1581,25 +1587,35 @@ export default function EstimatesPage() {
       .sort((a, b) => Number(partNumberKey(b.item_number) === partNumberKey(q)) - Number(partNumberKey(a.item_number) === partNumberKey(q))
         || String(a.item_number).localeCompare(String(b.item_number)))
       .slice(0, 8);
+    // Part number matches are fetched on their own so a short search like
+    // "3000" can't lose UP12/3000SD-CG behind "3000 lb" descriptions; then
+    // everything is ranked best match first.
+    const cols = 'id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost';
+    const numberFilter = partSearchOrFilter(['item_number'], [], q);
     const partFilter = partSearchOrFilter(['item_number'], ['display_name', 'description'], q);
-    const { data } = partFilter ? await supabase
-      .from('netsuite_parts')
-      .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost')
-      .eq('is_active', true)
-      .or(partFilter)
-      .limit(14) : { data: [] };
+    const [byNum, byAny] = await Promise.all([
+      numberFilter ? supabase.from('netsuite_parts').select(cols).eq('is_active', true).or(numberFilter)
+        .order('item_number').limit(PART_RESULTS_FETCH) : Promise.resolve({ data: [] }),
+      partFilter ? supabase.from('netsuite_parts').select(cols).eq('is_active', true).or(partFilter)
+        .order('item_number').limit(PART_RESULTS_FETCH) : Promise.resolve({ data: [] }),
+    ]);
+    if (seq !== partSearchSeq.current) return; // a newer search is on its way
+    const fetched = [...((byNum.data as Part[]) || []), ...((byAny.data as Part[]) || [])];
+    const data = rankPartResults(fetched, q);
     // A NetSuite item with a rack kit's number is that rack, and the kit
     // wins (Craig 2026-10-24): the item stays out and its kit is listed,
     // even when the search matched only the item's description.
     const byNumber = rackKitsByNumber(kits);
     const parts: Part[] = [];
-    for (const p of (data as Part[]) || []) {
+    for (const p of data) {
       const kit = rackKitForPart(byNumber, p.item_number);
       if (!kit) parts.push(p);
       else if (!kitMatches.includes(kit)) kitMatches.push(kit);
     }
     setKitResults(kitMatches);
-    setPartResults(parts.slice(0, 10));
+    setPartResults(parts);
+    setPartShown(PART_RESULTS_PAGE);
+    setPartResultsCapped((byNum.data?.length ?? 0) >= PART_RESULTS_FETCH || (byAny.data?.length ?? 0) >= PART_RESULTS_FETCH);
     setPartSearching(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
@@ -5216,7 +5232,7 @@ export default function EstimatesPage() {
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
                 background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
                 boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-                maxHeight: '250px', overflowY: 'auto', marginTop: '2px',
+                maxHeight: 'min(65vh, 560px)', overflowY: 'auto', marginTop: '2px',
               }}>
                 {/* Rack kits first: one click adds the rack with its
                     components beneath it. */}
@@ -5248,7 +5264,7 @@ export default function EstimatesPage() {
                     </div>
                   </button>
                 ))}
-                {partResults.map(p => (
+                {partResults.slice(0, partShown).map(p => (
                   <button
                     key={p.id}
                     onClick={() => addPartLine(p)}
@@ -5272,6 +5288,23 @@ export default function EstimatesPage() {
                     </div>
                   </button>
                 ))}
+                {partResults.length > PART_RESULTS_PAGE && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '8px 10px', borderBottom: '1px solid var(--border)', fontSize: '11px', color: 'var(--text-label)' }}>
+                    <span>
+                      Showing {Math.min(partShown, partResults.length)} of {partResults.length}{partResultsCapped ? '+' : ''}
+                      {partShown >= partResults.length && partResultsCapped ? ' (keep typing to narrow)' : ''}
+                    </span>
+                    {partShown < partResults.length && (
+                      <button
+                        type="button"
+                        onClick={() => setPartShown(n => n + PART_RESULTS_PAGE)}
+                        style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        Show {Math.min(PART_RESULTS_PAGE, partResults.length - partShown)} more
+                      </button>
+                    )}
+                  </div>
+                )}
                 {/* Not in the catalog yet → create it in NetSuite right here
                     and it lands as a line (admin-only: the create-item API
                     requires the admin role). */}
