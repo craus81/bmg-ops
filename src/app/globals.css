@@ -668,6 +668,10 @@ html[data-sidenav] .app-shell {
 }
 /* The shell already clears the rail (and the right inset inside it). */
 html[data-sidenav] .app-header { padding-right: 12px !important; }
+/* The full-screen file viewer covers the rail, so it clears Apple's
+   clock/camera bubble itself: Print, Save, ✕ and the picture sit left of
+   the rail's width (plus a little air). */
+html[data-duo-status-side] .proof-viewer { padding-right: calc(var(--rail-w) + 12px) !important; }
 html[data-sidenav] .palette-fab { bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important; }
 html[data-sidenav] .ai-chat-panel {
   right: calc(var(--rail-w) + 12px) !important;
