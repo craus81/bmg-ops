@@ -774,6 +774,12 @@ export default function PoPortalPage() {
                         Review &amp; approve
                       </a>
                     )}
+                    {e.trackUrl && (
+                      <a href={e.trackUrl} target="_blank" rel="noopener noreferrer"
+                        style={{ padding: '6px 12px', borderRadius: '8px', background: '#fff', border: '1px solid #2563eb', color: '#2563eb', fontSize: '12px', fontWeight: 800, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                        Track order
+                      </a>
+                    )}
                   </div>
                 </div>
               ))}

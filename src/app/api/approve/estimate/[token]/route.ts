@@ -496,7 +496,7 @@ async function notifySalesRep(estimate: any, verdict: 'accepted' | 'rejected', r
     ? `Approved: Estimate #${estimate.estimate_number}, ${estimate.customer_name || 'customer'}`
     : `Changes requested: Estimate #${estimate.estimate_number}, ${estimate.customer_name || 'customer'}`;
   const body = verdict === 'accepted'
-    ? `${customer} approved ${label}${from}. Review it, then push it to NetSuite.`
+    ? `${customer} approved ${label}${from}. Review it, then push it to NetSuite. Let them know you got it: tap Send approval confirmation on the estimate.`
     : `${customer} asked for changes on ${label}${from}: "${reason || '(no reason given)'}"`;
 
   // A change request needs an answer, not just an acknowledgment — make the

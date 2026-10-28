@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-const PUBLIC_PATHS = ['/login', '/auth', '/api/auth', '/api/messages/twilio-webhook', '/view', '/cni/onboard', '/credit-application', '/api/credit-application', '/portal', '/api/portal', '/book', '/api/book', '/qc/', '/api/qc/', '/unsubscribe', '/api/unsubscribe', '/meet/', '/api/meet/'];
+const PUBLIC_PATHS = ['/login', '/auth', '/api/auth', '/api/messages/twilio-webhook', '/view', '/cni/onboard', '/credit-application', '/api/credit-application', '/portal', '/api/portal', '/book', '/api/book', '/qc/', '/api/qc/', '/unsubscribe', '/api/unsubscribe', '/meet/', '/api/meet/', '/order/', '/api/order-status/'];
 const CRON_PATHS = ['/api/gmail/auto-import'];
 
 export async function middleware(request: NextRequest) {

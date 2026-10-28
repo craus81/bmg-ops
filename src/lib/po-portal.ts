@@ -114,6 +114,9 @@ export interface PortalEstimate {
    *  the portal token already scopes the page to this customer, and the
    *  approval link's audience IS this customer. Null once decided/expired. */
   approveUrl: string | null;
+  /** The estimate's live Order status page (migration 449), once a rep has
+   *  made its link. */
+  trackUrl?: string | null;
 }
 
 export interface PortalData {
@@ -149,7 +152,7 @@ async function buildPortalEstimates(
   const cutoff = new Date(Date.now() - ESTIMATE_WINDOW_DAYS * 86_400_000).toISOString();
   const { data: rows } = await service
     .from('estimates')
-    .select('estimate_number, title, grand_total, sent_for_approval_at, customer_approved, customer_approved_at, customer_rejected_at, approval_token, approval_token_expires_at, netsuite_so_id, status')
+    .select('estimate_number, title, grand_total, sent_for_approval_at, customer_approved, customer_approved_at, customer_rejected_at, approval_token, approval_token_expires_at, netsuite_so_id, status, order_status_token')
     .eq('customer_netsuite_id', netsuiteId)
     .not('sent_for_approval_at', 'is', null)
     .gte('sent_for_approval_at', cutoff)
@@ -184,6 +187,7 @@ async function buildPortalEstimates(
       color: meta[state].color,
       decidedAt: e.customer_approved_at || e.customer_rejected_at || null,
       approveUrl: state === 'awaiting' ? deepLinks.approveEstimate(String(e.approval_token)) : null,
+      trackUrl: approved && e.order_status_token ? deepLinks.orderStatus(String(e.order_status_token)) : null,
     };
   });
 }
