@@ -10,6 +10,7 @@ import {
 import { fleetMembers } from '@/lib/estimate-fleet';
 import { deliveryColumns, deliveryFromRow } from '@/lib/delivery';
 import { fleetContentLine, fleetJobFor, linkFleetCheckins } from '@/lib/graphics-fleet';
+import { graphicsJobQuantity } from '@/lib/graphics-job-quantity';
 
 export const dynamic = 'force-dynamic';
 
@@ -84,7 +85,7 @@ async function markEstimateWon(supabase: any, estimateId: string) {
 async function buildEstimateJobPrefill(supabase: any, estimate: any) {
   const { data: lineRows } = await supabase
     .from('estimate_line_items')
-    .select('part_id, item_number, description, quantity')
+    .select('part_id, item_number, description, quantity, wrap_quote_id')
     .eq('estimate_id', estimate.id);
 
   const partIds = ((lineRows || []) as any[])
@@ -104,8 +105,12 @@ async function buildEstimateJobPrefill(supabase: any, estimate: any) {
     );
     const graphicsLines = ((lineRows || []) as any[]).filter(l => l.part_id && graphicsPartIds.has(l.part_id));
     graphicsItemNumbers = [...new Set(graphicsLines.map(l => l.item_number).filter(Boolean) as string[])];
-    const totalQty = graphicsLines.reduce((sum, l) => sum + (l.quantity || 0), 0);
-    if (totalQty > 0) graphicsQuantity = Math.max(1, totalQty);
+    // Graphics worksheet lines are square feet, not pieces, so they don't
+    // count toward the job's quantity.
+    const totalQty = graphicsLines
+      .filter(l => !l.wrap_quote_id)
+      .reduce((sum, l) => sum + (Number(l.quantity) || 0), 0);
+    graphicsQuantity = graphicsJobQuantity(totalQty);
   }
 
   const { data: defaultAssignee } = await supabase

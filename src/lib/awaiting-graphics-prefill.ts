@@ -24,6 +24,7 @@
  */
 
 import { isGraphicsPartNumber } from './po-install-parts';
+import { graphicsJobQuantity } from './graphics-job-quantity';
 
 export type GraphicsSignal = 'catalog' | 'prefix';
 
@@ -108,11 +109,10 @@ export function buildAwaitingPrefill(
     seen.add(key);
 
     const cat = catalog.get(key);
-    const qty = Number(line.quantity);
     matched.push({
       itemNumber: key,
       description: cat?.display_name || cat?.description || line.description || null,
-      quantity: Number.isFinite(qty) && qty > 0 ? qty : 1,
+      quantity: graphicsJobQuantity(line.quantity),
       signal,
     });
   }

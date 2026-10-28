@@ -78,6 +78,7 @@ import {
 } from '@/lib/types';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { looseMatcher, looseSearchRegex } from '@/lib/loose-search';
+import { graphicsJobQuantity } from '@/lib/graphics-job-quantity';
 
 // 'approved' = the ✓ Approved tab: proof approved, not printing yet. It
 // depends on more than the status, so it's checked with inScope() below.
@@ -945,7 +946,7 @@ export default function GraphicsPage() {
         title: createForm.title || 'Untitled Job',
         part_number: [...createForm.part_numbers, createForm.partInput.trim()].filter(Boolean).join(', ') || null,
         customer: createForm.customer || null,
-        quantity: createForm.quantity || 1,
+        quantity: graphicsJobQuantity(createForm.quantity),
         content: createForm.content || null,
         notes: createForm.notes || null,
         vinyl_type: cat === 'production' ? (createForm.vinyl_type || null) : null,
