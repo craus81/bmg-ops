@@ -37,6 +37,11 @@ export function computeDuoLayout(
     sideNav = /iPhone/.test(userAgent) && Math.min(width, height) >= 360 && ratio >= 0.6 && ratio <= 1.7;
   }
   // The big screen held upright (≥560px wide) keeps a normal status bar on top.
-  const statusOnSide = sideNav && !(height > width && width >= 560);
-  return { sideNav, wide: sideNav && width >= 700, statusOnSide };
+  const bigUpright = height > width && width >= 560;
+  const statusOnSide = sideNav && !bigUpright;
+  // Wide (two panes, split screen): the big screen either way round. Held
+  // upright it's narrower than 700 (Craig's portrait screenshot, 2026-10-28,
+  // got one page and no Split button), so the same ≥560px-upright test
+  // that puts its status bar on top counts too.
+  return { sideNav, wide: sideNav && (width >= 700 || bigUpright), statusOnSide };
 }

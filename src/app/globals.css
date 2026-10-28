@@ -628,6 +628,16 @@ button {
   .scan-row-del { display: none !important; }
 }
 
+/* iOS draws a date box at its own native width and height, so in a half-
+   width column it ran past the edge (Estimate → Expiration date, Craig's
+   Duo screenshot 2026-10-28). Plain appearance keeps it inside its column,
+   the same height as the boxes beside it, with the date on the left. Tapping
+   still opens the iOS date picker. iPhone/iPad only (-webkit-touch-callout). */
+@supports (-webkit-touch-callout: none) {
+  input[type="date"] { -webkit-appearance: none; appearance: none; min-width: 0; max-width: 100%; }
+  input[type="date"]::-webkit-date-and-time-value { text-align: left; }
+}
+
 /* ===== iPhone Duo =====
    DuoLayoutWatcher stamps these on <html> (rules in src/lib/duo-layout.ts):
    data-sidenav on the folding iPhone's short, wide screens, data-duo-wide
