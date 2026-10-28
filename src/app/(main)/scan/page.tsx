@@ -7,6 +7,8 @@ import { storage } from '@/lib/storage';
 import MyScansPanel from '@/components/MyScansPanel';
 import ProofViewer from '@/components/ProofViewer';
 import { toJpegIfHeic } from '@/lib/heic';
+import { uploadScanPhoto } from '@/lib/scan-photo-upload';
+import { useImagesDrop } from '@/lib/use-image-drop';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import VinScanner from '@/components/VinScanner';
@@ -116,7 +118,7 @@ export default function ScanPage() {
   // In-app camera session (PhotoSession): tap once, shoot many, Done.
   const [photoSession, setPhotoSession] = useState(false);
 
-  const uploadScanPhoto = async (picked: File) => {
+  const addScanPhoto = async (picked: File) => {
     if (photoTargets.length === 0) return;
     // Before the offline queue too, so a queued photo syncs as JPEG.
     const file = await toJpegIfHeic(picked);
@@ -139,23 +141,21 @@ export default function ScanPage() {
 
     setPhotoUploading(true);
     try {
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const path = `scans/${photoTargets[0]}/${Date.now()}.${ext}`;
-      const { error: upErr } = await storage.from('photos').upload(path, file, { contentType: file.type });
-      if (upErr) { setScanError('Photo upload failed: ' + upErr.message); return; }
-      const { data: { session } } = await supabase.auth.getSession();
-      const res = await fetch('/api/scans/photos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
-        body: JSON.stringify({ scanIds: photoTargets, storagePath: path, contentType: file.type || undefined }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) { setScanError('Photo save failed: ' + (json.error || `HTTP ${res.status}`)); return; }
+      const r = await uploadScanPhoto(file, photoTargets);
+      if (!r.ok) { setScanError(r.error); return; }
       setPhotoCount(c => c + 1);
     } finally {
       setPhotoUploading(false);
     }
   };
+  // Photos from the computer too (Craig, 2026-10-28: photos get texted and
+  // emailed in): ⬆ Upload, drag onto the green line, or paste.
+  const photoFileRef = useRef<HTMLInputElement>(null);
+  const addScanPhotos = async (files: File[]) => { for (const f of files) await addScanPhoto(f); };
+  const { dragging: photoDragging, dropProps: photoDropProps } = useImagesDrop(
+    files => { void addScanPhotos(files); },
+    { disabled: photoTargets.length === 0 || photoUploading, pasteEnabled: photoTargets.length > 0 && !photoSession },
+  );
   // VIN captured by the camera, awaiting confirmation (+ optional unit #).
   // While set, the camera stays on but pauses detection.
   const [pendingScan, setPendingScan] = useState<string | null>(null);
@@ -1509,7 +1509,7 @@ export default function ScanPage() {
             <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: theme.errorBg, border: `1px solid ${theme.errorBorder}`, color: theme.error, fontSize: '12px', fontWeight: 600 }}>{scanError}</div>
           )}
           {scanSuccess && (
-            <div style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700 }}>
+            <div {...(photoTargets.length > 0 ? photoDropProps : {})} style={{ padding: '8px 12px', borderRadius: '8px', marginBottom: '8px', background: photoDragging ? 'rgba(34,197,94,0.16)' : 'rgba(34,197,94,0.06)', border: photoDragging ? '2px dashed #22c55e' : '1px solid rgba(34,197,94,0.2)', color: '#22c55e', fontSize: '12px', fontWeight: 700 }}>
               ✓ {scanSuccess}
               {/* Optional completion photo (K8) — one tap to add, zero to skip. */}
               {photoTargets.length > 0 && (
@@ -1518,7 +1518,7 @@ export default function ScanPage() {
                     open={photoSession}
                     title="Install photos"
                     subtitle="Tap Done when finished — each shot uploads as you go"
-                    onShot={(file) => uploadScanPhoto(file)}
+                    onShot={(file) => addScanPhoto(file)}
                     onClose={() => setPhotoSession(false)}
                   />
                   <button
@@ -1528,6 +1528,21 @@ export default function ScanPage() {
                   >
                     {photoUploading ? 'Uploading…' : photoCount > 0 ? `${photoCount} added · add another` : 'Add photo (optional)'}
                   </button>
+                  <button
+                    onClick={() => photoFileRef.current?.click()}
+                    disabled={photoUploading}
+                    title="Choose photos from this computer or phone. You can also drag them here or paste them."
+                    style={{ marginLeft: '6px', padding: '3px 10px', borderRadius: '6px', border: '1px solid rgba(34,197,94,0.35)', background: 'transparent', color: '#22c55e', fontSize: '11px', fontWeight: 700, cursor: 'pointer', opacity: photoUploading ? 0.6 : 1 }}
+                  >
+                    ⬆ Upload
+                  </button>
+                  <input
+                    ref={photoFileRef} type="file" accept="image/*,.heic,.heif" multiple hidden
+                    onChange={e => { const files = Array.from(e.target.files || []); e.target.value = ''; void addScanPhotos(files); }}
+                  />
+                  <span className="drop-hint" style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                    {photoDragging ? 'Drop to add' : 'or drag / paste photos here'}
+                  </span>
                 </span>
               )}
             </div>

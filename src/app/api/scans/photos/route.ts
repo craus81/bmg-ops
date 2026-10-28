@@ -60,10 +60,11 @@ export async function POST(req: NextRequest) {
       content_type: contentType || null,
       taken_by: auth.user.id,
     }));
-    const { error: insertErr } = await supabase.from('scan_photos').insert(rows);
+    const { data: inserted, error: insertErr } = await supabase.from('scan_photos').insert(rows)
+      .select('id, scan_log_id, storage_path, created_at, taken_by');
     if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
 
-    return NextResponse.json({ success: true, attached: validIds.length });
+    return NextResponse.json({ success: true, attached: validIds.length, photos: inserted || [] });
   } catch (err: any) {
     return NextResponse.json({ error: err.message || 'Failed to save photo' }, { status: 500 });
   }
