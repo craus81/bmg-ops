@@ -79,6 +79,7 @@ import { DeliveryPicker } from '@/components/DeliveryPicker';
 import { EMPTY_DELIVERY, deliveryColumns, deliveryFromRow, deliveryText, sameDelivery, type Delivery } from '@/lib/delivery';
 import VehicleTemplatePicker from '@/components/VehicleTemplatePicker';
 import { remapWorksheetIds } from '@/lib/estimate-copy-worksheets';
+import { estimateCopiedFrom, oldRecordCopiedFrom } from '@/lib/estimate-copied-from';
 import { sanitizeCopiedProofs } from '@/lib/estimate-copied-proofs';
 import {
   EMPTY_FILTERS, TEMPLATE_COLUMNS, estimateVehicleFields, searchTemplates, templateLabel,
@@ -361,6 +362,7 @@ interface Estimate {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  internal_notes?: string | null;
   vin: string | null;
   vehicle_other: string | null;
   unit_number: string | null;
@@ -667,6 +669,9 @@ export default function EstimatesPage() {
   // (Copy to new estimate) rather than a pasted request: same grid,
   // different wording. `number` is empty while the copy is loading.
   const [draftFromOld, setDraftFromOld] = useState<{ system: 'QuickBooks' | 'NetSuite'; number: string; typeLabel: string; date: string } | null>(null);
+  // "Copied from NetSuite Invoice …" on a new estimate filled from an old
+  // record, shown until its first save gives it a number.
+  const [copiedFromOld, setCopiedFromOld] = useState<string | null>(null);
 
   const [revisionDiff, setRevisionDiff] = useState<{ diff: EstimateDiff | null; original: { estimateNumber: string; rejectionReason: string | null } | null } | null>(null);
   const [laborRate, setLaborRate] = useState(DEFAULT_LABOR_RATE);
@@ -1844,6 +1849,7 @@ export default function EstimatesPage() {
       });
     });
     if (additions.length > 0) setLines(prev => [...prev, ...additions]);
+    if (!editingId && additions.length > 0) setCopiedFromOld(oldRecordCopiedFrom(draftFromOld));
     // The vehicle count is the customer's own statement, so it fills the
     // header field — visibly, where the rep can correct it.
     if (draftResult.vehicleCount && draftResult.vehicleCount > 1) {
@@ -3959,6 +3965,7 @@ export default function EstimatesPage() {
 
   const resetBuilder = () => {
     setEditingId(null);
+    setCopiedFromOld(null);
     setTitle('');
     setNotes('');
     setCustomerId(null);
@@ -4711,6 +4718,10 @@ export default function EstimatesPage() {
     setView('list');
   };
   const editingAltNumber = editingId ? estimateAltNumber(editingEst) : null;
+  // Craig 2026-10-28: a copy says where it came from until it's saved.
+  const copiedFrom = editingId ? estimateCopiedFrom(editingEst) : null;
+  const copiedFromSource = copiedFrom ? estimates.find(e => e.estimate_number === copiedFrom.sourceNumber) : null;
+  const copiedFromStyle = { display: 'block', fontSize: '10px', fontWeight: 700, color: '#60a5fa', lineHeight: 1.3 } as const;
 
   return (
     <div data-form="estimate_builder">
@@ -4742,12 +4753,24 @@ export default function EstimatesPage() {
                 FS: {editingAltNumber}
               </div>
             )}
+            {copiedFrom && (copiedFromSource ? (
+              <button
+                onClick={() => openEstimate(copiedFromSource)}
+                title="Open the original. This goes away once you save the copy."
+                style={{ ...copiedFromStyle, background: 'none', border: 'none', padding: 0, marginLeft: 'auto', cursor: 'pointer', textAlign: 'right' }}
+              >
+                {copiedFrom.text} →
+              </button>
+            ) : (
+              <div style={copiedFromStyle}>{copiedFrom.text}</div>
+            ))}
             <CreatedBy userId={editingEst?.created_by} at={editingEst?.created_at} style={{ display: 'block', fontSize: '10px' }} />
           </div>
         ) : (
           <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
             {/* No number until the first save mints one. */}
             {editingId ? 'Editing' : 'New Estimate'}
+            {!editingId && copiedFromOld && <div style={copiedFromStyle}>{copiedFromOld}</div>}
           </div>
         )}
       </div>
