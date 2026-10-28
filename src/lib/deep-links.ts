@@ -275,6 +275,10 @@ export const deepLinks = {
   /** Customer PO-status portal — the shared link on a customer record
    *  (customers.portal_token, migration 260). Public page, no login. */
   customerPoPortal: (token: string) => `/portal/${encodeURIComponent(token)}`,
+  /** Customer Order status page for one approved estimate
+   *  (estimates.order_status_token, migration 449). Public, no login; the
+   *  rep hands it out (approval confirmation email, Copy link). */
+  orderStatus: (token: string) => `/order/${encodeURIComponent(token)}`,
   /** The three tokenized approval pages. Public, no login: the token IS
    *  the credential, so these strings are only ever built server-side and
    *  handed straight to the audience the link was minted for — an emailed

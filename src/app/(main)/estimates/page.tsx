@@ -18,6 +18,7 @@ import { kitEstimateLines, loadKits, normItem, rackKitForPart, rackKitsByNumber,
 import type { AddonLine } from '@/lib/rack-picker';
 import { gatherKitGroups } from '@/lib/estimate-kits';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
+import EstimateOrderStatusCard from '@/components/EstimateOrderStatusCard';
 import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeContact, type EmailComposeFields } from '@/components/EmailComposeModal';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import {
@@ -7192,6 +7193,14 @@ export default function EstimatesPage() {
             );
           }
           return null;
+        })()}
+
+        {/* Customer updates after approval (migration 449): the "We got your
+            approval" email, the live Order status link, Mark all parts in. */}
+        {editingId && (() => {
+          const est = estimates.find(e => e.id === editingId) as any;
+          if (!est || !(est.customer_approved || est.status === 'accepted')) return null;
+          return <EstimateOrderStatusCard key={editingId} estimateId={editingId} customerId={customerId} prospectId={prospectId} />;
         })()}
 
         {/* Signed E-SIGN snapshot — the frozen document the customer accepted,
