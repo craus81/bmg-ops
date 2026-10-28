@@ -17,7 +17,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { AI_TAB_ID } from '@/lib/nav-tabs';
 import { getTextZoom } from '@/lib/text-size';
 import {
-  defaultSplitState, otherPane, paneAt, paneName, parseSplitState, safePaneUrl, splitAvailable, splitDirection, splitOn,
+  defaultSplitState, dropLabel, otherPane, paneAt, paneName, parseSplitState, safePaneUrl, splitAvailable, splitDirection, splitOn,
   SPLIT_STORAGE_KEY, type HostMessage, type PaneId, type PaneMessage, type PaneRect, type SplitState,
 } from '@/lib/split-screen';
 
@@ -213,6 +213,8 @@ export function SplitPanes() {
   const [drag, setDrag] = useState<{ from: PaneId; id: string; name: string; x: number; y: number; over: PaneId | null } | null>(null);
   const dragRef = useRef(drag);
   dragRef.current = drag;
+  // What a Client Files drop does on each pane (PaneBridge reports it).
+  const [hints, setHints] = useState<Record<PaneId, string | null>>({ a: null, b: null });
   const pages = usePickerPages();
 
   // Where each pane's frame sits in the split area, in the area's px.
@@ -230,7 +232,7 @@ export function SplitPanes() {
     if (d.over && d.over !== d.from && panes) {
       panes.setActive(d.over);
       const w = frameRefs.current[d.over]?.contentWindow;
-      w?.postMessage({ type: 'fs-host-open-client-file', id: d.id } satisfies HostMessage, window.location.origin);
+      w?.postMessage({ type: 'fs-host-open-client-file', id: d.id, name: d.name, dropped: true } satisfies HostMessage, window.location.origin);
     }
   }, [panes]);
 
@@ -249,6 +251,9 @@ export function SplitPanes() {
       if (msg?.type === 'fs-pane-url') {
         const url = safePaneUrl(msg.url);
         if (url) panes.setPaneUrl(p, url);
+      } else if (msg?.type === 'fs-pane-drop-hint') {
+        const hint = typeof msg.clientFile === 'string' ? msg.clientFile : null;
+        setHints(h => (h[p] === hint ? h : { ...h, [p]: hint }));
       } else if (msg?.type === 'fs-pane-touch') {
         panes.setActive(p);
       } else if (msg?.type === 'fs-pane-send-client-file' && typeof msg.id === 'string') {
@@ -384,7 +389,7 @@ export function SplitPanes() {
           }}>
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>📄 {drag.name}</div>
             <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', marginTop: '2px' }}>
-              {drag.over && drag.over !== drag.from ? 'Let go to open it in the Graphics Builder' : 'Drag to the other side'}
+              {drag.over && drag.over !== drag.from ? dropLabel(hints[drag.over]) : 'Drag to the other side'}
             </div>
           </div>
         </div>

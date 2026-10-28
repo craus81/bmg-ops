@@ -58,6 +58,8 @@ import { estimateHeadlineNumber, estimateAltNumber, estimateNumberMatches } from
 import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { uploadRecordFile } from '@/lib/record-file-upload';
 import EstimateFilesSection from '@/components/EstimateFilesSection';
+import { LinkedClientFiles } from '@/components/GraphicsJobClientFiles';
+import { useClientFileDropTarget } from '@/lib/pane-drop-targets';
 import EstimateReviewRequest from '@/components/EstimateReviewRequest';
 import { bounceNextStep, bounceIsAmbiguous, recipientsLabel } from '@/lib/email-bounce';
 import EstimatePartsRequestModal from '@/components/EstimatePartsRequestModal';
@@ -572,6 +574,11 @@ export default function EstimatesPage() {
 
   // Builder state
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Split screen: a Client Files file dropped on an estimate that isn't
+  // saved yet has nothing to hang on (a saved one's LinkedClientFiles takes it).
+  useClientFileDropTarget(view === 'builder' && !editingId ? 'Save this estimate first' : null, f => {
+    dialog.alert(`Save this estimate first, then drop ${f.name} on it again.`);
+  });
   // The pricing request this estimate prices, if any (migration 352): its
   // number for the banner and the requester's email for the approval send.
   const [priceSheetRequest, setPriceSheetRequest] = useState<{ request_number: string; company_name: string; contact_email: string | null } | null>(null);
@@ -4919,6 +4926,19 @@ export default function EstimatesPage() {
       {/* Pictures & files kept on the estimate (Craig, 2026-10-22): what
           went out on its emails, visible without opening an email screen. */}
       {editingId && <EstimateFilesSection estimateId={editingId} labelStyle={labelStyle} />}
+
+      {/* Client Files linked onto the estimate (migration 448): picked, or
+          dropped here from Client Files on the other side of split screen. */}
+      {editingId && (
+        <div style={{ marginBottom: '12px' }}>
+          <LinkedClientFiles
+            endpoint={`/api/estimates/${editingId}/client-files`}
+            noun="estimate"
+            customerName={customerName || null}
+            customerNetsuiteId={customerNsId}
+          />
+        </div>
+      )}
 
       {/* Customer defaults modal */}
       {editingCustomerDefaults && customerId && (

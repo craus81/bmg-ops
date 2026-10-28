@@ -9,7 +9,9 @@
  *  - sends a Client Files proof's 🎨 Builder link to the other pane instead
  *    of leaving Client Files;
  *  - lets a proof be pressed and held (or dragged with a mouse) and dropped
- *    on the other pane, which opens it in the Graphics Builder there.
+ *    on the other pane, which opens it in the Graphics Builder there — or,
+ *    on a page that takes drops (src/lib/pane-drop-targets.ts), hands it
+ *    to that page, whose label it reports ahead of time.
  */
 
 import { useEffect, useRef } from 'react';
@@ -18,6 +20,7 @@ import {
   builderUrlFor, clientFileFromBuilderLink, OPEN_CLIENT_FILE_EVENT, safePaneUrl,
   type HostMessage, type PaneMessage,
 } from '@/lib/split-screen';
+import { currentClientFileDropTarget, onClientFileDropTargetsChange } from '@/lib/pane-drop-targets';
 
 const HOLD_MS = 400;
 const MOVE_SLOP = 10;
@@ -42,6 +45,13 @@ export default function PaneBridge() {
     const t = window.setInterval(report, 700);
     return () => window.clearInterval(t);
   }, [pathname]);
+
+  // What a drop does here, for the label on the file in hand.
+  useEffect(() => {
+    const report = () => post({ type: 'fs-pane-drop-hint', clientFile: currentClientFileDropTarget()?.label ?? null });
+    report();
+    return onClientFileDropTargetsChange(report);
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-fs-pane', '');
@@ -75,7 +85,10 @@ export default function PaneBridge() {
         const url = safePaneUrl(msg.url);
         if (url) router.push(url);
       } else if (msg?.type === 'fs-host-open-client-file' && typeof msg.id === 'string') {
-        if (pathRef.current.startsWith('/admin/wrap-quote')) {
+        const target = msg.dropped ? currentClientFileDropTarget() : null;
+        if (target) {
+          target.onDrop({ id: msg.id, name: typeof msg.name === 'string' ? msg.name : 'File' });
+        } else if (pathRef.current.startsWith('/admin/wrap-quote')) {
           window.dispatchEvent(new CustomEvent(OPEN_CLIENT_FILE_EVENT, { detail: { id: msg.id } }));
         } else {
           router.push(builderUrlFor(msg.id));

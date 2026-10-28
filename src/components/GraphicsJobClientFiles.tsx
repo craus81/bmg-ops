@@ -1,26 +1,35 @@
 'use client';
 
 /**
- * Dropbox client files linked onto a graphics job (migration 418), in the
- * job's Files card: the list, an ✕ to unlink one, and the "From Client
- * Files" button that opens the picker. Links, not copies (Craig,
+ * Dropbox client files linked onto a graphics job (migration 418) or an
+ * estimate (migration 448), in the job's Files card or under the
+ * estimate's Pictures & files: the list, an ✕ to unlink one, and the "From
+ * Client Files" button that opens the picker. Links, not copies (Craig,
  * 2026-10-20), so each opens Dropbox's latest version through
  * /api/client-files/<id>.
+ *
+ * In split screen a Client Files file dragged across from the other side
+ * and let go here is linked too (Craig, 2026-10-28; src/lib/pane-drop-targets.ts).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/lib/api-client';
 import { useDialog } from '@/components/DialogProvider';
 import { formatBytes } from '@/lib/client-files';
 import { clientFileUrl, FileTile, type ClientFile } from '@/components/ClientFileRow';
 import ClientFilePicker from '@/components/ClientFilePicker';
+import { useClientFileDropTarget, type DroppedClientFile } from '@/lib/pane-drop-targets';
 
 type Linked = ClientFile & { linkId: string; deleted: boolean };
 
 /** Links picked files onto a job; used here and by the create wizard. */
 export async function linkClientFilesToJob(jobId: string, fileIds: string[]): Promise<void> {
+  return linkClientFiles(`/api/graphics-jobs/${jobId}/client-files`, fileIds);
+}
+
+async function linkClientFiles(endpoint: string, fileIds: string[]): Promise<void> {
   if (fileIds.length === 0) return;
-  const res = await apiFetch(`/api/graphics-jobs/${jobId}/client-files`, {
+  const res = await apiFetch(endpoint, {
     method: 'POST',
     body: JSON.stringify({ fileIds }),
   });
@@ -43,24 +52,65 @@ interface Props {
   customerNetsuiteId?: string | null;
 }
 
-export default function GraphicsJobClientFiles({ jobId, customerName, customerNetsuiteId }: Props) {
+export default function GraphicsJobClientFiles({ jobId, ...rest }: Props) {
+  return <LinkedClientFiles endpoint={`/api/graphics-jobs/${jobId}/client-files`} noun="job" {...rest} />;
+}
+
+interface LinkedProps {
+  /** The record's client-files route: /api/graphics-jobs/<id>/client-files or /api/estimates/<id>/client-files. */
+  endpoint: string;
+  noun: 'job' | 'estimate';
+  customerName: string | null;
+  customerNetsuiteId?: string | null;
+}
+
+export function LinkedClientFiles({ endpoint, noun, customerName, customerNetsuiteId }: LinkedProps) {
   const dialog = useDialog();
   const [files, setFiles] = useState<Linked[]>([]);
   const [picking, setPicking] = useState(false);
+  // What the last split-screen drop did: added, already here, or failed.
+  const [dropNote, setDropNote] = useState<{ text: string; error: boolean } | null>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const loaded = useRef(false);
 
   const load = useCallback(async () => {
-    const res = await apiFetch(`/api/graphics-jobs/${jobId}/client-files`);
+    const res = await apiFetch(endpoint);
     const json = await res.json().catch(() => ({} as any));
-    if (res.ok) setFiles(json.files || []);
-  }, [jobId]);
+    if (res.ok) { setFiles(json.files || []); loaded.current = true; }
+  }, [endpoint]);
 
   useEffect(() => { load(); }, [load]);
 
   const already = useMemo(() => new Set(files.map(f => f.id)), [files]);
+  const alreadyRef = useRef(already);
+  alreadyRef.current = already;
+
+  useEffect(() => {
+    if (!dropNote) return;
+    box.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (dropNote.error) return; // an error stays until the next drop
+    const t = window.setTimeout(() => setDropNote(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [dropNote]);
+
+  const onDrop = async (f: DroppedClientFile) => {
+    if (loaded.current && alreadyRef.current.has(f.id)) {
+      setDropNote({ text: `${f.name} is already on this ${noun}.`, error: false });
+      return;
+    }
+    try {
+      await linkClientFiles(endpoint, [f.id]);
+      await load();
+      setDropNote({ text: `Added ${f.name} to this ${noun}.`, error: false });
+    } catch (e: any) {
+      setDropNote({ text: e?.message || `Could not add ${f.name}`, error: true });
+    }
+  };
+  useClientFileDropTarget(`Let go to add it to this ${noun}`, onDrop);
 
   const unlink = async (f: Linked) => {
-    if (!(await dialog.confirm(`Take ${f.name} off this job? The file stays in Dropbox.`))) return;
-    const res = await apiFetch(`/api/graphics-jobs/${jobId}/client-files?link=${f.linkId}`, { method: 'DELETE' });
+    if (!(await dialog.confirm(`Take ${f.name} off this ${noun}? The file stays in Dropbox.`))) return;
+    const res = await apiFetch(`${endpoint}?link=${f.linkId}`, { method: 'DELETE' });
     if (!res.ok) {
       const json = await res.json().catch(() => ({} as any));
       await dialog.alert(json.error || 'Could not remove it');
@@ -69,7 +119,12 @@ export default function GraphicsJobClientFiles({ jobId, customerName, customerNe
   };
 
   return (
-    <>
+    <div ref={box}>
+      {dropNote && (
+        <div role="status" style={{ fontSize: '12px', fontWeight: 700, marginBottom: '6px', color: dropNote.error ? '#ef4444' : 'var(--success, #16a34a)' }}>
+          {dropNote.error ? '' : '✓ '}{dropNote.text}
+        </div>
+      )}
       {files.length > 0 && (
         <div style={{ marginBottom: '6px' }}>
           <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.3px', marginBottom: '4px' }}>From Client Files (Dropbox)</div>
@@ -95,7 +150,7 @@ export default function GraphicsJobClientFiles({ jobId, customerName, customerNe
                 {f.size > 0 && <span style={{ fontSize: '9px', color: 'var(--text-muted)', flexShrink: 0 }}>{formatBytes(f.size)}</span>}
                 <button
                   onClick={() => unlink(f)}
-                  title="Take off this job (stays in Dropbox)"
+                  title={`Take off this ${noun} (stays in Dropbox)`}
                   style={{ padding: '2px 6px', borderRadius: '4px', border: 'none', background: 'rgba(248,113,113,0.1)', color: '#f87171', fontSize: '10px', fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
                 >✕</button>
               </div>
@@ -112,12 +167,12 @@ export default function GraphicsJobClientFiles({ jobId, customerName, customerNe
           customerNetsuiteId={customerNetsuiteId}
           alreadyIds={already}
           onAdd={async picked => {
-            await linkClientFilesToJob(jobId, picked.map(f => f.id));
+            await linkClientFiles(endpoint, picked.map(f => f.id));
             await load();
           }}
           onClose={() => setPicking(false)}
         />
       )}
-    </>
+    </div>
   );
 }
