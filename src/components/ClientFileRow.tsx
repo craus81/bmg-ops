@@ -111,7 +111,10 @@ export default function ClientFileRow({ file, selected, onSelect, onClient, hide
         (picking ? onCheck : onSelect)?.();
       }}
       style={{
-        display: 'flex', alignItems: 'center', gap: compact ? '10px' : '12px',
+        // Wraps so a narrow pane (split screen, the folding iPhone) drops
+        // Builder / Open to a second line instead of squeezing the name into
+        // a column one letter wide (Craig, 2026-10-28).
+        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: compact ? '10px' : '12px',
         padding: compact ? '8px 0' : '10px 12px',
         borderRadius: compact ? 0 : '12px',
         background: compact ? 'transparent' : 'var(--card)',
@@ -127,7 +130,7 @@ export default function ClientFileRow({ file, selected, onSelect, onClient, hide
         />
       )}
       <FileTile file={file} size={compact ? 40 : 56} />
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: '1 1 160px', minWidth: 0 }}>
         <div style={{ fontSize: compact ? '12.5px' : '14px', fontWeight: 700, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>
           {file.name}
         </div>
@@ -155,27 +158,29 @@ export default function ClientFileRow({ file, selected, onSelect, onClient, hide
           <CopiedBadge copied={file.copied} />
         </div>
       </div>
-      {builder && (
+      <div style={{ display: 'flex', gap: compact ? '10px' : '12px', marginLeft: 'auto', flexShrink: 0 }}>
+        {builder && (
+          <a
+            href={deepLinks.graphicsBuilderFromClientFile(file.id)}
+            title="Open in the Graphics Builder to measure it, then make the estimate"
+            aria-label={`Open ${file.name} in the Graphics Builder`}
+            style={{
+              flexShrink: 0, padding: compact ? '6px 10px' : '8px 12px', borderRadius: '8px', fontSize: '13px', fontWeight: 800,
+              background: 'rgba(6,182,212,0.12)', color: '#06b6d4', border: '1px solid rgba(6,182,212,0.4)',
+              textDecoration: 'none', whiteSpace: 'nowrap',
+            }}
+          >🎨 Builder</a>
+        )}
         <a
-          href={deepLinks.graphicsBuilderFromClientFile(file.id)}
-          title="Open in the Graphics Builder to measure it, then make the estimate"
-          aria-label={`Open ${file.name} in the Graphics Builder`}
+          href={clientFileUrl(file)}
+          target="_blank"
+          rel="noopener noreferrer"
           style={{
-            flexShrink: 0, padding: compact ? '6px 10px' : '8px 12px', borderRadius: '8px', fontSize: '13px', fontWeight: 800,
-            background: 'rgba(6,182,212,0.12)', color: '#06b6d4', border: '1px solid rgba(6,182,212,0.4)',
-            textDecoration: 'none', whiteSpace: 'nowrap',
+            flexShrink: 0, padding: compact ? '6px 10px' : '8px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 800,
+            background: 'var(--accent, #2563eb)', color: '#fff', textDecoration: 'none', whiteSpace: 'nowrap',
           }}
-        >🎨 Builder</a>
-      )}
-      <a
-        href={clientFileUrl(file)}
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{
-          flexShrink: 0, padding: compact ? '6px 10px' : '8px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 800,
-          background: 'var(--accent, #2563eb)', color: '#fff', textDecoration: 'none', whiteSpace: 'nowrap',
-        }}
-      >Open</a>
+        >Open</a>
+      </div>
     </div>
   );
 }

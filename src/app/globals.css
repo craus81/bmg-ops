@@ -654,6 +654,10 @@ html[data-sidenav] .app-nav-tab { flex: 0 0 auto !important; padding: 8px 2px !i
 /* Start below Apple's clock/camera bubble, which floats over the top of the
    right edge (see data-duo-status-side in src/lib/duo-layout.ts). */
 html[data-duo-status-side] .app-nav { padding-top: calc(150px + env(safe-area-inset-top, 0px)) !important; }
+/* The big screen's bubble also holds the clock and Wi-Fi/battery below the
+   scores, reaching ~190px down, so its rail starts lower (Craig's screenshot,
+   2026-10-28: it covered the first tab). */
+html[data-duo-status-side][data-duo-wide] .app-nav { padding-top: calc(210px + env(safe-area-inset-top, 0px)) !important; }
 /* Short screens (the closed phone on its side): icons only so all tabs fit;
    each tab keeps its name as its label for screen readers and long-press. */
 @media (max-height: 640px) {
