@@ -33,6 +33,7 @@ import { closeOnEscape } from '@/lib/modal-escape';
 import AddScanPhotosModal from '@/components/AddScanPhotosModal';
 import { dragHasFiles } from '@/components/useClientFileUploads';
 import { looseMatcher, looseOrFilter } from '@/lib/loose-search';
+import { splitPartNumbers } from '@/lib/scan-part-split';
 
 /** One completion photo (K8, migration 190) attached to a scan. */
 interface ScanPhoto {
@@ -1169,8 +1170,49 @@ export default function AdminScansPage() {
   const [bulkEditBusy, setBulkEditBusy] = useState(false);
   const [allPOs, setAllPOs] = useState<{ id: string; po_number: string; customer: string; ship_to: any; line_items: { id: string; part_number: string; quantity: number; installed: number }[] }[]>([]);
   /** "0602S029/06S646" typed into one part field → the two parts it means. */
-  const splitSlashParts = (raw: string | null | undefined) =>
-    (raw || '').split('/').map(t => t.trim()).filter(Boolean);
+  const splitSlashParts = splitPartNumbers;
+
+  // Scans saved before the Scan screen split "A/B" itself (2026-10-29): still
+  // open for billing, two parts in one field. One button splits them all.
+  const [twoPartScans, setTwoPartScans] = useState<{ id: string; vin: string; part_number: string; parts: string[]; unit_number: string | null; location_name: string | null; scanned_at: string }[]>([]);
+  const [twoPartOpen, setTwoPartOpen] = useState(false);
+  const [twoPartBusy, setTwoPartBusy] = useState(false);
+  const loadTwoPartScans = async () => {
+    try {
+      const res = await fetch('/api/scans/split-parts');
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) setTwoPartScans(data.scans || []);
+    } catch {}
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
+  useEffect(() => { loadTwoPartScans(); }, []);
+  const splitTwoPartScans = async () => {
+    if (twoPartScans.length === 0) return;
+    setTwoPartBusy(true);
+    try {
+      const res = await fetch('/api/scans/split-parts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scanIds: twoPartScans.slice(0, 500).map(s => s.id) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        await dialog.alert(`Could not split: ${data.error || 'Unknown error'}`);
+      } else {
+        const lines = [`Split ${data.split} scan${data.split === 1 ? '' : 's'} into one line per part.`];
+        if (data.notAttempted) lines.push(`${data.notAttempted} not reached. Click Split again.`);
+        for (const p of (data.problems || []).slice(0, 10)) lines.push(`${p.vin}: ${p.error}`);
+        if (data.creditsError) lines.push(`Pay credits: ${data.creditsError}`);
+        await dialog.alert(lines.join('\n'));
+      }
+    } catch (err: any) {
+      await dialog.alert(`Could not split: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setTwoPartBusy(false);
+    }
+    loadTwoPartScans();
+    loadAll({ quiet: true });
+  };
 
   /** The one scan the panel is editing, or null when it is editing several. */
   const editorScan = editorIds.length === 1
@@ -1687,6 +1729,35 @@ export default function AdminScansPage() {
           }}>{t.label}</button>
         ))}
       </div>
+
+      {twoPartScans.length > 0 && isScanListTab && (
+        <div style={{ padding: '10px 12px', borderRadius: '10px', marginBottom: '10px', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: '200px', fontSize: '12px', fontWeight: 700, color: theme.textPrimary }}>
+              {twoPartScans.length} scan{twoPartScans.length === 1 ? ' has' : 's have'} two parts in one field (like {twoPartScans[0].part_number})
+            </div>
+            <button onClick={() => setTwoPartOpen(o => !o)} style={{ padding: '5px 10px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: 'transparent', border: `1px solid ${theme.border}`, color: theme.textSecondary, cursor: 'pointer' }}>
+              {twoPartOpen ? 'Hide' : 'Show'}
+            </button>
+            <button onClick={splitTwoPartScans} disabled={twoPartBusy} style={{ padding: '5px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 800, background: '#f59e0b', border: 'none', color: '#fff', cursor: twoPartBusy ? 'default' : 'pointer', opacity: twoPartBusy ? 0.6 : 1 }}>
+              {twoPartBusy ? 'Splitting…' : 'Split into one line per part'}
+            </button>
+          </div>
+          {twoPartOpen && (
+            <div style={{ marginTop: '8px', maxHeight: 'calc(40vh / var(--ts))', overflowY: 'auto', fontSize: '11px', color: theme.textSecondary }}>
+              {twoPartScans.map(s => (
+                <div key={s.id} style={{ padding: '3px 0', borderTop: `1px solid ${theme.border}` }}>
+                  <span style={{ fontFamily: 'monospace', fontWeight: 700, color: theme.textPrimary }}>{s.vin}</span>
+                  {' · '}{s.part_number} → {s.parts.join(' + ')}
+                  {s.unit_number ? ` · Unit ${s.unit_number}` : ''}
+                  {s.location_name ? ` · ${s.location_name}` : ''}
+                  {' · '}{new Date(s.scanned_at).toLocaleDateString()}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {historyPending && (
         <div role="status" style={{ textAlign: 'center', padding: '32px 0', color: 'var(--text-muted)', fontSize: '13px', fontWeight: 600 }}>

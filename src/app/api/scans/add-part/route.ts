@@ -2,11 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { logScan } from '@/lib/scan-log';
-import { matchScansToOpenPos } from '@/lib/scan-match';
-import { creditAddedPart } from '@/lib/pay-credits';
-import { fetchPartRowsCI } from '@/lib/part-number';
-import { logAudit } from '@/lib/audit';
+import { addPartToScans, ADD_PART_SOURCE_COLUMNS } from '@/lib/scan-add-part';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,127 +51,20 @@ export async function POST(req: NextRequest) {
 
   const { data: sources, error: srcErr } = await service
     .from('scan_logs')
-    .select('id, vin, vehicle_year, vehicle_make, vehicle_model, vehicle_trim, body_class, billable_customer, unit_number, stock_number, location_id, location_name, installer_name, scanned_at, scanned_by, scanned_by_company')
+    .select(ADD_PART_SOURCE_COLUMNS)
     .in('id', scanIds);
   if (srcErr) return NextResponse.json({ error: srcErr.message }, { status: 500 });
   if (!sources || sources.length === 0) {
     return NextResponse.json({ error: 'Scan not found' }, { status: 404 });
   }
 
-  // The catalog fills in what the caller didn't send. The customer stays the
-  // vehicle's — two parts on one vehicle are billed to whoever is being
-  // billed for the visit — and the catalog's customer only fills a blank.
-  const [catalogPart] = await fetchPartRowsCI(service, [partNumber], 'item_number, display_name, billable_customer');
-
-  const added: { scanId: string; vin: string; partNumber: string; poNumber: string | null }[] = [];
-  const duplicates: { vin: string; error: string }[] = [];
-  const failures: { vin: string; error: string }[] = [];
-  let creditsWritten = 0;
-  let creditsError: string | null = null;
-
-  const deadline = Date.now() + (maxDuration - 20) * 1000;
-  let notAttempted = 0;
-
-  for (const source of sources) {
-    if (Date.now() > deadline) {
-      notAttempted++;
-      continue;
-    }
-
-    const result = await logScan(
-      service,
-      // The install belongs to whoever did it, not to the admin adding the part.
-      source.scanned_by || auth.user.id,
-      source.scanned_by_company ?? null,
-      {
-        vin: source.vin,
-        vehicle_year: source.vehicle_year,
-        vehicle_make: source.vehicle_make,
-        vehicle_model: source.vehicle_model,
-        vehicle_trim: source.vehicle_trim,
-        body_class: source.body_class,
-        part_number: partNumber,
-        part_description: partDescription || catalogPart?.display_name || null,
-        billable_customer: source.billable_customer ?? catalogPart?.billable_customer ?? null,
-        unit_number: source.unit_number,
-        stock_number: source.stock_number,
-        location_id: source.location_id,
-        location_name: source.location_name,
-        installer_name: source.installer_name,
-        scanned_at: source.scanned_at,
-        // Device IDs belong to the RFID part itself, so there are none to carry
-        // over. An admin adding that part here fills them in on the scan editor
-        // afterwards — refusing the row would leave no way to add it at all.
-        skipDeviceValidation: true,
-      },
-    );
-
-    // logScan's duplicate guard is what refuses a part the vehicle already
-    // has. Across a selection that is expected — some of those trucks may
-    // already carry the part — so it is reported, not treated as a failure.
-    if (!result.ok) {
-      (result.duplicate ? duplicates : failures).push({ vin: source.vin, error: result.error });
-      continue;
-    }
-
-    // Completion photos are evidence of the visit, not of one part — the field
-    // scanner attaches the same file to every part's row, so an added part gets
-    // the same rows pointing at the same stored file.
-    const { data: photos } = await service
-      .from('scan_photos')
-      .select('storage_path, content_type, taken_by')
-      .eq('scan_log_id', source.id);
-    if (photos && photos.length > 0) {
-      await service.from('scan_photos').insert(
-        photos.map(p => ({ ...p, scan_log_id: result.scanLogId })),
-      );
-    }
-
-    // Pay the crew that was credited for this vehicle, at the added part's own
-    // rate. Best-effort: a credit failure must not undo a saved scan — it is
-    // reported so the admin can fix it in the pay editor.
-    const credits = await creditAddedPart(service, {
-      sourceScanLogId: source.id,
-      targetScanLogId: result.scanLogId,
-      vin: source.vin,
-      partNumber,
-      createdBy: auth.user.id,
-    });
-    creditsWritten += credits.credited;
-    if (!credits.ok && !creditsError) creditsError = credits.error || 'Failed to write pay credits';
-
-    added.push({ scanId: result.scanLogId, vin: source.vin, partNumber, poNumber: null });
-  }
-
-  // Auto-match the added parts to open POs — the whole point of the second
-  // row is that it can land on a different PO than the first.
-  if (added.length > 0) {
-    try {
-      await matchScansToOpenPos(service, added.map(a => a.scanId));
-    } catch (err) {
-      console.warn('Added-part auto-match failed:', err);
-    }
-
-    const { data: saved } = await service
-      .from('scan_logs')
-      .select('id, part_number, po_number')
-      .in('id', added.map(a => a.scanId));
-    for (const a of added) {
-      const row = saved?.find(r => r.id === a.scanId);
-      if (row) {
-        a.partNumber = row.part_number || a.partNumber;
-        a.poNumber = row.po_number || null;
-      }
-    }
-
-    await logAudit(service, added.map(a => ({
-      actorId: auth.user.id,
-      table: 'scan_logs',
-      recordId: a.scanId,
-      action: 'add_part',
-      detail: { vin: a.vin, part_number: a.partNumber, po_number: a.poNumber },
-    })));
-  }
+  const { added, duplicates, failures, notAttempted, creditsWritten, creditsError } = await addPartToScans(service, {
+    actorId: auth.user.id,
+    sources,
+    partNumber,
+    partDescription,
+    deadline: Date.now() + (maxDuration - 20) * 1000,
+  });
 
   // Nothing landed: the caller asked for something that could not be done, so
   // say so as an error rather than a success with a zero in it. A single-scan
