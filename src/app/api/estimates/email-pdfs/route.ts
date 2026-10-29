@@ -13,8 +13,15 @@ import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
 import { estimateCustomerKey, MAX_BATCH_ESTIMATES } from '@/lib/estimate-batch';
 
 export const dynamic = 'force-dynamic';
-// One PDF render per estimate before the send.
-export const maxDuration = 120;
+// One PDF render per estimate before the send: several estimates with
+// pictures and proofs ran past the old 120 s and Vercel cut the request off
+// with no JSON body, which the screen could only call "Unknown error"
+// (Craig, 2026-10-29).
+export const maxDuration = 300;
+
+/** PDFs rendered at once: faster than one by one, without loading every
+ *  estimate's pictures into memory together. */
+const PDF_CONCURRENCY = 4;
 
 const Schema = z.object({
   estimateIds: z.array(z.string().uuid()).min(1).max(MAX_BATCH_ESTIMATES),
@@ -37,6 +44,16 @@ const money = (n: any) => `$${(Number(n) || 0).toLocaleString('en-US', { minimum
  * preview. Approved estimates can go too (copies of what was agreed).
  */
 export async function POST(req: NextRequest) {
+  // Anything thrown below still answers with words the screen can show.
+  try {
+    return await emailPdfs(req);
+  } catch (err: any) {
+    console.error('[email-pdfs] failed:', err);
+    return NextResponse.json({ error: `Something went wrong making or sending the PDFs: ${err?.message || String(err)}` }, { status: 500 });
+  }
+}
+
+async function emailPdfs(req: NextRequest) {
   const auth = await requireFeature(req, 'estimates');
   if (auth.error) return auth.error;
 
@@ -114,10 +131,16 @@ export async function POST(req: NextRequest) {
 
   // Every PDF, all inside the email size budget. A PDF that can't be made
   // stops the send with its number rather than going out quietly missing.
+  const pdfs: Awaited<ReturnType<typeof generateEstimatePdf>>[] = new Array(estimates.length);
+  for (let i = 0; i < estimates.length; i += PDF_CONCURRENCY) {
+    const batch = estimates.slice(i, i + PDF_CONCURRENCY);
+    const made = await Promise.all(batch.map(e => generateEstimatePdf(supabase, e.id)));
+    made.forEach((pdf, j) => { pdfs[i + j] = pdf; });
+  }
   const attachments: { filename: string; content: Buffer; contentType: string }[] = [];
   let bytes = 0;
-  for (const e of estimates) {
-    const pdf = await generateEstimatePdf(supabase, e.id);
+  for (const [i, e] of estimates.entries()) {
+    const pdf = pdfs[i];
     if (!pdf.ok) return NextResponse.json({ error: `Estimate #${e.estimate_number}: ${pdf.error}` }, { status: pdf.status });
     bytes += pdf.buffer.byteLength;
     if (bytes > MAX_ATTACHMENT_BYTES) {

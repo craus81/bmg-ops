@@ -48,3 +48,24 @@ export function groupByCustomer<T extends BatchEstimate>(estimates: T[]): T[][] 
 export function canSendForApproval(e: { customer_approved?: boolean | null; status?: string | null; netsuite_so_id?: string | null }): boolean {
   return !estimateIsLocked(e);
 }
+
+/**
+ * What to tell the sender when a batch send fails, in plain words. The
+ * route answers `{ error }` for everything it catches, but a request Vercel
+ * cuts off (too slow, out of memory) comes back as a bare status with an
+ * HTML or empty body: that showed as "Unknown error" (Craig, 2026-10-29).
+ */
+export function batchSendErrorText(status: number, body: string): string {
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed.error === 'string' && parsed.error.trim()) return parsed.error;
+  } catch { /* not JSON: a platform error page */ }
+  if (status === 504 || /FUNCTION_INVOCATION_TIMEOUT/i.test(body)) {
+    return 'Making the PDFs took too long, so the server stopped before sending. Nothing was sent. Try fewer estimates at a time.';
+  }
+  if (status === 413 || /PAYLOAD_TOO_LARGE/i.test(body)) {
+    return 'The email was too big to send. Nothing was sent. Try fewer estimates at a time.';
+  }
+  const snippet = body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+  return `The server answered ${status || 'with no response'}${snippet ? `: ${snippet}` : ''}. Nothing was sent.`;
+}
