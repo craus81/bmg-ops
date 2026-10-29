@@ -617,6 +617,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/scans/match-po/route.ts': staff(),
   'src/app/api/scans/mine/route.ts': authScoped('the caller\'s own scans only (scanned_by = caller), behind the same staff-or-installer allowlist as scans/log; no money in the select', 'isInternalStaffRole(', "eq('scanned_by', auth.user.id)"),
   'src/app/api/scans/photos/route.ts': authScoped('completion photos ride the same field-scanner flow and enforce the same staff-or-installer allowlist as scans/log', 'isInternalStaffRole('),
+  'src/app/api/scans/split-parts/route.ts': admin(),
   // Actual-consumption import (R6-1): graphics production owns the
   // printer's own numbers, so they can reconcile without an admin.
   'src/app/api/materials/import/route.ts': role(),

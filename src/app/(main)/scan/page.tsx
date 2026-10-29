@@ -22,6 +22,7 @@ import { useFormTelemetry } from '@/lib/use-form-telemetry';
 import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/components/AddToCatalog';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { partNumberKey } from '@/lib/loose-search';
+import { partsToSplit } from '@/lib/scan-part-split';
 
 interface Part {
   id: string;
@@ -545,6 +546,22 @@ export default function ScanPage() {
     setStep('scan');
   };
 
+  // A custom job typed as two parts ("0602S029/06S646": an install and its
+  // separate unit number part) records one scan row per part, exactly like
+  // picking both from the list — so each lands on its own PO and pay rate
+  // instead of one "A/B" row someone splits by hand in Scans (Craig,
+  // 2026-10-29). The Verizon RFID part needs its own device form, so a typed
+  // combination containing it stays one row, as before.
+  const customJobParts = (): { partNumber: string; catalog: Part | null }[] => {
+    const split = partsToSplit(customJob, parts.map(p => p.item_number));
+    if (!split || split.some(pn => isVerizonRfidPart(pn))) return [{ partNumber: customJob, catalog: null }];
+    return split.map(pn => {
+      const catalog = parts.find(p => (p.item_number || '').toUpperCase() === pn.toUpperCase()) || null;
+      return { partNumber: catalog?.item_number || pn, catalog };
+    });
+  };
+  const customJobPartNumbers = () => customJobParts().map(cp => cp.partNumber);
+
   const loadTodayScans = useCallback(async () => {
     if (selectedParts.length === 0 && !customJob) return;
     const todayStart = new Date();
@@ -558,7 +575,7 @@ export default function ScanPage() {
       .order('scanned_at', { ascending: false });
 
     if (selectedParts.length > 0) query = query.in('part_number', selectedParts.map(p => p.item_number));
-    else if (customJob) query = query.eq('part_number', customJob);
+    else if (customJob) query = query.in('part_number', customJobPartNumbers());
     if (selectedLocation) query = query.eq('location_id', selectedLocation.id);
 
     const { data } = await query;
@@ -635,7 +652,11 @@ export default function ScanPage() {
 
     const partsToScan = selectedParts.length > 0
       ? selectedParts.map(p => ({ partNumber: p.item_number, partDesc: p.display_name || p.description || p.item_number, billable: p.billable_customer || customCustomer || null }))
-      : [{ partNumber: customJob, partDesc: customJob, billable: customCustomer || null }];
+      : customJobParts().map(cp => ({
+          partNumber: cp.partNumber,
+          partDesc: cp.catalog ? cp.catalog.display_name || cp.catalog.description || cp.partNumber : cp.partNumber,
+          billable: cp.catalog?.billable_customer || customCustomer || null,
+        }));
 
     // Crew shift for pay credits — implicit solo shift if none was tagged.
     const sid = await ensureShift();
@@ -849,12 +870,13 @@ export default function ScanPage() {
 
   const totalQueuedPhotos = Object.values(queuedPhotoCounts).reduce((n, c) => n + c, 0);
 
+  const customSplit = selectedParts.length === 0 && customJob ? customJobPartNumbers() : [];
   const partLabel = selectedParts.length > 0
     ? selectedParts.map(p => p.item_number).join(' / ')
-    : customJob || '';
+    : customSplit.length > 1 ? customSplit.join(' + ') : customJob || '';
   const partDesc = selectedParts.length > 0
     ? selectedParts.map(p => p.display_name || p.description || '').filter(Boolean).join(', ')
-    : null;
+    : customSplit.length > 1 ? `Each VIN records ${customSplit.length} parts` : null;
 
   return (
     <div data-form="scan_vin" data-form-manual="true">
@@ -1130,6 +1152,11 @@ export default function ScanPage() {
                 border: `1px solid ${theme.border}`, background: 'var(--input-bg)',
                 color: theme.textPrimary, fontWeight: 600, marginBottom: '10px',
               }} />
+              {customSplit.length > 1 && (
+                <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '-4px', marginBottom: '10px' }}>
+                  Each VIN records {customSplit.length} parts: <span style={{ fontWeight: 700, color: theme.textPrimary }}>{customSplit.join(' + ')}</span>
+                </div>
+              )}
               {/* No Billable Customer input here anymore — the customer step
                   already asked, and the selection stamps every scan. The old
                   customCustomer value still backstops restored pre-step
