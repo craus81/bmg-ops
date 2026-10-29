@@ -668,6 +668,13 @@ html[data-duo-status-side] .app-nav { padding-top: calc(150px + env(safe-area-in
    scores, reaching ~190px down, so its rail starts lower (Craig's screenshot,
    2026-10-28: it covered the first tab). */
 html[data-duo-status-side][data-duo-wide] .app-nav { padding-top: calc(210px + env(safe-area-inset-top, 0px)) !important; }
+/* The small screen held upright grows the same way when something is
+   playing or a Live Activity is up: the clock, battery and 5G drop below it
+   to ~230px and covered Home (Craig's screenshot, 2026-10-29). On its side
+   (≤640px tall) there's no room for that and the bubble stays short. */
+@media (min-height: 641px) {
+  html[data-duo-status-side]:not([data-duo-wide]) .app-nav { padding-top: calc(240px + env(safe-area-inset-top, 0px)) !important; }
+}
 /* Short screens (the closed phone on its side): icons only so all tabs fit;
    each tab keeps its name as its label for screen readers and long-press. */
 @media (max-height: 640px) {
@@ -680,6 +687,10 @@ html[data-sidenav] .app-shell {
   padding-right: var(--rail-w) !important;
   padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important;
 }
+/* Header counts: on these narrow screens the red/blue count sat on top of
+   its word and hid it ("Ale 89"), so it rides above the word's corner
+   instead. Same width as before, so the logo isn't pushed off. */
+html[data-sidenav] .hdr-badge { top: -9px !important; right: -7px !important; }
 /* The shell already clears the rail (and the right inset inside it). */
 html[data-sidenav] .app-header { padding-right: 12px !important; }
 /* The full-screen file viewer covers the rail, so it clears Apple's
@@ -740,3 +751,15 @@ html[data-duo-wide] .scan-step {
 html[data-duo-wide] .scan-capture { grid-column: 1; grid-row: 1 / span 2; }
 html[data-duo-wide] .scan-head { grid-column: 2; grid-row: 1; }
 html[data-duo-wide] .scan-list { grid-column: 2; grid-row: 2; }
+
+/* Estimates list cards: in a narrow column (the Duo's small screen, a split
+   pane, Large text) the buttons on the right took nearly the whole width and
+   squeezed the estimate into one word per line (Craig's screenshot,
+   2026-10-29). There the buttons drop to their own wrapping row under the
+   estimate, which gets the full width. Wider screens keep them on the right. */
+.est-row { container-type: inline-size; }
+@container (max-width: 600px) {
+  .est-row-main { flex-wrap: wrap !important; }
+  .est-row-main > div:not(.est-row-side) { flex: 1 1 0 !important; }
+  .est-row-side { flex: 1 1 100% !important; flex-wrap: wrap !important; justify-content: flex-start !important; }
+}

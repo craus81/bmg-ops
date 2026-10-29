@@ -4451,8 +4451,9 @@ export default function EstimatesPage() {
                     background: picked ? 'rgba(52,211,153,0.08)' : 'var(--subtle-bg)',
                     padding: '12px', cursor: 'pointer',
                   }}
+                  className="est-row"
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                  <div className="est-row-main" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
                     {selecting && (
                       <span aria-hidden style={{
                         width: '20px', height: '20px', borderRadius: '6px', flexShrink: 0, marginTop: '1px',
@@ -4495,7 +4496,7 @@ export default function EstimatesPage() {
                         </>
                       )}
                     </div>
-                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
+                    <div className="est-row-side" style={{ display: 'flex', gap: '4px', alignItems: 'center', flexShrink: 0 }}>
                       {est.status === 'sent' && (() => {
                         const quiet = quietDays(est);
                         return (
