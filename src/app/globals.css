@@ -766,3 +766,16 @@ html[data-duo-wide] .scan-list { grid-column: 2; grid-row: 2; }
   .est-row-main > div:not(.est-row-side) { flex: 1 1 0 !important; }
   .est-row-side { flex: 1 1 100% !important; flex-wrap: wrap !important; justify-content: flex-start !important; }
 }
+
+/* Labor and freight check before an estimate email (src/components/SendCheckModal.tsx):
+   full screen on a phone, buttons along the bottom. */
+@media (max-width: 600px) {
+  .send-check-backdrop { padding: 0 !important; align-items: stretch !important; }
+  .send-check {
+    max-width: none !important; max-height: none !important; border-radius: 0 !important; border: 0 !important;
+    padding-top: calc(18px + env(safe-area-inset-top, 0px)) !important;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+  .send-check-buttons { margin-top: auto; }
+  .send-check-buttons button { flex: 1; }
+}
