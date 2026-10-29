@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import PhotoLightbox from '@/components/PhotoLightbox';
+import TopSaveBar from '@/components/TopSaveBar';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { isHeicFile } from '@/lib/heic';
@@ -523,6 +524,13 @@ export default function BooksSnapBillPage() {
       {/* The bill to check. */}
       {bill && bill.status === 'draft' && form && setup && (
         <div style={{ border: '1px solid var(--border)', borderRadius: '12px', padding: '14px', background: 'var(--card)' }}>
+          <TopSaveBar
+            title={form.vendorName?.trim() ? `${form.vendorName.trim()}'s bill` : 'Bill'}
+            onSave={() => act('save')}
+            saving={busy === 'save'}
+            disabled={!!busy || stage !== 'idle'}
+            saveLabel="Save for later"
+          />
           {/* Nothing changes while it's being read, saved or sent: the answer would replace it. */}
           <fieldset disabled={!!busy || stage !== 'idle'} style={{ border: 'none', margin: 0, padding: 0, minWidth: 0 }}>
             {bill.sendError && <div style={banner(RED)}>The last try to send it didn&apos;t work: {bill.sendError}</div>}
@@ -911,9 +919,6 @@ export default function BooksSnapBillPage() {
                     style={bigButton('go', !view?.canSend || checking || !!busy || stage !== 'idle')}
                   >
                     {busy === 'send' ? 'Sending…' : billing && view ? (view.po.needsReason ? 'Bill it anyway' : `Bill ${view.po.number}`) : 'Send to NetSuite'}
-                  </button>
-                  <button type="button" disabled={!!busy || stage !== 'idle'} onClick={() => act('save')} style={bigButton()}>
-                    {busy === 'save' ? 'Saving…' : 'Save for later'}
                   </button>
                   <button type="button" disabled={!!busy || stage !== 'idle'} onClick={() => setConfirmThrow(true)} style={bigButton()}>Throw it away</button>
                 </div>

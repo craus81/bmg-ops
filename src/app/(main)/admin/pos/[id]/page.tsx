@@ -17,6 +17,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import TopSaveBar from '@/components/TopSaveBar';
 import { useDialog } from '@/components/DialogProvider';
 import { holdAwareFetch } from '@/lib/hold-aware-fetch';
 import { storage, storageDownloadUrl } from '@/lib/storage';
@@ -1247,6 +1248,13 @@ export default function PoRecordPage() {
       {/* Edit PO */}
       {editingPo && (
         <div style={card}>
+          <TopSaveBar
+            title={`Edit PO ${editPoForm.po_number}`}
+            subtitle={editPoForm.customer || undefined}
+            onSave={saveEditPO}
+            saving={savingPo}
+            onCancel={() => setEditingPo(false)}
+          />
           <div style={eyebrow}>Edit PO</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
             <div>
@@ -1294,10 +1302,6 @@ export default function PoRecordPage() {
               onChange={next => { setEditShipToId(''); setEditShipTo(next); }}
               onSaveLocation={saveShipToAsLocation}
             />
-          </div>
-          <div style={{ display: 'flex', gap: '6px', marginTop: '10px' }}>
-            <button onClick={saveEditPO} disabled={savingPo} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '12px', fontWeight: 700, border: 'none', cursor: 'pointer', opacity: savingPo ? 0.6 : 1 }}>{savingPo ? 'Saving…' : 'Save'}</button>
-            <button onClick={() => setEditingPo(false)} style={{ flex: 1, padding: '8px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
           </div>
         </div>
       )}

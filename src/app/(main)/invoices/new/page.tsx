@@ -17,6 +17,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import CustomerPicker from '@/components/CustomerPicker';
+import TopSaveBar from '@/components/TopSaveBar';
 import EmailInvoicesModal from '@/components/EmailInvoicesModal';
 import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
@@ -58,7 +59,6 @@ const btn: React.CSSProperties = {
   padding: '9px 14px', borderRadius: '8px', border: `1px solid ${theme.border}`, background: theme.card,
   color: theme.textPrimary, fontSize: '14px', fontWeight: 700, cursor: 'pointer',
 };
-const createBtn: React.CSSProperties = { ...btn, background: '#16a34a', borderColor: '#16a34a', color: '#fff' };
 const num: React.CSSProperties = { textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
 
 export default function NewInvoicePage() {
@@ -192,6 +192,19 @@ export default function NewInvoicePage() {
 
   return (
     <div style={{ maxWidth: '820px', margin: '0 auto', padding: '16px', display: 'grid', gap: '14px' }}>
+      {!done && (
+        <TopSaveBar
+          title="New invoice"
+          subtitle={customer || undefined}
+          error={error || undefined}
+          onSave={create}
+          saving={submitting}
+          disabled={worked.problems.length > 0}
+          saveLabel="Create invoice"
+          savingLabel="Making invoice…"
+          onCancel={() => router.push('/invoices')}
+        />
+      )}
       <div>
         <button onClick={() => router.push('/invoices')} style={{ ...btn, padding: '4px 0', border: 'none', background: 'none', color: theme.textMuted, fontSize: '13px' }}>← Invoicing</button>
         <h1 style={{ margin: '4px 0 0', fontSize: '22px', fontWeight: 800, color: theme.textPrimary }}>New invoice</h1>
@@ -332,15 +345,7 @@ export default function NewInvoicePage() {
               {worked.problems.map(p => <div key={p}>{p}</div>)}
             </div>
           )}
-          {error && <div style={{ color: theme.error, fontSize: '14px', fontWeight: 700, whiteSpace: 'pre-wrap' }}>{error}</div>}
 
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <button onClick={create} disabled={submitting || worked.problems.length > 0}
-              style={{ ...createBtn, opacity: submitting || worked.problems.length > 0 ? 0.5 : 1 }}>
-              {submitting ? 'Making invoice…' : 'Create invoice'}
-            </button>
-            <button onClick={() => router.push('/invoices')} style={btn}>Cancel</button>
-          </div>
         </>
       )}
 

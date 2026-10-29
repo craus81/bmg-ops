@@ -7,6 +7,7 @@ import { flashNote } from '@/lib/focus-note';
 import { createClient } from '@/lib/supabase-browser';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { useAuth } from '@/components/AuthProvider';
+import TopSaveBar from '@/components/TopSaveBar';
 import { parseMasterackPO, type ParsedPO, type ParsedPOLine } from '@/lib/parsePO';
 import { resolvePoCustomer } from '@/lib/customer-match';
 import { storage } from '@/lib/storage';
@@ -3293,6 +3294,16 @@ export default function POsPage() {
 
       {showCreate && (
         <div style={{ background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px', padding: '14px', marginBottom: '12px' }}>
+          <TopSaveBar
+            title="New PO"
+            subtitle={createPoMissing ? `${createPoMissing} to create the PO` : form.customer || undefined}
+            onSave={handleCreate}
+            saving={creatingPo}
+            disabled={!!createPoMissing}
+            saveLabel="Create PO"
+            savingLabel="Creating…"
+            onCancel={() => setShowCreate(false)}
+          />
           <div style={{ marginBottom: '8px' }}>
             <label style={labelStyle}>PO Number</label>
             <input value={form.po_number} onChange={(e) => setForm({ ...form, po_number: e.target.value })} style={inputStyle} />
@@ -3419,17 +3430,6 @@ export default function POsPage() {
           )}
 
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button
-              onClick={handleCreate}
-              disabled={!!createPoMissing || creatingPo}
-              style={{
-                flex: 1, padding: '12px', borderRadius: '10px', background: '#22c55e',
-                color: '#fff', fontWeight: 800, fontSize: '14px', border: 'none',
-                opacity: !createPoMissing && !creatingPo ? 1 : 0.4,
-              }}
-            >
-              {creatingPo ? 'Creating…' : 'Create PO'}
-            </button>
             <button
               onClick={handleCreateAndGraphics}
               disabled={!!createPoMissing || creatingPo}

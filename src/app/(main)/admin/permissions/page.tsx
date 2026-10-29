@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import TopSaveBar from '@/components/TopSaveBar';
 import {
   FEATURES, EDITABLE_ROLES, SUPER_ADMIN_FEATURES, canGrantToRole, roleFeatures, roleDefaultFeatures,
   type FeatureKey, type RoleFeatureSetting,
@@ -151,6 +152,21 @@ export default function PermissionsPage() {
 
   return (
     <div style={{ paddingBottom: '80px' }}>
+      <TopSaveBar
+        title={`Permissions · ${roleLabel(role)}`}
+        subtitle={notice || (totalUnsaved > 0 ? `${totalUnsaved} change${totalUnsaved === 1 ? '' : 's'} not saved` : 'No changes')}
+        onSave={save}
+        saving={saving}
+        disabled={totalUnsaved === 0}
+        extra={(
+          <button
+            onClick={resetRole}
+            disabled={saving}
+            title={`Reset ${roleLabel(role)} to normal`}
+            style={{ padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)', cursor: 'pointer' }}
+          >Reset</button>
+        )}
+      />
       <div style={{ marginBottom: '14px' }}>
         <div style={{ fontSize: '22px', fontWeight: 800, color: 'var(--text-primary)' }}>Permissions</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', maxWidth: '720px' }}>
@@ -262,29 +278,6 @@ export default function PermissionsPage() {
         </div>
       )}
 
-      <div style={{
-        position: 'sticky', bottom: 0, marginTop: '16px', padding: '10px 12px', borderRadius: '12px',
-        background: 'var(--card)', border: '1px solid var(--border)', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap',
-      }}>
-        <div style={{ flex: 1, minWidth: '140px', fontSize: '12px', color: notice ? '#22c55e' : 'var(--text-muted)' }}>
-          {notice || (totalUnsaved > 0 ? `${totalUnsaved} change${totalUnsaved === 1 ? '' : 's'} not saved` : 'No changes')}
-        </div>
-        <button
-          onClick={resetRole}
-          disabled={saving}
-          style={{ padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, background: 'var(--subtle-bg)', color: 'var(--text-primary)', border: '1px solid var(--border)', cursor: 'pointer' }}
-        >Reset {roleLabel(role)} to normal</button>
-        <button
-          onClick={save}
-          disabled={saving || totalUnsaved === 0}
-          style={{
-            padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, border: 'none',
-            background: saving || totalUnsaved === 0 ? 'var(--subtle-bg)' : 'var(--orange)',
-            color: saving || totalUnsaved === 0 ? 'var(--text-muted)' : '#fff',
-            cursor: saving || totalUnsaved === 0 ? 'default' : 'pointer',
-          }}
-        >{saving ? 'Saving…' : 'Save'}</button>
-      </div>
     </div>
   );
 }

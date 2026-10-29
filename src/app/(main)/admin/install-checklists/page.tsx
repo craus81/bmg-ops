@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import TopSaveBar, { CARD_BAR } from '@/components/TopSaveBar';
 import { useDialog } from '@/components/DialogProvider';
 
 type Category = 'upfit' | 'graphics' | 'mixed';
@@ -176,9 +177,15 @@ export default function InstallChecklistsAdminPage() {
           background: 'var(--card)', border: '1px solid var(--border)',
           borderRadius: '14px', padding: '16px', marginBottom: '20px',
         }}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '10px' }}>
-            {editingId === 'new' ? 'New Template' : 'Edit Template'}
-          </div>
+          <TopSaveBar
+            title={editingId === 'new' ? 'New Template' : 'Edit Template'}
+            subtitle={draft.name || undefined}
+            onSave={saveDraft}
+            saving={saving}
+            savingLabel="Saving..."
+            onCancel={cancelEdit}
+            style={CARD_BAR}
+          />
 
           <div style={{ display: 'grid', gap: '10px', marginBottom: '14px' }}>
             <label>
@@ -243,17 +250,6 @@ export default function InstallChecklistsAdminPage() {
             style={{ padding: '6px 12px', borderRadius: '8px', border: '1px dashed var(--border)', background: 'transparent', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
           >+ Add Item</button>
 
-          <div style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
-            <button
-              onClick={saveDraft}
-              disabled={saving}
-              style={{ padding: '10px 16px', borderRadius: '10px', border: 'none', background: 'var(--accent, #2563eb)', color: '#fff', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
-            >{saving ? 'Saving...' : 'Save'}</button>
-            <button
-              onClick={cancelEdit}
-              style={{ padding: '10px 16px', borderRadius: '10px', border: '1px solid var(--border)', background: 'var(--card)', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
-            >Cancel</button>
-          </div>
         </div>
       )}
 

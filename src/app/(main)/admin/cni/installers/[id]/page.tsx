@@ -5,6 +5,7 @@ import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { deepLinks } from '@/lib/deep-links';
 import { useAuth } from '@/components/AuthProvider';
+import TopSaveBar, { CARD_BAR } from '@/components/TopSaveBar';
 import { useDialog } from '@/components/DialogProvider';
 import { theme } from '@/lib/theme';
 import { loadCompaniesWithCounts, type CompanyOption } from '@/lib/cni-companies';
@@ -499,9 +500,16 @@ export default function CniInstallerDetailPage() {
       {/* ── EDIT MODE ── */}
       {isEditing ? (
         <div style={sectionStyle}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: theme.textPrimary, marginBottom: '14px' }}>
-            Edit Installer Profile
-          </div>
+          <TopSaveBar
+            title="Edit Installer Profile"
+            subtitle={editForm.fullName.trim() || undefined}
+            onSave={saveEdit}
+            saving={saving}
+            saveLabel="Save Changes"
+            savingLabel="Saving..."
+            onCancel={() => setIsEditing(false)}
+            style={{ ...CARD_BAR, margin: '-14px -16px 14px', borderRadius: '12px 12px 0 0' }}
+          />
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
             <div>
@@ -619,21 +627,6 @@ export default function CniInstallerDetailPage() {
             </div>
           </div>
 
-          {/* Save / Cancel */}
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button onClick={saveEdit} disabled={saving} style={{
-              flex: 1, padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-              background: saving ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none', cursor: saving ? 'default' : 'pointer',
-            }}>
-              {saving ? 'Saving...' : 'Save Changes'}
-            </button>
-            <button onClick={() => setIsEditing(false)} style={{
-              padding: '12px 20px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-              background: 'var(--subtle-bg)', border: '1px solid var(--border)', color: 'var(--text-muted)', cursor: 'pointer',
-            }}>
-              Cancel
-            </button>
-          </div>
         </div>
       ) : (
         <>
@@ -731,9 +724,14 @@ export default function CniInstallerDetailPage() {
         background: 'color-mix(in srgb, var(--error) 5%, var(--card))',
         border: '1px solid var(--error-border)',
       }}>
-        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--error)', marginBottom: '12px' }}>
-          INTERNAL ONLY — Not visible to installer
-        </div>
+        <TopSaveBar
+          title={<span style={{ color: 'var(--error)' }}>INTERNAL ONLY — Not visible to installer</span>}
+          onSave={saveInternalFields}
+          saving={saving}
+          saveLabel="Save Internal Fields"
+          savingLabel="Saving..."
+          style={{ ...CARD_BAR, margin: '-14px -16px 12px', borderRadius: '12px 12px 0 0', background: 'color-mix(in srgb, var(--error) 5%, var(--card))' }}
+        />
 
         {/* Performance */}
         <div style={{ marginBottom: '16px' }}>
@@ -784,16 +782,6 @@ export default function CniInstallerDetailPage() {
           </div>
         </div>
 
-        <button
-          onClick={saveInternalFields}
-          disabled={saving}
-          style={{
-            width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-            background: saving ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none', cursor: saving ? 'default' : 'pointer',
-          }}
-        >
-          {saving ? 'Saving...' : 'Save Internal Fields'}
-        </button>
       </div>
 
       {/* Performance Summary */}

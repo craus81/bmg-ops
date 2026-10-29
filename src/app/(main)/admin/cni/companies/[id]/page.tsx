@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import TopSaveBar, { CARD_BAR } from '@/components/TopSaveBar';
 import { useDialog } from '@/components/DialogProvider';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import NetsuiteVendorSearch, { type NsVendor } from '@/components/NetsuiteVendorSearch';
@@ -595,9 +596,15 @@ export default function CniCompanyDetailPage() {
         padding: '16px', borderRadius: '14px', marginBottom: '14px',
         background: 'var(--card)', border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
       }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
-          Company Details
-        </div>
+        <TopSaveBar
+          title="Company Details"
+          subtitle={name || company?.name || undefined}
+          onSave={handleSave}
+          saving={saving}
+          saveLabel="Save Changes"
+          savingLabel="Saving..."
+          style={CARD_BAR}
+        />
 
         {saveMsg && (
           <div style={{
@@ -750,17 +757,6 @@ export default function CniCompanyDetailPage() {
           </div>
         </div>
 
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          style={{
-            width: '100%', padding: '12px', borderRadius: '10px', fontSize: '13px', fontWeight: 700,
-            background: saving ? 'var(--text-muted)' : 'var(--accent)', color: '#fff', border: 'none',
-            cursor: saving ? 'default' : 'pointer',
-          }}
-        >
-          {saving ? 'Saving...' : 'Save Changes'}
-        </button>
       </div>
 
       {/* Compliance documents card — W9 / insurance / direct deposit on file */}
