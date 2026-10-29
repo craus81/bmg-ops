@@ -548,7 +548,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
           >
             Chat
             {unreadMessages > 0 && (
-              <span aria-hidden="true" style={{
+              <span aria-hidden="true" className="hdr-badge" style={{
                 position: 'absolute', top: '2px', right: '2px',
                 background: '#3b82f6', color: '#fff',
                 fontSize: '9px', fontWeight: 800,
@@ -582,7 +582,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
             >
               ＠
               {unreadMentions.length > 0 && (
-                <span aria-hidden="true" style={{
+                <span aria-hidden="true" className="hdr-badge" style={{
                   position: 'absolute', top: '2px', right: '-2px',
                   background: '#60a5fa', color: '#fff',
                   fontSize: '9px', fontWeight: 800,
@@ -681,7 +681,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
             >
               Alerts
               {unreadCount > 0 && (
-                <span aria-hidden="true" style={{
+                <span aria-hidden="true" className="hdr-badge" style={{
                   position: 'absolute', top: '2px', right: '2px',
                   background: '#ef4444', color: '#fff',
                   fontSize: '9px', fontWeight: 800,
