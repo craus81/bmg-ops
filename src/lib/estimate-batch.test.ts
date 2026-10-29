@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { estimateCustomerKey, groupByCustomer, canSendForApproval } from './estimate-batch';
+import { estimateCustomerKey, groupByCustomer, canSendForApproval, batchSendErrorText } from './estimate-batch';
 
 describe('estimateCustomerKey', () => {
   it('prefers the customer record, then the lead, then NetSuite, then the name', () => {
@@ -32,5 +32,20 @@ describe('canSendForApproval', () => {
     expect(canSendForApproval({ customer_approved: true })).toBe(false);
     expect(canSendForApproval({ status: 'accepted' })).toBe(false);
     expect(canSendForApproval({ netsuite_so_id: '123' })).toBe(false);
+  });
+});
+
+describe('batchSendErrorText', () => {
+  it('shows the route\'s own error', () => {
+    expect(batchSendErrorText(400, JSON.stringify({ error: 'Estimate #12 is for Gateway.' }))).toBe('Estimate #12 is for Gateway.');
+  });
+
+  it('names a timeout instead of "Unknown error"', () => {
+    expect(batchSendErrorText(504, 'An error occurred with your deployment\n\nFUNCTION_INVOCATION_TIMEOUT')).toMatch(/took too long/);
+  });
+
+  it('says what came back when it is something else', () => {
+    expect(batchSendErrorText(500, '')).toBe('The server answered 500. Nothing was sent.');
+    expect(batchSendErrorText(502, '<html><body>Bad gateway</body></html>')).toBe('The server answered 502: Bad gateway. Nothing was sent.');
   });
 });

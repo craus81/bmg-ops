@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from 'react';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { useDialog } from '@/components/DialogProvider';
 import { holdAwareFetch } from '@/lib/hold-aware-fetch';
-import { canSendForApproval, groupByCustomer } from '@/lib/estimate-batch';
+import { batchSendErrorText, canSendForApproval, groupByCustomer } from '@/lib/estimate-batch';
 
 /**
  * Several estimates picked on the Estimates list, emailed one customer at a
@@ -87,9 +87,10 @@ export default function EstimateBatchSend({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ preview: true, estimateIds: group.map(e => e.id), emails: fields.emails, message: fields.message || undefined }),
         });
-      const data = await res.json();
-      if (res.ok && data.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
-      return { error: data.error || 'Unknown error' };
+      const text = await res.text();
+      const data = (() => { try { return JSON.parse(text); } catch { return null; } })();
+      if (res.ok && data?.preview) return { preview: { to: data.to ?? null, subject: data.subject, html: data.html } };
+      return { error: batchSendErrorText(res.status, text) };
     } catch {
       return { error: 'Network error. Try again.' };
     }
@@ -98,6 +99,11 @@ export default function EstimateBatchSend({
   const send = async (fields: EmailComposeFields): Promise<{ ok: boolean }> => {
     const common = { emails: fields.emails, bccSelf: fields.bccSelf, cc: fields.cc, message: fields.message || undefined };
     let data: any;
+    // Failures in red, with the server's own words (or what cut it off).
+    const fail = async (res: Response) => {
+      await dialog.alert('Send failed: ' + batchSendErrorText(res.status, await res.text().catch(() => '')), { error: true });
+      return { ok: false };
+    };
     try {
       if (mode === 'pdfs') {
         const res = await fetch('/api/estimates/email-pdfs', {
@@ -105,8 +111,8 @@ export default function EstimateBatchSend({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...common, estimateIds: group.map(e => e.id) }),
         });
+        if (!res.ok) return fail(res);
         data = await res.json().catch(() => ({}));
-        if (!res.ok) { await dialog.alert('Send failed: ' + (data.error || 'Unknown error')); return { ok: false }; }
       } else {
         // Below the margin floor: one 409 with the numbers, then a typed
         // reason retries (recorded, owner notified). A customer on hold asks
@@ -120,7 +126,8 @@ export default function EstimateBatchSend({
             body: JSON.stringify({ ...common, alsoIds: others.map(e => e.id), ...(floorReason ? { floorReason } : {}) }),
           }, fetch, holdCtx);
           if (!res) return { ok: false };
-          data = await res.json().catch(() => ({}));
+          if (!res.ok && !(res.status === 409 && attempt === 0)) return fail(res);
+          data = await res.clone().json().catch(() => ({}));
           if (res.ok) break;
           if (res.status === 409 && data.belowFloor && attempt === 0) {
             const reason = await dialog.prompt(
@@ -132,16 +139,15 @@ export default function EstimateBatchSend({
             floorReason = reason.trim();
             continue;
           }
-          await dialog.alert('Send failed: ' + (data.error || 'Unknown error'));
-          return { ok: false };
+          return fail(res);
         }
-        if (!data || data.error) { await dialog.alert('Send failed: ' + (data?.error || 'Unknown error')); return { ok: false }; }
+        if (!data || data.error) { await dialog.alert('Send failed: ' + (data?.error || 'the server gave no answer. Check whether the email arrived before sending again.'), { error: true }); return { ok: false }; }
         if (data.dispatch?.email && !data.dispatch.email.ok) {
-          await dialog.alert(`The email to ${customer} did not go out: ${data.dispatch.email.error || 'unknown error'}. The estimates are marked sent, so use Send for Approval on one of them to try again.`);
+          await dialog.alert(`The email to ${customer} did not go out: ${data.dispatch.email.error || 'the email service refused it'}. The estimates are marked sent, so use Send for Approval on one of them to try again.`, { error: true });
         }
       }
     } catch {
-      await dialog.alert('Network error. Try again.');
+      await dialog.alert('The connection dropped before the server answered. Check whether the email arrived before sending again.', { error: true });
       return { ok: false };
     }
     sentRef.current = true;
