@@ -27,7 +27,7 @@ import { validateBody, z } from '@/lib/validate';
 import { renderEstimateDocument, escHtml } from '@/lib/estimate-document';
 import { publicEstimate, publicLines, publicProofs, loadApprovalLines } from '@/lib/estimate-approval-view';
 import { r2GetBytes, r2Upload } from '@/lib/r2';
-import { recordQuoteView } from '@/lib/quote-view-recorder';
+import { recordQuoteView, viewerFromUrl } from '@/lib/quote-view-recorder';
 import { loadApprovalDownloads } from '@/lib/estimate-approval-downloads';
 import { jobCoversEstimate } from '@/lib/graphics-fleet';
 import { resolveProofResponder } from '@/lib/proof-responder';
@@ -119,6 +119,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     repIds: [estimate.sent_for_approval_by, estimate.created_by],
     label: `Estimate #${estimate.estimate_number}${estimate.title ? ` — ${estimate.title}` : ''}`,
     customerName: estimate.customer_name || null,
+    viewer: viewerFromUrl(req.url),
   });
 
   return NextResponse.json({

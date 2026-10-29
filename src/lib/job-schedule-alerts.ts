@@ -23,19 +23,13 @@ import { deepLinks } from './deep-links';
 import { installSchedulerIds } from './install-scheduling';
 import { computePartsReadinessBoard } from './parts-readiness';
 import { scheduleStep, type ScheduleStep } from './job-schedule-alerts-state';
+import { newAlertWatcherIds } from './new-alert-watchers';
 
 export { scheduleStep, type ScheduleStep };
+export { newAlertWatcherIds };
 
 type Verdict = 'reserved' | 'ready' | 'waiting' | 'short';
 
-/** Everyone ticked "Copy me on new alerts" (Craig, for now). */
-export async function newAlertWatcherIds(service: { from: (table: string) => any }): Promise<string[]> {
-  const { data } = await service
-    .from('notification_preferences')
-    .select('user_id')
-    .eq('copy_new_alerts', true);
-  return [...new Set(((data || []) as any[]).map(r => r.user_id as string).filter(Boolean))];
-}
 
 /** Who hears about a job's scheduling step: the schedulers plus the watchers. */
 export async function scheduleAlertRecipients(service: SupabaseClient): Promise<string[]> {

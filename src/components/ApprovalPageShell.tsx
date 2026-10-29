@@ -127,7 +127,9 @@ export default function ApprovalPageShell({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/approve/${kind}/${encodeURIComponent(token)}`);
+        // A per-person link tells the open alert who is reading (2026-10-29).
+        const who = ownLink ? `?to=${encodeURIComponent(deliveryTarget!)}&own=1` : '';
+        const res = await fetch(`/api/approve/${kind}/${encodeURIComponent(token)}${who}`);
         const json = await res.json();
         if (cancelled) return;
         if (!res.ok) {
