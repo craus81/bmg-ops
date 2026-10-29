@@ -4,7 +4,7 @@ import { validateExpiry, checkRateLimit, getRequestIp } from '@/lib/magic-link-a
 import { loadEstimateGraphics, loadEstimateProofs } from '@/lib/estimate-graphics';
 import { publicEstimate, publicLines, publicProofs, loadApprovalLines } from '@/lib/estimate-approval-view';
 import { loadApprovalDownloads } from '@/lib/estimate-approval-downloads';
-import { recordQuoteView } from '@/lib/quote-view-recorder';
+import { recordQuoteView, viewerFromUrl } from '@/lib/quote-view-recorder';
 import { compareUnits } from '@/lib/estimate-fleet';
 import { vehicleDescription } from '@/lib/estimate-document';
 
@@ -98,6 +98,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
       repIds: [shown.sent_for_approval_by, shown.created_by],
       label: `${batch ? 'Estimates' : 'Fleet order'} of ${members.length} (${members.map(e => `#${e.estimate_number}`).join(', ')})`,
       customerName: shown.customer_name || null,
+      viewer: viewerFromUrl(req.url),
     });
   }
 

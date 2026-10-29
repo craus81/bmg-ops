@@ -88,6 +88,8 @@ export interface QuoteViewRow {
   viewer_kind?: ViewerKind | string | null;
   ip_address?: string | null;
   user_agent?: string | null;
+  /** Who the per-person link was minted for (migration 452). */
+  viewer?: string | null;
 }
 
 export interface ViewSummary {

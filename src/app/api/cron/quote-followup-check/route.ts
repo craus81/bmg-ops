@@ -105,7 +105,7 @@ export async function GET(req: NextRequest) {
               type: 'quote_followup',
               title: `⏰ Follow-up reminder: ${number} — ${customer}`,
               body: r.note ? r.note.slice(0, 900) : `You asked to be reminded today to follow up on ${number}.`,
-              url: deepLinks.quoteFollowUps(r.quote_type as 'estimate' | 'wrap', r.quote_id),
+              url: deepLinks.quote(r.quote_type as 'estimate' | 'wrap', r.quote_id),
               channels: ['in_app', 'push'],
             });
             reminded++;
@@ -207,9 +207,8 @@ export async function GET(req: NextRequest) {
           .sort((a, b) => b.quietDays - a.quietDays)
           .map(q => `${q.number} ${q.customer} (${fmtK(q.total)}, quiet ${q.quietDays}d)`)
           .join(' · ');
-        // Land on the follow-ups queue — that's where Log Follow-Up / Won /
-        // Lost live. A one-quote nudge highlights its exact row; a real
-        // multi-quote digest opens the list.
+        // A one-quote nudge opens that estimate (✉ Follow Up lives there);
+        // a real multi-quote digest opens the list.
         const only = quotes.length === 1 ? quotes[0] : null;
         await notifyMany([repId], {
           type: 'quote_followup',
@@ -218,7 +217,7 @@ export async function GET(req: NextRequest) {
           // one, or this reads as an FYI about an email we already sent.
           body: `${lines}\n\nNo reminder has been emailed to the customer. Open the quote and use ✉ Follow Up to send one.`.slice(0, 900),
           url: only
-            ? deepLinks.quoteFollowUps(only.table === 'estimates' ? 'estimate' : 'wrap', only.id)
+            ? deepLinks.quote(only.table === 'estimates' ? 'estimate' : 'wrap', only.id)
             : deepLinks.quoteFollowUps(),
           channels: ['in_app', 'push', 'email'],
         });

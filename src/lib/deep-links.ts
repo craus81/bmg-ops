@@ -136,6 +136,13 @@ export const deepLinks = {
    *  /quotes and /admin/quote-followups URLs redirect here. */
   quoteFollowUps: (type?: 'estimate' | 'wrap', quoteId?: string) =>
     `/estimates${type && quoteId ? `?item=${type}-${quoteId}` : '?status=sent'}`,
+  /** One quote itself, for alerts about it (👀 Opened, follow-up
+   *  reminders). An estimate opens in the builder (Craig, 2026-10-29:
+   *  tapping 👀 should open the estimate, not the list), and its back
+   *  button returns to the estimate's row, where ☎ Log and ✉ Follow Up
+   *  live. Wrap quotes keep their row on the list. */
+  quote: (type: 'estimate' | 'wrap', quoteId: string) =>
+    type === 'estimate' ? `/estimates?id=${quoteId}&from=quotes` : `/estimates?item=wrap-${quoteId}`,
   /** AP queue — jumps to the vendor invoice's status tab and highlights it. */
   apInvoice: (invoiceId: string) => `/admin/ap?invoice=${invoiceId}`,
   /** Installer portal invoice list — expands and scrolls to the invoice. */

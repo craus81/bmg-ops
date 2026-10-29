@@ -76,7 +76,9 @@ export default function FleetApprovalPage() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/approve/fleet/${encodeURIComponent(token)}`);
+        // A per-person link tells the open alert who is reading (2026-10-29).
+        const who = ownLink ? `?to=${encodeURIComponent(deliveryTarget!)}&own=1` : '';
+        const res = await fetch(`/api/approve/fleet/${encodeURIComponent(token)}${who}`);
         const json = await res.json();
         if (cancelled) return;
         if (json.status === 'single') {

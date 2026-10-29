@@ -166,6 +166,11 @@ describe('deepLinks.estimate / newEstimate fromCustomer', () => {
     expect(deepLinks.estimate('est-1')).toBe('/estimates?id=est-1');
     expect(deepLinks.newEstimate('cust-1')).toBe('/estimates?new=1&customer=cust-1');
   });
+
+  it('quote opens an estimate itself (back returns to its row); wrap quotes keep their list row', () => {
+    expect(deepLinks.quote('estimate', 'est-1')).toBe('/estimates?id=est-1&from=quotes');
+    expect(deepLinks.quote('wrap', 'wq-1')).toBe('/estimates?item=wrap-wq-1');
+  });
 });
 
 describe('PO PDF file names', () => {
