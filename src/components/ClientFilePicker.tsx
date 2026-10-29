@@ -151,15 +151,22 @@ export default function ClientFilePicker({ customerName, customerNetsuiteId, alr
   return createPortal(
     <div
       ref={closeOnEscape(onClose)}
-      onClick={onClose}
+      // Only a tap on the backdrop itself closes. Taps stop here so they don't
+      // reach the job sheet behind (portal events bubble up the React tree);
+      // NativeLinkHandler catches Open in the capture phase, so stopping
+      // doesn't send it to Safari any more (Craig, 2026-10-29).
+      onClick={e => { e.stopPropagation(); if (e.target === e.currentTarget) onClose(); }}
+      // On the iPhone Duo the panel steps left of Apple's clock bubble, which
+      // sat on top of Cancel (globals.css); the strip it leaves closes too.
+      className="duo-clear-status"
       style={{
         position: 'fixed', inset: 0, zIndex: 1100,
         background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(6px)',
         display: 'flex', flexDirection: 'column',
+        paddingTop: 'env(safe-area-inset-top)',
       }}
     >
       <div
-        onClick={e => e.stopPropagation()}
         style={{
           // Fill the fixed overlay rather than 100vh: in the iPhone app the web
           // view is inset under the status bar and home bar, so 100vh ran past
@@ -265,6 +272,8 @@ export default function ClientFilePicker({ customerName, customerNetsuiteId, alr
           <div style={{ flex: 1, fontSize: '12px', color: error ? 'var(--error)' : 'var(--text-secondary)', minWidth: 0 }}>
             {error || (picked.size === 0 ? 'Tick the files to add.' : `${picked.size} picked`)}
           </div>
+          {/* Always a way out down here too, next to Add. */}
+          <button onClick={onClose} style={{ padding: '9px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', background: 'transparent', color: 'var(--text-body)', border: '1px solid var(--border-strong)' }}>Close</button>
           {picked.size > 0 && (
             <button onClick={() => setPicked(new Map())} style={{ padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-strong)' }}>Clear</button>
           )}

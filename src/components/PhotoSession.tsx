@@ -380,6 +380,7 @@ export default function PhotoSession({ open, title = 'Take photos', subtitle, on
       role="dialog"
       aria-modal="true"
       aria-label={title}
+      className="duo-clear-status"
       style={{
         position: 'fixed', inset: 0, zIndex: 4000, background: '#000',
         display: 'flex', flexDirection: 'column', userSelect: 'none', WebkitUserSelect: 'none',

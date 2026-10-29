@@ -229,6 +229,7 @@ export default function PhotoLightbox({ photos, index, onClose, onIndex, printHe
       aria-modal="true"
       aria-label={photo.title || 'Photo'}
       onClick={onClose}
+      className="duo-clear-status"
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)',
         display: 'flex', flexDirection: 'column',
