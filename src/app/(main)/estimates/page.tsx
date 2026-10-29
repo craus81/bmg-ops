@@ -21,6 +21,7 @@ import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import EstimateOrderStatusCard from '@/components/EstimateOrderStatusCard';
 import EstimateBatchSend from '@/components/EstimateBatchSend';
 import { canSendForApproval, groupByCustomer, MAX_BATCH_ESTIMATES } from '@/lib/estimate-batch';
+import { useSendCheck } from '@/components/SendCheckModal';
 import EmailComposeModal, { type EmailComposeAttachment, type EmailComposeContact, type EmailComposeFields } from '@/components/EmailComposeModal';
 import { INTERNAL_STAFF_ROLES } from '@/lib/features';
 import {
@@ -547,6 +548,8 @@ export default function EstimatesPage() {
   useRequireFeature('estimates');
   const dialog = useDialog();
   const supabase = createClient();
+  // Labor and freight pop-up before every estimate email (Craig, 2026-10-29).
+  const sendCheck = useSendCheck(supabase);
 
   const [view, setView] = useState<ViewMode>('list');
   // Usage telemetry (R7-4): a started builder attempt that returns to the
@@ -2900,6 +2903,8 @@ export default function EstimatesPage() {
       const saved = await saveEstimate(est?.status || 'draft');
       // Don't open a compose screen that would attach a stale PDF.
       if (!saved) return;
+      // A frozen estimate can't change, so only an editable one is checked.
+      if (!(await sendCheck.ask([editingId], { action: proForma ? 'Email Pro Forma' : 'Email PDF', saved: true }))) return;
     }
     await loadEstimateFiles(editingId);
     setPdfEmailProForma(proForma);
@@ -3143,6 +3148,12 @@ export default function EstimatesPage() {
         .filter(m => m.id !== editingId && !m.customer_approved && !m.netsuite_so_id && m.status !== 'accepted')
         .map(m => ({ id: m.id, estimateNumber: m.estimate_number, unitNumber: m.unit_number || null }));
     } catch { /* no order, or it can't load: an ordinary send */ }
+    // Every truck the email can carry: an edit to one fleet estimate doesn't
+    // carry over to the others, so each gets its own check.
+    if (!(await sendCheck.ask([editingId, ...fleetSiblings.map(f => f.id)], { action: 'Send for approval', saved: true }))) {
+      setSendingForApproval(false);
+      return;
+    }
     setApprovalFleetSiblings(fleetSiblings);
     setApprovalFleetAll(true);
 
@@ -4648,12 +4659,16 @@ export default function EstimatesPage() {
               )}
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 <button
-                  onClick={() => setBatchMode('approval')}
+                  onClick={async () => {
+                    if (await sendCheck.ask(sendable.map(e => e.id), { action: 'Send for approval' })) setBatchMode('approval');
+                  }}
                   disabled={sendable.length === 0 || !!tooMany}
                   style={{ ...barButton('#059669', '#059669'), opacity: sendable.length === 0 || tooMany ? 0.45 : 1 }}
                 >✉ Send for approval{sendable.length ? ` (${sendable.length})` : ''}</button>
                 <button
-                  onClick={() => setBatchMode('pdfs')}
+                  onClick={async () => {
+                    if (await sendCheck.ask(picked.map(e => e.id), { action: 'Email PDFs' })) setBatchMode('pdfs');
+                  }}
                   disabled={picked.length === 0 || !!tooMany}
                   style={{ ...barButton('#60a5fa', 'transparent'), opacity: picked.length === 0 || tooMany ? 0.45 : 1 }}
                 >📄 Email PDFs{picked.length ? ` (${picked.length})` : ''}</button>
@@ -4666,6 +4681,7 @@ export default function EstimatesPage() {
           );
         })()}
 
+        {sendCheck.element}
         {batchMode && (
           <EstimateBatchSend
             mode={batchMode}
@@ -7706,6 +7722,7 @@ export default function EstimatesPage() {
       {/* Approval email — standard compose screen (E4 + the customer-email
           standard): edit recipients, bcc yourself, add a note, and see the
           exact document before it goes out. */}
+      {sendCheck.element}
       {approvalModal && (
         <EmailComposeModal
           title="Review Approval Email Before Sending"
