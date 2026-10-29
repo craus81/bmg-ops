@@ -90,6 +90,7 @@ export default function MyScansPanel({ onClose, waitingPhotos = 0 }: {
       role="dialog"
       aria-modal="true"
       aria-label="My scans"
+      className="duo-clear-status"
       style={{
         position: 'fixed', inset: 0, zIndex: 900, background: theme.bg, overflowY: 'auto',
         paddingTop: 'env(safe-area-inset-top)', paddingBottom: 'env(safe-area-inset-bottom)',

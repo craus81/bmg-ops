@@ -125,7 +125,7 @@ export default function DrawingWorkspace({
   };
 
   return (
-    <div style={rootStyle}>
+    <div style={rootStyle} className={fullscreen ? 'duo-clear-status' : undefined}>
       <div style={panelStyle}>
         {fullscreen && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', borderBottom: `1px solid ${theme.border}`, flexShrink: 0 }}>

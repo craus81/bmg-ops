@@ -19,8 +19,12 @@
  *    the app itself doesn't offer).
  *
  * Screens that already handle the app themselves (graphics job files) call
- * preventDefault first, and this leaves those clicks alone. Computers never
- * mount any of this. See also src/lib/native-files.ts.
+ * preventDefault, and this leaves those clicks alone. Clicks are caught on
+ * the way down, so a screen that stops the click on the way up (a sheet
+ * that keeps taps from closing it) can't send it to Safari any more: that
+ * hit Client Files twice (Craig, 2026-10-16 and 2026-10-29). A link clicked
+ * from code without being on the page (a.click()) is caught too. Computers
+ * never mount any of this. See also src/lib/native-files.ts.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -131,18 +135,38 @@ export default function NativeLinkHandler() {
       return true;
     };
 
-    // Bubble phase on window runs after React's own handlers, so a screen
-    // that already called preventDefault keeps its click.
+    /** A link that would leave for Safari, with what to open in its place. */
+    const catchable = (a: HTMLAnchorElement | null): { href: string; hint: string | null } | null => {
+      if (!a || !a.href || a.hasAttribute('data-browser')) return null;
+      const newTab = a.target === '_blank' || a.hasAttribute('download');
+      if (!newTab || !classify(a.href)) return null;
+      return { href: a.href, hint: a.getAttribute('download') || a.textContent };
+    };
+
+    // Capture phase on window: runs before anything on the page can stop the
+    // click. Safari is blocked straight away, and once the click has been
+    // everywhere it goes, the link opens here unless a screen called
+    // preventDefault itself (it opened the file its own way).
     const onClick = (e: MouseEvent) => {
       if (e.defaultPrevented || e.button !== 0) return;
-      const a = (e.target as Element | null)?.closest?.('a');
-      if (!a || !a.href) return;
-      if (a.hasAttribute('data-browser')) return;
-      const newTab = a.target === '_blank' || a.hasAttribute('download');
-      if (!newTab) return;
-      if (route(a.href, a.getAttribute('download') || a.textContent)) e.preventDefault();
+      const link = catchable((e.target as Element | null)?.closest?.('a') as HTMLAnchorElement | null);
+      if (!link) return;
+      let screenHandled = false;
+      const block = e.preventDefault.bind(e);
+      e.preventDefault = () => { screenHandled = true; block(); };
+      block();
+      setTimeout(() => { if (!screenHandled) route(link.href, link.hint); }, 0);
     };
-    window.addEventListener('click', onClick);
+    window.addEventListener('click', onClick, true);
+
+    // a.click() on a link that isn't on the page: its click never reaches
+    // window, so catch it at the source.
+    const originalClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) {
+      const link = this.isConnected ? null : catchable(this);
+      if (link && route(link.href, link.hint)) return;
+      originalClick.call(this);
+    };
 
     // window.open(url) — only calls with a real URL. window.open('') is used
     // to write a print page, and that keeps the original behavior.
@@ -158,7 +182,8 @@ export default function NativeLinkHandler() {
     } as typeof window.open;
 
     return () => {
-      window.removeEventListener('click', onClick);
+      window.removeEventListener('click', onClick, true);
+      HTMLAnchorElement.prototype.click = originalClick;
       window.open = originalOpen;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- bind once on mount
@@ -199,6 +224,7 @@ export default function NativeLinkHandler() {
       role="dialog"
       aria-modal="true"
       aria-label={opened.name}
+      className="duo-clear-status"
       style={{
         position: 'fixed', inset: 0, zIndex: 3000, background: '#111',
         display: 'flex', flexDirection: 'column',

@@ -693,10 +693,13 @@ html[data-sidenav] .app-shell {
 html[data-sidenav] .hdr-badge { top: -9px !important; right: -7px !important; }
 /* The shell already clears the rail (and the right inset inside it). */
 html[data-sidenav] .app-header { padding-right: 12px !important; }
-/* The full-screen file viewer covers the rail, so it clears Apple's
-   clock/camera bubble itself: Print, Save, ✕ and the picture sit left of
-   the rail's width (plus a little air). */
-html[data-duo-status-side] .proof-viewer { padding-right: calc(var(--rail-w) + 12px) !important; }
+/* Full-screen screens cover the rail, so they clear Apple's clock/camera
+   bubble themselves: their buttons sit left of the rail's width (plus a
+   little air). .duo-clear-status is for any screen that fills the window;
+   the Client Files picker's Cancel sat under the bubble with no way out
+   (Craig, 2026-10-29). */
+html[data-duo-status-side] .proof-viewer,
+html[data-duo-status-side] .duo-clear-status { padding-right: calc(var(--rail-w) + 12px) !important; }
 html[data-sidenav] .palette-fab { bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important; }
 html[data-sidenav] .ai-chat-panel {
   right: calc(var(--rail-w) + 12px) !important;
