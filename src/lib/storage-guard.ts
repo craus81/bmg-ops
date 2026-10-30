@@ -56,7 +56,11 @@ export const ALLOWED_STORAGE_PREFIXES = new Set<string>([
 //   books-bills      — the vendors' bills snapped in Books → Snap a bill
 //                      (migration 436), written and served only by the super
 //                      admins' /api/admin/books/snap-a-bill.
-const DENIED_STORAGE_PREFIXES = new Set<string>(['signed-documents', 'ledger', 'books-bills']);
+//   app-requests     — screenshots on in-app Requests (migration 453), which
+//                      customer and installer accounts send too; served only
+//                      by /api/requests/files/[id] (who can see the request)
+//                      and the agent route.
+const DENIED_STORAGE_PREFIXES = new Set<string>(['signed-documents', 'ledger', 'books-bills', 'app-requests']);
 
 // Top-level prefixes are lowercase kebab tokens (photos, graphics-proofs, …).
 const PREFIX_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;

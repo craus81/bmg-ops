@@ -177,6 +177,7 @@ export const ENV_SPECS: EnvSpec[] = [
   { name: 'SUPABASE_DB_URL', group: 'platform', powers: 'Applying migrations during the build', whenMissing: 'fail' },
   { name: 'DATABASE_URL', group: 'platform', powers: 'Migration fallback connection string', whenMissing: 'off' },
   { name: 'CRON_SECRET', group: 'platform', powers: 'Authenticating scheduled runs — without it every cron is effectively off', whenMissing: 'fail' },
+  { name: 'REQUESTS_AGENT_TOKEN', group: 'platform', powers: 'Claude\u2019s scheduled check of More \u2192 Requests (/api/requests/agent) \u2014 without it nobody picks up new requests', whenMissing: 'warn' },
   { name: 'NEXT_PUBLIC_APP_URL', group: 'platform', powers: 'Absolute URLs in emails and notifications — deep links break without it', whenMissing: 'fail' },
   { name: 'HEALTH_PING_URL', group: 'platform', powers: "The external dead-man's switch that catches the scheduler itself dying", whenMissing: 'warn' },
   { name: 'HEALTH_JOBS_PING_URL', group: 'platform', powers: 'A second external check that goes red when any background job is stale or erroring (HEALTH_PING_URL only covers the app and scheduler)', whenMissing: 'off' },

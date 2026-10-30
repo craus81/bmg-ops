@@ -222,6 +222,19 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/pricing-requests/[id]/route.ts': feature('estimates'),
   'src/app/api/pricing-requests/[id]/notes/route.ts': feature('estimates'),
   'src/app/api/pricing-requests/link-po/route.ts': admin(),
+  // In-app Requests (migration 453): every approved login may send one, so
+  // these are requireAuth on purpose; customer and installer accounts only
+  // ever reach their own requests (canSeeRequest), staff see them all.
+  'src/app/api/requests/route.ts': authScoped('any approved login can send a request; the list is everything for staff and only the caller\'s own requests for customer and installer accounts', 'isInternalStaffRole('),
+  'src/app/api/requests/[id]/route.ts': authScoped('reads one request only when canSeeRequest admits the caller (staff, or the person who sent it)', 'canSeeRequest('),
+  'src/app/api/requests/[id]/messages/route.ts': authScoped('replies only on a request canSeeRequest admits the caller to', 'canSeeRequest('),
+  'src/app/api/requests/[id]/files/route.ts': authScoped('screenshots only onto a request canSeeRequest admits the caller to, images only, size-capped, stored under a prefix the generic storage API denies', 'canSeeRequest('),
+  'src/app/api/requests/[id]/me-too/route.ts': authScoped('Me too only on a request canSeeRequest admits the caller to (staff, since others see only their own)', 'canSeeRequest('),
+  'src/app/api/requests/[id]/wont/route.ts': authScoped('Won\'t do is Craig\'s alone: isRequestsOwner checks super admin plus the owner\'s email', 'isRequestsOwner('),
+  'src/app/api/requests/files/[id]/route.ts': authScoped('serves a screenshot only when canSeeRequest admits the caller to its request', 'canSeeRequest('),
+  'src/app/api/requests/agent/route.ts': token('Claude\'s scheduled Requests check, no session: REQUESTS_AGENT_TOKEN (Bearer, constant-time compare, refused when unset) is the credential; it only reads requests', 'authenticateRequestsAgent('),
+  'src/app/api/requests/agent/[id]/route.ts': token('Claude\'s scheduled Requests check, no session: REQUESTS_AGENT_TOKEN is the credential; the only writes are Claude\'s reply on one request and its status (never Won\'t do)', 'authenticateRequestsAgent('),
+  'src/app/api/requests/agent/files/[id]/route.ts': token('Claude\'s scheduled Requests check, no session: REQUESTS_AGENT_TOKEN is the credential; reads one request screenshot', 'authenticateRequestsAgent('),
   'src/app/api/siri/key/route.ts': feature('schedule'),
   'src/app/api/siri/calendar-event/route.ts': token('iPhone Siri intent, no session: the per-device Siri key (only its hash stored in siri_keys, revoked on sign-out) is the credential, and authenticateSiriKey re-checks on every call that its owner is approved, not deactivated and still holds the schedule feature; the only write is one calendar_events row owned by that user', 'authenticateSiriKey('),
   'src/app/api/checkins/condition/route.ts': staff(),

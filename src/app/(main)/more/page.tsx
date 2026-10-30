@@ -124,13 +124,16 @@ export default function MorePage() {
     { group: 'you', title: 'Customize Bottom Bar', sub: 'Pick which tabs sit in your bottom bar, and their order', path: '/more/bottom-bar', show: !customerOnly },
   ];
   const visible = items.filter(i => i.show);
+  // Requests (Craig, 2026-10-30): top of More, for everyone, outside the
+  // folding groups so it's never hidden. Search finds it too.
+  const requestsItem: Item = { title: 'Requests', sub: 'Report a problem, ask for a feature or ask a question · Claude answers there', path: '/requests', show: true };
 
   // The person's own area first: the same focus that shapes their Dashboard.
   const focus = resolveDashboardFocus(profile?.dashboard_focus, {
     isAdmin, sales: hasRole('sales'), finance: hasRole('finance'), executive: hasRole('executive'),
   });
   const groupOrder = orderMoreGroups(focus);
-  const results = searchMorePages(visible, query);
+  const results = searchMorePages([...visible, { ...requestsItem, group: 'you' as MoreGroupId }], query);
   const searching = query.trim().length > 0;
   const headerOf = (id: MoreGroupId) => MORE_GROUPS.find(g => g.id === id)?.header ?? '';
 
@@ -183,6 +186,9 @@ export default function MorePage() {
               {unknownQueues.length} queue{unknownQueues.length === 1 ? '' : 's'} could not be counted just now — those rows show no badge, which is not the same as empty.
             </div>
           )}
+          <div style={{ marginBottom: '20px' }}>
+            <MenuRow item={requestsItem} onOpen={() => router.push(requestsItem.path)} />
+          </div>
           {groupOrder.map(id => {
             const groupItems = visible.filter(i => i.group === id);
             if (groupItems.length === 0) return null;

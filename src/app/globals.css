@@ -779,3 +779,15 @@ html[data-duo-wide] .scan-list { grid-column: 2; grid-row: 2; }
   .send-check-buttons { margin-top: auto; }
   .send-check-buttons button { flex: 1; }
 }
+
+/* Requests (src/app/(main)/requests/page.tsx): the new-request form and a
+   request open full screen on a phone, Send along the bottom. */
+@media (max-width: 600px) {
+  .app-req-backdrop { padding: 0 !important; align-items: stretch !important; }
+  .app-req-sheet {
+    max-width: none !important; max-height: none !important; border-radius: 0 !important; border: 0 !important;
+    padding-top: env(safe-area-inset-top, 0px) !important;
+  }
+  .app-req-foot { margin-top: auto; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)) !important; }
+  .app-req-foot button { flex: 1; }
+}
