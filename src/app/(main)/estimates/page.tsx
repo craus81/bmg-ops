@@ -1158,6 +1158,14 @@ export default function EstimatesPage() {
     const added = searchParams.get('wrapAdded');
     if (added && /^[0-9a-f-]{36}$/i.test(added)) setWrapJustAdded(added);
   }, [searchParams]);
+  // Just back from the New Job form (&gfxCreated=<graphics job id>): a green
+  // note names the job, and the page scrolls to Convert to Sales Order (or
+  // to the Graphics Production Jobs card when there is nothing to convert).
+  const [graphicsJustCreated, setGraphicsJustCreated] = useState<string | null>(null);
+  useEffect(() => {
+    const created = searchParams.get('gfxCreated');
+    if (created && /^[0-9a-f-]{36}$/i.test(created)) setGraphicsJustCreated(created);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!user) return;
@@ -1223,6 +1231,16 @@ export default function EstimatesPage() {
         // A mention on the Internal Notes field (&note=field) scroll-flashes
         // it once the estimate form renders.
         if (searchParams.get('note') === 'field') flashNote('est-notes-field');
+        // Back from creating a graphics job: show Convert to Sales Order.
+        if (searchParams.get('gfxCreated')) {
+          let tries = 0;
+          const jump = () => {
+            if (document.getElementById('est-convert-so')) flashNote('est-convert-so');
+            else if (tries++ < 30) setTimeout(jump, 100);
+            else flashNote('est-graphics-jobs');
+          };
+          jump();
+        }
       };
       const est = estimates.find(e => e.id === estId);
       if (est) {
@@ -4723,6 +4741,48 @@ export default function EstimatesPage() {
   // A pricing request's price sheet is billed off the customer's PO, so the
   // NetSuite push and Convert to SO stay hidden (the routes refuse it too).
   const isPriceSheet = !!editingEst?.pricing_request_id;
+
+  // Convert to Sales Order shows for a saved, unconverted estimate with lines.
+  const canConvertToSO = !!editingId && !!(customerNsId || prospectId) && lines.length > 0 && !isPriceSheet
+    && !estimates.find(e => e.id === editingId)?.netsuite_so_id;
+
+  // The return trip from the New Job form (&gfxCreated): sits right above
+  // Convert to Sales Order, or atop the Graphics card when there is none.
+  const renderGraphicsCreatedNote = () => {
+    if (!graphicsJustCreated) return null;
+    // Only on the estimate the job belongs to (its linked list loads a beat
+    // after the estimate opens; the note appears then).
+    const job = linkedGraphicsJobs.find(j => j.id === graphicsJustCreated);
+    if (!job) return null;
+    return (
+      <div style={{
+        fontSize: '12px', color: 'var(--text-body)', marginBottom: '8px', padding: '8px 10px', borderRadius: '8px',
+        background: 'rgba(34,197,94,0.12)', border: '1px solid rgba(34,197,94,0.35)',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap',
+      }}>
+        <span>
+          <span style={{ fontWeight: 800, color: '#16a34a' }}>✓ Graphics job{job.job_number ? ` ${job.job_number}` : ''} created</span>
+          {canConvertToSO ? '. Ready to convert to a sales order.' : ' and linked to this estimate.'}
+        </span>
+        <span style={{ display: 'flex', gap: '10px' }}>
+          <button
+            onClick={() => router.push(deepLinks.graphicsJob(graphicsJustCreated))}
+            style={{ background: 'none', border: 'none', padding: 0, color: '#60a5fa', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}
+          >
+            Open job ›
+          </button>
+          <button
+            onClick={() => setGraphicsJustCreated(null)}
+            aria-label="Dismiss"
+            style={{ background: 'none', border: 'none', padding: 0, color: 'var(--text-muted)', fontSize: '14px', cursor: 'pointer' }}
+          >
+            ×
+          </button>
+        </span>
+      </div>
+    );
+  };
+
   // Same "accepted" the content lock uses: signed in the app, or marked
   // accepted (phone/PO approvals, conversion).
   const estAccepted = !!(editingEst && ((editingEst as any).customer_approved || editingEst.status === 'accepted'));
@@ -6332,10 +6392,11 @@ export default function EstimatesPage() {
       )}
 
       {editingId && (lines.some(isGraphicsLine) || linkedGraphicsJobs.length > 0 || copiedProofJobs.length > 0) && (
-        <div style={{
+        <div id="est-graphics-jobs" style={{
           background: 'var(--subtle-bg)', border: '1px solid var(--border)', borderRadius: '10px',
           padding: '12px', marginBottom: '12px',
         }}>
+          {!canConvertToSO && renderGraphicsCreatedNote()}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
             <div style={labelStyle}>Graphics Production Jobs</div>
             <div style={{ display: 'flex', gap: '6px' }}>
@@ -7494,12 +7555,14 @@ export default function EstimatesPage() {
         )}
         {/* Convert to Sales Order — gated on customer approval; admins can
             override with a recorded reason (phone/email/PO approvals). */}
-        {editingId && (customerNsId || prospectId) && lines.length > 0 && !isPriceSheet && !estimates.find(e => e.id === editingId)?.netsuite_so_id && (() => {
+        {canConvertToSO && (() => {
           const approved = !!(estimates.find(e => e.id === editingId) as any)?.customer_approved;
           const locked = !approved && !isAdmin;
           return (
             <>
+            {renderGraphicsCreatedNote()}
             <button
+              id="est-convert-so"
               onClick={() => convertToSalesOrder()}
               disabled={convertingToSO || locked}
               title={locked ? 'Waiting on customer approval — send the estimate for approval, or ask an admin to override.' : undefined}

@@ -81,9 +81,11 @@ export const deepLinks = {
    *  from: 'quotes' makes the builder's back button return to that row on
    *  the Quotes page instead of the Estimates list; fromCustomer (the
    *  customer record's route id — a prospects.id or `ns-<id>`) sends it
-   *  back to that customer's page. */
-  estimate: (estimateId: string, opts?: { flashNotes?: boolean; from?: 'quotes'; fromCustomer?: string | null }) =>
-    `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}${opts?.from ? `&from=${opts.from}` : ''}${opts?.fromCustomer ? `&fromCustomer=${encodeURIComponent(opts.fromCustomer)}` : ''}`,
+   *  back to that customer's page. graphicsJobCreated (a graphics job id)
+   *  is the New Job form's return trip: the estimate says the job was made
+   *  and scrolls to Convert to Sales Order. */
+  estimate: (estimateId: string, opts?: { flashNotes?: boolean; from?: 'quotes'; fromCustomer?: string | null; graphicsJobCreated?: string | null }) =>
+    `/estimates?id=${estimateId}${opts?.flashNotes ? '&note=field' : ''}${opts?.from ? `&from=${opts.from}` : ''}${opts?.fromCustomer ? `&fromCustomer=${encodeURIComponent(opts.fromCustomer)}` : ''}${opts?.graphicsJobCreated ? `&gfxCreated=${opts.graphicsJobCreated}` : ''}`,
   /** An order's team chat (migration 357), keyed by the estimate id — the
    *  same record once the estimate becomes a sales order. Its own page so
    *  every internal role can open it, Estimates access or not; `message`
