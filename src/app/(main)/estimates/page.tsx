@@ -1118,6 +1118,9 @@ export default function EstimatesPage() {
   const [matchingLineKey, setMatchingLineKey] = useState<string | null>(null);
   const [lineMatchQuery, setLineMatchQuery] = useState('');
   const [lineMatchResults, setLineMatchResults] = useState<Part[]>([]);
+  const [lineMatchShown, setLineMatchShown] = useState(PART_RESULTS_PAGE);
+  const [lineMatchCapped, setLineMatchCapped] = useState(false);
+  const lineMatchSeq = useRef(0);
   const [viewingPdf, setViewingPdf] = useState(false);
 
   // Customer search
@@ -1647,15 +1650,22 @@ export default function EstimatesPage() {
 
   // ── Match a custom line to a real NetSuite item ──
   const searchLineMatch = useCallback(async (q: string) => {
+    const seq = ++lineMatchSeq.current;
     const filter = partSearchOrFilter(['item_number'], ['display_name', 'description'], q);
     if (q.length < 2 || !filter) { setLineMatchResults([]); return; }
-    const { data } = await supabase
-      .from('netsuite_parts')
-      .select('id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost')
-      .eq('is_active', true)
-      .or(filter)
-      .limit(10);
-    setLineMatchResults((data as Part[]) || []);
+    // Same ranking as the main part search: part number matches first.
+    const cols = 'id, netsuite_id, item_number, display_name, description, sales_price, labor_hours, catalog, purchase_price, avg_install_cost';
+    const numberFilter = partSearchOrFilter(['item_number'], [], q);
+    const [byNum, byAny] = await Promise.all([
+      numberFilter ? supabase.from('netsuite_parts').select(cols).eq('is_active', true).or(numberFilter)
+        .order('item_number').limit(PART_RESULTS_FETCH) : Promise.resolve({ data: [] }),
+      supabase.from('netsuite_parts').select(cols).eq('is_active', true).or(filter)
+        .order('item_number').limit(PART_RESULTS_FETCH),
+    ]);
+    if (seq !== lineMatchSeq.current) return; // a newer search is on its way
+    setLineMatchResults(rankPartResults([...((byNum.data as Part[]) || []), ...((byAny.data as Part[]) || [])], q));
+    setLineMatchShown(PART_RESULTS_PAGE);
+    setLineMatchCapped((byNum.data?.length ?? 0) >= PART_RESULTS_FETCH || (byAny.data?.length ?? 0) >= PART_RESULTS_FETCH);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, []);
 
@@ -5395,7 +5405,7 @@ export default function EstimatesPage() {
                 position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50,
                 background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
                 boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-                maxHeight: 'min(65vh, 560px)', overflowY: 'auto', marginTop: '2px',
+                maxHeight: 'min(calc(65vh / var(--ts)), 560px)', overflowY: 'auto', marginTop: '2px',
               }}>
                 {/* Rack kits first: one click adds the rack with its
                     components beneath it. */}
@@ -6026,9 +6036,9 @@ export default function EstimatesPage() {
                           <div style={{
                             position: 'relative', zIndex: 50, marginTop: '2px',
                             background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '8px',
-                            maxHeight: '220px', overflowY: 'auto',
+                            maxHeight: 'min(calc(55vh / var(--ts)), 480px)', overflowY: 'auto',
                           }}>
-                            {lineMatchResults.map(p => (
+                            {lineMatchResults.slice(0, lineMatchShown).map(p => (
                               <button
                                 key={p.id}
                                 onClick={() => matchLineToPart(line.key, p)}
@@ -6047,6 +6057,23 @@ export default function EstimatesPage() {
                                 </div>
                               </button>
                             ))}
+                            {lineMatchResults.length > PART_RESULTS_PAGE && (
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '8px 10px', fontSize: '11px', color: 'var(--text-label)' }}>
+                                <span>
+                                  Showing {Math.min(lineMatchShown, lineMatchResults.length)} of {lineMatchResults.length}{lineMatchCapped ? '+' : ''}
+                                  {lineMatchShown >= lineMatchResults.length && lineMatchCapped ? ' (keep typing to narrow)' : ''}
+                                </span>
+                                {lineMatchShown < lineMatchResults.length && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setLineMatchShown(n => n + PART_RESULTS_PAGE)}
+                                    style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border)', background: 'var(--subtle-bg)', color: 'var(--text-primary)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
+                                  >
+                                    Show {Math.min(PART_RESULTS_PAGE, lineMatchResults.length - lineMatchShown)} more
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
                         )}
                         {lineMatchQuery.length >= 2 && lineMatchResults.length === 0 && (
