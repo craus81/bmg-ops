@@ -33,7 +33,8 @@ import { useDialog } from '@/components/DialogProvider';
 import NetsuiteVendorSearch from '@/components/NetsuiteVendorSearch';
 import VendorPickModal from '@/components/VendorPickModal';
 import PartsDemandTab from '@/components/PartsDemandTab';
-import CreatePoReviewModal, { type CreatePoResult, type ReviewRequest } from '@/components/CreatePoReviewModal';
+import CreatePoReviewModal, { type CreatePoResult, type OpenPo, type ReviewRequest } from '@/components/CreatePoReviewModal';
+import { canAddToPo } from '@/lib/po-add';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { trackingUrl } from '@/lib/tracking-url';
@@ -151,7 +152,10 @@ export default function PurchasingQueuePage() {
   const [creatingPo, setCreatingPo] = useState<string | null>(null);
   const [lastPo, setLastPo] = useState<CreatePoResult | null>(null);
   const [vendorFor, setVendorFor] = useState<RequestRow | null>(null);
-  const [review, setReview] = useState<{ vendor: string; gv: { id: string; name: string }; rows: RequestRow[] } | null>(null);
+  const [review, setReview] = useState<{ vendor: string; gv: { id: string; name: string }; rows: RequestRow[]; startPoId?: string } | null>(null);
+  // Open POs that can still take parts (dated today or yesterday), by
+  // NetSuite vendor id, for "Add to open PO" (po-add.ts).
+  const [openPosByVendor, setOpenPosByVendor] = useState<Record<string, OpenPo[]>>({});
   // Ticked queue rows, for Mark ordered and to pre-tick the PO review.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [markNotice, setMarkNotice] = useState<string | null>(null);
@@ -176,6 +180,18 @@ export default function PurchasingQueuePage() {
       const ordBody = await ordRes.json().catch(() => ({}));
       if (ordRes.ok && ordBody.success) setOnOrder(ordBody.requests || []);
     } catch { /* the empty state below says so */ }
+    try {
+      const poRes = await fetch('/api/purchase-requests/vendor-pos?status=open');
+      const poBody = await poRes.json().catch(() => ({}));
+      if (poRes.ok && poBody.success) {
+        const byVendor: Record<string, OpenPo[]> = {};
+        for (const p of (poBody.pos || []) as (OpenPo & { vendor_netsuite_id: string | null; status: string | null })[]) {
+          if (!p.vendor_netsuite_id || !canAddToPo(p)) continue;
+          (byVendor[p.vendor_netsuite_id] ||= []).push(p);
+        }
+        setOpenPosByVendor(byVendor);
+      }
+    } catch { /* no hint, and Create PO still makes a new PO */ }
     setLoading(false);
   }, []);
 
@@ -346,8 +362,8 @@ export default function PurchasingQueuePage() {
   };
 
   // Create PO opens the review screen; the modal itself places the PO.
-  const createPo = (vendor: string, rows: RequestRow[], gv: { id: string; name: string }) => {
-    setReview({ vendor, gv, rows });
+  const createPo = (vendor: string, rows: RequestRow[], gv: { id: string; name: string }, startPoId?: string) => {
+    setReview({ vendor, gv, rows, startPoId });
   };
   const poCreated = async (po: CreatePoResult) => {
     const vendor = review?.vendor;
@@ -587,7 +603,7 @@ export default function PurchasingQueuePage() {
       {lastPo && (
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 14px', marginBottom: '16px', background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.3)', borderRadius: '12px' }}>
           <div style={{ flex: 1, fontSize: '12px', color: 'var(--text-body)' }}>
-            <span style={{ fontWeight: 800, color: '#4ade80' }}>✓ PO {lastPo.number} created in NetSuite.</span>{' '}
+            <span style={{ fontWeight: 800, color: '#4ade80' }}>✓ {lastPo.addedToExisting ? `Added to PO ${lastPo.number} in NetSuite.` : `PO ${lastPo.number} created in NetSuite.`}</span>{' '}
             {lastPo.mirrored
               ? 'Readiness cards show these parts on order now.'
               : 'The 2-hourly sync will mirror it into FleetSuite shortly.'}
@@ -674,6 +690,22 @@ export default function PurchasingQueuePage() {
                 </div>
               )}
             </div>
+            {isAdmin && gv && (openPosByVendor[gv.id] || []).length > 0 && (() => {
+              const open = openPosByVendor[gv.id];
+              const p = open[0];
+              const label = p.tranid || `#${p.netsuite_id || ''}`;
+              return (
+                <div style={{ padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', background: 'rgba(245,158,11,0.08)', borderBottom: `1px solid ${theme.border}`, fontSize: '12px', color: 'var(--text-body)' }}>
+                  <span>
+                    <b style={{ color: '#f59e0b' }}>{label}</b> is still open with {gv.name} ({p.lines.length} line{p.lines.length !== 1 ? 's' : ''}{p.trandate ? `, dated ${p.trandate.slice(5, 7)}-${p.trandate.slice(8, 10)}` : ''}){open.length > 1 ? `, plus ${open.length - 1} more` : ''}.
+                  </span>
+                  <button onClick={() => createPo(vendor, rows, gv, p.id)} disabled={creatingPo !== null || noId === rows.length}
+                    style={{ marginLeft: 'auto', padding: '5px 11px', borderRadius: '7px', background: 'rgba(74,222,128,0.12)', border: '1px solid rgba(74,222,128,0.4)', color: '#4ade80', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}>
+                    ➕ Add these to {label}…
+                  </button>
+                </div>
+              );
+            })()}
             {isAdmin && pickerOpen === vendor && (
               <div style={{ padding: '10px 14px', borderBottom: `1px solid ${theme.border}`, background: 'var(--subtle-bg)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
@@ -922,6 +954,8 @@ export default function PurchasingQueuePage() {
             customerName: r.upfit_projects?.customer_name || r.estimates?.customer_name || null,
           }))}
           initiallySelected={new Set(review.rows.filter(r => selected.has(r.id)).map(r => r.id))}
+          openPos={openPosByVendor[review.gv.id] || []}
+          startPoId={review.startPoId || null}
           onClose={() => setReview(null)}
           onDone={poCreated}
         />

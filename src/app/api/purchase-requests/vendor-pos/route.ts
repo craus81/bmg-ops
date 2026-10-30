@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
 
   let query = service
     .from('netsuite_vendor_pos')
-    .select('id, netsuite_id, tranid, vendor_name, trandate, status, status_label, memo, total, eta_date, tracking_number, carrier')
+    .select('id, netsuite_id, tranid, vendor_netsuite_id, vendor_name, trandate, status, status_label, memo, total, eta_date, tracking_number, carrier')
     .order('trandate', { ascending: false, nullsFirst: false })
     .order('id')
     .limit(100);
