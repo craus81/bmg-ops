@@ -43,6 +43,7 @@ import CreatedBy from '@/components/CreatedBy';
 import { poCreatedBy } from '@/lib/created-by';
 import PoPricingRequestLink from '@/components/PoPricingRequestLink';
 import PoAttentionFlag from '@/components/PoAttentionFlag';
+import { trackingUrl } from '@/lib/tracking-url';
 
 type ShipTo = NonNullable<PurchaseOrder['ship_to']>;
 
@@ -86,6 +87,8 @@ interface PoGfxJob {
   status: GraphicsJobStatus;
   po_id: string;
   po_line_item_id: string | null;
+  tracking_number: string | null;
+  carrier: string | null;
 }
 
 type PoRecord = PurchaseOrder & {
@@ -299,7 +302,7 @@ export default function PoRecordPage() {
     // Children load after the record renders — each card degrades to empty.
     const [gfxRes, filesRes, notesRes, locRes, profRes] = await Promise.all([
       supabase.from('graphics_jobs')
-        .select('id, job_number, title, status, po_id, po_line_item_id')
+        .select('id, job_number, title, status, po_id, po_line_item_id, tracking_number, carrier')
         .eq('po_id', id).neq('status', 'cancelled'),
       supabase.from('po_files').select('*').eq('po_id', id).order('uploaded_at', { ascending: false }),
       supabase.from('po_notes').select('*').eq('po_id', id).order('created_at', { ascending: true }),
@@ -1714,6 +1717,23 @@ export default function PoRecordPage() {
                     {!j.po_line_item_id && <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: '6px', fontSize: '10px' }}>whole PO</span>}
                   </div>
                   {j.title && <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.title}</div>}
+                  {/* Tracking lives on the job; the PO just reads it (Craig
+                      2026-10-30: staff look up shipments by PO number). */}
+                  {j.tracking_number && (
+                    <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      {j.carrier ? `${j.carrier} ` : ''}
+                      <a
+                        href={trackingUrl(j.tracking_number, j.carrier)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        title="Track this shipment"
+                        style={{ color: '#60a5fa', fontWeight: 700 }}
+                      >
+                        {j.tracking_number}
+                      </a>
+                    </div>
+                  )}
                 </div>
                 <span style={{ fontSize: '10px', fontWeight: 700, whiteSpace: 'nowrap', color: GRAPHICS_STATUS_COLORS[j.status] || 'var(--text-secondary)' }}>
                   {GRAPHICS_STATUS_LABELS[j.status] || j.status}
