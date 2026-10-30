@@ -219,7 +219,8 @@ they tell you to go back to auto-shipping.
   "Gmail not connected". Every DOWN alert landed on :00; the same health
   check at :30 never failed. The recurring jobs now hold exclusive minutes
   (calendar-pull :02/:17/:32/:47, auto-import :05/:25/:45, health-check
-  :12/:42, parts-email-scan :22, parts-sync :37, netsuite-sync :52) — when
+  :12/:42, parts-email-scan :22, parts-sync :37, netsuite-sync :52,
+  inventory-sync :06/:19/:36/:53) — when
   adding a cron, pick a minute nothing else uses rather than a `*/N` step,
   and keep the health check alone on its minute so the watcher is never a
   victim of the load it is watching.

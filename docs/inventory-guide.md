@@ -194,6 +194,24 @@ One row per part that has stock, reservations, or an open PO:
 
 Use the search box and the **Allocated** / **On Order** filters.
 
+### Adjusting stock (admins)
+
+Each row has an **Adjust** button (the Parts list has **Adjust inventory**
+in an inventory part's details). It posts a real NetSuite **Inventory
+Adjustment** at O'Fallon to 52000 Inventory Adjustment, so NetSuite, the
+Inventory page and Books all agree. Two ways to enter it:
+
+- **Add or remove**: +2, -1.
+- **Shelf count**: type what's on the shelf; FleetSuite reads NetSuite's live
+  O'Fallon count and posts the difference.
+
+Pick a reason (Count correction, Damaged, Used in shop, Found, Other) and an
+optional note; both land on the NetSuite memo. The pop-up lists the part's
+recent adjustments (`inventory_adjustments`, migration 454). No alerts.
+
+The **From NetSuite · Refresh** chip shows when stock last came over and
+pulls it now.
+
 ## Open-job demand (Admin → Purchasing → "Open-job demand" tab)
 
 The readiness card answers "can I build THIS job." This tab answers the
@@ -245,7 +263,7 @@ vendor or NetSuite item id to enrich it.
 
 ## Gotchas
 
-- **On-hand numbers come from NetSuite** (synced every 2 hours; the
+- **On-hand numbers come from NetSuite** (synced every 15 minutes; the
   readiness card also checks live when opened). Until the QBO move,
   NetSuite is still the master for physical counts — FleetSuite is the
   master for *who the parts are for*.

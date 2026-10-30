@@ -36,7 +36,7 @@ export const HEALTH_MONITORS: HealthMonitor[] = [
   { syncType: 'dropbox_client_files', label: 'Dropbox client files copy', intervalMinutes: 10 },
   { syncType: 'parts_email_scan', label: 'Parts email ETA scan', intervalMinutes: 60 },
   { syncType: 'netsuite_parts', label: 'NetSuite parts catalog sync', intervalMinutes: 60 },
-  { syncType: 'netsuite_inventory', label: 'NetSuite inventory sweep', intervalMinutes: 120 },
+  { syncType: 'netsuite_inventory', label: 'NetSuite inventory sweep', intervalMinutes: 20 },
   { syncType: 'health_check', label: 'Health monitor itself', intervalMinutes: 30 },
   { syncType: 'at_risk_check', label: 'At-risk account sweep', intervalMinutes: 1440 },
   { syncType: 'quote_followup_check', label: 'Quote follow-up nudges', intervalMinutes: 1440 },

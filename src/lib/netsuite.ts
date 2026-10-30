@@ -2055,6 +2055,87 @@ export async function createPurchaseOrder(payload: {
   }
 }
 
+/**
+ * Create an Inventory Adjustment for one item at one location
+ * (POST /services/rest/record/v1/inventoryAdjustment). adjustQtyBy is the
+ * signed change; NetSuite costs added units at the item's average cost.
+ */
+export async function createInventoryAdjustment(payload: {
+  itemId: string | number;
+  locationId: string | number;
+  accountId: string | number;
+  subsidiaryId?: string | number | null;
+  adjustQtyBy: number;
+  memo?: string;
+  tranDate?: string;
+}): Promise<{ success: boolean; adjustmentId?: string; adjustmentNumber?: string; error?: string }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/inventoryAdjustment`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    account: { id: payload.accountId },
+    adjLocation: { id: payload.locationId },
+    ...(payload.subsidiaryId ? { subsidiary: { id: payload.subsidiaryId } } : {}),
+    ...(payload.tranDate ? { tranDate: payload.tranDate } : {}),
+    ...(payload.memo ? { memo: payload.memo.slice(0, 999) } : {}),
+    inventory: {
+      items: [{
+        item: { id: payload.itemId },
+        location: { id: payload.locationId },
+        adjustQtyBy: payload.adjustQtyBy,
+      }],
+    },
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite inventory adjustment error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 400);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite refused the adjustment (${response.status}): ${detail}` };
+    }
+
+    const location = response.headers.get('Location');
+    let id = location?.match(/\/(\d+)$/)?.[1] || '';
+    let tranId = '';
+    try {
+      const result = await response.json();
+      id = id || result.id?.toString() || '';
+      tranId = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content — the Location header carried the id
+    }
+    if (id && !tranId) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${id}`);
+        tranId = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical — the internal id is enough
+      }
+    }
+    return { success: true, adjustmentId: id, adjustmentNumber: tranId };
+  } catch (e: any) {
+    return { success: false, error: `Couldn't reach NetSuite: ${e.message}` };
+  }
+}
+
 /** One item line of a NetSuite purchase order, as REST returns it. */
 export interface PoItemLine {
   /** The sublist key: the line's id on this PO. */

@@ -11,7 +11,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase-browser';
-import { useRequireFeature } from '@/components/AuthProvider';
+import { useAuth, useRequireFeature } from '@/components/AuthProvider';
+import InventoryAdjustModal, { type AdjustPart } from '@/components/InventoryAdjustModal';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { looseMatcher, partNumberIncludes } from '@/lib/loose-search';
 
@@ -26,6 +27,8 @@ const CLOSED_PO_STATUSES = ['F', 'G', 'H'];
 
 interface InvRow {
   item_number: string;
+  /** NetSuite internal id of the stocked part, for the Adjust button. */
+  netsuite_id: string | null;
   display_name: string | null;
   on_hand: number;
   available: number;
@@ -40,7 +43,14 @@ const fmt = (d: string | null) => d ? new Date(`${d.slice(0, 10)}T12:00:00`).toL
 
 export default function InventoryPage() {
   useRequireFeature('parts_catalog');
+  const { isAdmin } = useAuth();
   const supabase = createClient();
+  const [adjusting, setAdjusting] = useState<AdjustPart | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshErr, setRefreshErr] = useState('');
+  const [, setTick] = useState(0);
   const [rows, setRows] = useState<InvRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -60,7 +70,7 @@ export default function InventoryPage() {
           .range(from, to)),
       fetchAllRows<any>((from, to) =>
         supabase.from('netsuite_parts')
-          .select('item_number, display_name, quantity_on_hand, quantity_available')
+          .select('item_number, netsuite_id, display_name, quantity_on_hand, quantity_available')
           .eq('is_active', true)
           .gt('quantity_on_hand', 0)
           .order('id')
@@ -70,7 +80,7 @@ export default function InventoryPage() {
     const map = new Map<string, InvRow>();
     const ensure = (key: string): InvRow => {
       if (!map.has(key)) {
-        map.set(key, { item_number: key, display_name: null, on_hand: 0, available: 0, allocated: 0, allocations: [], free: 0, on_order: 0, pos: [] });
+        map.set(key, { item_number: key, netsuite_id: null, display_name: null, on_hand: 0, available: 0, allocated: 0, allocations: [], free: 0, on_order: 0, pos: [] });
       }
       return map.get(key)!;
     };
@@ -78,6 +88,7 @@ export default function InventoryPage() {
     for (const p of partsRes.data || []) {
       const row = ensure(normPart(p.item_number));
       row.display_name = row.display_name || p.display_name;
+      row.netsuite_id = row.netsuite_id || (p.netsuite_id ? String(p.netsuite_id) : null);
       row.on_hand += Number(p.quantity_on_hand) || 0;
       row.available += Number(p.quantity_available) || 0;
     }
@@ -113,6 +124,37 @@ export default function InventoryPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // When stock last came from NetSuite (every 15 minutes, or Refresh).
+  useEffect(() => {
+    if (!isAdmin) return;
+    fetch('/api/inventory/refresh').then(r => r.json()).then(d => setLastSynced(d.lastSyncedAt || null)).catch(() => {});
+    const t = setInterval(() => setTick(n => n + 1), 60_000);
+    return () => clearInterval(t);
+  }, [isAdmin]);
+
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshErr('');
+    try {
+      const res = await fetch('/api/inventory/refresh', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setRefreshErr(data.error || "Couldn't refresh from NetSuite."); return; }
+      setLastSynced(data.lastSyncedAt || new Date().toISOString());
+      await load();
+    } catch {
+      setRefreshErr("Couldn't reach FleetSuite. Check your connection.");
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const syncedAgo = (() => {
+    if (!lastSynced) return null;
+    const mins = Math.max(0, Math.round((Date.now() - new Date(lastSynced).getTime()) / 60_000));
+    return mins < 1 ? 'just now' : mins < 60 ? `${mins} min ago` : `${Math.round(mins / 60)} hr ago`;
+  })();
+
   const match = looseMatcher(search);
   const visible = rows.filter(r => {
     if (filter === 'allocated' && r.allocated <= 0) return false;
@@ -134,7 +176,15 @@ export default function InventoryPage() {
           <h1 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Inventory</h1>
           <Link href="/admin/inventory/rack-kits" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>Rack Kits: what can we build? →</Link>
           <Link href="/admin/inventory/hitch-kits" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>Hitch Kits →</Link>
+          {isAdmin && (
+            <button onClick={refresh} disabled={refreshing} title="Pull on hand and available from NetSuite now"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '999px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-muted)', cursor: refreshing ? 'default' : 'pointer' }}>
+              <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: 'var(--success)' }} />
+              {refreshing ? 'Refreshing from NetSuite…' : `From NetSuite${syncedAgo ? ` ${syncedAgo}` : ''} · Refresh`}
+            </button>
+          )}
         </div>
+        {refreshErr && <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--error)', marginTop: '4px' }}>{refreshErr}</div>}
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
           On hand · allocated to jobs · free · on order — {totals.parts} parts shown, {totals.allocated} allocated, {totals.onOrder} on order
         </div>
@@ -176,11 +226,12 @@ export default function InventoryPage() {
                   <th style={{ padding: '8px 10px', fontWeight: 700, textAlign: 'right' }} title="Reserved to jobs in FleetSuite">Allocated</th>
                   <th style={{ padding: '8px 10px', fontWeight: 700, textAlign: 'right' }} title="Available minus reservations">Free</th>
                   <th style={{ padding: '8px 10px', fontWeight: 700, textAlign: 'right' }}>On Order</th>
+                  {isAdmin && <th style={{ padding: '8px 10px' }} />}
                 </tr>
               </thead>
               <tbody>
                 {visible.slice(0, 300).map(r => (
-                  <tr key={r.item_number} style={{ borderTop: '1px solid var(--border)' }}>
+                  <tr key={r.item_number} style={{ borderTop: '1px solid var(--border)', background: flash === r.item_number ? 'var(--success-bg)' : undefined }}>
                     <td style={{ padding: '7px 10px' }}>
                       <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{r.item_number}</div>
                       {r.display_name && <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>{r.display_name}</div>}
@@ -204,6 +255,16 @@ export default function InventoryPage() {
                     <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: r.allocated > 0 ? '#22c55e' : 'var(--text-muted)' }}>{r.allocated}</td>
                     <td style={{ padding: '7px 10px', textAlign: 'right', fontWeight: 700, color: r.free > 0 ? 'var(--text-primary)' : 'var(--text-muted)' }}>{r.free}</td>
                     <td style={{ padding: '7px 10px', textAlign: 'right', color: r.on_order > 0 ? '#60a5fa' : 'var(--text-muted)', fontWeight: r.on_order > 0 ? 700 : 400 }}>{r.on_order}</td>
+                    {isAdmin && (
+                      <td style={{ padding: '7px 10px', textAlign: 'right' }}>
+                        {r.netsuite_id && (
+                          <button onClick={() => setAdjusting({ netsuiteId: r.netsuite_id!, itemNumber: r.item_number, displayName: r.display_name })}
+                            style={{ padding: '4px 10px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, border: '1px solid #60a5fa', background: 'transparent', color: '#60a5fa', cursor: 'pointer' }}>
+                            Adjust
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -215,6 +276,14 @@ export default function InventoryPage() {
             </div>
           )}
         </div>
+      )}
+
+      {adjusting && (
+        <InventoryAdjustModal
+          part={adjusting}
+          onClose={() => setAdjusting(null)}
+          onPosted={() => { setFlash(adjusting.itemNumber); load(); }}
+        />
       )}
     </div>
   );
