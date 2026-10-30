@@ -19,6 +19,7 @@ import InstalledPhotosGrid from '@/components/InstalledPhotosGrid';
 import PhotoLightbox, { type LightboxPhoto } from '@/components/PhotoLightbox';
 import PartTransactionsModal from '@/components/PartTransactionsModal';
 import PartPosModal from '@/components/PartPosModal';
+import InventoryAdjustModal from '@/components/InventoryAdjustModal';
 import OrderPartModal from '@/components/OrderPartModal';
 import { loadBillableCustomers, type BillableCustomer } from '@/lib/billable-customers';
 import { isPartTaxable, partTaxReason } from '@/lib/line-taxability';
@@ -165,6 +166,7 @@ export default function PartsPage() {
   const [orderPart, setOrderPart] = useState<Part | null>(null);
   // PO list modal: every PO the part appears on ("click the counters").
   const [poModal, setPoModal] = useState<{ partNumber: string; mode: 'open' | 'all' } | null>(null);
+  const [adjustPart, setAdjustPart] = useState<Part | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [movingId, setMovingId] = useState<string | null>(null);
   // Duplicate cleanup: groups of rows sharing a part number, the chosen survivor
@@ -1270,6 +1272,14 @@ export default function PartsPage() {
                       ))}
                       <DetailField label="Qty On Hand" value={formatQty(part.quantity_on_hand)} color={part.quantity_on_hand > 0 ? 'var(--text-primary)' : 'var(--error)'} />
                       <DetailField label="Qty Available" value={formatQty(part.quantity_available)} color={part.quantity_available > 0 ? 'var(--text-primary)' : 'var(--error)'} />
+                      {isAdmin && part.item_type === 'InvtPart' && part.netsuite_id && (
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                          <button onClick={() => setAdjustPart(part)}
+                            style={{ padding: '6px 12px', borderRadius: '7px', fontSize: '11px', fontWeight: 700, border: '1px solid #60a5fa', background: 'transparent', color: '#60a5fa', cursor: 'pointer' }}>
+                            Adjust inventory
+                          </button>
+                        </div>
+                      )}
                       <DetailField label={`Completed · ${RANGE_PHRASE[range]}`} value={statsLoading ? '…' : completed.toString()} color="#34d399" />
                       <DetailField label="Open on POs" value={statsLoading ? '…' : formatQty(poRemainingByPart[key] || 0)} color="#60a5fa"
                         onClick={() => setPoModal({ partNumber: part.item_number, mode: 'open' })} />
@@ -1749,6 +1759,19 @@ export default function PartsPage() {
             loadParts();
           }}
           onClose={() => setNsCreatePart(null)}
+        />
+      )}
+
+      {adjustPart && (
+        <InventoryAdjustModal
+          part={{ netsuiteId: String(adjustPart.netsuite_id), itemNumber: adjustPart.item_number, displayName: adjustPart.display_name }}
+          onClose={() => setAdjustPart(null)}
+          onPosted={async () => {
+            // The route copied NetSuite's new totals onto the part; show them.
+            const { data } = await supabase.from('netsuite_parts')
+              .select('quantity_on_hand, quantity_available').eq('id', adjustPart.id).maybeSingle();
+            if (data) setParts(prev => prev.map(p => p.id === adjustPart.id ? { ...p, ...data } : p));
+          }}
         />
       )}
 

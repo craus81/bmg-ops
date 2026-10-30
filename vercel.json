@@ -69,6 +69,10 @@
       "schedule": "22 * * * *"
     },
     {
+      "path": "/api/cron/inventory-sync",
+      "schedule": "6,19,36,53 * * * *"
+    },
+    {
       "path": "/api/cron/parts-sync",
       "schedule": "37 * * * *"
     },

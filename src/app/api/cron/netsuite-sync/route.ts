@@ -7,7 +7,6 @@ import { verifyPoInvoiceQuantities } from '@/lib/po-invoice-verify';
 import { syncVendorPos } from '@/lib/vendor-po-sync';
 import { autoMatchPurchaseRequests } from '@/lib/purchase-request-po-match';
 import { syncSalesOrders } from '@/lib/sales-order-sync';
-import { syncInventoryQuantities } from '@/lib/inventory-sync';
 import { syncVendorBillPayments, syncPayoutBillPayments } from '@/lib/vendor-bill-sync';
 import { syncArInvoicePayments } from '@/lib/ar-payment-sync';
 import { closeConvertedEstimates } from '@/lib/estimate-close-sync';
@@ -452,26 +451,7 @@ export async function GET(req: NextRequest) {
     results.salesOrders = { error: err.message };
   }
 
-  // ═══════════ 3c. INVENTORY QUANTITY SWEEP ═══════════
-  // Item quantities move without bumping lastmodifieddate, so the parts
-  // catalog snapshot (and everything reading on-hand/available from it)
-  // gets a light quantities-only refresh here.
-  try {
-  // R6-7: vendor master. Names are free text everywhere else, so one
-  // canonical list is what lets reports stop treating "Grimco",
-  // "GRIMCO" and "Grimco Inc" as three vendors. Guarded: a vendor-sync
-  // failure must not cost the syncs that already ran.
-  try {
-    results.vendors = await syncVendors(supabase);
-  } catch (err: any) {
-    results.vendors = { error: err.message };
-  }
-
-    results.inventory = await syncInventoryQuantities(supabase);
-  } catch (err: any) {
-    console.error('[cron] Inventory sweep error:', err.message);
-    results.inventory = { error: err.message };
-  }
+  // 3c (inventory quantities) runs every 15 minutes in /api/cron/inventory-sync.
 
   // ═══════════ 3d. VENDOR BILL PAYMENT SWEEP ═══════════
   // CNI vendor invoices waiting at "billed" get flipped to "paid" once
