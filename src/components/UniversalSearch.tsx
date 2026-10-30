@@ -142,6 +142,11 @@ export function renderResult(group: string, item: any, onSelect: (group: string,
           {item.ship_to?.city && (
             <div style={{ ...subtitleStyle, fontSize: '10px' }}>Ship To: {item.ship_to.name || ''} {item.ship_to.city}, {item.ship_to.state}</div>
           )}
+          {item.matched_tracking && (
+            <div style={{ ...subtitleStyle, fontSize: '10px', color: '#fbbf24' }}>
+              Tracking {item.matched_tracking.tracking_number}{item.matched_tracking.job_number ? ` on ${item.matched_tracking.job_number}` : ''}
+            </div>
+          )}
         </button>
       );
     }
@@ -167,8 +172,11 @@ export function renderResult(group: string, item: any, onSelect: (group: string,
             <span style={{ ...statusBadge, color: statusColor(item.status) }}>{item.status}</span>
           </div>
           <div style={subtitleStyle}>
-            {item.customer}{item.part_number ? ` · ${item.part_number}` : ''}{item.due_date ? ` · Due ${formatDate(item.due_date)}` : ''}
+            {item.customer}{item.part_number ? ` · ${item.part_number}` : ''}{item.po_number ? ` · PO #${item.po_number}` : ''}{item.due_date ? ` · Due ${formatDate(item.due_date)}` : ''}
           </div>
+          {item.matched_tracking && (
+            <div style={{ ...subtitleStyle, fontSize: '10px', color: '#fbbf24' }}>Tracking {item.matched_tracking}</div>
+          )}
         </button>
       );
 

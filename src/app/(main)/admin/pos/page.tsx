@@ -54,6 +54,7 @@ interface PoGfxJob {
   status: GraphicsJobStatus;
   po_id: string;
   po_line_item_id: string | null;
+  tracking_number: string | null;
 }
 
 // ── Unified parts catalog (phase 2) ──────────────────────────────────────
@@ -613,7 +614,7 @@ export default function POsPage() {
       // needs one created.
       const { data: gfxJobs } = await fetchAllRows<PoGfxJob>((from, to) => supabase
         .from('graphics_jobs')
-        .select('id, job_number, title, status, po_id, po_line_item_id')
+        .select('id, job_number, title, status, po_id, po_line_item_id, tracking_number')
         .not('po_id', 'is', null)
         .neq('status', 'cancelled')
         .order('id')
@@ -1850,6 +1851,8 @@ export default function POsPage() {
       if (!poSearch.trim()) return true;
       if (matchPoSearch(po.po_number, po.customer)) return true;
       if (po.line_items.some((li) => matchPoSearch(li.part_number, li.description))) return true;
+      // Tracking numbers typed on the PO's graphics jobs
+      if ((gfxJobsByPo[po.id] || []).some(j => matchPoSearch(j.tracking_number))) return true;
       return false;
     });
 

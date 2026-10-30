@@ -3,7 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff, profileFeatures, getProfileRoles } from '@/lib/api-auth';
 import { isLedgerReader } from '@/lib/ledger/history';
 import { deepSearch, type DeepSearchResult } from '@/lib/deep-search';
-import { looseOrFilter, looseOrFilterWithNumbers, looseSearchRegex, partSearchOrFilter } from '@/lib/loose-search';
+import { looseOrFilter, looseOrFilterWithNumbers, looseSearchRegex, partNumberIncludes, partSearchOrFilter } from '@/lib/loose-search';
 import { orderSearchResults } from '@/lib/search-groups';
 
 export const dynamic = 'force-dynamic';
@@ -125,11 +125,12 @@ export async function GET(req: NextRequest) {
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
-    // Graphics Jobs — search by job number, title, part number, customer
+    // Graphics Jobs — search by job number, title, part number, customer,
+    // the customer's PO number and the shipment's tracking number
     supabase
       .from('graphics_jobs')
-      .select('id, job_number, title, part_number, customer, status, priority, due_date, created_at', { count: 'exact' })
-      .or(anyOfWithNumbers(['job_number'], ['title', 'part_number', 'customer']))
+      .select('id, job_number, title, part_number, customer, status, priority, due_date, created_at, po_number, tracking_number', { count: 'exact' })
+      .or(anyOfWithNumbers(['job_number', 'po_number', 'tracking_number'], ['title', 'part_number', 'customer']))
       .order('created_at', { ascending: false })
       .limit(MAX_PER_GROUP),
 
@@ -277,8 +278,34 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // POs through the tracking number on one of their graphics jobs (Craig
+  // 2026-10-30) — the shipment is found under the PO staff know it by.
+  let poFromTracking: any[] = [];
+  const { data: trackingJobs } = await supabase
+    .from('graphics_jobs')
+    .select('po_id, job_number, tracking_number')
+    .not('po_id', 'is', null)
+    .not('tracking_number', 'is', null)
+    .or(anyOfWithNumbers(['tracking_number'], []))
+    .limit(MAX_PER_GROUP);
+  if (trackingJobs && trackingJobs.length > 0) {
+    const seen = new Set([...(pos.data || []), ...poFromLineItems].map((p: any) => p.id));
+    const newPoIds = [...new Set(trackingJobs.map((j: any) => j.po_id))].filter(id => !seen.has(id));
+    if (newPoIds.length > 0) {
+      const { data: trackingPOs } = await supabase
+        .from('purchase_orders')
+        .select('id, po_number, customer, status, ordered_date, created_at, ship_to, po_line_items(id, part_number, description, quantity, unit_price, installed)')
+        .in('id', newPoIds)
+        .limit(MAX_PER_GROUP);
+      poFromTracking = (trackingPOs || []).map((p: any) => {
+        const job = trackingJobs.find((j: any) => j.po_id === p.id);
+        return { ...p, matched_tracking: job ? { tracking_number: job.tracking_number, job_number: job.job_number } : null };
+      });
+    }
+  }
+
   // Merge PO results
-  const allPOs = [...(pos.data || []), ...poFromLineItems].slice(0, MAX_PER_GROUP);
+  const allPOs = [...(pos.data || []), ...poFromLineItems, ...poFromTracking].slice(0, MAX_PER_GROUP);
 
   // Phone hits beyond the prospect's own number: a CONTACT's cell is often
   // the number on caller ID, and a NetSuite-mirror customer may have no CRM
@@ -404,14 +431,18 @@ export async function GET(req: NextRequest) {
 
   if (allPOs.length > 0) {
     results.purchase_orders = allPOs;
-    totals.purchase_orders = Math.max(allPOs.length, (pos.count ?? 0) + poFromLineItems.length);
+    totals.purchase_orders = Math.max(allPOs.length, (pos.count ?? 0) + poFromLineItems.length + poFromTracking.length);
   }
   if (vehicles.data?.length) {
     results.vehicles = vehicles.data;
     totals.vehicles = vehicles.count ?? vehicles.data.length;
   }
   if (graphicsJobs.data?.length) {
-    results.graphics_jobs = graphicsJobs.data;
+    // Say so when the hit was the tracking number — nothing else on the row shows it.
+    results.graphics_jobs = graphicsJobs.data.map((j: any) => ({
+      ...j,
+      matched_tracking: j.tracking_number && partNumberIncludes(j.tracking_number, q) ? j.tracking_number : null,
+    }));
     totals.graphics_jobs = graphicsJobs.count ?? graphicsJobs.data.length;
   }
   if (allEstimates.length > 0) {

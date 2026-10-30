@@ -1329,7 +1329,7 @@ export default function GraphicsPage() {
     if (metricFilter && !metricPredicates[metricFilter](j)) return false;
     // Status filter (Active / All tabs + the popover's per-status select)
     if (!inScope(j)) return false;
-    if (search) return matchSearch(j.title, j.part_number, j.customer, j.job_number, j.po_number, j.content);
+    if (search) return matchSearch(j.title, j.part_number, j.customer, j.job_number, j.po_number, j.tracking_number, j.content);
     return true;
   });
 
