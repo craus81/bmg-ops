@@ -10,6 +10,10 @@
  * in the queue. Prices are per part (one PO line per part), starting at the
  * catalog's purchase price; a blank price lets NetSuite use the item's own.
  * The PO goes in final, Pending Receipt (Craig, 2026-10-07).
+ *
+ * When the vendor has an open PO dated today or yesterday, the screen can
+ * add the parts to it instead (po-add.ts, Craig 2026-10-30): a part already
+ * on that PO raises its line's qty, the rest become new lines.
  */
 
 import { useMemo, useState } from 'react';
@@ -45,6 +49,20 @@ export interface CreatePoResult {
   stamped: boolean;
   /** Set when NetSuite wouldn't take the customer ending on the number. */
   suffixError?: string | null;
+  /** The parts went on an open PO instead of a new one. */
+  addedToExisting?: boolean;
+}
+
+/** An open PO with this vendor that can still take parts (vendor-pos GET). */
+export interface OpenPo {
+  id: string;
+  tranid: string | null;
+  netsuite_id: string | null;
+  trandate: string | null;
+  status_label: string | null;
+  total: number | null;
+  url?: string | null;
+  lines: { item_netsuite_id: string | null; item_number: string; quantity: number; quantity_received: number }[];
 }
 
 interface Props {
@@ -52,11 +70,27 @@ interface Props {
   rows: ReviewRequest[];
   /** Rows ticked when the screen opens; empty = every orderable row. */
   initiallySelected: Set<string>;
+  /** This vendor's open POs that can take more parts, newest first. */
+  openPos?: OpenPo[];
+  /** Open on "Add to" this PO (the queue's open-PO hint). */
+  startPoId?: string | null;
   onClose: () => void;
   onDone: (po: CreatePoResult) => void;
 }
 
-export default function CreatePoReviewModal({ vendor, rows, initiallySelected, onClose, onDone }: Props) {
+const shortDate = (d: string | null) => (d ? `${d.slice(5, 7)}-${d.slice(8, 10)}` : '');
+
+export default function CreatePoReviewModal({ vendor, rows, initiallySelected, openPos = [], startPoId, onClose, onDone }: Props) {
+  // null = a new PO; otherwise the open PO the parts go on.
+  const [targetPoId, setTargetPoId] = useState<string | null>(
+    () => (startPoId && openPos.some(p => p.id === startPoId) ? startPoId : openPos[0]?.id ?? null),
+  );
+  const [lastPoPick, setLastPoPick] = useState<string | null>(targetPoId);
+  const targetPo = openPos.find(p => p.id === targetPoId) || null;
+  const poLabel = (p: OpenPo) => p.tranid || `#${p.netsuite_id || ''}`;
+  /** The untouched line a part already has on the target PO. */
+  const onTarget = (r: ReviewRequest) => targetPo?.lines.find(l =>
+    l.item_netsuite_id && l.item_netsuite_id === r.netsuite_item_id && !(Number(l.quantity_received) > 0));
   const orderable = useMemo(() => rows.filter(r => r.netsuite_item_id), [rows]);
   const [ticked, setTicked] = useState<Set<string>>(() => new Set(
     orderable.filter(r => initiallySelected.size === 0 || initiallySelected.has(r.id)).map(r => r.id),
@@ -87,6 +121,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
   const badQty = chosen.some(r => qtyFor(r) <= 0);
   const unpriced = chosen.filter(r => priceFor(r) == null);
   const total = chosen.reduce((s, r) => s + qtyFor(r) * (priceFor(r) || 0), 0);
+  const addCount = new Set(chosen.map(r => r.netsuite_item_id)).size;
 
   const toggle = (id: string) => setTicked(prev => {
     const next = new Set(prev);
@@ -109,6 +144,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
           locationName: location,
           poSuffix: cleanPoSuffix(suffix) || null,
           lines: chosen.map(r => ({ requestId: r.id, quantity: qtyFor(r), rate: priceFor(r) })),
+          existingPoId: targetPo?.id || null,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -120,9 +156,10 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
         mirrored: !!body.mirrored,
         stamped: !!body.stamped,
         suffixError: body.suffixError || null,
+        addedToExisting: !!body.addedToExisting,
       });
     } catch (e: any) {
-      setError(`PO creation failed: ${e?.message || 'unknown error'}. Nothing was ordered, and the requests are still in the queue.`);
+      setError(`${targetPo ? `Adding to PO ${poLabel(targetPo)}` : 'PO creation'} failed: ${e?.message || 'unknown error'}. Nothing was ordered, and the requests are still in the queue.`);
       setBusy(false);
     }
   };
@@ -153,11 +190,48 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
       >
         <div style={{ padding: '14px 16px', borderBottom: `1px solid ${theme.border}` }}>
           <div style={{ fontSize: '15px', fontWeight: 800, color: theme.textPrimary }}>
-            New purchase order: {vendor.name}
+            {openPos.length > 0 ? 'Purchase order' : 'New purchase order'}: {vendor.name}
           </div>
           <div style={{ fontSize: '12px', color: theme.textMuted, marginTop: '3px' }}>
-            NetSuite vendor #{vendor.id}. The PO goes into NetSuite as Pending Receipt. Ordering less than requested leaves the rest in the queue.
+            {targetPo
+              ? `NetSuite vendor #${vendor.id}. The parts go on PO ${poLabel(targetPo)}; a part already on it gets its qty raised. Ordering less than requested leaves the rest in the queue.`
+              : `NetSuite vendor #${vendor.id}. The PO goes into NetSuite as Pending Receipt. Ordering less than requested leaves the rest in the queue.`}
           </div>
+          {openPos.length > 0 && (
+            <>
+              <div role="group" aria-label="New or open PO" style={{ display: 'flex', marginTop: '10px', border: `1px solid ${theme.border}`, borderRadius: '9px', overflow: 'hidden', width: 'max-content', maxWidth: '100%' }}>
+                {[
+                  { on: !targetPo, label: 'New PO', pick: () => { setLastPoPick(targetPoId ?? lastPoPick); setTargetPoId(null); } },
+                  { on: !!targetPo, label: `Add to open PO (${openPos.length})`, pick: () => setTargetPoId(lastPoPick ?? openPos[0].id) },
+                ].map(b => (
+                  <button key={b.label} type="button" disabled={busy} aria-pressed={b.on} onClick={b.pick}
+                    style={{ padding: '7px 12px', fontSize: '12.5px', fontWeight: 800, border: 'none', cursor: 'pointer', background: b.on ? '#16a34a' : 'transparent', color: b.on ? '#fff' : theme.textSecondary }}>
+                    {b.label}
+                  </button>
+                ))}
+              </div>
+              {targetPo && (
+                <div role="radiogroup" aria-label="Which open PO" style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
+                  {openPos.map(p => {
+                    const on = p.id === targetPo.id;
+                    return (
+                      <button key={p.id} type="button" role="radio" aria-checked={on} disabled={busy}
+                        onClick={() => { setTargetPoId(p.id); setLastPoPick(p.id); }}
+                        style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', textAlign: 'left', padding: '8px 10px', borderRadius: '9px', cursor: 'pointer', border: `1px solid ${on ? '#16a34a' : theme.border}`, background: on ? 'rgba(74,222,128,0.08)' : 'transparent', color: theme.textSecondary, fontSize: '12.5px' }}>
+                        <span style={{ width: '14px', height: '14px', borderRadius: '50%', flexShrink: 0, marginTop: '2px', border: `2px solid ${on ? '#16a34a' : theme.textMuted}`, background: on ? '#16a34a' : 'transparent' }} />
+                        <span>
+                          <b style={{ color: theme.textPrimary }}>{poLabel(p)}</b> · {p.status_label || 'Open'} · {shortDate(p.trandate)}
+                          <span style={{ display: 'block', fontSize: '11px', color: theme.textMuted }}>
+                            {p.lines.length} line{p.lines.length !== 1 ? 's' : ''}{p.total != null ? ` · ${money(Number(p.total))}` : ''}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '10px 16px' }}>
@@ -186,7 +260,20 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
                   aria-label={`Order ${r.item_number}`}
                   style={{ width: '16px', height: '16px', flexShrink: 0, cursor: 'pointer' }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: theme.textPrimary }}>{r.item_number}</div>
+                  <div style={{ fontSize: '12.5px', fontWeight: 700, color: theme.textPrimary }}>
+                    {r.item_number}
+                    {(() => {
+                      const had = onTarget(r);
+                      if (!had || off || !targetPo) return null;
+                      // Two requests for one part share the raise; count every ticked one.
+                      const adding = chosen.filter(c => c.netsuite_item_id === r.netsuite_item_id).reduce((s, c) => s + qtyFor(c), 0);
+                      return (
+                        <span style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 800, padding: '2px 6px', borderRadius: '6px', background: 'rgba(245,158,11,0.12)', color: '#f59e0b' }}>
+                          Already on {poLabel(targetPo)}: {qtyText(Number(had.quantity))} → {qtyText(Number(had.quantity) + adding)}
+                        </span>
+                      );
+                    })()}
+                  </div>
                   {r.description && (
                     <div style={{ fontSize: '11px', color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.description}</div>
                   )}
@@ -213,6 +300,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
 
         <div style={{ padding: '12px 16px', borderTop: `1px solid ${theme.border}` }}>
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '10px' }}>
+            {!targetPo && (<>
             <label style={{ fontSize: '12px', fontWeight: 700, color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '6px' }}>
               Location
               <select value={location} disabled={busy} onChange={e => setLocation(e.target.value as LocationName)}
@@ -228,11 +316,17 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
                 style={{ width: '96px', padding: '6px 8px', fontSize: '16px', borderRadius: '7px', background: theme.inputBg, color: theme.textPrimary, border: `1px solid ${theme.border}`, textTransform: 'uppercase' }} />
               <span style={{ fontWeight: 400, color: theme.textMuted }}>{cleanPoSuffix(suffix) ? `PO###-${cleanPoSuffix(suffix)}` : 'NetSuite’s number'}</span>
             </label>
+            </>)}
             <div style={{ marginLeft: 'auto', fontSize: '12px', color: theme.textSecondary }}>
               {chosen.length} line{chosen.length !== 1 ? 's' : ''} · <b style={{ color: theme.textPrimary }}>{money(total)}</b>
               {unpriced.length > 0 && <span style={{ color: theme.textMuted }}> + {unpriced.length} at NetSuite’s price</span>}
             </div>
           </div>
+          {targetPo ? (
+            <div style={{ fontSize: '12px', lineHeight: 1.45, color: theme.textMuted, marginBottom: '10px' }}>
+              PO {poLabel(targetPo)} keeps its number, location and memo; any new sales order is added to the memo. {vendor.name} may already have this PO, so send them the updated PDF. FleetSuite won’t email them.
+            </div>
+          ) : (
           <textarea
             value={memo}
             onChange={e => { if (!busy) setMemo(e.target.value.slice(0, 500)); }}
@@ -245,6 +339,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
               marginBottom: '10px',
             }}
           />
+          )}
           {error && <div style={{ fontSize: '12px', fontWeight: 700, color: '#f87171', marginBottom: '8px' }}>{error}</div>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
             <button type="button" onClick={onClose} disabled={busy}
@@ -262,7 +357,9 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
                 background: '#16a34a', color: '#fff', border: 'none',
                 cursor: busy ? 'wait' : 'pointer', opacity: chosen.length === 0 || badQty ? 0.5 : 1,
               }}>
-              {busy ? 'Creating PO…' : `Create PO in NetSuite (${chosen.length})`}
+              {targetPo
+                ? (busy ? 'Adding…' : `Add ${addCount} part${addCount !== 1 ? 's' : ''} to ${poLabel(targetPo)}`)
+                : (busy ? 'Creating PO…' : `Create PO in NetSuite (${chosen.length})`)}
             </button>
           </div>
         </div>

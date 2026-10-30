@@ -2239,6 +2239,24 @@ export async function updatePurchaseOrderItemLines(
   return res.ok ? { success: true } : { success: false, error: res.error };
 }
 
+/**
+ * Put more parts on an open PO (po-add.ts plans the lines): a line sent
+ * with its `line` key gets its new quantity, a line without one is added.
+ * No `replace`, so the PO's other lines stay as they are. A memo, when
+ * given, rides the same PATCH.
+ */
+export async function addPurchaseOrderItemLines(
+  purchaseOrderId: string | number,
+  lines: Record<string, unknown>[],
+  memo?: string | null,
+): Promise<{ success: boolean; error?: string }> {
+  const res = await purchaseOrderRecordCall(`${purchaseOrderId}`, 'PATCH', {
+    item: { items: lines },
+    ...(memo ? { memo } : {}),
+  });
+  return res.ok ? { success: true } : { success: false, error: res.error };
+}
+
 /** GET/PATCH a salesOrder record — the same envelope as purchaseOrderRecordCall. */
 async function salesOrderRecordCall(
   path: string,

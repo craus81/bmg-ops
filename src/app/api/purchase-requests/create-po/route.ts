@@ -4,7 +4,8 @@ import { requireFeature, requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
-import { createPurchaseOrder, resolveDefaultLocationId, setPurchaseOrderNumber, transactionUrl } from '@/lib/netsuite';
+import { addPurchaseOrderItemLines, createPurchaseOrder, getPurchaseOrderItemLines, resolveDefaultLocationId, setPurchaseOrderNumber, transactionUrl } from '@/lib/netsuite';
+import { canAddToPo, memoWithSos, planPoLineAdds, type PoAddPlan } from '@/lib/po-add';
 import { cleanPoSuffix, withPoSuffix } from '@/lib/po-number';
 import { locationIdForName } from '@/lib/invoice-location';
 
@@ -31,6 +32,11 @@ export const maxDuration = 60;
  * matching against the PO number. EVERY source project additionally gets
  * an upfit_project_pos row for this PO (migration 267) — the multi-PO
  * link the single columns can't hold.
+ *
+ * existingPoId puts the requests on a PO that's already open with the
+ * same vendor instead (po-add.ts: dated today or yesterday; a part already
+ * on it raises that line's qty). Everything after NetSuite — stamps,
+ * project links, requester notes — is the same as for a new PO.
  */
 
 const Schema = z.object({
@@ -54,6 +60,9 @@ const Schema = z.object({
   /** Added after a dash to NetSuite's own number: PO453 → PO453-ACME
    *  (po-number.ts). Blank = NetSuite's number as is. */
   poSuffix: z.string().max(40).optional().nullable(),
+  /** netsuite_vendor_pos.id of an open PO to add these to, instead of
+   *  creating a new one. Location, memo and suffix are then ignored. */
+  existingPoId: z.string().uuid().optional().nullable(),
 });
 
 export async function POST(req: NextRequest) {
@@ -180,7 +189,42 @@ export async function POST(req: NextRequest) {
   // SuiteQL error — Round 3 finding). From here to the NetSuite verdict,
   // every exit releases the claim.
   let po: Awaited<ReturnType<typeof createPurchaseOrder>>;
-  try {
+  // Set when the parts went on an open PO rather than a new one.
+  let existing: { id: string; total: number | null; plan: PoAddPlan; newMemo: string | null } | null = null;
+  if (body.existingPoId) {
+    try {
+      const { data: target } = await supabase
+        .from('netsuite_vendor_pos')
+        .select('id, netsuite_id, tranid, vendor_netsuite_id, status, trandate, memo, total')
+        .eq('id', body.existingPoId)
+        .maybeSingle();
+      const refuse = async (status: number, error: string) => {
+        await releaseClaim();
+        return NextResponse.json({ error }, { status });
+      };
+      if (!target?.netsuite_id) return await refuse(404, 'That PO isn’t in FleetSuite. Refresh the page.');
+      const label = target.tranid || `#${target.netsuite_id}`;
+      if (target.vendor_netsuite_id && String(target.vendor_netsuite_id) !== body.vendorNetsuiteId) {
+        return await refuse(400, `PO ${label} is with a different vendor. Pick a PO with this vendor, or create a new one.`);
+      }
+      if (!canAddToPo(target)) {
+        return await refuse(409, `PO ${label} can’t take more parts: only open POs dated today or yesterday can. Create a new PO instead.`);
+      }
+      const live = await getPurchaseOrderItemLines(target.netsuite_id);
+      if (!live.success) return await refuse(502, `Couldn’t read PO ${label} from NetSuite: ${live.error}. Nothing was ordered.`);
+      const plan = planPoLineAdds(live.lines, lines.map(l => ({
+        itemId: l.itemId, quantity: l.quantity, rate: l.rate, description: l.description,
+      })));
+      const newMemo = memoWithSos(target.memo, projects.map(p => p.netsuite_so_number).filter(Boolean).map(String));
+      const res = await addPurchaseOrderItemLines(target.netsuite_id, plan.lines, newMemo);
+      if (!res.success) return await refuse(502, `NetSuite didn’t add the parts to PO ${label}: ${res.error}. Nothing was ordered.`);
+      po = { success: true, purchaseOrderId: String(target.netsuite_id), purchaseOrderNumber: target.tranid || undefined };
+      existing = { id: target.id, total: target.total != null ? Number(target.total) : null, plan, newMemo };
+    } catch (err: any) {
+      await releaseClaim();
+      return NextResponse.json({ error: `NetSuite call failed before the parts were added: ${String(err?.message || err).slice(0, 300)}` }, { status: 502 });
+    }
+  } else try {
     const locationId = body.locationName
       ? await locationIdForName(body.locationName)
       : await resolveDefaultLocationId();
@@ -206,7 +250,7 @@ export async function POST(req: NextRequest) {
   // sequence never skips. A refusal leaves NetSuite's number and says why.
   let suffixError: string | null = null;
   const suffix = cleanPoSuffix(body.poSuffix);
-  if (suffix && po.purchaseOrderId && po.purchaseOrderNumber) {
+  if (suffix && !existing && po.purchaseOrderId && po.purchaseOrderNumber) {
     const wanted = withPoSuffix(po.purchaseOrderNumber, suffix);
     try {
       const renamed = await setPurchaseOrderNumber(po.purchaseOrderId, wanted);
@@ -223,7 +267,49 @@ export async function POST(req: NextRequest) {
   let mirrorRowId: string | null = null;
   let stamped = false;
 
-  if (po.purchaseOrderId) {
+  if (existing) {
+    // The added lines in the mirror, so readiness shows them on order now;
+    // the next sync rewrites this PO's lines from NetSuite anyway.
+    try {
+      mirrorRowId = existing.id;
+      for (const l of lines) {
+        const raise = existing.plan.raised.get(l.itemId);
+        if (raise) {
+          const { data: mLines } = await supabase.from('netsuite_vendor_po_lines')
+            .select('id').eq('po_id', existing.id).eq('item_netsuite_id', l.itemId).eq('quantity_received', 0)
+            .order('quantity', { ascending: false }).limit(1);
+          const ml = (mLines || [])[0] as { id: string } | undefined;
+          if (ml) {
+            // NetSuite keeps the line's own rate, so only the qty moves here.
+            await supabase.from('netsuite_vendor_po_lines').update({ quantity: raise.to }).eq('id', ml.id);
+            continue;
+          }
+        }
+        await supabase.from('netsuite_vendor_po_lines').insert({
+          po_id: existing.id,
+          line_id: `prov-add-${Date.now()}-${l.itemId}`,
+          item_netsuite_id: l.itemId,
+          item_number: l.item_number,
+          description: l.description,
+          quantity: l.quantity,
+          quantity_received: 0,
+          quantity_billed: 0,
+          rate: l.rate,
+          amount: l.rate != null ? +((l.rate * l.quantity).toFixed(2)) : null,
+        });
+      }
+      const addedTotal = lines.every(l => l.rate != null)
+        ? lines.reduce((s, l) => s + l.rate! * l.quantity, 0)
+        : null;
+      await supabase.from('netsuite_vendor_pos').update({
+        ...(existing.newMemo ? { memo: existing.newMemo } : {}),
+        total: existing.total != null && addedTotal != null ? +((existing.total + addedTotal).toFixed(2)) : null,
+        last_synced_at: now,
+      }).eq('id', existing.id);
+    } catch (err) {
+      console.error('create-po: mirror update for added lines failed (sync will catch up):', err);
+    }
+  } else if (po.purchaseOrderId) {
     try {
       const total = lines.every(l => l.rate != null)
         ? +(lines.reduce((s, l) => s + (l.rate! * l.quantity), 0).toFixed(2))
@@ -401,5 +487,7 @@ export async function POST(req: NextRequest) {
     stamped,
     lines: lines.length,
     suffixError,
+    addedToExisting: !!existing,
+    raised: existing ? existing.plan.raised.size : 0,
   });
 }
