@@ -60,6 +60,9 @@ export const deepLinks = {
   /** Pricing requests (Masterack, migration 352): the list, or one request. */
   pricingRequests: () => '/pricing-requests',
   pricingRequest: (id: string) => `/pricing-requests?id=${encodeURIComponent(id)}`,
+  /** In-app Requests (migration 453): the list, or one request opened. */
+  appRequests: () => '/requests',
+  appRequest: (id: string) => `/requests?id=${encodeURIComponent(id)}`,
   /** A job task: the job's vehicle on In-Shop once one is checked in (techs
    *  work from the vehicle card, which lists the job's open tasks),
    *  otherwise the job page flashing the task (2026-10-20). */

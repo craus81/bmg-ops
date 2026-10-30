@@ -14,6 +14,7 @@ import NativeLinkHandler from '@/components/NativeLinkHandler';
 import NativePushHandler from '@/components/NativePushHandler';
 import NativeSiriKey from '@/components/NativeSiriKey';
 import UsageTelemetry from '@/components/UsageTelemetry';
+import LastPageTracker from '@/components/LastPageTracker';
 import DuoLayoutWatcher from '@/components/DuoLayoutWatcher';
 import PaneBridge from '@/components/PaneBridge';
 import { SplitScreenProvider, SplitPanes, useSplitScreen } from '@/components/SplitScreen';
@@ -153,6 +154,7 @@ export default function ClientProviders({ children }: { children: React.ReactNod
               {!pane && <NativePushHandler />}
               {!pane && <NativeSiriKey />}
               <UsageTelemetry />
+              <LastPageTracker />
               {!pane && <DuoLayoutWatcher />}
               <SplitScreenProvider disabled={pane}>
                 <AppShell pane={pane}>{children}</AppShell>
