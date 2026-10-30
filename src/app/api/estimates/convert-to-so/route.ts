@@ -83,10 +83,13 @@ export async function POST(req: NextRequest) {
     if (!skipGraphicsCheck) {
       const gfxLines = (estimate.estimate_line_items || []).filter(isGraphicsLine);
       if (gfxLines.length > 0) {
+        // A fleet order's one graphics job (migration 411) covers every
+        // estimate in the order, not just the one it was made from — the
+        // same rule the estimate's Graphics panel and Send for approval use.
         const { data: gjob } = await supabase
           .from('graphics_jobs')
           .select('id')
-          .eq('estimate_id', estimateId)
+          .or(estimate.fleet_group_id ? `estimate_id.eq.${estimateId},fleet_group_id.eq.${estimate.fleet_group_id}` : `estimate_id.eq.${estimateId}`)
           .limit(1);
         if (!gjob || gjob.length === 0) {
           return NextResponse.json({
