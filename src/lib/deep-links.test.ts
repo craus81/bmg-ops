@@ -222,3 +222,11 @@ describe('Card charge links', () => {
     expect(deepLinks.cardCharges()).toBe('/admin/card-charges');
   });
 });
+
+describe('Journal entry links', () => {
+  it('opens the journal entries screen, or one entry on it', () => {
+    expect(deepLinks.journalEntries()).toBe('/admin/journal-entries');
+    expect(deepLinks.journalEntries(null)).toBe('/admin/journal-entries');
+    expect(deepLinks.journalEntries('c0000000-0000-4000-8000-000000000001')).toBe('/admin/journal-entries?id=c0000000-0000-4000-8000-000000000001');
+  });
+});

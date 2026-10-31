@@ -71,20 +71,28 @@ export default function MorePage() {
     return () => { cancelled = true; };
   }, [canOrderParts]);
 
-  // Card Charges: anyone with Payments once card charges are switched on in
-  // Books → Switches; until then super admins only.
+  // Card Charges and Journal Entries: anyone with Payments once each is
+  // switched on in Books → Switches; until then super admins only.
   const canPayments = hasFeature('vendor_payments');
   const [canCardCharges, setCanCardCharges] = useState(false);
+  const [canJournalEntries, setCanJournalEntries] = useState(false);
   useEffect(() => {
     if (!canPayments) return;
     let cancelled = false;
-    (async () => {
+    const canUse = async (url: string) => {
       try {
-        const res = await apiFetch('/api/card-charges?status=1');
+        const res = await apiFetch(url);
         const body = await res.json().catch(() => ({}));
-        if (!cancelled) setCanCardCharges(res.ok && !!body.canUse);
+        return res.ok && !!body.canUse;
       } catch {
-        if (!cancelled) setCanCardCharges(false);
+        return false;
+      }
+    };
+    (async () => {
+      const [cards, journals] = await Promise.all([canUse('/api/card-charges?status=1'), canUse('/api/journal-entries?status=1')]);
+      if (!cancelled) {
+        setCanCardCharges(cards);
+        setCanJournalEntries(journals);
       }
     })();
     return () => { cancelled = true; };
@@ -134,6 +142,7 @@ export default function MorePage() {
 
     { group: 'money', title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: F('vendor_payments') },
     { group: 'money', title: 'Card Charges', sub: 'Code the Chase card’s charges · sent to NetSuite as a journal entry each month', path: deepLinks.cardCharges(), show: canCardCharges },
+    { group: 'money', title: 'Journal Entries', sub: 'Type a journal entry · a super admin approves it and it’s made in NetSuite', path: deepLinks.journalEntries(), show: canJournalEntries },
     { group: 'money', title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
     { group: 'money', title: 'Books', sub: 'FleetSuite’s own books · reports, accounts, trial balance & NetSuite lists', path: '/admin/books', show: hasRole('super_admin') },
     { group: 'money', title: 'Ledger', sub: 'QuickBooks history import, customer matching & NetSuite mirror', path: '/admin/ledger', show: F('ledger'), badge: badgeFor('ledger_unmatched_customers') },

@@ -65,10 +65,12 @@ an Excel file, with each side's running balance, part 34, credit memos
 made in FleetSuite against an invoice and sent on to NetSuite, with Books'
 own copy of each, built switched off, part 35, vendor credits entered
 in FleetSuite and applied to the vendor's open bills, sent on to NetSuite
-the same way, with Books' own copy of each, built switched off, and part
+the same way, with Books' own copy of each, built switched off, part
 36, the Chase card's charges coded in FleetSuite and sent on to NetSuite as
 one journal entry a month, with Books' own copy of each, built switched
-off. The screens are the accounts page at `/admin/books`, the trial
+off, and part 37, journal entries typed in FleetSuite, approved by a super
+admin who didn't ask and sent on to NetSuite, with Books' own copy of
+each, built switched off. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -96,7 +98,10 @@ More → Purchasing → Vendor Credits: only super admins can open it while
 vendor credits are switched off. The card charges screen,
 `/admin/card-charges`, is for staff with Payments, opened from More →
 Money & Books → Card Charges: only super admins can open it while card
-charges are switched off.
+charges are switched off. The journal entries screen,
+`/admin/journal-entries`, is for staff with Payments too, opened from More
+→ Money & Books → Journal Entries: only super admins can open it while
+journal entries are switched off.
 
 | Piece | Where |
 | --- | --- |
@@ -198,7 +203,10 @@ charges are switched off.
 | The Chase card's charges coded in FleetSuite, sent on to NetSuite as one journal entry a month, and Books' own copy of each journal entry | `migrations/468-card-charges-in-fleetsuite.sql`, `src/lib/card-charges.ts`, `src/lib/books/own-journal-entries.ts`, `findJournalEntry` and `createJournalEntry` in `src/lib/netsuite.ts`, `src/app/api/card-charges/route.ts` |
 | The card charges screen and More → Money & Books' Card Charges | `src/app/(main)/admin/card-charges/page.tsx`, `src/app/(main)/more/page.tsx` |
 | Card charge tests | `src/lib/card-charges.test.ts`, `src/lib/card-charges-route.test.ts`, `src/lib/netsuite-journal-entry.test.ts`, `src/lib/books/own-journal-entries.test.ts`, and the tables and their functions `src/lib/books/own-journal-entries-sql.test.ts` |
-| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql` and `migrations/468-card-charges-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
+| Journal entries typed in FleetSuite, approved, sent on to NetSuite, and Books' own copy of each | `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `src/lib/typed-journal-entries.ts`, `src/lib/books/own-journal-entries.ts`, `findJournalEntry` and `createJournalEntry` in `src/lib/netsuite.ts`, `src/app/api/journal-entries/route.ts` |
+| The journal entries screen and More → Money & Books' Journal Entries | `src/app/(main)/admin/journal-entries/page.tsx`, `src/app/(main)/more/page.tsx` |
+| Typed journal entry tests | `src/lib/typed-journal-entries.test.ts`, `src/lib/journal-entries-route.test.ts`, `src/lib/books/own-journal-entries.test.ts`, and the table and its functions `src/lib/books/typed-journal-entries-sql.test.ts` |
+| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql`, `migrations/468-card-charges-in-fleetsuite.sql` and `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -3652,10 +3660,100 @@ $42.10 and debited $20.00, $147.60 onto the card in all.
 - Payments to the card aren't matched to the bank's; they stay in NetSuite
   with banking.
 
+## Journal entries typed in FleetSuite
+
+From January 1, 2027 the journal entries the bookkeeper types into NetSuite
+today (accruals, reclasses, depreciation and the like) are typed in
+FleetSuite, approved, and sent on to NetSuite, and Books keeps its own copy
+(the NetSuite Exit Checklist's January pieces, owner decisions
+2026-10-31). It's built switched off ("Switches"): until a super admin
+turns it on, only super admins can open the screen, to type and save
+entries and see what they'd make, and none is asked for approval or sent
+to NetSuite. Once it's on, anyone with Payments can, and More → Money &
+Books shows Journal Entries to them.
+
+The screen is `/admin/journal-entries` (`deepLinks.journalEntries`, with
+the entry's id to open one), and it needs price access too. An entry has a
+company (BMG unless they pick another), a date, a memo saying what it's
+for, and its lines: each an account in the chart the company can use, a
+debit or a credit, and a note if wanted. The totals show as it's typed, in
+green when they balance and in red with how far apart when they don't.
+Save keeps it as a draft (`typed_journal_entries`, saved only by
+`typed_journal_entry_save`), whole or half typed. Only a draft can be
+changed, and only whoever started it or a super admin can delete it.
+
+Ask for approval checks it first (`workOutTypedEntry` in
+`src/lib/typed-journal-entries.ts`, `typed_journal_entry@1`): the company
+needs a NetSuite subsidiary; the entry needs a real date, a memo, and two
+lines or more, 200 at most; each line needs an account the company can
+use and a debit or a credit above $0, not both, to the cent and
+$100,000,000.00 at most; and its debits must match its credits. A line to
+Accounts Receivable or Accounts Payable isn't taken: NetSuite needs a
+customer or vendor there, so those are an invoice, credit memo, bill or
+vendor credit instead. Any date is taken, so a year-end entry dated
+December 31 is fine. The ask names the draft as the asker saw it
+(`typed_journal_entry_ask`): saved again since, it isn't asked. Every super
+admin but the asker hears it's waiting (`books_journal_entry_waiting`), and
+so does anyone with "Copy me on new alerts" ticked, by email too.
+
+A waiting entry can't be changed. Whoever asked, whoever started it, or a
+super admin can take it back to a draft (`typed_journal_entry_take_back`).
+A super admin can send it back with why (`typed_journal_entry_send_back`),
+shown in red on the draft until it's asked again, and whoever asked hears
+it (`books_journal_entry_decided`).
+
+A super admin who didn't ask approves it, and FleetSuite makes it in
+NetSuite once, exactly as typed. The approval names the ask the approver
+saw (`typed_journal_entry_claim`): taken back or asked again since, nothing
+is sent. The route (`/api/journal-entries`) works the entry out again from
+its lines as they're kept, never from what the page sent, and lets go when
+they no longer make one. The entry's id, made by the page when it's
+started, is the journal entry's External ID in NetSuite (`fleetsuite-je-`
+and the id). The route asks NetSuite for it first (`findJournalEntry`) and
+sends nothing when NetSuite can't say. Then it makes it
+(`createJournalEntry`) and keeps NetSuite's id on the entry
+(`typed_journal_entry_made`). Pressing again says what it made. A refusal
+puts it back to waiting for approval, with NetSuite's reason in red
+(`typed_journal_entry_let_go`). When NetSuite may have made it anyway, it
+stays approved; Ask NetSuite after five minutes finds out, and it finishes
+or goes back to waiting. Whoever asked hears it's made. A made entry can
+be copied into a new draft, or reversed into one: each debit a credit and
+each credit a debit, dated the first of the next month.
+
+Books keeps its own copy of each one made (`gl_own_journal_entries`,
+source `typed`, `ownTypedEntryPayload` in
+`src/lib/books/own-journal-entries.ts`): each line's account, debit or
+credit and note, as typed. Saving it never stops an approval; one that
+can't be saved is said on the screen in red.
+
+Made-up example: at the end of January, depreciation of $1,250.00 is
+typed as three lines: depreciation debited $800.00 for the shop truck and
+$450.00 for the box van, and accumulated depreciation credited $1,250.00.
+Asked for approval by someone with Payments and approved by a super
+admin, it's one journal entry of three lines in NetSuite, dated January 31.
+
+### What isn't done yet
+
+- Books' own copies aren't checked against NetSuite's journal entries,
+  listed or posted yet. Until they are, the journal entry posts from the
+  copy of NetSuite's ledger as the bookkeeper's do.
+- A super admin's own entries wait for another super admin to approve
+  them, so approving needs two super admins.
+- A line can't name a customer, vendor or employee (NetSuite's Name
+  column), which is why Accounts Receivable and Payable lines are refused.
+- Entries that repeat each month, like depreciation, are copied by hand:
+  nothing makes them on a schedule yet.
+- Before switching on, check against NetSuite: that NetSuite's own journal
+  entry approval doesn't hold FleetSuite's for approval a second time;
+  whether a line needs a location, department or class; what NetSuite says
+  to a closed month; and that the accounts offered are the ones the
+  bookkeeper uses. Then type the first month-end entry here instead of in
+  NetSuite and compare.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 468, `src/lib/books/switches.ts`),
+row each in `books_switches` (migrations 466 to 469, `src/lib/books/switches.ts`),
 and stays off until a super admin turns it on in Books → Switches
 (`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
 on on January 1, 2027, asking the owner once in late December.
@@ -3671,6 +3769,7 @@ in the audit log (`switch_on`, `switch_off`).
 | `credit_memos` | Anyone with Invoicing makes a credit memo against an invoice in FleetSuite, and FleetSuite makes it in NetSuite ("Credit memos made in FleetSuite") | Invoicing → Invoiced → Credit on an invoice |
 | `vendor_credits` | Admins with Parts Ordering enter a vendor's credit in FleetSuite and apply it to that vendor's open bills, and FleetSuite makes it in NetSuite ("Vendor credits made in FleetSuite") | More → Purchasing → Vendor Credits |
 | `card_charges` | Anyone with Payments adds the Chase card's activity and codes each charge to its account, and FleetSuite sends each month's charges to NetSuite as one journal entry ("Card charges coded in FleetSuite") | More → Money & Books → Card Charges |
+| `journal_entries` | Anyone with Payments types a journal entry and asks for approval, a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite ("Journal entries typed in FleetSuite") | More → Money & Books → Journal Entries |
 
 ## Posting
 
