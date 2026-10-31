@@ -1,12 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from './netsuite';
+import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 
 /**
  * Vendor master (R6-7). Vendor names live as free text on
  * purchase_requests and the PO mirror, so "Grimco", "GRIMCO" and
  * "Grimco Inc" are three different vendors to every report that groups by
- * them. Mirroring NetSuite's vendor list nightly gives the app real ids,
- * terms and contacts — and one canonical spelling to resolve against.
+ * them. Mirroring NetSuite's vendor list every two hours (the NetSuite sync
+ * cron) gives the app real ids, terms and contacts — and one canonical
+ * spelling to resolve against.
  *
  * Deliberately additive: rows are upserted on netsuite_id and inactive
  * vendors are FLAGGED rather than deleted, because a PO from two years ago
@@ -27,9 +29,27 @@ export interface VendorMasterRow {
 export const vendorKey = (name: string | null | undefined) =>
   String(name || '').trim().toLowerCase().replace(/[.,]/g, '').replace(/\s+/g, ' ');
 
-export async function syncVendors(service: SupabaseClient): Promise<{
-  fetched: number; upserted: number; error?: string;
-}> {
+export interface VendorSyncResult {
+  fetched: number;
+  upserted: number;
+  error?: string;
+  /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
+  syncStateWrite?: HeartbeatResult;
+}
+
+/**
+ * Copies NetSuite's vendor list into netsuite_vendors, then writes the
+ * netsuite_vendors heartbeat System Health watches, so the copy can't stop
+ * quietly (it did from 2026-10-29, when its call went out of the cron with
+ * the inventory sweep it sat inside).
+ */
+export async function syncVendors(service: SupabaseClient): Promise<VendorSyncResult> {
+  const startedAt = Date.now();
+  const result = await copyVendors(service);
+  return { ...result, syncStateWrite: await recordHeartbeat(service, 'netsuite_vendors', result, { startedAt, records: result.upserted }) };
+}
+
+async function copyVendors(service: SupabaseClient): Promise<VendorSyncResult> {
   let rows: any[] = [];
   try {
     // terms is a joined lookup; LEFT JOIN so a vendor with no terms still

@@ -452,6 +452,19 @@ export async function GET(req: NextRequest) {
     results.salesOrders = { error: err.message };
   }
 
+  // ═══════════ 3b3. VENDOR MASTER (R6-7) ═══════════
+  // Vendor names are free text everywhere else, so one canonical list is
+  // what lets reports stop treating "Grimco", "GRIMCO" and "Grimco Inc" as
+  // three vendors, and what purchase requests and new items pick a vendor
+  // from. Guarded: a vendor-sync failure must not cost the syncs that
+  // already ran.
+  try {
+    results.vendors = await syncVendors(supabase);
+  } catch (err: any) {
+    console.error('[cron] Vendor master sync error:', err.message);
+    results.vendors = { error: err.message };
+  }
+
   // 3c (inventory quantities) runs every 15 minutes in /api/cron/inventory-sync.
 
   // ═══════════ 3d. VENDOR BILL PAYMENT SWEEP ═══════════
