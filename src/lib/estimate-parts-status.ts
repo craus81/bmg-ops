@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { computeEstimateReadiness } from '@/lib/estimate-readiness';
+import { suiteqlQueryAll } from '@/lib/netsuite';
 import { isOpenSalesOrderStatus } from '@/lib/parts-demand';
-import { derivePartsStage, type PartsStageRequest, type PartsStageResult } from '@/lib/estimate-parts-stage';
+import { derivePartsStage, soStock, type PartsStageRequest, type PartsStageResult, type SoStockLine } from '@/lib/estimate-parts-stage';
 
 /**
  * Loads what derivePartsStage needs for a batch of estimates: approval, the
@@ -116,11 +117,43 @@ export async function loadEstimatePartsStages(
   }
 
   // ── Stock check, only where nothing was requested (Craig's 2B) ──
-  const needStock = approved.filter(e => {
+  const nothingAsked = approved.filter(e => {
     if (e.netsuite_so_id && closedSo.has(String(e.netsuite_so_id))) return false;
     const reqs = [...(requestsByEstimate.get(e.id)?.values() || [])].filter(r => r.status !== 'cancelled');
     return reqs.length === 0 && !(dropShips.get(e.id)?.length);
-  }).slice(0, opts.maxStockChecks);
+  });
+  const stockByEstimate = new Map<string, { parts: number; short: number; unknown: number; onOrder: number }>();
+
+  // Converted to a sales order: NetSuite has already committed the stock to
+  // that order, which takes it out of "available". Reading available would
+  // call the job short of its own parts (Craig, 2026-10-31), so ask the
+  // order itself instead: in stock = no inventory line is backordered.
+  // One query covers every order in the batch.
+  const withSo = nothingAsked.filter(e => e.netsuite_so_id && /^\d+$/.test(String(e.netsuite_so_id)));
+  const soLinesById = new Map<string, SoStockLine[]>();
+  for (const part of chunks(withSo.map(e => String(e.netsuite_so_id)))) {
+    try {
+      const rows = await suiteqlQueryAll(`
+        SELECT tl.transaction AS so_id, tl.itemtype AS item_type,
+               ABS(NVL(tl.quantity, 0)) AS qty, ABS(NVL(tl.quantitybackordered, 0)) AS backordered
+        FROM transactionline tl
+        WHERE tl.transaction IN (${part.join(', ')}) AND tl.mainline = 'F'
+      `);
+      for (const r of rows) {
+        const id = String(r.so_id);
+        const list = soLinesById.get(id) || [];
+        list.push({ itemType: r.item_type, quantity: Number(r.qty) || 0, backordered: Number(r.backordered) || 0 });
+        soLinesById.set(id, list);
+      }
+    } catch { /* NetSuite didn't answer: those jobs stay Approved */ }
+  }
+  for (const e of withSo) {
+    const lines = soLinesById.get(String(e.netsuite_so_id));
+    if (lines) stockByEstimate.set(e.id, soStock(lines));
+  }
+
+  // Not converted yet: the estimate's own lines against stock.
+  const needStock = nothingAsked.filter(e => !withSo.includes(e)).slice(0, opts.maxStockChecks);
   const linesByEstimate = new Map<string, { item_number: string | null; quantity: number | null }[]>();
   for (const part of chunks(needStock.map(e => e.id as string))) {
     const { data } = await service.from('estimate_line_items')
@@ -134,7 +167,6 @@ export async function loadEstimatePartsStages(
       linesByEstimate.set(l.estimate_id, list);
     }
   }
-  const stockByEstimate = new Map<string, { parts: number; short: number; unknown: number; onOrder: number }>();
   // Five at a time: each check is several reads, and a long list shouldn't
   // fire them all at once.
   for (let i = 0; i < needStock.length; i += 5) await Promise.all(needStock.slice(i, i + 5).map(async e => {
