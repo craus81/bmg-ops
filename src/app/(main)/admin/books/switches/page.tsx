@@ -24,6 +24,8 @@ interface Switch {
   name: string;
   what: string;
   where: string;
+  turnOn?: string;
+  turnOff?: string;
   on: boolean;
   changedAt: string | null;
   changedBy: string | null;
@@ -66,8 +68,8 @@ export default function BooksSwitchesPage() {
     const on = !s.on;
     const ok = await dialog.confirm(
       on
-        ? `Switch on ${s.name}? From now on staff use it in FleetSuite (${s.where}), and FleetSuite sends each one on to NetSuite.`
-        : `Switch off ${s.name}? Nobody can use it in FleetSuite until it's switched on again, so it's done in NetSuite meanwhile.`,
+        ? s.turnOn ?? `Switch on ${s.name}? From now on staff use it in FleetSuite (${s.where}), and FleetSuite sends each one on to NetSuite.`
+        : s.turnOff ?? `Switch off ${s.name}? Nobody can use it in FleetSuite until it's switched on again, so it's done in NetSuite meanwhile.`,
       { confirmLabel: on ? 'Switch on' : 'Switch off', title: s.name, destructive: !on },
     );
     if (!ok) return;

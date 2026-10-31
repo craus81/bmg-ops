@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473 and 478, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 and 479, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -10,12 +10,14 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * While a piece is off, super admins can open its screen and see what it
  * would send, and nothing goes to NetSuite; the people who'd use it don't
  * see it at all. A super admin turns it on in Books → Switches. A switch
- * that can't be read counts as off.
+ * that can't be read counts as off. Estimates in FleetSuite only is the
+ * other way round: on, it stops a send (src/lib/estimates-in-fleetsuite.ts),
+ * and while it's off estimates push as they do now.
  */
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
-  | 'customer_vendor_details' | 'item_accounts';
+  | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite';
 
 export interface SwitchInfo {
   name: string;
@@ -23,6 +25,9 @@ export interface SwitchInfo {
   what: string;
   /** Where people find it, for the Switches page. */
   where: string;
+  /** What switching it on or off asks first, where the Switches page's own words don't fit. */
+  turnOn?: string;
+  turnOff?: string;
 }
 
 export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
@@ -70,6 +75,13 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     name: 'Item accounts',
     what: "Anyone with Payments changes an item's income account, an inventory item's cost of goods sold and inventory asset accounts, and the expense account of one that's bought, in FleetSuite, and FleetSuite makes the change in NetSuite.",
     where: 'More → Money & Books → Item Accounts, or Change accounts on Books → Stock by item',
+  },
+  estimates_in_fleetsuite: {
+    name: 'Estimates in FleetSuite only',
+    what: "Estimates stay in FleetSuite: nobody pushes one to NetSuite any more, and NetSuite gets each job's sales order when it's made, as now. Until it's on, estimates push as they do today.",
+    where: "An estimate's buttons, where Push to NetSuite as Estimate goes",
+    turnOn: "Switch on Estimates in FleetSuite only? From now on nobody can push an estimate to NetSuite, and NetSuite gets each job's sales order when it's made.",
+    turnOff: 'Switch off Estimates in FleetSuite only? Estimates can be pushed to NetSuite again, as before.',
   },
 };
 

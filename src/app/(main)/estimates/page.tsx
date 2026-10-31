@@ -46,6 +46,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { apiErrorMessage } from '@/lib/api-error-message';
 import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
+import { ESTIMATES_STAY_LINE, PUSHED_BEFORE_LINE } from '@/lib/estimates-in-fleetsuite';
 import { openJobOrder } from '@/lib/job-order-pdf';
 import FulfillInvoiceModal from '@/components/FulfillInvoiceModal';
 import EstimateInvoices from '@/components/EstimateInvoices';
@@ -1069,6 +1070,10 @@ export default function EstimatesPage() {
   const [saving, setSaving] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  // Estimates in FleetSuite only (migration 479): once Books → Switches has it
+  // on, the Push button goes. Off until the read says so; the push route
+  // refuses on its own either way.
+  const [estimatesStay, setEstimatesStay] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
   const [convertingToSO, setConvertingToSO] = useState(false);
@@ -1206,6 +1211,14 @@ export default function EstimatesPage() {
     loadEstimates();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
   }, [authLoading, user, isAdmin, isSales, isGraphicsProduction]);
+
+  useEffect(() => {
+    if (!user) return;
+    apiFetch('/api/estimates/push')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => setEstimatesStay(json?.estimatesStayInFleetsuite === true))
+      .catch(() => {});
+  }, [user]);
 
   // BMG staff directory — the internal-review reviewer dropdown, and the
   // names behind reviewer/requester ids on the review banner. Same audience
@@ -7063,7 +7076,7 @@ export default function EstimatesPage() {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <div style={{ fontSize: '10px', color: 'var(--text-label)' }}>
-                Edit below &amp; sync changes
+                {estimatesStay ? PUSHED_BEFORE_LINE : 'Edit below & sync changes'}
               </div>
               <button
                 onClick={viewEstimatePdf}
@@ -7128,8 +7141,10 @@ export default function EstimatesPage() {
           );
         })()}
 
-        {/* Push or Sync to NetSuite */}
-        {editingId && (customerNsId || prospectId) && lines.length > 0 && !isPriceSheet && (
+        {/* Push or Sync to NetSuite, gone once estimates stay in FleetSuite */}
+        {editingId && (customerNsId || prospectId) && lines.length > 0 && !isPriceSheet && (estimatesStay ? (
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center' }}>{ESTIMATES_STAY_LINE}</div>
+        ) : (
           <>
             <button
               onClick={() => pushToNetSuite(!!isPushed)}
@@ -7152,7 +7167,7 @@ export default function EstimatesPage() {
               </div>
             )}
           </>
-        )}
+        ))}
 
         {/* Send to a BMG teammate for review (migration 316). Optional by
             design — it sits ABOVE the customer send because that's the order
