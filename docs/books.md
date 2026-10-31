@@ -48,8 +48,10 @@ listed for a super admin to clear, and part 27, Books' own copy of each bill
 and PO receipt FleetSuite puts into NetSuite, checked against NetSuite's
 each morning, with one bill per approved vendor invoice or installer payout,
 part 28, Snap a bill, which enters a vendor's bill in NetSuite from a
-picture of it, and part 29, PO bills, which bills the purchase order a
-snapped bill names, any freight on its own line. The screens are the accounts page at `/admin/books`, the trial
+picture of it, part 29, PO bills, which bills the purchase order a
+snapped bill names, any freight on its own line, and part 30, Books' own
+copies of fulfillments, receipts and bills posted to the books in place of
+NetSuite's when they match them and make the same entry. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -140,6 +142,8 @@ the accounts page; the others are linked from there.
 | Books' own bills and receipts, saved as FleetSuite makes each and checked against NetSuite's, and one bill per approved vendor invoice or payout | `migrations/435-books-own-bills.sql`, `src/lib/books/own-bills.ts`, `src/lib/books/own-receipts.ts`, `src/lib/books/own-bill-check.ts`, `src/lib/books/own-receipt-check.ts`, `src/lib/bill-once.ts`, `findVendorBill` in `src/lib/netsuite.ts`; saved by `src/app/api/vendor-invoices/workflow/route.ts`, `src/app/api/admin/payouts/route.ts`, `src/app/api/parts-mail/create-bill/route.ts` and `src/app/api/po-receipts/route.ts` |
 | Own bills and own receipts and one's check, and their APIs | `src/app/(main)/admin/books/own-bills/page.tsx`, `src/app/(main)/admin/books/own-bills/bill/page.tsx`, `src/app/(main)/admin/books/own-receipts/page.tsx`, `src/app/(main)/admin/books/own-receipts/receipt/page.tsx`, `src/app/api/admin/books/own-bills/route.ts`, `src/app/api/admin/books/own-receipts/route.ts` |
 | Own bill and receipt tests | `src/lib/books/own-bills.test.ts`, `src/lib/books/own-receipts.test.ts`, `src/lib/books/own-bill-check.test.ts`, `src/lib/books/own-receipt-check.test.ts`, `src/lib/books/own-bills-sql.test.ts`, `src/lib/bill-once.test.ts`; the daily check's are in its test files |
+| Books' own fulfillments, receipts and bills posted in place of NetSuite's when they match, and what the books hold for each on the Own pages | `migrations/456-books-own-postings.sql`, `src/lib/books/own-stock-posting.ts`, `src/lib/books/own-bill-posting.ts`, `src/lib/books/invoice-posting.ts`, `src/lib/books/own-posting-view.ts`, `src/lib/books/own-posting-text.ts`, `src/components/BooksOwnPosting.tsx` |
+| Own posting tests | `src/lib/books/own-stock-posting.test.ts`, `src/lib/books/own-bill-posting.test.ts`, `src/lib/books/own-posting-text.test.ts`, and end to end, with the Own pages' reads, `src/lib/books/own-postings-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Snap a bill: each snapped bill, the reader, the suggestions and checks, sending once, and a vendor's earlier bills | `migrations/436-books-snap-a-bill.sql`, `src/lib/books/bill-reader.ts`, `src/lib/books/snap-a-bill.ts`, `src/lib/books/typed-dollars.ts`, `makeBillOnce` in `src/lib/bill-once.ts`, `createVendorBill` in `src/lib/netsuite.ts` |
 | Snap a bill's page and its API | `src/app/(main)/admin/books/snap-a-bill/page.tsx`, `src/app/api/admin/books/snap-a-bill/route.ts` |
 | Snap a bill tests | `src/lib/books/bill-reader.test.ts`, `src/lib/books/snap-a-bill.test.ts`, `src/lib/books/typed-dollars.test.ts`, `src/lib/books/snap-a-bill-sql.test.ts`; sending once is in `src/lib/bill-once.test.ts`, the bill NetSuite is sent in `src/lib/netsuite.test.ts` |
@@ -1041,7 +1045,10 @@ name it, as for invoices. One the rule can't work out, or whose lines or GL
 lines aren't copied yet, keeps whatever it has too, and the next run looks
 again. As for payments, one in neither company's GL copy (a bill waiting
 for approval posts nothing) is looked at only while an entry of it stands.
-1084's post the same way (Both companies).
+1084's post the same way (Both companies). A bill FleetSuite made posts
+from Books' own copy of it instead when that copy matches NetSuite's bill
+and makes the same entry ("Posting FleetSuite's own fulfillments, receipts
+and bills").
 
 The posting job and the Bills switch read a month the same way
 (`readBillMonth` in `src/lib/books/invoice-posting.ts`: `gl_bill_month`,
@@ -1540,7 +1547,10 @@ posts as a journal entry does: once, in the month NetSuite booked it into,
 reversed and posted again when NetSuite changes what it posts, and
 reversed when the GL copy no longer holds a line of it for the company (for
 an invoice or credit memo, a cost line); 1084's post the same way (Both
-companies).
+companies). A fulfillment FleetSuite made, or a Receive NetSuite took,
+posts from Books' own copy of it instead when that copy matches NetSuite's
+document and makes the same entry ("Posting FleetSuite's own
+fulfillments, receipts and bills").
 The entries are filed as `item_fulfillment`, `item_receipt`,
 `inventory_adjustment`, `inventory_transfer`, `assembly_build`,
 `assembly_unbuild` and `invoice_cost` (an invoice's and a credit memo's
@@ -2335,10 +2345,10 @@ posts when it does, and links to FleetSuite's copy.
 
 ### What isn't done yet
 
-- Only invoices post from FleetSuite's own records. Its fulfillments are
-  copied and checked ("FleetSuite's own fulfillments") but not posted yet,
-  and its receipts and bills come next; until then they post from
-  NetSuite's.
+- Credit memos, and the documents Books has no copies of, post from
+  NetSuite's. Fulfillments, receipts and bills post from Books' own copies
+  from part 30 ("Posting FleetSuite's own fulfillments, receipts and
+  bills").
 - There's no history: copies start the day part 23 shipped.
 - FleetSuite's sales tax is one rate for everything but Social Circle, while
   NetSuite picks a tax code for each invoice. Where that differs, the check
@@ -2357,7 +2367,9 @@ before it invoices it, every open line (`fulfillSalesOrder` in
 `src/lib/netsuite.ts`), so its fulfillments are the cost side of its
 invoices: what leaves stock, and the cost of goods sold it books. The copies
 are `gl_own_fulfillments` and `gl_own_fulfillment_lines` (migration 416).
-They aren't posted: the books still post NetSuite's fulfillments ("Stock and
+From part 30 the books post a copy in place of NetSuite's fulfillment when
+it matches it and makes the same entry ("Posting FleetSuite's own
+fulfillments, receipts and bills"), and NetSuite's otherwise ("Stock and
 cost"). Nothing is written to NetSuite.
 
 Both ways FleetSuite invoices a sales order save a copy right after NetSuite
@@ -2452,15 +2464,16 @@ ledger and lists and the daily check went, and a search. Each opens
 (`deepLinks.booksOwnFulfillment`, by NetSuite's id for the fulfillment):
 what's compared, side by side with why it differs; each item with its
 quantity, cost each and cost on both sides and the count and value
-FleetSuite costed it from, linking to its moves on Stock by item; what
-NetSuite's fulfillment posted, account by account; what FleetSuite didn't
-know; how it worked the copy out; and FleetSuite's own invoice off the
-order. The daily check tells the super admins when one stops matching
-("Daily check").
+FleetSuite costed it from, linking to its moves on Stock by item; the
+copy's entry next to NetSuite's, or what NetSuite's fulfillment posted,
+account by account, when the copy's isn't worked out; what FleetSuite
+didn't know; how it worked the copy out; and FleetSuite's own invoice off
+the order. Both say what the books hold for it ("Posting FleetSuite's own
+fulfillments, receipts and bills"). The daily check tells the super admins
+when one stops matching ("Daily check").
 
 ### What isn't done yet
 
-- The copies aren't posted: the books post NetSuite's fulfillments.
 - There's no history: copies start the day part 25 shipped.
 - FleetSuite doesn't know a kit's parts, so a fulfillment of a kit is
   incomplete.
@@ -2475,9 +2488,11 @@ items, worked out from what FleetSuite knows rather than read back from
 NetSuite (owner decision 2026-10-24, "Shared bills": each bill is entered
 once, from FleetSuite, and Books keeps its copy to check against
 NetSuite's). The copies are `gl_own_bills` and `gl_own_bill_lines`, and
-`gl_own_receipts` and `gl_own_receipt_lines` (migration 435). They aren't
-posted: the books still post NetSuite's bills ("Vendor bills") and item
-receipts ("Stock and cost"). Nothing more is written to NetSuite than
+`gl_own_receipts` and `gl_own_receipt_lines` (migration 435). From part 30
+the books post a copy in place of NetSuite's bill or item receipt when it
+matches it and makes the same entry ("Posting FleetSuite's own
+fulfillments, receipts and bills"), and NetSuite's otherwise ("Vendor
+bills", "Stock and cost"). Nothing more is written to NetSuite than
 before.
 
 FleetSuite makes bills four ways, and each saves a copy right after
@@ -2588,13 +2603,14 @@ with what each added to stock on both sides. Each opens
 `/admin/books/own-receipts/receipt?key=` (`deepLinks.booksOwnReceipt`, by
 the copy's key): what's compared, each item with its count and value on
 both sides, linking to its moves on Stock by item, where Receiving's rows
-for it stand, and what NetSuite said when it didn't take it. The daily check
-tells the super admins when one stops matching ("Daily check").
+for it stand, and what NetSuite said when it didn't take it. Each list and
+page says what the books hold for it, and each page puts the copy's entry
+next to NetSuite's ("Posting FleetSuite's own fulfillments, receipts and
+bills"). The daily check tells the super admins when one stops matching
+("Daily check").
 
 ### What isn't done yet
 
-- The copies aren't posted: the books post NetSuite's bills and item
-  receipts.
 - There's no history: copies start the day part 27 shipped.
 - FleetSuite's copy of a PO doesn't say the company, so a Parts Mail bill
   and a receipt are kept for BMG, and one for 1084 differs on its company.
@@ -2602,6 +2618,97 @@ tells the super admins when one stops matching ("Daily check").
   time, is already the next day, and NetSuite takes that date.
 - Parts Mail's own claim on its bills doesn't ask NetSuite for the bill
   before making one, and isn't taken over when it's left behind.
+
+## Posting FleetSuite's own fulfillments, receipts and bills
+
+From part 30 (owner decision 2026-10-30, "Own postings", then "Build it")
+the books post Books' own copy of a fulfillment FleetSuite made, of a
+Receive NetSuite took and of a bill FleetSuite put into NetSuite, snapped
+bills among them, in place of NetSuite's document, as they post its own
+invoices ("Posting FleetSuite's own invoices"), when:
+
+- the copy **matches** NetSuite's document, as Own fulfillments, Own
+  receipts or Own bills checks it; and
+- the entry the copy makes is the one NetSuite's makes: the same amount to
+  each account, on the same date, and for a bill the payables for the same
+  vendor.
+
+Otherwise NetSuite's document posts, as it always has: when the copy
+differs, is incomplete or is waiting, and when its entry can't be worked
+out or comes out different. The second test means switching copies never
+moves anything in the books, so Differences, the reports, the ledger on
+Stock by item, the balances and the daily check read the same whichever
+copy posted. A copy that posts and then stops matching (NetSuite's
+document was changed, say) goes back to NetSuite's at the next run, and
+the other way round. A document whose own lines in NetSuite can't be worked
+out, or are caught mid-refresh, keeps whatever entry stands.
+
+The copies' entries (`src/lib/books/own-stock-posting.ts` and
+`src/lib/books/own-bill-posting.ts`):
+
+- **A fulfillment** (`own_fulfillment@1`): each item's cost, as Own
+  fulfillments works it out (its average at the location just before),
+  comes off the item's asset account, as the copy of NetSuite's items has
+  it, and goes to its cost of goods account. NetSuite won't give an item's
+  cost of goods account, so it's the account NetSuite's last fulfillment of
+  the item before this one debited its cost to, or, for an item NetSuite
+  hasn't fulfilled before, the one most of the company's fulfillments debit
+  theirs to (`gl_own_stock_accounts`, migration 456). When NetSuite's
+  fulfillment put an item's cost in another account, its page says so, and
+  the item's next fulfillment takes NetSuite's account from it.
+- **A receipt** (`own_receipt@1`): each item NetSuite keeps in stock goes
+  onto its asset account at the purchase order's price, as Own receipts
+  works it out, and what they come to is credited to the account the
+  company's item receipts hold received stock against until it's billed,
+  the one most of them credit, as the bill rule picks it.
+- **A bill** (`own_bill@1`): the bill rule's working on the copy's own
+  lines, with the accounts NetSuite's bill is worked out with: payables take
+  the copy's total and carry its vendor, an expense line goes to its
+  account, and an item line to where NetSuite puts the item, a stock item
+  from a purchase order's line to the account received stock is held
+  against until it's billed.
+
+Each is dated as NetSuite's is, in the month NetSuite booked the document
+into, keyed as NetSuite's is (`item_fulfillment:<NetSuite id>:<n>`,
+`item_receipt:…`, `vendor_bill:…`), and its lines name the copy's own
+(`own:<item>:cost`, `own:<item>:asset`, `own:received`, `own:<line>`).
+Fulfillments are BMG's; a receipt or a bill posts for the company it's
+kept for, and one NetSuite booked to both companies posts from NetSuite's.
+
+The posting run reads the copies of each month's fulfillments, receipts and
+bills, made on the days they're dated, from the first month Books made any,
+and checks each as the Own pages do, against the copies of NetSuite's stock
+moves, bills and general ledger as far as they had come. Migration 456 has
+`gl_stock_postings` and `gl_bill_postings` say which rule made the entry
+that stands (`posting_rule`), so a document whose entry was made by the
+other copy's rule has it replaced, reversed and posted again in one
+transaction, the reversal's memo saying why ("IF-1234 now posts from
+FleetSuite's own copy"). So the first run after part 30 shipped replaced the
+entry of each document whose copy matched, and each lists NetSuite's as an
+earlier entry. A read of the copies that fails stops the run, saying what it
+was reading.
+
+Own fulfillments, Own receipts and Own bills show on each row what the books
+hold for NetSuite's document ("Entry 902 · own copy", "Entry 871 ·
+NetSuite's", "Not posted yet") and count them above the list. Each one's
+page says which copy made its entry, what the next run does about it and,
+when NetSuite's posts, why, with a link to the document on Invoices vs
+NetSuite, and puts the copy's entry next to NetSuite's, account by account,
+with what differs in red. On Invoices vs NetSuite each one posted from its
+copy reads "Entry 902 · own copy", its month counts how many did, and
+opening it links to its copy.
+
+### What isn't done yet
+
+- Inventory adjustments, transfers, builds and unbuilds and invoices' cost
+  lines post from NetSuite's: Books keeps no copies of them yet. Own
+  adjustments come next.
+- Bill credits and bill payments post from NetSuite's. A Receive NetSuite
+  didn't take posts nothing until it's entered there by hand, and then
+  NetSuite's receipt posts, as Receiving doesn't know which it is.
+- An item's cost of goods account is learned from NetSuite's fulfillments,
+  so after NetSuite moves an item to another account, its next fulfillment
+  posts from NetSuite's, and the one after takes the new account.
 
 ## Snap a bill
 

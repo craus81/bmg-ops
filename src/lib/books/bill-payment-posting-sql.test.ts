@@ -62,9 +62,16 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migrations 314 and 407 point at in the app's own schema.
+    -- What migrations 314, 407, 416 and 435 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
     CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT, netsuite_id TEXT, tax_exempt BOOLEAN);
+    CREATE TABLE public.netsuite_sales_orders (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(), netsuite_id TEXT NOT NULL UNIQUE, tranid TEXT,
+      customer_netsuite_id TEXT, customer_name TEXT
+    );
+    CREATE TABLE public.vendor_invoices (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), status TEXT NOT NULL DEFAULT 'approved');
+    CREATE TABLE public.payouts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), status TEXT NOT NULL DEFAULT 'approved');
+    CREATE TABLE public.po_receipts (id UUID PRIMARY KEY, ns_status TEXT NOT NULL);
     CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
   `);
   for (const file of [
@@ -76,8 +83,13 @@ async function freshDb(): Promise<PGlite> {
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
     '397-books-stock-postings-once.sql', '399-books-customer-refunds.sql',
+    // Stock by item, which Books' own fulfillments are costed from.
+    '401-books-stock-by-item.sql', '402-books-stock-values.sql', '403-books-stock-item-setup.sql',
+    '404-books-stock-ledger-parts.sql', '405-books-stock-account-items.sql',
     // FleetSuite's own invoices, which the job reads with BMG's invoices.
     '407-books-own-invoices.sql', '409-books-own-invoice-posting.sql',
+    // Books' own fulfillments, receipts and bills, which the job reads with NetSuite's.
+    '416-books-own-fulfillments.sql', '435-books-own-bills.sql', '436-books-snap-a-bill.sql', '456-books-own-postings.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);

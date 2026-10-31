@@ -9,6 +9,8 @@ import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
 import type { OwnCheckStatus } from '@/lib/books/own-invoice-check';
 import type { OwnBillCheck } from '@/lib/books/own-bill-check';
+import type { OwnBooks } from '@/lib/books/own-invoice-posting';
+import { ownBooksChip, ownBooksCount } from '@/lib/books/own-posting-text';
 
 /**
  * Books → Own bills (migration 435, src/lib/books/own-bills.ts and
@@ -21,10 +23,14 @@ import type { OwnBillCheck } from '@/lib/books/own-bill-check';
  * bill, a month at a time: the ones
  * that differ first, with why in a sentence. Tap one for its line by line
  * check. The daily check tells the super admins when one differs and links
- * here (?only=differs) or to the bill. Super admins only, as the books are.
+ * here (?only=differs) or to the bill. Each says what the books hold for
+ * NetSuite's bill and which copy made it (migration 456,
+ * src/lib/books/own-bill-posting.ts). Super admins only, as the books are.
  */
 
-type Row = Omit<OwnBillCheck, 'fields' | 'lines' | 'workedOut'> & { netsuiteUrl: string | null; poUrl: string | null; madeByName: string | null };
+type Row = Omit<OwnBillCheck, 'fields' | 'lines' | 'workedOut'> & {
+  netsuiteUrl: string | null; poUrl: string | null; madeByName: string | null; books: OwnBooks | null;
+};
 
 interface SyncState { at: string; error: string | null }
 
@@ -120,9 +126,10 @@ function TableRow({ label, style, children }: { label: React.ReactNode; style?: 
   );
 }
 
-/** A bill: its vendor and number (opening its check), status, the sentence saying how it compares, and where it came from. */
+/** A bill: its vendor and number (opening its check), status, what the books hold, the sentence saying how it compares, and where it came from. */
 function BillLabel({ r }: { r: Row }) {
   const s = STATUS[r.status];
+  const books = ownBooksChip(r.books, r.status);
   return (
     <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
@@ -130,6 +137,7 @@ function BillLabel({ r }: { r: Row }) {
         <span style={{ fontWeight: 700 }}>{r.vendor ?? 'A vendor'}</span>
         <Link href={deepLinks.booksOwnBill(r.netsuiteId)} className="rep-link" style={{ fontWeight: 700 }}>{r.number}</Link>
         <span style={chip(s.color)}>{s.chip}</span>
+        {books && <span style={chip(books.color)}>{books.label}</span>}
       </div>
       <div style={{ fontSize: '11px', color: r.status === 'differs' ? RED : 'var(--text-muted)', overflowWrap: 'anywhere' }}>
         {r.summary}
@@ -216,6 +224,7 @@ export default function BooksOwnBillsPage() {
 
   const counts = data?.counts;
   const total = data?.bills.length ?? 0;
+  const booksCount = ownBooksCount(data?.bills ?? []);
 
   return (
     <div>
@@ -224,8 +233,9 @@ export default function BooksOwnBillsPage() {
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           Each bill FleetSuite puts into NetSuite, from Snap a bill, Parts Mail, CNI vendor invoices or installer payouts,
           kept by Books and checked against NetSuite&apos;s copy; tap one for its line by line check. Nothing here changes
-          NetSuite, and nothing is posted from them yet. Each morning the daily check tells super admins when one differs.
-          Visible only to super admins.{' '}
+          NetSuite. The books post each one from this copy when it matches NetSuite&apos;s and its entry comes out the same,
+          and from NetSuite&apos;s otherwise. Each morning the daily check tells super admins when one differs. Visible only
+          to super admins.{' '}
           <Link href={deepLinks.booksSnapBill()} style={{ color: 'var(--text-secondary)' }}>Snap a bill</Link>
           {' · '}
           <Link href="/admin/books/own-receipts" style={{ color: 'var(--text-secondary)' }}>Own receipts</Link>
@@ -300,6 +310,8 @@ export default function BooksOwnBillsPage() {
               />
             </div>
           )}
+
+          {booksCount && <div style={{ ...note, color: 'var(--text-secondary)' }}>{booksCount}</div>}
 
           {data.month && (
             <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px' }}>

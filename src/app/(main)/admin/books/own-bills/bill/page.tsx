@@ -8,6 +8,8 @@ import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { OwnCheckStatus } from '@/lib/books/own-invoice-check';
 import type { BillLinePair, OwnBillCheck } from '@/lib/books/own-bill-check';
+import type { OwnPostingView } from '@/lib/books/own-posting-view';
+import { OwnBooksLine, OwnEntry } from '@/components/BooksOwnPosting';
 
 /**
  * Books → Own bills → one of Books' own bills, next to NetSuite's (migration
@@ -15,7 +17,9 @@ import type { BillLinePair, OwnBillCheck } from '@/lib/books/own-bill-check';
  * bills and receipts").
  *
  * What's compared, each with Books' and NetSuite's side and why they differ;
- * each line paired with NetSuite's by what it's for; what FleetSuite
+ * each line paired with NetSuite's by what it's for; what the books hold for
+ * NetSuite's bill, and the entry this copy makes next to the one NetSuite's
+ * makes (migration 456, src/lib/books/own-posting-view.ts); what FleetSuite
  * couldn't work out; and how Books worked its copy out. Super admins only,
  * as the books are; opened from Own bills or the daily check's notification
  * (?id=, NetSuite's id for the bill).
@@ -118,6 +122,7 @@ export default function BooksOwnBillPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
   const [bill, setBill] = useState<Bill | null>(null);
+  const [posting, setPosting] = useState<OwnPostingView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -128,6 +133,7 @@ export default function BooksOwnBillPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
       setBill(json.bill);
+      setPosting(json.posting ?? null);
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Could not load the bill');
@@ -164,8 +170,9 @@ export default function BooksOwnBillPage() {
             <div style={{ fontSize: '12px', color: b.status === 'differs' ? RED : 'var(--text-muted)', marginTop: '4px' }}>{b.summary}</div>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
               Books&apos; own copy of the bill FleetSuite made for {b.company} from <MadeFrom bill={b} />
-              {b.poNumber ? `, from ${b.poNumber}` : ''}. Nothing is posted from it yet.
+              {b.poNumber ? `, from ${b.poNumber}` : ''}.
             </div>
+            <OwnBooksLine posting={posting} status={b.status} theirs="bill" company={b.company} kind="bill" netsuiteId={b.netsuiteId} date={b.date} />
             {(b.netsuiteUrl || b.poUrl) && (
               <div style={{ fontSize: '12px', marginTop: '2px' }}>
                 {b.netsuiteUrl && <a href={b.netsuiteUrl} target="_blank" rel="noreferrer" style={link}>Bill in NetSuite ↗</a>}
@@ -201,6 +208,8 @@ export default function BooksOwnBillPage() {
               </tbody>
             </table>
           </div>
+
+          <OwnEntry posting={posting} note="NetSuite's side is the entry the bill rule makes from NetSuite's bill, as the books post it." />
 
           {b.lines.length > 0 && (
             <>

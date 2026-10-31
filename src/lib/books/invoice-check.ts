@@ -297,7 +297,10 @@ export interface MonthSummary {
   pending?: number;
   /** And how many have nothing to post, because NetSuite voided them or they come to $0. */
   nothingToPost?: { voided: number; zero: number };
-  /** Invoices only: how many of those with an entry have it made from FleetSuite's own copy (src/lib/books/own-invoice-posting.ts); left out when none do. */
+  /**
+   * How many of those with an entry have it made from FleetSuite's own copy (src/lib/books/own-invoice-posting.ts,
+   * own-stock-posting.ts and own-bill-posting.ts); left out when none do.
+   */
   fromOwn?: number;
 }
 
@@ -521,12 +524,17 @@ export interface InvoiceBooks {
   /** Set when no entry stands for it and none should, because NetSuite voided it or it comes to $0. */
   nothingToPost?: 'voided' | 'zero';
   /**
-   * Invoices only: which copy of the invoice the entry that stands was made from, NetSuite's with the invoice rule or
-   * FleetSuite's own (own_invoice@1, src/lib/books/own-invoice-posting.ts).
+   * Which copy of the document the entry that stands was made from, NetSuite's or FleetSuite's own: an invoice's
+   * (own_invoice@1, src/lib/books/own-invoice-posting.ts), a fulfillment's or item receipt's (own_fulfillment@1 and
+   * own_receipt@1, own-stock-posting.ts) or a bill's (own_bill@1, own-bill-posting.ts). Left out for the kinds whose
+   * entries don't say.
    */
   from?: 'netsuite' | 'fleetsuite';
-  /** When FleetSuite has its own copy of the invoice: whether the books post that copy, and when they don't why. */
-  own?: { posts: boolean; why?: string };
+  /**
+   * When FleetSuite has its own copy of the document: whether the books post that copy, and when they don't why; a
+   * receipt's with Books' own key for it, which its page on Own receipts is opened by.
+   */
+  own?: { posts: boolean; why?: string; receiptKey?: string };
 }
 
 /**

@@ -5,8 +5,8 @@ import {
   bankDocumentBooks, bankJournalEntry, bankPostingFor, billBooks, billJournalEntry, billPaymentBooks, billPaymentJournalEntry, billPostingFor, copiedJournalEntry,
   decide, decideBankDocument, decideBill, decideBillPayment, decideDeposit, decideJournalEntry, decidePayment, decideSpending, depositBooks,
   depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, journalEntryBooks,
-  parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, replaceMemo, signature, spendingBooks, spendingJournalEntry,
-  spendingPostingFor, decideStockDocument, stockDocumentBooks, stockJournalEntry, stockPostingFor, unsaidFacts,
+  parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, replaceBillMemo, replaceMemo, replaceStockMemo, signature,
+  spendingBooks, spendingJournalEntry, spendingPostingFor, decideStockDocument, stockDocumentBooks, stockJournalEntry, stockPostingFor, unsaidFacts,
   type BankPosting, type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting,
   type PaymentPosting, type SpendingPosting, type StockPosting,
 } from './invoice-posting';
@@ -19,6 +19,8 @@ import { workOutJournalMonth, type JournalMonthData } from './journal-entry-chec
 import { workOutBankMonth, type BankMonthData } from './bank-check';
 import { workOutStockMonth, type StockMonthData } from './stock-check';
 import type { OwnPick } from './own-invoice-posting';
+import type { OwnBillPick } from './own-bill-posting';
+import type { OwnStockPick } from './own-stock-posting';
 
 // Made-up books: '120' receivable, '400' income, '220' sales tax payable.
 const CHART: ChartAccount[] = [
@@ -824,6 +826,110 @@ describe('bills', () => {
       const current = { id: 'e11', entry_no: 11, entry_date: entry!.entryDate, lines };
       expect(decideBill(w, held({ current }))).toEqual({ kind: 'keep' });
     }
+  });
+
+  describe("posted from Books' own copy", () => {
+    // Books' own copy of B-701, making the entry NetSuite's makes, line by line its own.
+    const ownEntry: NonNullable<OwnBillPick['entry']> = {
+      lines: [
+        { account: '200', cents: -65000, lineId: 'payables', itemNumber: null, division: null, role: 'payables' },
+        { account: '530', cents: 50000, lineId: 'own:1', itemNumber: null, division: null, role: 'expense' },
+        { account: '610', cents: 12000, lineId: 'own:2', itemNumber: 'SUPPLY-2', division: null, role: 'item' },
+        { account: '205', cents: 3000, lineId: 'own:3', itemNumber: 'WIDGET-1', division: null, role: 'received' },
+      ],
+      date: '2026-09-08',
+      vendorRef: '50',
+    };
+    const posts: OwnBillPick = { entry: ownEntry, why: null, own: ownEntry, differs: null };
+    const doesnt: OwnBillPick = { entry: null, why: "FleetSuite's own copy differs from NetSuite's bill, so the books post NetSuite's.", own: null, differs: null };
+    const money = (cents: number) => (Math.abs(cents) / 100).toFixed(2);
+    /** What the journal holds when B-701 posted from its copy as entry 13, NetSuite's entry 11 reversed by 12. */
+    const fromOwn = (entry = ownEntry) => held({
+      entries: 2,
+      unreversed: ['e13'],
+      history: [{ entry_no: 11, entry_date: '2026-09-08', reversed_by: 12 }, { entry_no: 13, entry_date: entry.date, reversed_by: null }],
+      current: {
+        id: 'e13', entry_no: 13, entry_date: entry.date, posting_rule: 'own_bill@1',
+        lines: entry.lines.map((l) => ({
+          account: l.account, debit: l.cents > 0 ? money(l.cents) : '0.00', credit: l.cents < 0 ? money(l.cents) : '0.00', division: null,
+          source_line_ref: l.lineId, customer_id: null, vendor_ref: l.lineId === 'payables' ? entry.vendorRef : null,
+        })),
+      },
+    });
+    /** And from NetSuite's, as entry 11, with the rule migration 456 says made it. */
+    const fromNetsuite = held({ current: { ...held().current!, posting_rule: 'bill@1' } });
+
+    it("replaces NetSuite's entry with the copy's when the copy posts, keeps that, and goes back when it no longer does", () => {
+      expect(decideBill(one(), fromNetsuite, posts)).toEqual({ kind: 'replace' });
+      // Read without the rule, the lines alone tell them apart.
+      expect(decideBill(one(), held(), posts)).toEqual({ kind: 'replace' });
+      expect(decideBill(one(), fromOwn(), posts)).toEqual({ kind: 'keep' });
+      expect(decideBill(one(), undefined, posts)).toEqual({ kind: 'post' });
+      expect(decideBill(one(), fromOwn(), doesnt)).toEqual({ kind: 'replace' });
+      expect(decideBill(one(), fromOwn(), null)).toEqual({ kind: 'replace' });
+      expect(decideBill(one(), fromNetsuite, doesnt)).toEqual({ kind: 'keep' });
+      expect(decideBill(one(), fromNetsuite, null)).toEqual({ kind: 'keep' });
+    });
+
+    it("replaces an entry the other copy's rule made, even one whose lines read the same, and the copy's when its entry changes", () => {
+      expect(decideBill(one(), held({ current: { ...held().current!, posting_rule: 'own_bill@1' } }), null)).toEqual({ kind: 'replace' });
+      expect(decideBill(one(), fromOwn(), { ...posts, entry: { ...ownEntry, date: '2026-09-09' } })).toEqual({ kind: 'replace' });
+      expect(decideBill(one(), fromOwn(), { ...posts, entry: { ...ownEntry, vendorRef: '51' } })).toEqual({ kind: 'replace' });
+      expect(decideBill(one(), fromOwn(), { ...posts, entry: { ...ownEntry, lines: ownEntry.lines.map((l) => (l.lineId === 'own:1' ? { ...l, account: '610' } : l)) } }))
+        .toEqual({ kind: 'replace' });
+    });
+
+    it("reverses and leaves an entry made from the copy as one made from NetSuite's", () => {
+      expect(decideBill(one(bill({ voided: true })), fromOwn(), posts)).toEqual({ kind: 'reverse', why: 'voided' });
+      expect(decideBill(one(bill({ lines: null })), fromOwn(), posts)).toEqual({ kind: 'leave', why: 'waiting' });
+      expect(decideBill(one(bill({ total: '660.00' })), fromOwn(), posts)).toEqual({ kind: 'leave', why: 'total' });
+    });
+
+    it('says which copy the entry was made from, and whether the copy posts or why not', () => {
+      expect(billBooks(one(), fromNetsuite, posts)).toEqual({ entryNo: 11, next: 'replace', earlier: [], from: 'netsuite', own: { posts: true } });
+      const earlier = [{ entryNo: 11, reversedBy: 12 }];
+      expect(billBooks(one(), fromOwn(), posts)).toEqual({ entryNo: 13, next: null, earlier, from: 'fleetsuite', own: { posts: true } });
+      expect(billBooks(one(), fromOwn(), doesnt)).toEqual({ entryNo: 13, next: 'replace', earlier, from: 'fleetsuite', own: { posts: false, why: doesnt.why } });
+      // A bill with no copy says nothing of one, and one read without the rule nothing of which copy made it.
+      expect(billBooks(one(), fromNetsuite)).toEqual({ entryNo: 11, next: null, earlier: [], from: 'netsuite' });
+      expect(billBooks(one(), held(), posts)).toEqual({ entryNo: 11, next: 'replace', earlier: [], own: { posts: true } });
+    });
+
+    it("posts the copy's lines under its own rule, with NetSuite's key and memo, the copy's date and its vendor on payables", () => {
+      const { entry } = billJournalEntry(one(), 'BMG', 2, ids, { ...ownEntry, date: '2026-09-09', vendorRef: '51' });
+      expect(entry).toMatchObject({
+        company: 'BMG', entryDate: '2026-09-09', sourceType: 'vendor_bill', sourceId: '701', postingRule: 'own_bill@1',
+        idempotencyKey: 'vendor_bill:701:2', memo: 'B-701, Sample Supply Co', postedBy: null,
+      });
+      expect(entry!.lines).toEqual([
+        { accountId: 'a-200', debit: null, credit: '650.00', division: null, itemNumber: null, sourceLineRef: 'payables', vendorRef: '51' },
+        { accountId: 'a-530', debit: '500.00', credit: null, division: null, itemNumber: null, sourceLineRef: 'own:1', vendorRef: null },
+        { accountId: 'a-610', debit: '120.00', credit: null, division: null, itemNumber: 'SUPPLY-2', sourceLineRef: 'own:2', vendorRef: null },
+        { accountId: 'a-205', debit: '30.00', credit: null, division: null, itemNumber: 'WIDGET-1', sourceLineRef: 'own:3', vendorRef: null },
+      ]);
+      expect(billJournalEntry(one(), 'BMG', 2, new Map([['200', 'a-200']]), ownEntry)).toEqual({ entry: null, missing: ['530', '610', '205'] });
+    });
+
+    it("says in the reversal's memo when a bill changes copies, and otherwise that NetSuite changed it", () => {
+      expect(replaceBillMemo(one(), fromNetsuite.current, posts)).toBe("B-701 now posts from FleetSuite's own copy");
+      expect(replaceBillMemo(one(), fromOwn().current, doesnt)).toBe("B-701 now posts from NetSuite's bill");
+      expect(replaceBillMemo(one(), fromOwn().current, null)).toBe("B-701 now posts from NetSuite's bill");
+      expect(replaceBillMemo(one(), fromOwn().current, posts)).toBe('B-701 changed in NetSuite');
+      expect(replaceBillMemo(one(), fromNetsuite.current, doesnt)).toBe('B-701 changed in NetSuite');
+      expect(replaceBillMemo(one(), held().current, posts)).toBe('B-701 changed in NetSuite');
+      expect(replaceBillMemo(one(), null, posts)).toBe('B-701 changed in NetSuite');
+    });
+
+    it('builds an entry from the copy that fits what it is compared against once posted', () => {
+      const { entry } = billJournalEntry(one(), 'BMG', 1, ids, ownEntry);
+      const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+      const lines = entry!.lines.map((l) => ({
+        account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+        division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null, vendor_ref: l.vendorRef ?? null,
+      }));
+      const current = { id: 'e13', entry_no: 13, entry_date: entry!.entryDate, posting_rule: entry!.postingRule, lines };
+      expect(decideBill(one(), held({ current }), posts)).toEqual({ kind: 'keep' });
+    });
   });
 });
 
@@ -1742,6 +1848,138 @@ describe('stock documents', () => {
       const current = { id: 'e61', entry_no: 61, entry_date: entry!.entryDate, lines };
       expect(decideStockDocument(w, held({ current })), JSON.stringify(d)).toEqual({ kind: 'keep' });
     }
+  });
+
+  describe("posted from Books' own copy", () => {
+    // Books' own copy of IF1201, making the entry NetSuite's makes, line by line its own.
+    const memo = 'A Customer · WIDGET-1';
+    const ownEntry: NonNullable<OwnStockPick['entry']> = {
+      lines: [
+        { lineId: 'own:901:cost', account: '500', cents: 4000, memo, customerId: null, vendorRef: null, itemNumber: 'WIDGET-1' },
+        { lineId: 'own:901:asset', account: '130', cents: -4000, memo, customerId: null, vendorRef: null, itemNumber: 'WIDGET-1' },
+      ],
+      date: '2026-09-15',
+    };
+    const posts: OwnStockPick = { entry: ownEntry, why: null, own: ownEntry, differs: null, learned: [], costs: null };
+    const doesnt: OwnStockPick = {
+      entry: null, why: "FleetSuite's own copy differs from NetSuite's fulfillment, so the books post NetSuite's.", own: null, differs: null, learned: [], costs: null,
+    };
+    const KEY = '0b6a1c3e-5f2d-4c8b-9a7e-1d2c3b4a5f60';
+    const money = (cents: number) => (Math.abs(cents) / 100).toFixed(2);
+    /** What the journal holds when IF1201 posted from its copy as entry 63, NetSuite's entry 61 reversed by 62. */
+    const fromOwn = (entry = ownEntry, rule = 'own_fulfillment@1') => held({
+      entries: 2,
+      unreversed: ['e63'],
+      history: [{ entry_no: 61, entry_date: '2026-09-15', reversed_by: 62 }, { entry_no: 63, entry_date: entry.date, reversed_by: null }],
+      current: {
+        id: 'e63', entry_no: 63, entry_date: entry.date, posting_rule: rule,
+        lines: entry.lines.map((l) => ({
+          account: l.account, debit: l.cents > 0 ? money(l.cents) : '0.00', credit: l.cents < 0 ? money(l.cents) : '0.00', division: null,
+          source_line_ref: l.lineId, customer_id: null, vendor_ref: null,
+        })),
+      },
+    });
+    /** And from NetSuite's, as entry 61, with the rule migration 456 says made it. */
+    const fromNetsuite = held({ current: { ...held().current!, posting_rule: 'stock@1' } });
+    const received = () => one(fulfillment({ type: 'ItemRcpt', number: 'IR1301' }));
+    const adjusted = () => one(fulfillment({ type: 'InvAdjst', number: 'ADJ77' }));
+
+    it("replaces NetSuite's entry with the copy's when the copy posts, keeps that, and goes back when it no longer does", () => {
+      expect(decideStockDocument(one(), fromNetsuite, posts)).toEqual({ kind: 'replace' });
+      // Read without the rule, the lines alone tell them apart.
+      expect(decideStockDocument(one(), held(), posts)).toEqual({ kind: 'replace' });
+      expect(decideStockDocument(one(), fromOwn(), posts)).toEqual({ kind: 'keep' });
+      expect(decideStockDocument(one(), undefined, posts)).toEqual({ kind: 'post' });
+      expect(decideStockDocument(one(), fromOwn(), doesnt)).toEqual({ kind: 'replace' });
+      expect(decideStockDocument(one(), fromOwn(), null)).toEqual({ kind: 'replace' });
+      expect(decideStockDocument(one(), fromNetsuite, doesnt)).toEqual({ kind: 'keep' });
+      expect(decideStockDocument(one(), fromNetsuite, null)).toEqual({ kind: 'keep' });
+    });
+
+    it("keeps a receipt's under the receipt's own rule, and replaces one made by any other", () => {
+      expect(decideStockDocument(received(), fromOwn(ownEntry, 'own_receipt@1'), posts)).toEqual({ kind: 'keep' });
+      expect(decideStockDocument(received(), fromOwn(ownEntry, 'own_fulfillment@1'), posts)).toEqual({ kind: 'replace' });
+      expect(decideStockDocument(one(), fromOwn(ownEntry, 'own_receipt@1'), posts)).toEqual({ kind: 'replace' });
+      // An entry the other copy's rule made, even one whose lines read the same.
+      expect(decideStockDocument(one(), held({ current: { ...held().current!, posting_rule: 'own_fulfillment@1' } }), null)).toEqual({ kind: 'replace' });
+    });
+
+    it('takes no copy for any other kind of stock document', () => {
+      expect(decideStockDocument(adjusted(), held(), posts)).toEqual({ kind: 'keep' });
+      expect(decideStockDocument(adjusted(), fromNetsuite, posts)).toEqual({ kind: 'keep' });
+      expect(stockJournalEntry(adjusted(), 'BMG', 1, ids, ownEntry).entry).toMatchObject({
+        postingRule: 'stock@1', entryDate: '2026-09-15', lines: [{ sourceLineRef: '1', itemNumber: null }, { sourceLineRef: '2', itemNumber: null }],
+      });
+    });
+
+    it("replaces the copy's entry when the copy's entry changes", () => {
+      expect(decideStockDocument(one(), fromOwn(), { ...posts, entry: { ...ownEntry, date: '2026-09-16' } })).toEqual({ kind: 'replace' });
+      const recosted = ownEntry.lines.map((l) => ({ ...l, cents: Math.sign(l.cents) * 4200 }));
+      expect(decideStockDocument(one(), fromOwn(), { ...posts, entry: { ...ownEntry, lines: recosted } })).toEqual({ kind: 'replace' });
+    });
+
+    it("reverses and leaves an entry made from the copy as one made from NetSuite's", () => {
+      const zero = fulfillment({ lines: [gl('1', '500', '0.00', '0.00'), gl('2', '130', '0.00', '0.00')] });
+      expect(decideStockDocument(one(zero), fromOwn(), posts)).toEqual({ kind: 'reverse', why: 'nothing' });
+      const across = fulfillment({ companies: ['1084', 'BMG'], lines: fulfillment().lines.slice(1) });
+      expect(decideStockDocument(one(across), fromOwn(), posts)).toEqual({ kind: 'leave', why: 'unworkable' });
+    });
+
+    it('says which copy the entry was made from, and whether the copy posts or why not', () => {
+      expect(stockDocumentBooks(one(), fromNetsuite, posts)).toEqual({ entryNo: 61, next: 'replace', earlier: [], from: 'netsuite', own: { posts: true } });
+      const earlier = [{ entryNo: 61, reversedBy: 62 }];
+      expect(stockDocumentBooks(one(), fromOwn(), posts)).toEqual({ entryNo: 63, next: null, earlier, from: 'fleetsuite', own: { posts: true } });
+      expect(stockDocumentBooks(one(), fromOwn(), doesnt))
+        .toEqual({ entryNo: 63, next: 'replace', earlier, from: 'fleetsuite', own: { posts: false, why: doesnt.why } });
+      // A receipt's copy carries Books' own key for it.
+      expect(stockDocumentBooks(received(), fromOwn(ownEntry, 'own_receipt@1'), { ...posts, receiptKey: KEY }))
+        .toEqual({ entryNo: 63, next: null, earlier, from: 'fleetsuite', own: { posts: true, receiptKey: KEY } });
+      // One with no copy says nothing of one, and one read without the rule nothing of which copy made it.
+      expect(stockDocumentBooks(one(), fromNetsuite)).toEqual({ entryNo: 61, next: null, earlier: [], from: 'netsuite' });
+      expect(stockDocumentBooks(one(), held())).toEqual({ entryNo: 61, next: null, earlier: [] });
+      expect(stockDocumentBooks(adjusted(), fromNetsuite)).toEqual({ entryNo: 61, next: null, earlier: [], from: 'netsuite' });
+    });
+
+    it("posts the copy's lines under its own rule, with NetSuite's key and memo, the copy's date and each line's item", () => {
+      const { entry } = stockJournalEntry(one(), 'BMG', 2, ids, { ...ownEntry, date: '2026-09-16' });
+      expect(entry).toMatchObject({
+        company: 'BMG', entryDate: '2026-09-16', sourceType: 'item_fulfillment', sourceId: '8101', postingRule: 'own_fulfillment@1',
+        idempotencyKey: 'item_fulfillment:8101:2', memo: 'IF1201', postedBy: null,
+      });
+      expect(entry!.lines).toEqual([
+        { accountId: 'a-500', debit: '40.00', credit: null, memo, division: null, itemNumber: 'WIDGET-1', sourceLineRef: 'own:901:cost', customerId: null, vendorRef: null },
+        { accountId: 'a-130', debit: null, credit: '40.00', memo, division: null, itemNumber: 'WIDGET-1', sourceLineRef: 'own:901:asset', customerId: null, vendorRef: null },
+      ]);
+      expect(stockJournalEntry(received(), 'BMG', 1, ids, ownEntry).entry).toMatchObject({
+        sourceType: 'item_receipt', postingRule: 'own_receipt@1', idempotencyKey: 'item_receipt:8101:1', memo: 'IR1301',
+      });
+      expect(stockJournalEntry(one(), 'BMG', 2, new Map([['130', 'a-130']]), ownEntry)).toEqual({ entry: null, missing: ['500'] });
+    });
+
+    it("says in the reversal's memo when a fulfillment or receipt changes copies, and otherwise that NetSuite changed it", () => {
+      expect(replaceStockMemo(one(), fromNetsuite.current, posts)).toBe("IF1201 now posts from FleetSuite's own copy");
+      expect(replaceStockMemo(one(), fromOwn().current, doesnt)).toBe("IF1201 now posts from NetSuite's fulfillment");
+      expect(replaceStockMemo(received(), fromOwn(ownEntry, 'own_receipt@1').current, null)).toBe("IR1301 now posts from NetSuite's receipt");
+      expect(replaceStockMemo(received(), fromNetsuite.current, posts)).toBe("IR1301 now posts from FleetSuite's own copy");
+      expect(replaceStockMemo(one(), fromOwn().current, posts)).toBe('IF1201 changed in NetSuite');
+      expect(replaceStockMemo(one(), fromNetsuite.current, doesnt)).toBe('IF1201 changed in NetSuite');
+      expect(replaceStockMemo(one(), held().current, posts)).toBe('IF1201 changed in NetSuite');
+      expect(replaceStockMemo(one(), null, posts)).toBe('IF1201 changed in NetSuite');
+      expect(replaceStockMemo(adjusted(), fromNetsuite.current, posts)).toBe('ADJ77 changed in NetSuite');
+    });
+
+    it('builds an entry from the copy that fits what it is compared against once posted', () => {
+      const back = new Map([...ids].map(([ns, id]) => [id, ns]));
+      for (const w of [one(), received()]) {
+        const { entry } = stockJournalEntry(w, 'BMG', 1, ids, ownEntry);
+        const lines = entry!.lines.map((l) => ({
+          account: back.get(l.accountId)!, debit: String(l.debit ?? '0.00'), credit: String(l.credit ?? '0.00'),
+          division: l.division ?? null, source_line_ref: l.sourceLineRef ?? null, customer_id: l.customerId ?? null, vendor_ref: l.vendorRef ?? null,
+        }));
+        const current = { id: 'e63', entry_no: 63, entry_date: entry!.entryDate, posting_rule: entry!.postingRule, lines };
+        expect(decideStockDocument(w, held({ current }), posts), w.entry.type).toEqual({ kind: 'keep' });
+      }
+    });
   });
 });
 

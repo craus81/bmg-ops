@@ -426,6 +426,8 @@ export interface WorkedBill {
   lines: BillLine[] | null;
   /** Which amounts its lines went in at (withOwnBillAmounts); null until they've been copied. */
   amounts: 'own' | 'net' | 'unfit' | null;
+  /** The accounts the rule posted it with, which Books' own copy of it posts with too (src/lib/books/own-bill-posting.ts). */
+  accounts: BillAccounts;
   checked: CheckedBill;
 }
 
@@ -501,6 +503,7 @@ export function workOutBillMonth(
       number: b.number || `NetSuite ${b.netsuite_id}`,
       lines,
       amounts: own?.amounts ?? null,
+      accounts,
       checked: checkBill({ cents: centsOf(b.total), lines, ordered, netsuite: postings(b) }, { accounts, accountTypes }),
     };
   });

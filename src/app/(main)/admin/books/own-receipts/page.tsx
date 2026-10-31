@@ -8,6 +8,8 @@ import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
 import type { OwnReceiptCheck, ReceiptStatus } from '@/lib/books/own-receipt-check';
+import type { OwnBooks } from '@/lib/books/own-invoice-posting';
+import { ownBooksChip, ownBooksCount } from '@/lib/books/own-posting-text';
 
 /**
  * Books → Own receipts (migration 435, src/lib/books/own-receipts.ts and
@@ -19,10 +21,12 @@ import type { OwnReceiptCheck, ReceiptStatus } from '@/lib/books/own-receipt-che
  * ones that differ first, then the ones NetSuite didn't take, with why in a
  * sentence. Tap one for its item by item check. The daily check tells the
  * super admins when one differs and links here (?only=differs) or to the
- * receipt. Super admins only, as the books are.
+ * receipt. Each says what the books hold for NetSuite's receipt and which
+ * copy made it (migration 456, src/lib/books/own-stock-posting.ts). Super
+ * admins only, as the books are.
  */
 
-type Row = Omit<OwnReceiptCheck, 'fields' | 'items' | 'workedOut'> & { netsuiteUrl: string | null; poUrl: string | null };
+type Row = Omit<OwnReceiptCheck, 'fields' | 'items' | 'workedOut'> & { netsuiteUrl: string | null; poUrl: string | null; books: OwnBooks | null };
 
 interface SyncState { at: string; error: string | null }
 
@@ -112,10 +116,11 @@ function TableRow({ label, style, children }: { label: React.ReactNode; style?: 
   );
 }
 
-/** A receipt: its PO (opening its check), vendor, status, the sentence saying how it compares, and what came in where. */
+/** A receipt: its PO (opening its check), vendor, status, what the books hold, the sentence saying how it compares, and what came in where. */
 function ReceiptLabel({ r }: { r: Row }) {
   const s = STATUS[r.status];
   const tone = r.status === 'differs' ? RED : r.status === 'not_in_netsuite' ? ORANGE : 'var(--text-muted)';
+  const books = ownBooksChip(r.books, r.status);
   return (
     <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
@@ -123,6 +128,7 @@ function ReceiptLabel({ r }: { r: Row }) {
         <Link href={deepLinks.booksOwnReceipt(r.receiptKey)} className="rep-link" style={{ fontWeight: 700 }}>{r.poNumber}</Link>
         {r.vendor && <span>· {r.vendor}</span>}
         <span style={chip(s.color)}>{s.chip}</span>
+        {books && <span style={chip(books.color)}>{books.label}</span>}
       </div>
       <div style={{ fontSize: '11px', color: tone, overflowWrap: 'anywhere' }}>{r.summary}</div>
       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
@@ -204,6 +210,7 @@ export default function BooksOwnReceiptsPage() {
 
   const counts = data?.counts;
   const total = data?.receipts.length ?? 0;
+  const booksCount = ownBooksCount(data?.receipts ?? []);
 
   return (
     <div>
@@ -211,9 +218,9 @@ export default function BooksOwnReceiptsPage() {
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Own receipts</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           Each Receive on the Receiving page, kept by Books at the purchase order&apos;s prices and checked against
-          NetSuite&apos;s item receipt; tap one for its item by item check. Nothing here changes NetSuite, and nothing is
-          posted from them yet. Each morning the daily check tells super admins when one differs. Visible only to super
-          admins.{' '}
+          NetSuite&apos;s item receipt; tap one for its item by item check. Nothing here changes NetSuite. The books post each
+          one from this copy when it matches NetSuite&apos;s and its entry comes out the same, and from NetSuite&apos;s
+          otherwise. Each morning the daily check tells super admins when one differs. Visible only to super admins.{' '}
           <Link href="/admin/books/own-bills" style={{ color: 'var(--text-secondary)' }}>Own bills</Link>
           {' · '}
           <Link href="/admin/books/stock" style={{ color: 'var(--text-secondary)' }}>Stock by item</Link>
@@ -283,6 +290,8 @@ export default function BooksOwnReceiptsPage() {
               />
             </div>
           )}
+
+          {booksCount && <div style={{ ...note, color: 'var(--text-secondary)' }}>{booksCount}</div>}
 
           {data.month && (
             <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px' }}>

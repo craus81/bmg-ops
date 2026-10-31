@@ -106,7 +106,7 @@ interface Summary {
   posted?: number;
   pending?: number;
   nothingToPost?: NothingToPost;
-  /** Invoices only: how many of those in the books posted from FleetSuite's own copy. */
+  /** Invoices, fulfillments, item receipts and bills only: how many of those in the books posted from FleetSuite's own copy. */
   fromOwn?: number;
 }
 
@@ -123,10 +123,13 @@ interface Books {
   earlier: Array<{ entryNo: number; reversedBy: number | null }>;
   /** No entry stands and none should, because NetSuite voided it or it comes to $0. */
   nothingToPost?: 'voided' | 'zero';
-  /** An invoice's: which copy the entry that stands was made from. */
+  /** An invoice's, a fulfillment's, an item receipt's or a bill's: which copy the entry that stands was made from. */
   from?: 'netsuite' | 'fleetsuite';
-  /** When FleetSuite has its own copy of the invoice: whether the books post it, and when they don't why. */
-  own?: { posts: boolean; why?: string };
+  /**
+   * When FleetSuite has its own copy of the document: whether the books post it, when they don't why, and an item
+   * receipt's key to its copy on Own receipts.
+   */
+  own?: { posts: boolean; why?: string; receiptKey?: string };
 }
 
 /** How the last posting run went (src/lib/books/invoice-posting.ts); counts only. */
@@ -316,20 +319,20 @@ function booksChip(books: Books): { label: string; color: string } {
   return books.next === 'post' ? { label: 'To post', color: GREY } : { label: 'Not posted', color: GREY };
 }
 
-/** What the books hold for a document of any kind on this page, in a sentence or two. */
-function booksText(books: Books): string {
+/** What the books hold for a document of any kind on this page, in a sentence or two. `one` is the document in words ('bill'). */
+function booksText(books: Books, one: string): string {
   const { own } = books;
-  // Which copy made the entry is worth saying only of an invoice FleetSuite has its own copy of, or one posted from it.
-  const made = books.from === 'fleetsuite' ? ", made from FleetSuite's own copy of the invoice"
-    : books.from === 'netsuite' && own ? ", made from NetSuite's invoice" : '';
+  // Which copy made the entry is worth saying only of a document FleetSuite has its own copy of, or one posted from it.
+  const made = books.from === 'fleetsuite' ? `, made from FleetSuite's own copy of the ${one}`
+    : books.from === 'netsuite' && own ? `, made from NetSuite's ${one}` : '';
   const now = books.entryNo !== null ? `In FleetSuite's books as entry ${books.entryNo}${made}.`
     : books.nothingToPost ? `Nothing to post: ${books.nothingToPost === 'voided' ? 'NetSuite voided it' : 'it comes to $0'}.`
       : "Not in FleetSuite's books.";
   const switching = books.next === 'replace' && (books.from === 'fleetsuite') !== !!own?.posts;
   const next = books.next === 'post' ? (own?.posts ? " The next posting run posts it from FleetSuite's own copy." : ' The next posting run posts it.')
     : switching ? (own?.posts
-      ? " FleetSuite's own copy matches NetSuite's invoice, so the next posting run reverses it and posts one made from FleetSuite's copy."
-      : " The next posting run reverses it and posts one made from NetSuite's invoice.")
+      ? ` FleetSuite's own copy matches NetSuite's ${one}, so the next posting run reverses it and posts one made from FleetSuite's copy.`
+      : ` The next posting run reverses it and posts one made from NetSuite's ${one}.`)
       : books.next === 'replace' ? ' It no longer fits what the rule works out, so the next posting run reverses it and posts the new entry.'
         : books.next === 'reverse' ? ' NetSuite voided it or it comes to nothing now, so the next posting run reverses it.'
           : '';
@@ -426,7 +429,19 @@ const amountsText = (amounts: NonNullable<Invoice['amounts']>, one: string) => (
   ? `NetSuite spread a discount, markup or payment over this ${one}'s lines, so FleetSuite takes each line at its own amount, as NetSuite posts it.`
   : `NetSuite's own amounts for this ${one}'s lines don't add up to it, so FleetSuite took each line at its net amount.`);
 
+/**
+ * Where FleetSuite's own copy of a document is, next to NetSuite's: Own invoices, Own fulfillments, Own receipts or Own
+ * bills; null for one of a kind it has no copies of, or an item receipt whose copy's key isn't known.
+ */
+function ownCopyLink(invoice: Invoice): string | null {
+  if (invoice.type === 'ItemShip') return deepLinks.booksOwnFulfillment(invoice.netsuiteId);
+  if (invoice.type === 'ItemRcpt') return invoice.books?.own?.receiptKey ? deepLinks.booksOwnReceipt(invoice.books.own.receiptKey) : null;
+  if (invoice.type === 'VendBill') return deepLinks.booksOwnBill(invoice.netsuiteId);
+  return invoice.type ? null : deepLinks.booksOwnInvoice(invoice.netsuiteId);
+}
+
 function InvoiceDetail({ invoice, accounts, one }: { invoice: Invoice; accounts: Record<string, string>; one: string }) {
+  const own = invoice.books?.own || invoice.books?.from === 'fleetsuite' ? ownCopyLink(invoice) : null;
   return (
     <div style={{ padding: '8px 10px 12px', background: 'var(--bg)' }}>
       {invoice.booked && (
@@ -435,12 +450,12 @@ function InvoiceDetail({ invoice, accounts, one }: { invoice: Invoice; accounts:
         </div>
       )}
       {invoice.books && (
-        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>{booksText(invoice.books)}</div>
+        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>{booksText(invoice.books, one)}</div>
       )}
-      {(invoice.books?.own || invoice.books?.from === 'fleetsuite') && (
+      {own && (
         <div style={{ fontSize: '12px', marginBottom: '4px' }}>
-          <Link href={deepLinks.booksOwnInvoice(invoice.netsuiteId)} style={{ color: 'var(--text-secondary)' }}>
-            FleetSuite&apos;s own copy of this invoice, next to NetSuite&apos;s
+          <Link href={own} style={{ color: 'var(--text-secondary)' }}>
+            FleetSuite&apos;s own copy of this {one}, next to NetSuite&apos;s
           </Link>
         </div>
       )}

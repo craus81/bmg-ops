@@ -180,22 +180,54 @@ export interface OwnBooks {
   from: 'netsuite' | 'fleetsuite';
 }
 
+type PostingsRead = ReadonlyArray<{
+  source_type: string;
+  source_id: string;
+  current: { entry_no: number; entry_date: string; posting_rule?: string } | null;
+}>;
+
 /**
  * What the books hold for each invoice, by NetSuite's id, from what gl_invoice_postings returns for them (migration
- * 409): an invoice with no entry standing is left out.
+ * 409): an invoice with no entry standing is left out. A fulfillment's, receipt's or bill's the same way, from
+ * gl_stock_postings or gl_bill_postings (migration 456), given its kind (the entries' source type) and the rule Books'
+ * own copies of it post with.
  */
-export function ownBooks(
-  postings: ReadonlyArray<{ source_type: string; source_id: string; current: { entry_no: number; entry_date: string; posting_rule?: string } | null }>,
-): Map<string, OwnBooks> {
+export function ownBooks(postings: PostingsRead, sourceType = 'invoice', ownRule = OWN_INVOICE_RULE): Map<string, OwnBooks> {
   const out = new Map<string, OwnBooks>();
   for (const p of postings) {
-    if (p.source_type !== 'invoice' || !p.current) continue;
+    if (p.source_type !== sourceType || !p.current) continue;
     out.set(p.source_id, {
       entryNo: p.current.entry_no,
       date: p.current.entry_date,
-      from: p.current.posting_rule === OWN_INVOICE_RULE ? 'fleetsuite' : 'netsuite',
+      from: p.current.posting_rule === ownRule ? 'fleetsuite' : 'netsuite',
     });
   }
+  return out;
+}
+
+/** How the journal says what it holds for a kind of document Books has its own copies of: its read, the list it answers with, the kind and the copies' rule. */
+export interface OwnBooksRead {
+  fn: string;
+  list: string;
+  sourceType: string;
+  ownRule: string;
+}
+
+/** What the books hold for some documents of one kind, each with its company, by NetSuite's id: read company by company. */
+export async function readOwnBooks(
+  service: SupabaseClient,
+  read: OwnBooksRead,
+  documents: ReadonlyArray<{ company: string; netsuiteId: string }>,
+): Promise<Map<string, OwnBooks>> {
+  const byCompany = new Map<string, string[]>();
+  for (const d of documents) byCompany.set(d.company, [...(byCompany.get(d.company) ?? []), d.netsuiteId]);
+  const out = new Map<string, OwnBooks>();
+  await Promise.all([...byCompany].map(async ([company, ids]) => {
+    const res = await service.rpc(read.fn, { p_company: company, p_source_ids: ids, p_lines: false });
+    if (res.error) throw new Error(res.error.message);
+    const postings = ((res.data ?? {}) as Record<string, PostingsRead | undefined>)[read.list] ?? [];
+    for (const [id, books] of ownBooks(postings, read.sourceType, read.ownRule)) out.set(id, books);
+  }));
   return out;
 }
 
