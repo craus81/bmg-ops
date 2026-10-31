@@ -447,16 +447,15 @@ export interface BooksListsSyncResult {
 }
 
 /**
- * FleetSuite changed a customer's or a vendor's terms in NetSuite (Customer Terms, Vendor Details: src/lib/customer-terms.ts,
- * src/lib/vendor-details.ts), so its row here takes the new terms now rather than at the list's next read, two hours
- * on at most: Books' own invoices fall due by a customer's terms, and Snap a bill's bills by a vendor's. The row goes
- * through gl_netsuite_lists_apply like any other; nothing is written when the copy has no row for it.
+ * FleetSuite changed something a row of the copy keeps in NetSuite, so the row takes it now rather than at the list's
+ * next read, two hours on at most: `details` over what the row has. It goes through gl_netsuite_lists_apply like any
+ * other row; nothing is written when the copy has no row for it.
  */
-export async function noteTermsChanged(
+async function noteChanged(
   service: SupabaseClient,
-  kind: 'customer' | 'vendor',
+  kind: ListKind,
   netsuiteId: string,
-  termsId: string,
+  details: Readonly<ListDetails>,
 ): Promise<{ noted: boolean }> {
   const { data, error } = await service
     .from('gl_netsuite_lists')
@@ -473,11 +472,39 @@ export async function noteTermsChanged(
     name: row.name,
     parent_netsuite_id: row.parent_netsuite_id,
     active: row.active,
-    details: { ...(row.details ?? {}), terms_id: termsId },
+    details: { ...(row.details ?? {}), ...details },
   };
   const applied = await service.rpc('gl_netsuite_lists_apply', { p: { kind, rows: [noted] } });
   if (applied.error) throw new Error(applied.error.message);
   return { noted: true };
+}
+
+/**
+ * FleetSuite changed a customer's or a vendor's terms in NetSuite (Customer Terms, Vendor Details: src/lib/customer-terms.ts,
+ * src/lib/vendor-details.ts), so its row here takes the new terms now: Books' own invoices fall due by a customer's
+ * terms, and Snap a bill's bills by a vendor's.
+ */
+export function noteTermsChanged(
+  service: SupabaseClient,
+  kind: 'customer' | 'vendor',
+  netsuiteId: string,
+  termsId: string,
+): Promise<{ noted: boolean }> {
+  return noteChanged(service, kind, netsuiteId, { terms_id: termsId });
+}
+
+/**
+ * FleetSuite changed an item's accounts in NetSuite (Item Accounts, src/lib/item-accounts.ts), so its row here takes
+ * them now: the posting rules read an item's accounts from it, and Stock by item lists the stocked items whose asset
+ * account isn't an asset account by it. `accounts` is NetSuite's id for each account changed, by where the row keeps
+ * it ('income_account', 'asset_account', 'expense_account').
+ */
+export function noteItemAccountsChanged(
+  service: SupabaseClient,
+  netsuiteId: string,
+  accounts: Readonly<Record<string, string>>,
+): Promise<{ noted: boolean }> {
+  return noteChanged(service, 'item', netsuiteId, accounts);
 }
 
 /** NetSuite's terms a customer or vendor can be given: the copy's active ones, by name. */

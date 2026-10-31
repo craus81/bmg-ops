@@ -246,6 +246,16 @@ describe('Customer and vendor details links', () => {
   });
 });
 
+describe('Item accounts links', () => {
+  it('opens Item Accounts, on one NetSuite item when given one', () => {
+    expect(deepLinks.itemAccounts()).toBe('/admin/item-accounts');
+    expect(deepLinks.itemAccounts(null)).toBe('/admin/item-accounts');
+    expect(deepLinks.itemAccounts('')).toBe('/admin/item-accounts');
+    expect(deepLinks.itemAccounts('501')).toBe('/admin/item-accounts?item=501');
+    expect(deepLinks.itemAccounts('5 01&x=1')).toBe('/admin/item-accounts?item=5+01%26x%3D1');
+  });
+});
+
 describe('Card charge links', () => {
   it('opens the card charges screen', () => {
     expect(deepLinks.cardCharges()).toBe('/admin/card-charges');

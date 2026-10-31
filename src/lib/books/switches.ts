@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473 and 478, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -15,7 +15,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
-  | 'customer_vendor_details';
+  | 'customer_vendor_details' | 'item_accounts';
 
 export interface SwitchInfo {
   name: string;
@@ -65,6 +65,11 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     name: 'Customer and vendor details',
     what: "Anyone with Credit Applications changes a customer's terms and credit limit, and anyone with Payments a vendor's email, phone, terms, addresses and 1099 details, in FleetSuite, and FleetSuite makes the change in NetSuite.",
     where: 'More → Sales → Customer Terms, or Change on a customer; More → Money & Books → Vendor Details',
+  },
+  item_accounts: {
+    name: 'Item accounts',
+    what: "Anyone with Payments changes an item's income account, an inventory item's cost of goods sold and inventory asset accounts, and the expense account of one that's bought, in FleetSuite, and FleetSuite makes the change in NetSuite.",
+    where: 'More → Money & Books → Item Accounts, or Change accounts on Books → Stock by item',
   },
 };
 

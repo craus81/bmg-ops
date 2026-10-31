@@ -79,13 +79,14 @@ export default function MorePage() {
     return () => { cancelled = true; };
   }, [canOrderParts]);
 
-  // Card Charges, Journal Entries and Vendor Details: anyone with Payments
-  // once each is switched on in Books → Switches; until then super admins
-  // only.
+  // Card Charges, Journal Entries, Vendor Details and Item Accounts: anyone
+  // with Payments once each is switched on in Books → Switches; until then
+  // super admins only.
   const canPayments = hasFeature('vendor_payments');
   const [canCardCharges, setCanCardCharges] = useState(false);
   const [canJournalEntries, setCanJournalEntries] = useState(false);
   const [canVendorDetails, setCanVendorDetails] = useState(false);
+  const [canItemAccounts, setCanItemAccounts] = useState(false);
   useEffect(() => {
     if (!canPayments) return;
     let cancelled = false;
@@ -99,13 +100,15 @@ export default function MorePage() {
       }
     };
     (async () => {
-      const [cards, journals, vendors] = await Promise.all([
+      const [cards, journals, vendors, items] = await Promise.all([
         canUse('/api/card-charges?status=1'), canUse('/api/journal-entries?status=1'), canUse('/api/vendor-details?status=1'),
+        canUse('/api/item-accounts?status=1'),
       ]);
       if (!cancelled) {
         setCanCardCharges(cards);
         setCanJournalEntries(journals);
         setCanVendorDetails(vendors);
+        setCanItemAccounts(items);
       }
     })();
     return () => { cancelled = true; };
@@ -197,6 +200,7 @@ export default function MorePage() {
     { group: 'money', title: 'Card Charges', sub: 'Code the Chase card’s charges · sent to NetSuite as a journal entry each month', path: deepLinks.cardCharges(), show: canCardCharges },
     { group: 'money', title: 'Journal Entries', sub: 'Type a journal entry · a super admin approves it and it’s made in NetSuite', path: deepLinks.journalEntries(), show: canJournalEntries },
     { group: 'money', title: 'Vendor Details', sub: 'Change a vendor’s email, terms, addresses or 1099 details · changed in NetSuite', path: deepLinks.vendorDetails(), show: canVendorDetails },
+    { group: 'money', title: 'Item Accounts', sub: 'Change the accounts an item’s sales, costs and stock post to · changed in NetSuite', path: deepLinks.itemAccounts(), show: canItemAccounts },
     { group: 'money', title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
     { group: 'money', title: 'Books', sub: 'FleetSuite’s own books · reports, accounts, trial balance & NetSuite lists', path: '/admin/books', show: hasRole('super_admin') },
     { group: 'money', title: 'Ledger', sub: 'QuickBooks history import, customer matching & NetSuite mirror', path: '/admin/ledger', show: F('ledger'), badge: badgeFor('ledger_unmatched_customers') },

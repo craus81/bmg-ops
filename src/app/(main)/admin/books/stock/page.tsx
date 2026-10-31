@@ -201,16 +201,18 @@ function SetupList({ setup }: { setup: StockSetup }) {
       <div>
         {count(setup.items.length, 'stocked item has', 'stocked items have')} an asset account in NetSuite that isn&apos;t an asset
         account. NetSuite puts what a stocked item costs on its asset account when it&apos;s received and takes it off when it ships,
-        so {setup.items.length === 1 ? 'its' : 'their'} cost lands in the wrong place. On {setup.items.length === 1 ? 'its' : 'each one\'s'}{' '}
-        Accounting tab in NetSuite, set Asset Account to {setup.usual ? `${setup.usual}, as most stocked items have it,` : 'your inventory asset account'} and check COGS
-        Account is your cost of goods sold account: FleetSuite can&apos;t read that one. An item drops off this list once{' '}
-        <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied again, every two hours or on Sync now.
+        so {setup.items.length === 1 ? 'its' : 'their'} cost lands in the wrong place. With Change accounts beside{' '}
+        {setup.items.length === 1 ? 'it' : 'each one'}, set its inventory asset account to {setup.usual ? `${setup.usual}, as most stocked items have it,` : 'your inventory asset account'} and
+        check its cost of goods sold account there: this list can&apos;t read that one. An item drops off this list once it&apos;s changed there,
+        or after a change made in NetSuite once <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied again,
+        every two hours or on Sync now.
       </div>
       <ul style={{ margin: '6px 0 0', paddingLeft: '18px', fontWeight: 400 }}>
         {setup.items.map((i) => (
           <li key={i.itemId} style={{ overflowWrap: 'anywhere' }}>
             <Link href={deepLinks.booksStockItem(i.itemId)} className="rep-link" style={{ fontWeight: 700 }}>{i.item}</Link>
-            {i.description ? ` · ${i.description}` : ''}: asset account {i.account}, {i.accountKind}
+            {i.description ? ` · ${i.description}` : ''}: asset account {i.account}, {i.accountKind} ·{' '}
+            <Link href={deepLinks.itemAccounts(i.itemId)} className="rep-link">Change accounts</Link>
           </li>
         ))}
       </ul>
@@ -257,14 +259,15 @@ function NamedBy({ named }: { named: NonNullable<LedgerPart['namedBy']> }) {
           <li key={i.itemId} style={{ overflowWrap: 'anywhere' }}>
             <Link href={deepLinks.booksStockItem(i.itemId)} className="rep-link" style={{ fontWeight: 700 }}>{i.item}</Link>
             {i.description ? ` · ${i.description}` : ''}
-            {i.active ? '' : ' · inactive'}
+            {i.active ? '' : ' · inactive'} ·{' '}
+            <Link href={deepLinks.itemAccounts(i.itemId)} className="rep-link">Change accounts</Link>
           </li>
         ))}
         {named.more > 0 && <li>and {count(named.more, 'more', 'more')}</li>}
       </ul>
       <div>
-        If {one ? 'it' : 'they'} shouldn&apos;t, set {one ? 'its' : 'each one\'s'} Asset Account to {named.usual ?? 'your inventory asset account'} on
-        the Accounting tab in NetSuite. Once {one ? 'it\'s' : 'they\'re'} right and{' '}
+        If {one ? 'it' : 'they'} shouldn&apos;t, set {one ? 'its' : 'each one\'s'} inventory asset account to {named.usual ?? 'your inventory asset account'} with
+        Change accounts. Once {one ? 'it\'s' : 'they\'re'} right, at once when changed there or after a change in NetSuite once{' '}
         <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied again, every two hours or on Sync now, the
         account leaves this page.
       </div>
