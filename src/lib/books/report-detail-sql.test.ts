@@ -1,6 +1,6 @@
 // Migration 400 lists the documents behind one account's line on Reports,
-// and 459 lets the Excel download take up to 20,000 of them at once. This
-// runs migrations 314 and 359–363 with 396, 400 and 459 in an in-memory
+// and 460 lets the Excel download take up to 20,000 of them at once. This
+// runs migrations 314 and 359–363 with 396, 400 and 460 in an in-memory
 // Postgres (PGlite) as the app's server login, copies a made-up NetSuite
 // general ledger for both companies, posts FleetSuite's own entries for it
 // (a replaced entry, a typed entry, one reversed in the same month among
@@ -53,7 +53,7 @@ async function freshDb(): Promise<PGlite> {
   for (const file of [
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '396-books-reports.sql', '400-books-report-detail.sql',
-    '459-books-account-documents-download.sql',
+    '460-books-account-documents-download.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -247,7 +247,7 @@ describe("migration 400's account documents", () => {
     ]);
   });
 
-  it('gives more than 2,000 documents at once for the Excel download (migration 459), by date and number', async () => {
+  it('gives more than 2,000 documents at once for the Excel download (migration 460), by date and number', async () => {
     // 2,050 made-up invoices on an account of their own, in July: past
     // migration 400's 2,000.
     await db.exec(`

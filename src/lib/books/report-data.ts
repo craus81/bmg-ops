@@ -119,7 +119,7 @@ export interface LoadedAccountDetail {
  * What one account's line on a report is made of over the months asked for
  * (account=, report=, from=, to=): its two ends from the report itself
  * (lineSpan) and the documents between them (gl_books_account_documents,
- * migrations 400 and 459), only those that differ with `differs`, at most
+ * migrations 400 and 460), only those that differ with `differs`, at most
  * `limit`. `account` is the line's key: the account's NetSuite id, or
  * fs:<id> for one NetSuite doesn't have.
  */

@@ -1,4 +1,4 @@
--- Migration 459: FleetSuite's own books, part 33 — Excel downloads.
+-- Migration 460: FleetSuite's own books, part 33 — Excel downloads.
 --
 -- The NetSuite Exit Checklist's "Excel downloads" (thread "Replacing
 -- NetSuite with FleetSuite", owner's go-ahead 2026-10-31): Reports and an
@@ -182,4 +182,4 @@ BEGIN
   END IF;
 END $$;
 
-COMMENT ON FUNCTION public.gl_books_account_documents(text, text, date, date, boolean, integer) IS 'Migrations 400 and 459: the documents that moved one of a company''s accounts (its NetSuite id, or fs:<id>) in a range of months, FleetSuite''s journal by entry date next to the copy of NetSuite''s GL by posting month, document by document, with their numbers, names and memos, for the report detail page (up to 1,000) and its Excel download (up to 20,000). Service role only.';
+COMMENT ON FUNCTION public.gl_books_account_documents(text, text, date, date, boolean, integer) IS 'Migrations 400 and 460: the documents that moved one of a company''s accounts (its NetSuite id, or fs:<id>) in a range of months, FleetSuite''s journal by entry date next to the copy of NetSuite''s GL by posting month, document by document, with their numbers, names and memos, for the report detail page (up to 1,000) and its Excel download (up to 20,000). Service role only.';
