@@ -24,6 +24,7 @@ const service = createServiceClient();
 const LineSchema = z.object({
   item_number: z.string().trim().max(120).nullish(),
   quantity: z.union([z.number(), z.string()]).nullish(),
+  description: z.string().max(2000).nullish(),
 });
 
 const Schema = z.discriminatedUnion('action', [

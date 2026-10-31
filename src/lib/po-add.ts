@@ -43,6 +43,9 @@ export interface PoAdd {
   quantity: number;
   rate: number | null;
   description: string | null;
+  /** Always its own new line — a generic part (Misc) line, which must
+   *  never be added onto another Misc line of the PO. */
+  separate?: boolean;
 }
 
 export interface PoAddPlan {
@@ -61,7 +64,7 @@ export function planPoLineAdds(live: PoItemLine[], adds: PoAdd[]): PoAddPlan {
   const added: string[] = [];
   for (const a of adds) {
     // The part's line, if it's still untouched: open, nothing received or billed.
-    const mine = live.find(l => l.itemId === a.itemId && !l.isClosed && l.quantityReceived <= 0 && l.quantityBilled <= 0);
+    const mine = a.separate ? undefined : live.find(l => l.itemId === a.itemId && !l.isClosed && l.quantityReceived <= 0 && l.quantityBilled <= 0);
     if (mine) {
       const to = round2(mine.quantity + a.quantity);
       lines.push({ line: mine.line, quantity: to });

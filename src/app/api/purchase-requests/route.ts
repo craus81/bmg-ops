@@ -7,6 +7,8 @@ import { deepLinks } from '@/lib/deep-links';
 import { computePartsReadiness } from '@/lib/parts-readiness';
 import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
 import { resolveVendorNames, vendorKey } from '@/lib/purchase-request-vendor';
+import { genericLineKey } from '@/lib/generic-lines';
+import { loadGenericItems } from '@/lib/generic-lines-server';
 
 const supabase = createServiceClient();
 
@@ -94,6 +96,7 @@ export async function GET(req: NextRequest) {
       .from('purchase_requests')
       .select(`*, upfit_projects(id, project_name, netsuite_so_number, customer_name), estimates(id, estimate_number, customer_name), requester:profiles!purchase_requests_requested_by_fkey(full_name), ordered_po:netsuite_vendor_pos(${ORDERED_PO_SELECT})`)
       .eq('status', 'ordered')
+      .is('received_at', null) // "Got it" on the job card: it's here
       .order('ordered_at', { ascending: false, nullsFirst: false })
       .limit(500);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -239,7 +242,7 @@ export async function POST(req: NextRequest) {
   // Existing pending rows for idempotence.
   let dupQuery = supabase
     .from('purchase_requests')
-    .select('id, item_number, quantity, source_project_id, source_estimate_id')
+    .select('id, item_number, description, quantity, source_project_id, source_estimate_id')
     .eq('status', 'pending')
     .in('item_number', itemNumbers);
   const { data: existing } = await dupQuery;
@@ -251,10 +254,20 @@ export async function POST(req: NextRequest) {
     : body.projectId
       ? r.source_project_id === body.projectId
       : !r.source_project_id && !r.source_estimate_id;
+  // A generic part (Misc) is one request per line description, so two
+  // different Misc lines never fold into one ask (Craig, 2026-10-31).
+  let genericItems = new Set<string>();
+  try {
+    genericItems = await loadGenericItems(supabase, itemNumbers);
+  } catch (e) {
+    console.error('purchase-requests: generic parts lookup failed', e);
+  }
+  const dupKey = (item: string, desc: string | null | undefined) =>
+    genericItems.has(item) ? genericLineKey(item, desc) : item;
   const pendingByItem = new Map(
     (existing || [])
       .filter(sameSource)
-      .map((r: any) => [normalizeItemNumber(r.item_number), r]),
+      .map((r: any) => [dupKey(normalizeItemNumber(r.item_number), r.description), r]),
   );
 
   const created: string[] = [];
@@ -263,7 +276,8 @@ export async function POST(req: NextRequest) {
     const key = normalizeItemNumber(item.itemNumber);
     if (!key) continue;
     const cat = catalog.get(key);
-    const dup: any = body.fresh ? undefined : pendingByItem.get(key);
+    const generic = genericItems.has(key);
+    const dup: any = body.fresh ? undefined : pendingByItem.get(dupKey(key, item.description));
     if (dup) {
       // The estimate's button asks for what is still uncovered AFTER its
       // pending requests, so its quantity adds to the open row. Every other
@@ -282,7 +296,9 @@ export async function POST(req: NextRequest) {
     const { data: row, error } = await supabase.from('purchase_requests').insert({
       item_number: key,
       netsuite_item_id: item.netsuiteItemId || cat?.netsuite_id || null,
-      description: item.description || cat?.description || cat?.display_name || null,
+      // A generic line keeps its own words: the catalog's "Miscellaneous"
+      // tells purchasing nothing.
+      description: generic ? (item.description?.trim() || null) : (item.description || cat?.description || cat?.display_name || null),
       quantity: item.quantity,
       vendor_name: (cat?.vendor && resolvedVendors.get(vendorKey(cat.vendor))?.name) || cat?.vendor || lastVendor.get(key)?.name || null,
       vendor_netsuite_id: (cat?.vendor ? resolvedVendors.get(vendorKey(cat.vendor))?.id : lastVendor.get(key)?.id) || null,

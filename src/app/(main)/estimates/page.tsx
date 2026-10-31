@@ -84,6 +84,7 @@ import { remapWorksheetIds } from '@/lib/estimate-copy-worksheets';
 import TopSaveBar from '@/components/TopSaveBar';
 import { estimateCopiedFrom, oldRecordCopiedFrom } from '@/lib/estimate-copied-from';
 import { sanitizeCopiedProofs } from '@/lib/estimate-copied-proofs';
+import { genericDescKey, sameGenericLine } from '@/lib/generic-lines';
 import {
   EMPTY_FILTERS, TEMPLATE_COLUMNS, estimateVehicleFields, searchTemplates, templateLabel,
   matchBedFeet, matchRoof, matchWheelbase, pickerFiltersFromPlatform,
@@ -108,6 +109,12 @@ type StockState = 'reserved' | 'available' | 'waiting' | 'short' | 'unknown';
 
 interface StockPartRow {
   item_number: string;
+  /** Unique per row: the part number, or one key per line for a generic part. */
+  line_key: string;
+  /** A generic part's line (Misc): never reserved, tracked by its requests. */
+  generic?: boolean;
+  /** Generic lines only: how many have arrived. */
+  received?: number;
   description: string | null;
   needed: number;
   allocated: number;
@@ -2124,17 +2131,46 @@ export default function EstimatesPage() {
 
   // ── Stock check ──
   // The signature is what the answer was computed FOR: item numbers,
-  // quantities and the vehicle count. Anything else about a line (price,
-  // description, order) can't change whether the parts are on the shelf, so
-  // it must not mark a perfectly good answer stale.
+  // quantities and the vehicle count, plus descriptions: a generic part
+  // (Misc) is one row per description. Anything else about a line (price,
+  // order) can't change whether the parts are on the shelf, so it must not
+  // mark a perfectly good answer stale.
   const stockSignature = `${units}|${lines
-    .map(l => `${String(l.item_number || '').trim().toUpperCase()}:${l.quantity}`)
+    .map(l => `${String(l.item_number || '').trim().toUpperCase()}:${l.quantity}:${genericDescKey(l.description)}`)
     .filter(x => !x.startsWith(':'))
     .sort()
     .join(',')}`;
   const stockStale = stock != null && stockKey !== stockSignature;
-  const stockLines = () => lines.map(l => ({ item_number: l.item_number, quantity: l.quantity }));
-  const stockByItem = new Map((stock?.parts || []).map(r => [r.item_number, r]));
+  const stockLines = () => lines.map(l => ({ item_number: l.item_number, quantity: l.quantity, description: l.description || null }));
+  const stockByItem = new Map((stock?.parts || []).filter(r => !r.generic).map(r => [r.item_number, r]));
+  // A generic part's line finds its own row by description.
+  const stockRowFor = (itemKey: string, description: string | null | undefined) => {
+    const own = (stock?.parts || []).filter(r => r.generic && r.item_number === itemKey);
+    if (own.length === 0) return stockByItem.get(itemKey);
+    return own.find(r => sameGenericLine(r.description, description));
+  };
+  // One generic line straight to Purchasing, with the line's own words.
+  const [genericRequesting, setGenericRequesting] = useState<string | null>(null);
+  const requestGenericLine = async (row: StockPartRow) => {
+    if (!editingId || genericRequesting) return;
+    setGenericRequesting(row.line_key);
+    try {
+      const res = await fetch('/api/purchase-requests', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          estimateId: editingId,
+          items: [{ itemNumber: row.item_number, quantity: row.to_request, description: row.description, netsuiteItemId: row.netsuite_item_id || null }],
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+      await checkStock();
+    } catch (e: any) {
+      setStockErr(`Could not send the request: ${e?.message || 'unknown error'}`);
+    } finally {
+      setGenericRequesting(null);
+    }
+  };
 
   const applyStock = (data: StockReadiness, signature: string) => {
     setStock(data);
@@ -6037,9 +6073,41 @@ export default function EstimatesPage() {
                 {(() => {
                   if (!stock || stockStale) return null;
                   const key = String(line.item_number || '').trim().toUpperCase();
-                  const row = key ? stockByItem.get(key) : undefined;
+                  const row = key ? stockRowFor(key, line.description) : undefined;
                   if (!row) return null;
                   const tone = STOCK_TONE[row.state];
+                  if (row.generic) {
+                    const genericText =
+                      row.state === 'reserved' ? `Generic part — received ${row.received ?? row.needed} of ${row.needed}`
+                        : row.state === 'waiting' ? `Generic part — ${row.on_order} ordered${row.received ? `, ${row.received} received` : ''}`
+                          : 'Generic part — order as needed';
+                    return (
+                      <div style={{
+                        display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
+                        padding: '3px 8px', marginBottom: '4px', borderRadius: '6px',
+                        background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.25)',
+                      }}>
+                        <span style={{ fontSize: '10px', fontWeight: 700, color: row.state === 'reserved' ? '#22c55e' : '#60a5fa' }}>
+                          {genericText}{row.requested > 0 ? ` · ${row.requested} requested` : ''}
+                        </span>
+                        {editingId && canRequestParts && row.to_request > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => requestGenericLine(row)}
+                            disabled={genericRequesting != null}
+                            title="Ask purchasing to order this line, with its description"
+                            style={{
+                              padding: '2px 7px', borderRadius: '5px', fontSize: '9px', fontWeight: 800,
+                              border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(96,165,250,0.1)',
+                              color: '#60a5fa', cursor: genericRequesting ? 'wait' : 'pointer',
+                            }}
+                          >
+                            {genericRequesting === row.line_key ? 'Requesting…' : `Request ${row.to_request}`}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  }
                   const eta = stockEta(row.pos.map(po => po.eta_date).filter(Boolean).sort().pop() || null);
                   const text =
                     row.state === 'unknown' ? 'Not in the parts catalog — stock unknown'

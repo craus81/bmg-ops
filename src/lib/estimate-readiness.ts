@@ -5,6 +5,8 @@ import { isStockableItemType } from '@/lib/parts-demand';
 import { normalizeVehicleCount } from '@/lib/estimate-totals';
 import { allocationMath, type PartState, type PoRef } from '@/lib/parts-readiness';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { genericLineStatus, groupGenericLines, type GenericLineInput } from '@/lib/generic-lines';
+import { loadGenericItems, loadGenericRequests } from '@/lib/generic-lines-server';
 
 /**
  * "Do we actually have the parts for this quote?" — the readiness math an
@@ -34,6 +36,13 @@ export type EstimatePartState = PartState | 'unknown';
 
 export interface EstimatePartRow {
   item_number: string;
+  /** Unique per row: the part number, or for a generic part (Misc) one
+   *  key per line description — see generic-lines.ts. */
+  line_key: string;
+  /** A generic part's line: never reserved, tracked by its own requests. */
+  generic?: boolean;
+  /** Generic lines only: how many have arrived (Receiving or "Got it"). */
+  received?: number;
   description: string | null;
   /** Line quantity × vehicle count. */
   needed: number;
@@ -82,6 +91,8 @@ export interface EstimateReadiness {
 
 export interface EstimateReadinessLine {
   item_number?: string | null;
+  /** The line's own description — what a generic part's row is named by. */
+  description?: string | null;
   quantity?: number | string | null;
 }
 
@@ -133,6 +144,9 @@ export async function computeEstimateReadiness(
   // so looking up only "GRAPHICS INSTALL LABOR" never found "Graphics Install
   // Labor" and every mixed-case item read "not in the parts catalog".
   const lookupNames = new Set<string>();
+  // Each line's own description and quantity, kept for generic parts,
+  // which are tracked per line rather than per part number.
+  const linesByKey = new Map<string, GenericLineInput[]>();
   let skippedNonStock = 0;
   for (const line of input.lines) {
     const raw = String(line.item_number || '').trim();
@@ -154,6 +168,9 @@ export async function computeEstimateReadiness(
     };
     row.needed += qty;
     parts.set(key, row);
+    const own = linesByKey.get(key) || [];
+    own.push({ description: line.description, quantity: qty });
+    linesByKey.set(key, own);
   }
 
   const empty: EstimateReadiness = {
@@ -192,6 +209,52 @@ export async function computeEstimateReadiness(
       // back to on hand, the same preference inventory-sync writes with.
       const avail = c.quantity_available != null ? Number(c.quantity_available) : Number(c.quantity_on_hand);
       row.availPool = Math.max(0, Number.isFinite(avail) ? avail : 0);
+    }
+  }
+
+  // ── Generic parts (Misc): one row per line, never reserved ──
+  // Taken out of the per-part math here, so no stock, hold or PO figure is
+  // ever summed across their lines; their state comes from their requests.
+  let projectId: string | null = null;
+  if (input.estimateId) {
+    const { data: proj } = await service
+      .from('upfit_projects').select('id').eq('estimate_id', input.estimateId).maybeSingle();
+    projectId = proj?.id || null;
+  }
+  const genericRows: EstimatePartRow[] = [];
+  const catalogKeys = [...parts.keys()].filter(k => catalogued.has(k));
+  let genericItems = new Set<string>();
+  try {
+    genericItems = await loadGenericItems(service, [...lookupNames].filter(n => catalogKeys.includes(normalizeItemNumber(n))));
+  } catch (e) {
+    // Readiness still answers for every real part; generic lines just
+    // fall back to being counted like any other part.
+    console.error('estimate-readiness: generic parts lookup failed', e);
+  }
+  const genericKeys = catalogKeys.filter(k => genericItems.has(k));
+  if (genericKeys.length > 0) {
+    let scoped: Awaited<ReturnType<typeof loadGenericRequests>> = { requests: [], poLines: [] };
+    try {
+      scoped = await loadGenericRequests(service, { estimateId: input.estimateId, projectId }, genericKeys);
+    } catch (e) {
+      console.error('estimate-readiness: generic requests lookup failed', e);
+    }
+    for (const key of genericKeys) {
+      const w = parts.get(key)!;
+      parts.delete(key);
+      const mine = scoped.requests.filter(r => r.item_number === key);
+      for (const g of groupGenericLines(key, linesByKey.get(key) || [])) {
+        const st = genericLineStatus(g, mine, scoped.poLines);
+        genericRows.push({
+          item_number: key, line_key: g.key, generic: true, received: st.received,
+          description: g.description, needed: g.needed,
+          allocated: 0, free: 0, usable: 0, on_hand: 0,
+          on_order: st.ordered, short: st.short, state: st.state,
+          allocatable: 0, pos: [], netsuite_item_id: w.netsuite_item_id,
+          uncatalogued: false, requested: st.requested,
+          to_request: st.state === 'short' ? Math.max(0, st.short - st.requested) : 0,
+        });
+      }
     }
   }
 
@@ -282,10 +345,8 @@ export async function computeEstimateReadiness(
   const requestedByItem = new Map<string, number>();
   if (input.estimateId) {
     try {
-      const { data: proj } = await service
-        .from('upfit_projects').select('id').eq('estimate_id', input.estimateId).maybeSingle();
-      const sourceFilter = proj?.id
-        ? `source_estimate_id.eq.${input.estimateId},source_project_id.eq.${proj.id}`
+      const sourceFilter = projectId
+        ? `source_estimate_id.eq.${input.estimateId},source_project_id.eq.${projectId}`
         : `source_estimate_id.eq.${input.estimateId}`;
       const { data: reqs } = await service
         .from('purchase_requests')
@@ -311,6 +372,7 @@ export async function computeEstimateReadiness(
     const state: EstimatePartState = uncatalogued ? 'unknown' : m.state;
     return {
       item_number: w.item_number,
+      line_key: w.item_number,
       description: w.description,
       needed: w.needed,
       allocated: w.allocatedHere,
@@ -335,6 +397,7 @@ export async function computeEstimateReadiness(
   const stateRank: Record<EstimatePartState, number> = {
     short: 0, waiting: 1, unknown: 2, available: 3, reserved: 4,
   };
+  rows.push(...genericRows);
   rows.sort((a, b) => (stateRank[a.state] - stateRank[b.state]) || a.item_number.localeCompare(b.item_number));
 
   return {

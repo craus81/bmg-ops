@@ -20,6 +20,7 @@ import { useMemo, useState } from 'react';
 import { theme } from '@/lib/theme';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { cleanPoSuffix, suggestedPoSuffix } from '@/lib/po-number';
+import { genericDescKey } from '@/lib/generic-lines';
 
 const LOCATIONS = ["O'Fallon", 'Wentzville', 'Kansas City', 'Social Circle'] as const;
 type LocationName = typeof LOCATIONS[number];
@@ -97,6 +98,8 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
   ));
   const [qtyEdits, setQtyEdits] = useState<Record<string, string>>({});
   // Keyed by part: two requests for one part share one PO line, so one price.
+  // A generic part (Misc) is a line per request, told apart by description.
+  const priceKey = (r: ReviewRequest) => `${r.item_number}::${genericDescKey(r.description)}`;
   const [priceEdits, setPriceEdits] = useState<Record<string, string>>({});
   const [location, setLocation] = useState<LocationName>("O'Fallon");
   const [memo, setMemo] = useState('');
@@ -111,7 +114,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
     return Number.isFinite(n) && n > 0 ? n : 0;
   };
   const priceText = (r: ReviewRequest): string =>
-    priceEdits[r.item_number] ?? (r.catalog_cost && r.catalog_cost > 0 ? String(r.catalog_cost) : '');
+    priceEdits[priceKey(r)] ?? (r.catalog_cost && r.catalog_cost > 0 ? String(r.catalog_cost) : '');
   const priceFor = (r: ReviewRequest): number | null => {
     const n = parseFloat(priceText(r));
     return Number.isFinite(n) && n > 0 ? n : null;
@@ -291,7 +294,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
                   aria-label={`Unit price of ${r.item_number}`}
                   placeholder="NetSuite"
                   value={priceText(r)}
-                  onChange={e => setPriceEdits(prev => ({ ...prev, [r.item_number]: e.target.value }))}
+                  onChange={e => setPriceEdits(prev => ({ ...prev, [priceKey(r)]: e.target.value }))}
                   style={{ ...inputStyle, width: '92px', flexShrink: 0 }} />
               </div>
             );
