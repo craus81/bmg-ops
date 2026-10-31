@@ -89,6 +89,20 @@ describe('working out FleetSuite\'s own invoice', () => {
     expect(own).toMatchObject({ subtotalCents: 19000, taxCents: 600, totalCents: 19600 });
   });
 
+  it('leaves a 06 install untaxed whatever NetSuite calls its type (INV2686, 06S646)', () => {
+    const items = new Map(facts().items);
+    items.set('61', { number: '06S646', type: 'NonInvtPart', taxableOverride: null });
+    const own = workOutOwnInvoice(input({
+      lines: [
+        { itemId: '61', quantity: 1, rate: 925 },
+        { itemId: '55', quantity: 1, rate: 300 },
+        { itemId: '98', itemNumber: '06T111', quantity: 1, rate: 10 },
+      ],
+    }), facts({ items }));
+    expect(amounts(own)).toEqual([['06S646', 92500, false, 0], ['SHELF-1', 30000, true, 3000], ['06T111', 1000, false, 0]]);
+    expect(own).toMatchObject({ subtotalCents: 123500, taxCents: 3000 });
+  });
+
   it('taxes a discount as the line above it, the one it takes money off', () => {
     const own = workOutOwnInvoice(input({
       lines: [

@@ -218,7 +218,7 @@ export function workOutOwnInvoice(input: OwnInvoiceInput, facts: OwnInvoiceFacts
     const above = lines[lines.length - 1];
     const taxable = priced && (item?.type && TAKES_OFF.has(item.type) && above
       ? above.taxable
-      : isPartTaxable({ item_type: item?.type ?? null, taxable_override: item?.taxableOverride ?? null }));
+      : isPartTaxable({ item_type: item?.type ?? null, item_number: billed.itemNumber ?? item?.number ?? null, taxable_override: item?.taxableOverride ?? null }));
     lines.push({
       lineNo: lines.length + 1,
       itemId: billed.itemId,
@@ -529,7 +529,7 @@ export function fixedOwnInvoicePayload(
     const above = lines[lines.length - 1];
     const taxable = item?.type && TAKES_OFF.has(item.type) && above
       ? above.taxable
-      : isPartTaxable({ item_type: item?.type ?? null, taxable_override: item?.taxableOverride ?? null });
+      : isPartTaxable({ item_type: item?.type ?? null, item_number: l.itemNumber ?? item?.number ?? null, taxable_override: item?.taxableOverride ?? null });
     lines.push({
       lineNo: lines.length + 1,
       itemId: l.itemId,

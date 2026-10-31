@@ -1369,7 +1369,7 @@ export default function PartsPage() {
                             title="Which quote lines carry sales tax. Default: Service items aren't taxed, everything else is. Sent to NetSuite with each line."
                             style={{ ...inputStyle, padding: '4px 6px', fontSize: '12px' }}
                           >
-                            <option value="default">Default ({isPartTaxable({ item_type: part.item_type }) ? 'taxed' : 'not taxed, service'})</option>
+                            <option value="default">Default ({isPartTaxable({ item_type: part.item_type, item_number: part.item_number }) ? 'taxed' : 'not taxed, service'})</option>
                             <option value="taxed">Always taxed</option>
                             <option value="untaxed">Never taxed</option>
                           </select>

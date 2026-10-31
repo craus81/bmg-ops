@@ -97,7 +97,7 @@ export function workOutNewInvoice(
     const above = lines[lines.length - 1];
     const taxable = isDiscount
       ? (above ? above.taxable : true)
-      : isPartTaxable({ item_type: d.itemType, taxable_override: d.taxableOverride });
+      : isPartTaxable({ item_type: d.itemType, item_number: d.itemNumber, taxable_override: d.taxableOverride });
     lines.push({ ...d, isDiscount, cents: lineCents, taxable });
   });
 

@@ -171,7 +171,7 @@ export function parseInvoiceRecord(rec: any, opts: { taxCodeRate?: number | null
     const rate = kind === 'amount' ? null : listedRate;
     // What NetSuite taxed on this invoice; where it doesn't say, FleetSuite's rule, and nothing when it charged none.
     const said = flag(it.isTaxable ?? it.istaxable);
-    const taxable = taxCents === 0 ? false : said ?? isPartTaxable({ item_type: type });
+    const taxable = taxCents === 0 ? false : said ?? isPartTaxable({ item_type: type, item_number: itemNumberOf(it) });
     lines.push({
       line: Number(it.line),
       itemId: refId(it.item),
