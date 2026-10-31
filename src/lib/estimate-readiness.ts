@@ -122,6 +122,9 @@ export async function computeEstimateReadiness(
     estimateId: string | null;
     lines: EstimateReadinessLine[];
     vehicleCount: unknown;
+    /** false = use the mirrored stock only. Lists checking many estimates
+     *  at once (the Parts in stock tag) skip the NetSuite call. */
+    liveStock?: boolean;
   },
 ): Promise<EstimateReadiness> {
   const units = normalizeVehicleCount(input.vehicleCount);
@@ -266,7 +269,7 @@ export async function computeEstimateReadiness(
   // emptying it.
   let stockSource: 'live' | 'mirror' = 'mirror';
   const itemIds = [...parts.values()].map(p => p.netsuite_item_id).filter(id => id && /^\d+$/.test(id)) as string[];
-  if (itemIds.length > 0) {
+  if (itemIds.length > 0 && input.liveStock !== false) {
     try {
       let invRows: any[];
       try {
