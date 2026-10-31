@@ -4068,6 +4068,133 @@ export async function createJournalEntry(p: JournalEntryPayload): Promise<{ succ
 }
 
 /**
+ * The inventory transfer NetSuite has under FleetSuite's own name for it (its
+ * External ID), or null when it has none, so a transfer sent again never
+ * moves the stock twice. Throws when NetSuite can't be asked, so the caller
+ * fails closed (as findJournalEntry).
+ */
+export async function findInventoryTransfer(externalId: string): Promise<{ transferId: string; number: string } | null> {
+  const ref = externalId.trim();
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(ref)) throw new Error(`"${ref}" isn't an external id FleetSuite makes`);
+  const result = await suiteqlQuery(`
+    SELECT id, tranid
+    FROM transaction
+    WHERE type = 'InvTrnfr' AND externalid = '${ref}'
+    ORDER BY id
+    FETCH FIRST 1 ROWS ONLY
+  `);
+  const row = result?.items?.[0];
+  return row ? { transferId: row.id?.toString() ?? '', number: row.tranid ?? '' } : null;
+}
+
+/**
+ * NetSuite's count on hand now of each item at one location
+ * (inventoryitemlocations), with 0 for an item it holds none of there.
+ * Throws when NetSuite can't be asked.
+ */
+export async function getLocationOnHand(locationId: string, itemIds: string[]): Promise<Map<string, number>> {
+  if (!/^\d+$/.test(locationId)) throw new Error(`"${locationId}" isn't a NetSuite location id`);
+  const ids = [...new Set(itemIds)];
+  if (ids.some((id) => !/^\d+$/.test(id))) throw new Error("An item id isn't a NetSuite id");
+  const onHand = new Map(ids.map((id) => [id, 0]));
+  if (ids.length === 0) return onHand;
+  const result = await suiteqlQuery(`
+    SELECT item, quantityonhand
+    FROM inventoryitemlocations
+    WHERE location = ${locationId} AND item IN (${ids.join(', ')})
+  `);
+  for (const row of result?.items ?? []) {
+    const id = row.item?.toString();
+    if (id && onHand.has(id)) onHand.set(id, Number(row.quantityonhand) || 0);
+  }
+  return onHand;
+}
+
+/** What createInventoryTransfer sends: src/lib/inventory-transfers.ts's netsuiteTransfer. */
+export interface InventoryTransferPayload {
+  subsidiaryId: string;
+  /** 'YYYY-MM-DD'. */
+  tranDate: string;
+  memo: string;
+  /** FleetSuite's own name for it: NetSuite never takes two records of a kind under one. */
+  externalId: string;
+  fromLocationId: string;
+  toLocationId: string;
+  /** How many of each item move, above 0. */
+  lines: { itemId: string; quantity: number }[];
+}
+
+/**
+ * Move stock between two of a subsidiary's locations in NetSuite: POST
+ * /services/rest/record/v1/inventoryTransfer, NetSuite's Transfer Inventory,
+ * from its location to its transferLocation, each item's quantity on the
+ * inventory sublist as adjustQtyBy. `unsure` is set when NetSuite may have
+ * made it anyway (no answer, a server error, or no id in its answer): look
+ * for it by its External ID before trying again.
+ */
+export async function createInventoryTransfer(p: InventoryTransferPayload): Promise<{ success: boolean; transferId?: string; error?: string; unsure?: boolean }> {
+  if (p.lines.length < 1) return { success: false, error: 'A transfer needs an item to move' };
+  if (p.fromLocationId === p.toLocationId) return { success: false, error: 'A transfer moves stock from one location to another' };
+  if (p.lines.some((l) => !(l.quantity > 0))) return { success: false, error: 'Each item moved needs a quantity above 0' };
+
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/inventoryTransfer`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    externalId: p.externalId,
+    subsidiary: { id: p.subsidiaryId },
+    tranDate: p.tranDate,
+    memo: p.memo,
+    location: { id: p.fromLocationId },
+    transferLocation: { id: p.toLocationId },
+    inventory: {
+      items: p.lines.map((l) => ({ item: { id: l.itemId }, adjustQtyBy: l.quantity })),
+    },
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create inventory transfer error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      // A 4xx is NetSuite refusing it; after a server error it may have made it anyway.
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}`, ...(response.status >= 500 ? { unsure: true } : {}) };
+    }
+
+    let transferId = response.headers.get('Location')?.match(/\/(\d+)$/)?.[1] || '';
+    if (!transferId) {
+      try {
+        const result = await response.json();
+        transferId = result.id?.toString() || '';
+      } catch {
+        // 204 No Content
+      }
+    }
+    if (!transferId) return { success: false, error: "NetSuite said it made the transfer but didn't say its id.", unsure: true };
+    return { success: true, transferId };
+  } catch (e: any) {
+    return { success: false, error: `NetSuite didn't answer (${e.message}).`, unsure: true };
+  }
+}
+
+/**
  * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
  *
  * The SO carries the VIN only when it was created from an estimate that

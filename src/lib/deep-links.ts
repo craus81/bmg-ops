@@ -291,6 +291,11 @@ export const deepLinks = {
    *  id, that entry open. Anyone with Payments once journal entries are
    *  switched on in Books → Switches; until then super admins only. */
   journalEntries: (id?: string | null) => `/admin/journal-entries${id ? `?${new URLSearchParams({ id })}` : ''}`,
+  /** Inventory transfers made in FleetSuite and sent on to NetSuite
+   *  (src/lib/inventory-transfers.ts), from More → Parts & Inventory; with
+   *  an id, that transfer open. Admins once inventory transfers are switched
+   *  on in Books → Switches; until then super admins only. */
+  inventoryTransfers: (id?: string | null) => `/admin/inventory-transfers${id ? `?${new URLSearchParams({ id })}` : ''}`,
   /** Invoices hub — opens the create-invoice dialog for a shipped graphics job.
    *  NOTE: this exact string doubles as the match key that marks the prompt
    *  read once the invoice exists (graphics-invoice-notify.ts) — change both
