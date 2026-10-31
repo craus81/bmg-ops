@@ -128,6 +128,16 @@ export function retainedEarningsAccount<T extends TbAccount>(accounts: readonly 
   return found.length === 1 ? found[0] : null;
 }
 
+const order = (r: Pick<TbRow, 'statement' | 'retained'>) => (r.statement === 'balance_sheet' ? (r.retained ? 1 : 0) : 2);
+
+/** The trial balance's order: the balance sheet, earlier years' net income, then the income statement; numbered accounts by number, then any without a number by name. */
+export function compareRows(a: Pick<TbRow, 'statement' | 'retained' | 'number' | 'name'>, b: Pick<TbRow, 'statement' | 'retained' | 'number' | 'name'>): number {
+  return order(a) - order(b)
+    || Number(a.number === null) - Number(b.number === null)
+    || collator.compare(a.number ?? '', b.number ?? '')
+    || collator.compare(a.name, b.name);
+}
+
 /** The trial balance at the end of `month` ('YYYY-MM-01'), or the starting balances for START. */
 export function trialBalance(data: TbData, month: string): TrialBalance {
   const chart = new Map<string, TbAccount>();
@@ -203,13 +213,8 @@ export function trialBalance(data: TbData, month: string): TrialBalance {
       netsuite: v.netsuite,
     });
   }
-  const order = (r: TbRow) => (r.statement === 'balance_sheet' ? (r.retained ? 1 : 0) : 2);
   if (retainedRow) rows.push(retainedRow);
-  // Numbered accounts by number, then any without a number by name.
-  rows.sort((a, b) => order(a) - order(b)
-    || Number(a.number === null) - Number(b.number === null)
-    || collator.compare(a.number ?? '', b.number ?? '')
-    || collator.compare(a.name, b.name));
+  rows.sort(compareRows);
 
   const total = (key: 'copied' | 'netsuite'): TbTotals => ({
     debit: rows.reduce((s, r) => s + Math.max(0, r[key]), 0),

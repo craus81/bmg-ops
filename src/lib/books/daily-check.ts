@@ -3,7 +3,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import type { BooksCompany } from './journal';
-import { BOOKS_GL_SYNC, COPY_FROM } from './netsuite-gl';
+import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate } from './netsuite-gl';
 import { BOOKS_INVOICE_POSTING, POSTING_COMPANIES, runLimited } from './invoice-posting';
 import { BOOKS_STOCK_SYNC } from './netsuite-stock';
 import { compareStock, quantityText, type CountsBy, type StockItemsData, type StockLine } from './stock-items';
@@ -648,8 +648,16 @@ export function mistakeAlertsFor(news: MonthNews[], items: Map<string, MistakeAl
 /** Months whose documents are looked up at once. */
 const LOOKUPS = 4;
 
-/** One company's months that differ now, by the same comparison as Differences vs NetSuite, with what to name for each. */
-async function lookAt(service: SupabaseClient, company: BooksCompany): Promise<{ now: DifferingMonths; facts: Map<string, MonthFacts> }> {
+/**
+ * One company's months that differ now, by the same comparison as Differences vs NetSuite, with what to name for each.
+ * Once its books are live (`liveFrom`, src/lib/books/going-live.ts), the months before stay as they were and the opening
+ * entry, which brings the books to NetSuite's numbers, stands in the last of them, so only the months since are looked at.
+ */
+async function lookAt(
+  service: SupabaseClient,
+  company: BooksCompany,
+  liveFrom: string | null,
+): Promise<{ now: DifferingMonths; facts: Map<string, MonthFacts> }> {
   const sides = await service.rpc('gl_books_differences', { p_company: company });
   if (sides.error) throw new Error(`couldn't compare the books (${sides.error.message})`);
   const raw = (sides.data ?? {}) as Partial<DiffData>;
@@ -660,7 +668,9 @@ async function lookAt(service: SupabaseClient, company: BooksCompany): Promise<{
     fleetsuite_kinds: raw.fleetsuite_kinds ?? [],
   };
   const posted = postedKinds(data, true);
-  const differing = monthStatuses(indexMonths(data), posted, lastMonth(data, COPY_FROM)).filter((m) => m.status === 'differs');
+  const since = liveFrom ? monthOfDate(liveFrom)! : COPY_FROM;
+  const differing = monthStatuses(indexMonths(data), posted, lastMonth(data, COPY_FROM))
+    .filter((m) => m.status === 'differs' && m.month >= since);
   const kinds = Object.fromEntries(Object.entries(NETSUITE_TYPE).filter(([, type]) => posted.has(type)));
 
   const now: DifferingMonths = {};
@@ -907,9 +917,13 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
   const alerts: CheckAlert[] = [];
   const errors: string[] = [];
   let told = 0;
+  // The day each company's books went live, for those that have.
+  const live = await service.from('gl_companies').select('code, books_live_from');
+  const liveFrom = new Map(((live.data ?? []) as Array<{ code: string; books_live_from: string | null }>).map((c) => [c.code, c.books_live_from]));
   for (const company of POSTING_COMPANIES) {
     try {
-      const { now, facts } = await lookAt(service, company);
+      if (live.error) throw new Error(`couldn't read the companies (${live.error.message})`);
+      const { now, facts } = await lookAt(service, company, liveFrom.get(company) ?? null);
       const { check, news } = nextCheck(held.companies[company], now, opts.look);
       companies[company] = check;
       alerts.push(...alertsFor(company, news, facts, hint));

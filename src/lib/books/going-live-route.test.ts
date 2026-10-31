@@ -1,18 +1,19 @@
 // Books → Going live (src/app/api/admin/books/going-live): what it reads for
-// a made-up company's books, the month it opens on, and the opening entry
-// and rehearsal it hands back (src/lib/books/opening-balances.ts).
+// a made-up company's books, the month it opens on, the opening entry and
+// rehearsal it hands back (src/lib/books/opening-balances.ts), and the tap
+// that sets the books live (src/lib/books/going-live.ts).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
 let superAdmin = true;
 vi.mock('@/lib/api-auth', () => ({
-  requireSuperAdmin: vi.fn(async () => (superAdmin ? {} : { error: new Response('Forbidden', { status: 403 }) })),
+  requireSuperAdmin: vi.fn(async () => (superAdmin ? { user: { id: 'u-craig' } } : { error: new Response('Forbidden', { status: 403 }) })),
 }));
 vi.mock('@/lib/supabase-service', () => ({ createServiceClient: () => service }));
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
-import { GET } from '../../app/api/admin/books/going-live/route';
+import { GET, POST } from '../../app/api/admin/books/going-live/route';
 
 const money = (cents: number) => (Math.abs(cents) / 100).toFixed(2);
 const sides = (cents: number) => ({ debit: cents > 0 ? money(cents) : '0.00', credit: cents < 0 ? money(cents) : '0.00' });
@@ -42,16 +43,31 @@ let netsuiteMoves: Array<{ netsuite_account_id: string; month: string; debit: st
 let booksTotals: typeof BOOKS_TOTALS;
 let tables: Record<string, unknown[]>;
 let errors: Record<string, { message: string }>;
-let syncState: { last_result: unknown; updated_at: string } | null;
+let syncState: { last_result: unknown; last_synced_at?: string | null; updated_at: string } | null;
+let parties: unknown[];
+let openingEntries: unknown[];
 const rpcs: Array<[string, Record<string, unknown>]> = [];
+/** What the route wrote: each update with what it was limited to, and each audit row. */
+let updates: Array<{ table: string; values: unknown; eq: Array<[string, unknown]>; is: Array<[string, unknown]> }>;
+let audits: unknown[];
+/** How many rows an update finds: none when another tap got there first. */
+let updatedRows: number;
 
 /** Just enough of supabase-js for the route. */
 function query(table: string) {
   const result = () => ({ data: errors[table] ? null : tables[table] ?? [], error: errors[table] ?? null });
+  let update: (typeof updates)[number] | null = null;
   const q: any = {
-    select: () => q,
+    select: () => (update
+      ? { then: (done: (v: unknown) => unknown) => Promise.resolve(errors[`${table}:update`]
+        ? { data: null, error: errors[`${table}:update`] }
+        : { data: Array.from({ length: updatedRows }, () => ({ id: 'c2' })), error: null }).then(done) }
+      : q),
     order: () => q,
-    eq: () => q,
+    eq: (col: string, value: unknown) => { update?.eq.push([col, value]); return q; },
+    is: (col: string, value: unknown) => { update?.is.push([col, value]); return q; },
+    update: (values: unknown) => { update = { table, values, eq: [], is: [] }; updates.push(update); return q; },
+    insert: async (rows: unknown) => { audits.push(...(Array.isArray(rows) ? rows : [rows])); return { error: null }; },
     range: async (from: number, to: number) => {
       const r = result();
       return { ...r, data: r.data && r.data.slice(from, to + 1) };
@@ -68,6 +84,8 @@ const service = {
     if (errors[name]) return { data: null, error: errors[name] };
     if (name === 'gl_netsuite_totals') return { data: { opening: OPENING, netsuite: netsuiteMoves, copied: netsuiteMoves }, error: null };
     if (name === 'gl_books_totals') return { data: booksTotals, error: null };
+    if (name === 'gl_opening_parties') return { data: { parties }, error: null };
+    if (name === 'gl_opening_entries') return { data: { entries: openingEntries }, error: null };
     return { data: null, error: { message: `No ${name}` } };
   },
 };
@@ -76,6 +94,17 @@ const get = async (params = '') => {
   const res = await GET(new NextRequest(`https://go.bmgfleet.com/api/admin/books/going-live${params ? `?${params}` : ''}`));
   return { status: res.status, body: await res.json() };
 };
+const post = async (body: unknown) => {
+  const res = await POST(new NextRequest('https://go.bmgfleet.com/api/admin/books/going-live', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }));
+  return { status: res.status, body: await res.json() };
+};
+/** The reads every look at the page makes, for one company and the last day of the month it shows. */
+const reads = (company: string, through: string) => [
+  ['gl_netsuite_totals', { p_company: company }], ['gl_books_totals', { p_company: company }],
+  ['gl_opening_parties', { p_company: company, p_through: through }], ['gl_opening_entries', { p_company: company }],
+];
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -98,7 +127,12 @@ beforeEach(() => {
     ],
   };
   errors = {};
-  syncState = { last_result: {}, updated_at: '2026-10-31T07:00:00Z' };
+  syncState = { last_result: {}, last_synced_at: '2026-10-31T07:00:00Z', updated_at: '2026-10-31T07:00:00Z' };
+  parties = [];
+  openingEntries = [];
+  updates = [];
+  audits = [];
+  updatedRows = 1;
   rpcs.length = 0;
 });
 afterEach(() => { vi.useRealTimers(); });
@@ -115,13 +149,14 @@ describe('Going live', () => {
     const { status, body } = await get();
     expect(status).toBe(200);
     expect(body).toMatchObject({
-      company: 'BMG', liveFrom: null, plannedLiveFrom: '2027-01-01', month: '2025-12-01', through: '2026-10-01', today: '2026-10-31',
-      lastCopy: { at: '2026-10-31T07:00:00Z', error: null },
+      company: 'BMG', liveFrom: null, plannedLiveFrom: '2027-01-01', goLiveFrom: '2026-12-01', month: '2025-12-01', through: '2026-10-01',
+      today: '2026-10-31', openingEntries: [], waiting: null,
+      lastCopy: { at: '2026-10-31T07:00:00Z', syncedAt: '2026-10-31T07:00:00Z', error: null },
     });
     expect(body.companies).toEqual([{ code: '1084', name: '1084', liveFrom: null }, { code: 'BMG', name: 'BMG', liveFrom: null }]);
     expect(body.months).toHaveLength(22);
     expect([body.months[0], body.months[21]]).toEqual(['2025-01-01', '2026-10-01']);
-    expect(rpcs).toEqual([['gl_netsuite_totals', { p_company: 'BMG' }], ['gl_books_totals', { p_company: 'BMG' }]]);
+    expect(rpcs).toEqual(reads('BMG', '2025-12-31'));
 
     // On December 31, 2025 FleetSuite's books match NetSuite's: nothing to post.
     expect(body.entry).toEqual({
@@ -149,6 +184,11 @@ describe('Going live', () => {
 
     vi.setSystemTime(new Date('2026-12-31T23:00:00Z'));
     expect((await get()).body.month).toBe('2025-12-01');
+    // 9 PM on December 31 in O'Fallon, which is January 1 in UTC: the books keep Central time's days.
+    vi.setSystemTime(new Date('2027-01-01T03:00:00Z'));
+    expect((await get()).body).toMatchObject({ month: '2025-12-01', today: '2026-12-31' });
+    vi.setSystemTime(new Date('2027-01-01T06:00:00Z'));
+    expect((await get()).body).toMatchObject({ month: '2026-12-01', today: '2027-01-01' });
     // Before the copy has a December, the first month it has.
     vi.setSystemTime(new Date('2025-06-15T12:00:00Z'));
     netsuiteMoves = netsuiteMoves.filter((m) => m.month < '2025-07-01');
@@ -187,7 +227,7 @@ describe('Going live', () => {
   it('shows the company asked for, else BMG, else the first', async () => {
     const { body } = await get('company=1084&month=2026-03');
     expect(body).toMatchObject({ company: '1084', month: '2026-03-01' });
-    expect(rpcs).toEqual([['gl_netsuite_totals', { p_company: '1084' }], ['gl_books_totals', { p_company: '1084' }]]);
+    expect(rpcs).toEqual(reads('1084', '2026-03-31'));
     expect((await get('company=XYZ')).body.company).toBe('BMG');
     tables.gl_companies = [tables.gl_companies[0]];
     expect((await get()).body.company).toBe('1084');
@@ -203,16 +243,107 @@ describe('Going live', () => {
   });
 
   it("says how the last copy of NetSuite's ledger went", async () => {
-    syncState = { last_result: { error: 'NetSuite said no' }, updated_at: '2026-10-31T05:00:00Z' };
-    expect((await get()).body.lastCopy).toEqual({ at: '2026-10-31T05:00:00Z', error: 'NetSuite said no' });
+    syncState = { last_result: { error: 'NetSuite said no' }, last_synced_at: '2026-10-30T07:00:00Z', updated_at: '2026-10-31T05:00:00Z' };
+    expect((await get()).body.lastCopy).toEqual({ at: '2026-10-31T05:00:00Z', syncedAt: '2026-10-30T07:00:00Z', error: 'NetSuite said no' });
+    syncState = { last_result: null, updated_at: '2026-10-31T05:00:00Z' };
+    expect((await get()).body.lastCopy).toEqual({ at: '2026-10-31T05:00:00Z', syncedAt: null, error: null });
     syncState = null;
     expect((await get()).body.lastCopy).toBeNull();
   });
 
   it('says what failed', async () => {
-    for (const table of ['gl_companies', 'gl_accounts', 'sync_state', 'gl_netsuite_totals', 'gl_books_totals']) {
+    for (const table of ['gl_companies', 'gl_accounts', 'sync_state', 'gl_netsuite_totals', 'gl_books_totals', 'gl_opening_parties', 'gl_opening_entries']) {
       errors = { [table]: { message: `${table} is down` } };
       expect(await get()).toEqual({ status: 500, body: { error: `${table} is down` } });
     }
+  });
+
+  it('splits the receivable customer by customer', async () => {
+    vi.setSystemTime(new Date('2027-01-20T15:00:00Z'));
+    parties = [
+      { account: '2', kind: 'customer', party: 'cust-acme', name: 'Acme Fleet', netsuite: '2000.00', fleetsuite: '0.00' },
+      { account: '2', kind: 'customer', party: 'cust-bolt', name: 'Bolt Leasing', netsuite: '0.00', fleetsuite: '2000.00' },
+    ];
+    const { body } = await get();
+    expect(rpcs).toEqual(reads('BMG', '2026-12-31'));
+    expect(body.entry.lines.map((l: any) => [l.number, l.cents, l.parties?.map((p: any) => [p.name, p.cents])])).toEqual([
+      ['1000', -5000, undefined],
+      ['1200', 0, [['Acme Fleet', 200000], ['Bolt Leasing', -200000]]],
+      ['6000', 5000, undefined],
+    ]);
+    expect(body.entry).toMatchObject({ debit: 205000, credit: 205000, problems: [] });
+  });
+
+  it("once the books are live, lists the opening entries posted and says why the next one waits", async () => {
+    vi.setSystemTime(new Date('2027-01-20T15:00:00Z'));
+    (tables.gl_companies[1] as any).books_live_from = '2027-01-01';
+    syncState = { last_result: {}, last_synced_at: '2027-01-01T05:00:00Z', updated_at: '2027-01-20T14:00:00Z' };
+    openingEntries = [{ id: 'e1', entry_no: 812, entry_date: '2026-12-31', memo: 'Opening balances', posted_at: '2027-01-02T08:00:00Z', debit: '50.00', lines: 2, reversed_by: null }];
+    const { body } = await get();
+    expect(body).toMatchObject({ liveFrom: '2027-01-01', month: '2026-12-01' });
+    expect(body.openingEntries).toEqual([
+      { id: 'e1', entryNo: 812, date: '2026-12-31', memo: 'Opening balances', postedAt: '2027-01-02T08:00:00Z', debit: 5000, lines: 2, reversedBy: null },
+    ]);
+    // The rent still differs, and the last whole copy finished at 11 PM on December 31 in O'Fallon.
+    expect(body.waiting).toBe("No whole copy of NetSuite's ledger has been made since December 31, 2026 ended.");
+    syncState.last_synced_at = '2027-01-20T13:00:00Z';
+    expect((await get()).body.waiting).toBeNull();
+    // Another month's entry isn't the one the posting run posts.
+    syncState.last_synced_at = null;
+    expect((await get('month=2026-11')).body.waiting).toBeNull();
+  });
+});
+
+describe('Going live: the tap', () => {
+  beforeEach(() => { vi.setSystemTime(new Date('2026-12-28T16:00:00Z')); });
+
+  it('is for super admins only', async () => {
+    superAdmin = false;
+    const res = await POST(new NextRequest('https://go.bmgfleet.com/api/admin/books/going-live', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ company: 'BMG', confirm: 'BMG' }),
+    }));
+    expect(res.status).toBe(403);
+    expect(updates).toEqual([]);
+  });
+
+  it("sets the company's books live on January 1, 2027, once, and audits it", async () => {
+    expect(await post({ company: 'BMG', confirm: ' bmg ' })).toEqual({ status: 200, body: { company: 'BMG', liveFrom: '2027-01-01' } });
+    expect(updates).toEqual([{ table: 'gl_companies', values: { books_live_from: '2027-01-01' }, eq: [['id', 'c2']], is: [['books_live_from', null]] }]);
+    expect(audits).toEqual([{
+      actor_id: 'u-craig', table_name: 'gl_companies', record_id: 'c2', action: 'go_live', detail: { company: 'BMG', live_from: '2027-01-01' },
+    }]);
+  });
+
+  it('wants the code typed, from December 1, for a company not yet live', async () => {
+    expect(await post({ company: 'BMG', confirm: 'yes' })).toEqual({ status: 400, body: { error: 'Type BMG to go live.' } });
+    vi.setSystemTime(new Date('2026-12-01T05:30:00Z'));
+    expect(await post({ company: 'BMG', confirm: 'BMG' })).toEqual({ status: 400, body: { error: "BMG's books can go live from December 1, 2026." } });
+    vi.setSystemTime(new Date('2026-12-28T16:00:00Z'));
+    (tables.gl_companies[0] as any).books_live_from = '2027-01-01';
+    expect(await post({ company: '1084', confirm: '1084' })).toEqual({ status: 409, body: { error: "1084's books already went live on January 1, 2027." } });
+    expect(await post({ company: 'XYZ', confirm: 'XYZ' })).toEqual({ status: 400, body: { error: "There's no company called XYZ." } });
+    expect(updates).toEqual([]);
+    expect(audits).toEqual([]);
+  });
+
+  it("turns away a body it can't read", async () => {
+    expect((await post({ company: 'BMG' })).status).toBe(400);
+    expect((await post({ company: '', confirm: 'BMG' })).status).toBe(400);
+    expect((await post({ company: 'BMG', confirm: 7 })).status).toBe(400);
+    expect(updates).toEqual([]);
+  });
+
+  it('says so when another tap got there first, or the write fails', async () => {
+    updatedRows = 0;
+    expect(await post({ company: 'BMG', confirm: 'BMG' })).toEqual({ status: 409, body: { error: "BMG's books have already gone live." } });
+    expect(audits).toEqual([]);
+    updatedRows = 1;
+    errors = { 'gl_companies:update': { message: "gl: BMG went live on 2027-01-01, and that date can't change" } };
+    expect(await post({ company: 'BMG', confirm: 'BMG' })).toEqual({
+      status: 500, body: { error: "gl: BMG went live on 2027-01-01, and that date can't change" },
+    });
+    errors = { gl_companies: { message: 'companies are down' } };
+    expect(await post({ company: 'BMG', confirm: 'BMG' })).toEqual({ status: 500, body: { error: 'companies are down' } });
+    expect(audits).toEqual([]);
   });
 });

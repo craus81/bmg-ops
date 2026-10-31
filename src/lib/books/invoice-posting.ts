@@ -42,6 +42,8 @@ import type { BillCopiesThrough } from './own-bill-check';
 import { OWN_BILL_RULE, ownBillPick, readOwnBillCopies, readOwnBillSince, type OwnBillCopies, type OwnBillEntry, type OwnBillPick } from './own-bill-posting';
 import { BOOKS_STOCK_SYNC } from './netsuite-stock';
 import { BOOKS_BILLS_SYNC } from './netsuite-bills';
+import { postOpeningEntries } from './going-live';
+import { centralDate } from './mistake-checks';
 
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
@@ -267,6 +269,25 @@ export type Decision =
    * mid-refresh). The next run looks again.
    */
   | { kind: 'leave'; why: 'unworkable' | 'waiting' | 'total' };
+
+/**
+ * What a decision comes to once the company's books are live (src/lib/books/going-live.ts), given the date of the
+ * entry that stands for the document: the books take nothing dated before the day they went live but opening entries
+ * (migration 359), so an entry dated before it stays as it is, and the opening entry trues up what NetSuite has changed
+ * of it since. The document posts afresh when NetSuite books it into a month since, in place of replacing that entry.
+ */
+export function liveDecision(d: Decision, current: { entry_date: string } | null, liveFrom: string | null): Decision {
+  if (!liveFrom || !current || current.entry_date >= liveFrom) return d;
+  if (d.kind === 'reverse') return { kind: 'keep' };
+  if (d.kind === 'replace') return { kind: 'post' };
+  return d;
+}
+
+/** The dates of a document's entries that nothing reversed, newest first, as its `unreversed` lists them. */
+export const standingDates = (p: Pick<InvoicePosting, 'history'>) => (p.history ?? [])
+  .filter((h) => h.reversed_by == null)
+  .sort((a, b) => b.entry_no - a.entry_no)
+  .map((h) => h.entry_date);
 
 /** The receivable's customer and the lines of FleetSuite's own copy's entry, as signature compares them. */
 const ownSignature = (entry: NonNullable<OwnPick['entry']>) => signature(
@@ -1239,6 +1260,8 @@ export interface InvoicePostingResult {
   replaced?: number;
   reversed?: number;
   unchanged?: number;
+  /** Opening entries posted, once a company's books are live (src/lib/books/going-live.ts); only then is it counted. */
+  opened?: number;
   /** Documents the rule can't work out yet, or whose copy was mid-refresh, of every kind the run posts: whatever stands for them stayed. */
   left?: number;
   /** Writes the journal refused or that failed, a few of them with why. */
@@ -1379,9 +1402,13 @@ export async function postInvoices(
     ]);
     if (chart.error) throw readFailed('the chart of accounts', chart.error);
     if (lists.error) throw readFailed('the NetSuite lists', lists.error);
-    const companies = await service.from('gl_companies').select('id, code');
+    const companies = await service.from('gl_companies').select('id, code, books_live_from');
     if (companies.error) throw readFailed('the companies', companies.error);
-    const codeOf = new Map(((companies.data ?? []) as Array<{ id: string; code: string }>).map((c) => [c.id, c.code]));
+    const companyRows = (companies.data ?? []) as Array<{ id: string; code: string; books_live_from: string | null }>;
+    const codeOf = new Map(companyRows.map((c) => [c.id, c.code]));
+    // The day each company's books went live, for those that have: nothing dated before it posts but opening entries.
+    const liveOf = new Map(companyRows.flatMap((c): Array<[BooksCompany, string]> => (
+      c.books_live_from && (postingCompanies as readonly string[]).includes(c.code) ? [[c.code as BooksCompany, c.books_live_from]] : [])));
 
     const accountIds = new Map<string, string>();
     for (const a of chart.data) if (a.netsuite_account_id) accountIds.set(a.netsuite_account_id, a.id);
@@ -1471,17 +1498,21 @@ export async function postInvoices(
         ...(((stocked.data as any)?.documents ?? []) as StockPosting[])
           .map((p) => ({ posting: p, copy: p.document && { ...p.document, voided: false } })),
       ];
+      // Once the company's books are live, an entry dated before they went live stays: the opening entry trues it up.
+      const live = liveOf.get(company) ?? null;
       const tasks: Array<() => Promise<void>> = [];
       for (const { posting: p, copy } of held) {
         const number = copy?.number || `NetSuite ${p.source_id}`;
         const shown = named(company, number);
-        for (const extra of p.unreversed.slice(1)) {
+        const dates = live ? standingDates(p) : [];
+        p.unreversed.slice(1).forEach((extra, i) => {
+          if (live && !(dates[i + 1] >= live)) return;
           tasks.push(() => reverse(shown, extra, `${number} had another entry standing`));
-        }
+        });
         // An invoice's or credit memo's cost lines go when NetSuite books no cost on it, whether or not it has it still.
         const deleted = p.source_type === STOCK_SOURCE_TYPE.CustInvc ? 'no longer books a cost' : 'deleted';
         const gone = copy?.deleted ? deleted : copy?.voided ? 'voided' : null;
-        if (p.current && gone) {
+        if (p.current && gone && !(live && p.current.entry_date < live)) {
           const entryId = p.current.id;
           tasks.push(() => reverse(shown, entryId, `${number} ${gone} in NetSuite`));
         }
@@ -1489,7 +1520,18 @@ export async function postInvoices(
       await runLimited(tasks, WRITERS);
     }
 
-    // 2. Every month, from where the last run stopped.
+    // The opening entries of companies whose books are live, once the month before is over (src/lib/books/going-live.ts).
+    if (liveOf.size) {
+      const opening = await postOpeningEntries(service, {
+        today: centralDate(new Date(now())),
+        live: [...liveOf].map(([code, liveFrom]) => ({ code, liveFrom })),
+        codeOf,
+      });
+      result.opened = opening.posted;
+      notes.push(...opening.notes);
+    }
+
+    // 2. Every month, from where the last run stopped: for a company whose books are live, from the month they went live.
     const months = monthsBetween(COPY_FROM, monthOfDate(new Date(now()).toISOString().slice(0, 10))!);
     const skippedMonths: string[] = [];
     let skippedWhy = '';
@@ -1498,7 +1540,10 @@ export async function postInvoices(
     const unbalancedBank: string[] = [];
     const unbalancedStock: string[] = [];
     const missingAccounts = new Set<string>();
-    const queue = postingQueue(postingCompanies, months, state.resume);
+    const queue = postingQueue(postingCompanies, months, state.resume).filter((q) => {
+      const live = liveOf.get(q.company);
+      return !live || q.month >= monthOfDate(live)!;
+    });
 
     /**
      * Queues the writes a decision about one of a company's documents calls for, or counts it when it calls for none.
@@ -1508,12 +1553,13 @@ export async function postInvoices(
       tasks: Array<() => Promise<void>>,
       company: BooksCompany,
       number: string,
-      d: Decision,
-      current: { id: string } | null,
+      decided: Decision,
+      current: { id: string; entry_date: string } | null,
       build: () => { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] },
       memo?: string,
     ) => {
       const shown = named(company, number);
+      const d = liveDecision(decided, current, liveOf.get(company) ?? null);
       if (d.kind === 'keep') {
         if (current) result.unchanged! += 1;
         return;
@@ -1891,7 +1937,7 @@ export async function postInvoices(
   if (!result.failed!.length) delete result.failed;
   const heartbeat = await recordHeartbeat(service, BOOKS_INVOICE_POSTING, record(), {
     startedAt,
-    records: (result.posted ?? 0) + (result.replaced ?? 0) + (result.reversed ?? 0),
+    records: (result.posted ?? 0) + (result.replaced ?? 0) + (result.reversed ?? 0) + (result.opened ?? 0),
     touchLastSyncedAt: !result.partial && !result.error,
   });
   return { ...result, ...(notes.length ? { notes } : {}), heartbeat };
