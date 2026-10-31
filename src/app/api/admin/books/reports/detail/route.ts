@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireSuperAdmin } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
-import { COPY_FROM, monthsBetween, toCents } from '@/lib/books/netsuite-gl';
-import { loadReports, monthParam } from '@/lib/books/report-data';
-import { detailDocuments, type AccountDocumentsData } from '@/lib/books/report-detail';
-import { lineSpan, REPORT_KINDS, type ReportKind } from '@/lib/books/reports';
+import { COPY_FROM, monthsBetween } from '@/lib/books/netsuite-gl';
+import { loadAccountDetail, loadReports } from '@/lib/books/report-data';
+import { detailDocuments } from '@/lib/books/report-detail';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,8 +18,9 @@ const SHOWN = 1000;
  * NetSuite's general ledger (migration 400), only those that differ with
  * only=differs, and for a balance sheet account its balance at both ends.
  * Amounts are whole cents as `report` shows the line (lineSpan in
- * src/lib/books/reports.ts). `account` is the line's key: the account's
- * NetSuite id, or fs:<id> for one NetSuite doesn't have.
+ * src/lib/books/reports.ts, read by loadAccountDetail). `account` is the
+ * line's key: the account's NetSuite id, or fs:<id> for one NetSuite doesn't
+ * have.
  *
  * Super admin only, as the rest of the books (docs/books.md "Report detail").
  */
@@ -32,39 +32,19 @@ export async function GET(req: NextRequest) {
   const service = createServiceClient();
   const loaded = await loadReports(service, params.get('company'));
   if ('error' in loaded) return NextResponse.json({ error: loaded.error }, { status: 500 });
-  const { data, company, through } = loaded;
-
-  // A line's account is in the chart, or is a NetSuite account either side has amounts on.
-  const key = params.get('account') ?? '';
-  const account = data.accounts.find((a) => (a.netsuite_account_id ?? `fs:${a.id}`) === key) ?? null;
-  const known = !!account
-    || [...data.opening, ...data.netsuite].some((r) => r.netsuite_account_id === key)
-    || data.fleetsuite.some((r) => r.account === key);
-  if (!known) return NextResponse.json({ error: 'That account has nothing in these books' }, { status: 404 });
-
-  const askedKind = params.get('report');
-  const kind: ReportKind = REPORT_KINDS.find((k) => k === askedKind) ?? 'profit_and_loss';
-  const to = monthParam(params.get('to'), through) ?? loaded.lastMonth;
-  const askedFrom = monthParam(params.get('from'), through);
-  const from = askedFrom && askedFrom <= to ? askedFrom : to;
+  const { company, through } = loaded;
   const differs = params.get('only') === 'differs';
-
-  const span = lineSpan(data, kind, key, { from, to });
-  const docs = await service.rpc('gl_books_account_documents', {
-    p_company: company, p_account: key, p_from: from, p_to: to, p_differs: differs, p_limit: SHOWN,
-  });
-  if (docs.error) return NextResponse.json({ error: docs.error.message }, { status: 500 });
-  const found = docs.data as AccountDocumentsData;
-  // What the copy of NetSuite's ledger holds of the account, against what NetSuite's own totals say moved.
-  const copied = span.sign * toCents(found.netsuite) || 0;
+  const detail = await loadAccountDetail(service, loaded, params, { differs, limit: SHOWN });
+  if ('error' in detail) return NextResponse.json({ error: detail.error }, { status: detail.status });
+  const { span, found, copied } = detail;
 
   return NextResponse.json({
     companies: loaded.companies.map((c) => ({ code: c.code, name: c.name })),
     company,
-    report: kind,
-    account: { key, number: account?.number ?? null, name: account?.name ?? `NetSuite account ${key}`, inChart: !!account },
-    from,
-    to,
+    report: detail.kind,
+    account: detail.account,
+    from: detail.from,
+    to: detail.to,
     months: monthsBetween(COPY_FROM, through),
     ...span,
     documents: found.documents,

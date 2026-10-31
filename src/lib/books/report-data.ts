@@ -1,8 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate } from './netsuite-gl';
+import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate, toCents } from './netsuite-gl';
 import { BOOKS_INVOICE_POSTING, type InvoicePostingResult } from './invoice-posting';
-import { lastReportMonth, type ReportAccount, type ReportAmount, type ReportData } from './reports';
+import type { AccountDocumentsData } from './report-detail';
+import {
+  lastReportMonth, lineSpan, REPORT_KINDS,
+  type LineSpan, type ReportAccount, type ReportAmount, type ReportData, type ReportKind,
+} from './reports';
 import type { TbData } from './trial-balance';
 
 /**
@@ -82,4 +86,72 @@ export async function loadReports(service: SupabaseClient, asked: string | null)
 export function monthParam(value: string | null, through: string): string | null {
   const m = value && /^\d{4}-\d{2}$/.test(value) ? `${value}-01` : null;
   return m && m >= COPY_FROM && m <= through ? m : null;
+}
+
+/**
+ * The report a request asks for (report=, from=, to=): the profit and loss
+ * by default; its end last month by default, the newest one NetSuite may
+ * already have closed, as the trial balance does; its start the end's month
+ * alone by default, or when asked for after the end.
+ */
+export function reportRange(params: URLSearchParams, loaded: LoadedReports): { kind: ReportKind; from: string; to: string } {
+  const askedKind = params.get('report');
+  const kind: ReportKind = REPORT_KINDS.find((k) => k === askedKind) ?? 'profit_and_loss';
+  const to = monthParam(params.get('to'), loaded.through) ?? loaded.lastMonth;
+  const askedFrom = monthParam(params.get('from'), loaded.through);
+  const from = askedFrom && askedFrom <= to ? askedFrom : to;
+  return { kind, from, to };
+}
+
+/** One account line's detail, as its page and its Excel download read it. */
+export interface LoadedAccountDetail {
+  kind: ReportKind;
+  from: string;
+  to: string;
+  account: { key: string; number: string | null; name: string; inChart: boolean };
+  span: LineSpan;
+  found: AccountDocumentsData;
+  /** What the copy of NetSuite's ledger holds of the account in the months, as the line shows it. */
+  copied: number;
+}
+
+/**
+ * What one account's line on a report is made of over the months asked for
+ * (account=, report=, from=, to=): its two ends from the report itself
+ * (lineSpan) and the documents between them (gl_books_account_documents,
+ * migrations 400 and 459), only those that differ with `differs`, at most
+ * `limit`. `account` is the line's key: the account's NetSuite id, or
+ * fs:<id> for one NetSuite doesn't have.
+ */
+export async function loadAccountDetail(
+  service: SupabaseClient,
+  loaded: LoadedReports,
+  params: URLSearchParams,
+  opts: { differs: boolean; limit: number },
+): Promise<LoadedAccountDetail | { error: string; status: number }> {
+  const { data, company } = loaded;
+  // A line's account is in the chart, or is a NetSuite account either side has amounts on.
+  const key = params.get('account') ?? '';
+  const account = data.accounts.find((a) => (a.netsuite_account_id ?? `fs:${a.id}`) === key) ?? null;
+  const known = !!account
+    || [...data.opening, ...data.netsuite].some((r) => r.netsuite_account_id === key)
+    || data.fleetsuite.some((r) => r.account === key);
+  if (!known) return { error: 'That account has nothing in these books', status: 404 };
+
+  const { kind, from, to } = reportRange(params, loaded);
+  const span = lineSpan(data, kind, key, { from, to });
+  const docs = await service.rpc('gl_books_account_documents', {
+    p_company: company, p_account: key, p_from: from, p_to: to, p_differs: opts.differs, p_limit: opts.limit,
+  });
+  if (docs.error) return { error: docs.error.message, status: 500 };
+  const found = docs.data as AccountDocumentsData;
+  return {
+    kind,
+    from,
+    to,
+    account: { key, number: account?.number ?? null, name: account?.name ?? `NetSuite account ${key}`, inChart: !!account },
+    span,
+    found,
+    copied: span.sign * toCents(found.netsuite) || 0,
+  };
 }

@@ -4,7 +4,7 @@ vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
 import { deepLinks } from '@/lib/deep-links';
-import { detailDocuments, type AccountDocumentData, type AccountDocumentsData } from './report-detail';
+import { detailDocuments, runningBalances, type AccountDocumentData, type AccountDocumentsData, type DetailDocument } from './report-detail';
 
 const row = (r: Partial<AccountDocumentData> & Pick<AccountDocumentData, 'doc'>): AccountDocumentData => ({
   netsuite: '0', fleetsuite: '0', kind: null, type: null, number: null, month: null, date: null, name: null, memo: null,
@@ -81,6 +81,57 @@ describe('the documents on a line', () => {
       null,
       null,
       null,
+    ]);
+  });
+});
+
+describe("each side's running balance (the Excel download)", () => {
+  const doc = (doc: string, date: string | null, fleetsuite: number, netsuite: number): DetailDocument => ({
+    doc, date, type: 'Invoice', number: doc, name: null, memo: null, fleetsuite, netsuite, only: null, check: null,
+  });
+  const order = (rows: ReturnType<typeof runningBalances>) =>
+    rows.map((r) => (r.kind === 'document' ? r.document.doc : r.kind === 'closing' ? r.month : r.kind));
+
+  it("runs each side from the line's balance before the months, document by document, to the line", () => {
+    expect(runningBalances(
+      { starting: { fleetsuite: 1000, netsuite: 1000 }, ending: { fleetsuite: 1700, netsuite: 1650 } },
+      [],
+      [doc('1', '2026-08-03', 500, 500), doc('2', '2026-08-10', 200, 150)],
+    )).toEqual([
+      { kind: 'starting', balance: { fleetsuite: 1000, netsuite: 1000 } },
+      { kind: 'document', document: doc('1', '2026-08-03', 500, 500), balance: { fleetsuite: 1500, netsuite: 1500 } },
+      { kind: 'document', document: doc('2', '2026-08-10', 200, 150), balance: { fleetsuite: 1700, netsuite: 1650 } },
+      { kind: 'ending', balance: { fleetsuite: 1700, netsuite: 1650 }, reached: { fleetsuite: 1700, netsuite: 1650 } },
+    ]);
+  });
+
+  it('starts income and expenses from nothing, with no balance before', () => {
+    const rows = runningBalances({ starting: null, ending: { fleetsuite: 300, netsuite: 250 } }, [], [doc('1', '2026-01-05', 100, 100), doc('2', '2026-02-05', 200, 150)]);
+    expect(order(rows)).toEqual(['1', '2', 'ending']);
+    expect(rows[0]).toMatchObject({ balance: { fleetsuite: 100, netsuite: 100 } });
+    expect(rows[2]).toEqual({ kind: 'ending', balance: { fleetsuite: 300, netsuite: 250 }, reached: { fleetsuite: 300, netsuite: 250 } });
+  });
+
+  it("brings each year's net income in on January 1, before anything dated that day, whatever order they come in", () => {
+    const rows = runningBalances(
+      { starting: { fleetsuite: 0, netsuite: 0 }, ending: { fleetsuite: 40, netsuite: 35 } },
+      [{ month: '2027-01-01', closed: { fleetsuite: 20, netsuite: 20 } }, { month: '2026-01-01', closed: { fleetsuite: 10, netsuite: 5 } }],
+      // An undated document steps the balance without bringing a year in.
+      [doc('a', '2025-12-31', 1, 1), doc('b', '2026-01-01', 2, 2), doc('c', null, 3, 3), doc('d', '2026-12-31', 4, 4)],
+    );
+    expect(order(rows)).toEqual(['starting', 'a', '2026-01-01', 'b', 'c', 'd', '2027-01-01', 'ending']);
+    expect(rows[2]).toEqual({ kind: 'closing', month: '2026-01-01', amount: { fleetsuite: 10, netsuite: 5 }, balance: { fleetsuite: 11, netsuite: 6 } });
+    expect(rows[6]).toMatchObject({ balance: { fleetsuite: 40, netsuite: 35 } });
+    expect(rows[7]).toMatchObject({ reached: { fleetsuite: 40, netsuite: 35 } });
+  });
+
+  it("says where the rows come to when they don't reach the line", () => {
+    expect(runningBalances({ starting: { fleetsuite: 0, netsuite: 0 }, ending: { fleetsuite: 900, netsuite: 900 } }, [], [doc('1', '2026-08-03', 500, 400)]).at(-1))
+      .toEqual({ kind: 'ending', balance: { fleetsuite: 900, netsuite: 900 }, reached: { fleetsuite: 500, netsuite: 400 } });
+    // Nothing moved: the two ends alone.
+    expect(runningBalances({ starting: { fleetsuite: 7, netsuite: 7 }, ending: { fleetsuite: 7, netsuite: 7 } }, [], [])).toEqual([
+      { kind: 'starting', balance: { fleetsuite: 7, netsuite: 7 } },
+      { kind: 'ending', balance: { fleetsuite: 7, netsuite: 7 }, reached: { fleetsuite: 7, netsuite: 7 } },
     ]);
   });
 });

@@ -90,6 +90,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/own-receipts/route.ts': superAdmin(),
   'src/app/api/admin/books/reports/route.ts': superAdmin(),
   'src/app/api/admin/books/reports/detail/route.ts': superAdmin(),
+  'src/app/api/admin/books/reports/detail/download/route.ts': superAdmin(),
+  'src/app/api/admin/books/reports/download/route.ts': superAdmin(),
   'src/app/api/admin/books/sales/route.ts': superAdmin(),
   'src/app/api/admin/books/snap-a-bill/route.ts': superAdmin(),
   'src/app/api/admin/books/spending/route.ts': superAdmin(),

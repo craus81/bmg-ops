@@ -7,12 +7,14 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { detailMonths } from '@/lib/books/report-links';
+import { useFileDownload } from '@/lib/use-file-download';
 
 /**
  * Books → Reports (src/lib/books/reports.ts, migration 396, docs/books.md).
  *
  * FleetSuite's own profit and loss, balance sheet and trial balance, each
- * line next to NetSuite's own totals, for every month from January 2025.
+ * line next to NetSuite's own totals, for every month from January 2025,
+ * and the report shown as an Excel file (docs/books.md "Excel downloads").
  * Super admins only while the books are built, linked from the other books
  * pages.
  */
@@ -337,6 +339,7 @@ export default function BooksReportsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [onlyDifferences, setOnlyDifferences] = useState(false);
+  const excel = useFileDownload(setError);
 
   const load = useCallback(async (next: { company?: string; report?: Kind; from?: string; to?: string }) => {
     try {
@@ -389,6 +392,10 @@ export default function BooksReportsPage() {
   const shown = (data?.lines ?? []).filter((l) => !onlyDifferences
     || ((l.kind === 'account' || l.kind === 'total') && l.fleetsuite !== l.netsuite));
   const isTrialBalance = data?.report === 'trial_balance';
+  // The report shown, every line, as an Excel file (src/lib/books/report-workbook.ts).
+  const excelUrl = data && `/api/admin/books/reports/download?${new URLSearchParams({
+    company: data.company, report: data.report, from: data.from.slice(0, 7), to: data.to.slice(0, 7),
+  })}`;
   const detailOf = (l: Line): string | null => {
     if (!data || l.kind !== 'account' || !l.account || l.derived) return null;
     const { from, to } = detailMonths(data.report, l, { from: data.from, to: data.to, first: data.months[0]?.month ?? data.to });
@@ -552,6 +559,16 @@ export default function BooksReportsPage() {
               >
                 🖨 Print / Save PDF
               </button>
+              {excelUrl && (
+                <button
+                  onClick={() => excel.download(excelUrl, 'Report.xlsx')}
+                  disabled={loading || excel.busy}
+                  title="Every line of the report as an Excel file, FleetSuite's books next to NetSuite's with the difference"
+                  style={button(false)}
+                >
+                  {excel.busy ? 'Making the file…' : excel.ready(excelUrl) ? '⬇ Tap to save the Excel file' : '⬇ Download Excel'}
+                </button>
+              )}
             </div>
           </div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>

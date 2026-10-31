@@ -116,7 +116,8 @@ export interface ReportMonth {
 
 const SIDES = ['fleetsuite', 'netsuite'] as const;
 type Side = (typeof SIDES)[number];
-type Pair = Record<Side, number>;
+/** One amount on each side: FleetSuite's books and NetSuite's. */
+export type Pair = Record<Side, number>;
 
 const ZERO: Pair = { fleetsuite: 0, netsuite: 0 };
 const plus = (a: Pair, b: Pair): Pair => ({ fleetsuite: a.fleetsuite + b.fleetsuite, netsuite: a.netsuite + b.netsuite });
@@ -525,6 +526,20 @@ export function lineSpan(data: ReportData, kind: ReportKind, key: string, range:
     closed: incomeKeys.length ? times(sign, minus(earlier(range.to), earlier(previous))) : null,
     ending,
   };
+}
+
+/**
+ * Where a line's `closed` comes in: on retained earnings, the net income of
+ * each year it takes in at the next one's start, for each January from
+ * `from` through `to`, as the line shows it. They add up to `closed`. Empty
+ * on every other line, and a year with no net income either side has none.
+ * The Excel download's running balance steps by each one at its January.
+ */
+export function yearClosings(data: ReportData, kind: ReportKind, key: string, range: { from: string; to: string }): Array<{ month: string; closed: Pair }> {
+  return monthsBetween(range.from, range.to)
+    .filter((month) => month.slice(5, 7) === '01')
+    .map((month) => ({ month, closed: lineSpan(data, kind, key, { from: month, to: month }).closed }))
+    .filter((c): c is { month: string; closed: Pair } => !!c.closed && !isZero(c.closed));
 }
 
 /** The latest month either side has, but never before `floor`. */

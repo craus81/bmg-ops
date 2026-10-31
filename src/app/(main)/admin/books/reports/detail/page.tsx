@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
+import { useFileDownload } from '@/lib/use-file-download';
 import type { DetailDocument } from '@/lib/books/report-detail';
 
 /**
@@ -16,7 +17,9 @@ import type { DetailDocument } from '@/lib/books/report-detail';
  * journal next to the copy of NetSuite's general ledger, and for a balance
  * sheet account its balance before and after them. Amounts read as the
  * report the line is on shows them, so the documents add up to the line.
- * Super admins only, as the books are; opened from a line on Reports.
+ * Every document of the months downloads as Excel with each side's running
+ * balance (docs/books.md "Excel downloads"). Super admins only, as the books
+ * are; opened from a line on Reports.
  */
 
 type Kind = 'profit_and_loss' | 'balance_sheet' | 'trial_balance';
@@ -201,6 +204,7 @@ export default function BooksReportDetailPage() {
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const excel = useFileDownload(setError);
 
   const load = useCallback(async (asked: Asked) => {
     try {
@@ -250,6 +254,10 @@ export default function BooksReportDetailPage() {
   const lineDiffers = !!data && data.ending.fleetsuite !== data.ending.netsuite;
   // Back to the report the line is on: the profit and loss for these months, the others at the end of `to`.
   const back = data && deepLinks.booksReport(data.company, data.report, data.report === 'profit_and_loss' ? data.from : data.to, data.to);
+  // Every document of the months, whichever the page lists, with running balances (src/lib/books/report-workbook.ts).
+  const excelUrl = data && `/api/admin/books/reports/detail/download?${new URLSearchParams({
+    company: data.company, account: data.account.key, report: data.report, from: data.from.slice(0, 7), to: data.to.slice(0, 7),
+  })}`;
 
   return (
     <div>
@@ -307,6 +315,16 @@ export default function BooksReportDetailPage() {
                 {data.months.map((m) => <option key={m} value={m}>{shortName(m)}</option>)}
               </select>
             </label>
+            {excelUrl && (
+              <button
+                onClick={() => excel.download(excelUrl, 'Documents.xlsx')}
+                disabled={loading || excel.busy}
+                title="Every document in these months as an Excel file, by date, with each side's running balance"
+                style={button(false)}
+              >
+                {excel.busy ? 'Making the file…' : excel.ready(excelUrl) ? '⬇ Tap to save the Excel file' : '⬇ Download Excel'}
+              </button>
+            )}
           </div>
 
           <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px', marginBottom: '14px' }}>

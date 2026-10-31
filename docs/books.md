@@ -54,9 +54,10 @@ copies of fulfillments, receipts and bills posted to the books in place of
 NetSuite's when they match them and make the same entry, part 31, each
 change made with Inventory Adjust checked against NetSuite's inventory
 adjustment each morning, valued at FleetSuite's own average cost, and
-posted in place of it the same way, and part 32, what each customer owes
+posted in place of it the same way, part 32, what each customer owes
 and each vendor is owed by how late, the AR and AP agings, next to
-NetSuite's. The screens are the accounts page at `/admin/books`, the trial
+NetSuite's, and part 33, each report and an account line's documents as
+an Excel file, with each side's running balance. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -133,6 +134,8 @@ the accounts page; the others are linked from there.
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
+| Excel downloads of a report and of an account line's documents, with each side's running balance | `migrations/459-books-account-documents-download.sql`, `src/lib/books/report-workbook.ts`, `runningBalances` in `src/lib/books/report-detail.ts`, `yearClosings` in `src/lib/books/reports.ts`, `src/app/api/admin/books/reports/download/route.ts`, `src/app/api/admin/books/reports/detail/download/route.ts`, `saveFile` in `src/lib/native-files.ts`, `src/lib/use-file-download.ts` |
+| Excel download tests | `src/lib/books/report-workbook.test.ts` (each file read back cell by cell), `src/lib/books/report-download-route.test.ts`, `src/lib/use-file-download.test.ts`, `src/lib/native-files.test.ts`; the 20,000 in `src/lib/books/report-detail-sql.test.ts` |
 | Sales by location and class, with returns, discounts and transportation apart (made for the insurance premium audit) | `migrations/426-books-sales-report.sql`, `src/lib/books/sales-report.ts`, `src/app/(main)/admin/books/sales/page.tsx`, `src/app/api/admin/books/sales/route.ts`; tests `src/lib/books/sales-report.test.ts`, `src/lib/books/sales-report-sql.test.ts` |
 | NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `migrations/403-books-stock-item-setup.sql` (items set up wrong), `migrations/404-books-stock-ledger-parts.sql` (the ledger account by account), `migrations/405-books-stock-account-items.sql` (the items behind each account), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
 | Stock by item and an item's moves, and their APIs | `src/app/(main)/admin/books/stock/page.tsx`, `src/app/(main)/admin/books/stock/item/page.tsx`, `src/app/api/admin/books/stock/route.ts`, `src/app/api/admin/books/stock/item/route.ts` |
@@ -1933,6 +1936,57 @@ FleetSuite's documents always add up to its side of the line. NetSuite's
 come from the copy of its ledger, while the report's NetSuite side is
 NetSuite's own totals; when the copy doesn't hold all of a range yet, the
 page says how much it holds.
+
+## Excel downloads
+
+Reports and an account line's detail each have a Download Excel button
+(the NetSuite Exit Checklist's "Excel downloads", 2026-10-31), so the owner
+or the CPA can take the numbers into a spreadsheet as they do NetSuite's.
+Print / Save PDF still prints the statement alone, from NetSuite's own
+totals, for sending outside; the Excel file has both sides.
+
+`src/app/api/admin/books/reports/download` makes the report the page shows
+for the same company, report and months (`reportRange` in
+`src/lib/books/report-data.ts` reads them for both): every line, its
+account number apart, indented under its parent, FleetSuite's books next to
+NetSuite's own totals with the difference, the trial balance's debits and
+credits apart on each side with its totals. `src/app/api/admin/books/reports/detail/download`
+makes an account line's detail for the same company, account, report and
+months (`loadAccountDetail`): every document that moved the account, by
+date, with each side's balance after it, from the balance at the end of the
+month before (on the balance sheet) through retained earnings' row at a
+year's start to the line itself. Both are super admin only, as the rest of
+the books, and `src/lib/books/report-workbook.ts` builds them.
+
+Each file opens with the company's legal name, the report, its dates, what
+it is, when it was downloaded (Central time), and what the page warns about,
+in red or amber: a company that doesn't post yet, NetSuite's totals not read
+yet, the last posting run or copy failed or stopped for time, the copy of
+NetSuite's ledger holding less of the months than NetSuite's totals say
+moved. Amounts are dollars in Excel's accounting format, as values, not
+formulas, so a sum in the file is the CPA's own; a difference is red. The
+header row stays put when scrolling, prints on every page, and the pages
+print one wide.
+
+The detail's file lists every document whichever the page lists, since a
+running balance needs them all: migration 459 lets `gl_books_account_documents`
+give up to 20,000 at once (the page still asks for 1,000). When the
+documents don't come to the line, the row says what they come to on the
+short side, so a document the copy is missing shows where it should be;
+when there are more than 20,000, the file says so in red and asks for fewer
+months. Made-up example: a receivables line of $1,250.00 on NetSuite's side
+whose copied documents come to $1,000.00 ends with "The documents above come
+to $1,000.00 on NetSuite's side".
+
+The file names say what's in them: `BMG Profit and Loss 2026-01 to
+2026-09.xlsx` (one month alone is `2026-09`), `BMG Balance Sheet
+2026-09-30.xlsx`, `BMG Trial Balance 2026-09-30.xlsx`, and `BMG 1200
+Receivables 2026-08 to 2026-09.xlsx` for a line's documents. On a computer
+the button downloads the file; in the iPhone app it opens the share sheet
+(Save to Files, Mail, AirDrop), as Client Files' zip does (`saveFile` in
+`src/lib/native-files.ts`, `src/lib/use-file-download.ts`). Safari opens
+the share sheet only straight after a tap, so when a file takes a while to
+make the button reads "Tap to save the Excel file" for one more tap.
 
 ## Stock by item
 
