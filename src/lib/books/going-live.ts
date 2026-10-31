@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { BooksError, postEntry, type BooksCompany } from './journal';
+import { failureReason, postEntry, type BooksCompany } from './journal';
 import { BOOKS_GL_SYNC, monthOfDate, toCents } from './netsuite-gl';
 import { centralDate } from './mistake-checks';
 import {
@@ -156,15 +156,14 @@ export function openingWait(entry: OpeningEntry, copy: LastCopy | null): string 
   return null;
 }
 
-const reason = (err: unknown) => (err instanceof BooksError ? err.problems.join('; ') : String((err as any)?.message || err));
-
 /**
  * The posting run's step for companies whose books are live: once the month
  * before is over, the opening entry posts, and again whenever what differs
  * from NetSuite's numbers for that day changes, until nothing does. The run
  * holds the books' lock (src/lib/books/invoice-posting.ts), so the copy of
  * NetSuite's ledger doesn't change under it. Never throws: what waits or
- * fails is a note for the run's record.
+ * fails is a note for the run's record, in words that carry no amount, as
+ * the rest of that record is.
  */
 export async function postOpeningEntries(
   service: SupabaseClient,
@@ -182,7 +181,7 @@ export async function postOpeningEntries(
     copy = last;
     accounts = withCompanies(chart, opts.codeOf);
   } catch (err) {
-    run.notes.push(`The opening entries couldn't be worked out this time: ${reason(err)}`);
+    run.notes.push(`The opening entries couldn't be worked out this time: ${failureReason(err)}`);
     return run;
   }
 
@@ -194,6 +193,12 @@ export async function postOpeningEntries(
       const { data, journal } = await readTotals(service, code, accounts);
       const [parties, posted] = await Promise.all([readOpeningParties(service, code, date), readOpeningEntries(service, code)]);
       const entry = workOutOpeningEntry(data, journal, month, opts.today, parties);
+      // What would stop it mostly names an amount, so the note only counts them.
+      if (entry.problems.length) {
+        const n = entry.problems.length;
+        run.notes.push(`${whose} is waiting on ${n === 1 ? 'one thing' : `${n} things`} to fix first, which Going live shows.`);
+        continue;
+      }
       const wait = openingWait(entry, copy);
       if (wait) {
         run.notes.push(`${whose} is waiting: ${wait} Going live shows it.`);
@@ -203,7 +208,7 @@ export async function postOpeningEntries(
       const done = await postEntry(service, openingJournalEntry(entry, posted.length + 1));
       if (!done.alreadyPosted) run.posted += 1;
     } catch (err) {
-      run.notes.push(`${whose} couldn't post: ${reason(err)}`);
+      run.notes.push(`${whose} couldn't post: ${failureReason(err)}`);
     }
   }
   return run;

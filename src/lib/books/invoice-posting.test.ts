@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { BooksError } from './journal';
 import { workOutMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead } from './invoice-check';
 import {
   bankDocumentBooks, bankJournalEntry, bankPostingFor, billBooks, billJournalEntry, billPaymentBooks, billPaymentJournalEntry, billPostingFor, copiedJournalEntry,
   decide, decideBankDocument, decideBill, decideBillPayment, decideDeposit, decideJournalEntry, decidePayment, decideSpending, depositBooks,
-  depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, journalEntryBooks,
+  depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, invoiceBooks, invoiceJournalEntry, journalEntryBooks,
   liveDecision, parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, replaceBillMemo, replaceMemo, replaceStockMemo, signature,
   spendingBooks, spendingJournalEntry, spendingPostingFor, decideStockDocument, standingDates, stockDocumentBooks, stockJournalEntry, stockPostingFor, unsaidFacts,
   type BankPosting, type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting,
@@ -2033,15 +2032,6 @@ describe('stock documents', () => {
         expect(decideStockDocument(w, held({ current }), posts), w.entry.type).toEqual({ kind: 'keep' });
       }
     });
-  });
-});
-
-describe('failureReason', () => {
-  it('keeps what the journal said, but never an amount', () => {
-    expect(failureReason(new BooksError('refused', ['account 4010 (Old Sales) is inactive']))).toBe('Account 4010 (Old Sales) is inactive');
-    expect(failureReason(new BooksError('refused', ['entry does not balance: debits 10.00 vs credits 9.00']))).toBe('The journal refused the entry.');
-    expect(failureReason(new BooksError('invalid', ["Debits $10.00 don't equal credits $9.00"]))).toBe("FleetSuite's entry didn't pass the journal's own checks.");
-    expect(failureReason(new Error('timeout after 162.00 seconds'))).toBe('Timeout after … seconds');
   });
 });
 

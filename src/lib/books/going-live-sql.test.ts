@@ -72,13 +72,15 @@ async function freshDb(): Promise<PGlite> {
       [accountId(number), number, name, type, ns],
     );
   }
-  // Bravo's name is blank in FleetSuite, so its NetSuite name stands in.
+  // Bravo's name is blank in FleetSuite, so the first of its NetSuite names stands in. Charlie Cab is only a maybe for
+  // Acme, which the books don't take, so its balance is no customer's.
   await pg.query(`INSERT INTO customers (id, company_name) VALUES ($1, 'Acme Fleet'), ($2, '  ')`, [ACME, BRAVO]);
   await pg.query(`
     INSERT INTO ledger_customers (source, external_id, external_ref, display_name, cleaned_name, match_status, customer_id) VALUES
       ('netsuite', 'customer/9001', '9001', 'Acme Fleet Services', 'acme fleet services', 'exact', $1),
       ('netsuite', 'customer/9002', '9002', 'Bravo Transit', 'bravo transit', 'exact', $2),
-      ('netsuite', 'customer/9004', '9004', 'Charlie Cab', 'charlie cab', 'unmatched', NULL)
+      ('netsuite', 'customer/9004', '9004', 'Charlie Cab', 'charlie cab', 'ambiguous', $1),
+      ('netsuite', 'customer/9005', '9005', 'Bravo Transit (old)', 'bravo transit old', 'exact', $2)
   `, [ACME, BRAVO]);
   await pg.exec(`INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active) VALUES ('vendor', '7001', 'Landlord LLC', true)`);
   await pg.exec('SET ROLE service_role');
@@ -233,8 +235,8 @@ describe("migration 476 and going live", () => {
   it('is for the service role only', async () => {
     for (const role of ['anon', 'authenticated']) {
       await db.exec(`RESET ROLE; SET ROLE ${role}`);
-      await expect(db.query("SELECT gl_opening_parties('BMG', '2026-12-31')")).rejects.toThrow(/permission denied/);
-      await expect(db.query("SELECT gl_opening_entries('BMG')")).rejects.toThrow(/permission denied/);
+      await expect(db.query("SELECT gl_opening_parties('BMG', '2026-12-31')")).rejects.toThrow(/permission denied for function/);
+      await expect(db.query("SELECT gl_opening_entries('BMG')")).rejects.toThrow(/permission denied for function/);
     }
     await db.exec('RESET ROLE; SET ROLE service_role');
     expect(await one(db, "SELECT gl_opening_entries('BMG') AS r")).toEqual({ entries: [] });
@@ -331,6 +333,17 @@ describe("migration 476 and going live", () => {
     expect(await one(db, "SELECT idempotency_key AS r FROM gl_entries WHERE id = $1", [posted[1].id])).toBe('opening_balance:BMG:2027-01-01:2');
     expect(await entryNow('2027-02-10')).toMatchObject({ lines: [], problems: [] });
     expect((await balances('customer')).filter((p) => p.differs)).toEqual([]);
+  });
+
+  it('lists an opening entry reversed since with the entry that reversed it', async () => {
+    const [, trueUp] = await readOpeningEntries(service, 'BMG');
+    // Not on its own day, as nothing but opening entries is dated before the books went live. Made up: undone on February 11.
+    await expect(db.query('SELECT gl_reverse_entry($1, NULL, NULL, NULL, NULL)', [trueUp.id])).rejects.toThrow('is before BMG Fleet Installations went live');
+    const reversal = await one<{ entry_no: number }>(db, "SELECT gl_reverse_entry($1, '2027-02-11', 'Made up', NULL, NULL) AS r", [trueUp.id]);
+    expect((await readOpeningEntries(service, 'BMG')).map((e) => [e.entryNo, e.reversedBy])).toEqual([
+      [expect.any(Number), null],
+      [trueUp.entryNo, Number(reversal.entry_no)],
+    ]);
   });
 
   it('keeps the live date, and the journal', async () => {

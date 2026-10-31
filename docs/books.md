@@ -4341,8 +4341,12 @@ December stays document by document.
   `opening_balance:<company>:<live date>:<n>`. Whenever NetSuite's numbers
   for that day change afterwards (the CPA's year-end adjustments), what
   then differs posts as the next one, "Opening balances trued up". What
-  waits or fails is a note on the run's record, and the Going live page
-  says why. `gl_opening_entries` (migration 476) lists the ones posted.
+  waits or fails is a note on the run's record, with no amount in it, as
+  the rest of that record has none (`failureReason` in
+  `src/lib/books/journal.ts`): what would stop the entry is only counted
+  there, and the Going live page says what it is.
+  `gl_opening_entries` (migration 476) lists the ones posted, each with
+  the entry that reversed it, if one did.
 - The daily check looks only at the months since the live date. The
   months before stay as they were and the opening entry stands in the
   last of them, so Differences vs NetSuite shows that month differing by

@@ -998,6 +998,18 @@ describe('the daily books check', () => {
     expect(heldMistakes()).toEqual({ known: { [await idOf(TWICE.key)]: 1 }, noted: {} });
   });
 
+  it("keeps what it held for each company when it couldn't read when their books went live, and says why", async () => {
+    const before = held();
+    failing = (name) => name === 'gl_companies';
+    try {
+      const result = await look('first');
+      expect(result.error).toContain("BMG: couldn't read the companies (gl_companies failed) 1084: couldn't read the companies (gl_companies failed)");
+      expect(held()).toEqual(before);
+    } finally {
+      failing = null;
+    }
+  });
+
   // Last: a company's books can't stop being live (migration 359).
   it("looks only at the months since a company's books went live, the opening entry standing in the month before", async () => {
     // Made-up: BMG's books went live on September 1, 2026, so its December 2025 and August 2026 stay as they were.

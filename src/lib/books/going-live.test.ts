@@ -10,6 +10,7 @@ import {
   GO_LIVE_FROM, goLiveRefusal, openingMonth, openingWait, postOpeningEntries, readLastCopy, readOpeningEntries, withCompanies,
   type LastCopy,
 } from './going-live';
+import type { BooksCompany } from './journal';
 import type { OpeningEntry, OpeningPartyData } from './opening-balances';
 
 const ACME = 'c0000000-0000-4000-8000-00000000ac3e';
@@ -45,6 +46,8 @@ const SWAPPED: OpeningPartyData[] = [
 ];
 
 let copy: { last_result: unknown; last_synced_at: string | null; updated_at: string } | null;
+/** December as the copy of NetSuite's ledger has it. */
+let copied: typeof DECEMBER;
 let parties: Record<string, OpeningPartyData[]>;
 let posted: Record<string, Array<Record<string, unknown>>>;
 let errors: Record<string, { message: string }>;
@@ -68,7 +71,7 @@ const service: any = {
     const company = String(args.p_company ?? '');
     const error = errors[name] ?? errors[`${name}:${company}`];
     if (error) return { data: null, error };
-    if (name === 'gl_netsuite_totals') return { data: { opening: OPENING, netsuite: DECEMBER, copied: DECEMBER }, error: null };
+    if (name === 'gl_netsuite_totals') return { data: { opening: OPENING, netsuite: DECEMBER, copied }, error: null };
     if (name === 'gl_books_totals') return { data: JOURNAL, error: null };
     if (name === 'gl_opening_parties') return { data: { parties: parties[company] ?? [] }, error: null };
     if (name === 'gl_opening_entries') return { data: { entries: posted[company] ?? [] }, error: null };
@@ -77,13 +80,14 @@ const service: any = {
   },
 };
 
-const LIVE = [{ code: 'BMG' as const, liveFrom: '2027-01-01' }];
+const LIVE: Array<{ code: BooksCompany; liveFrom: string }> = [{ code: 'BMG', liveFrom: '2027-01-01' }];
 const codeOf = new Map<string, string>();
 const run = (today: string, live = LIVE) => postOpeningEntries(service, { today, live, codeOf });
 const postings = () => calls.filter(([name]) => name === 'gl_post_entry').map(([, args]) => args.p as Record<string, any>);
 
 beforeEach(() => {
   copy = { last_result: { swept: ['2026-12-01'] }, last_synced_at: '2027-01-01T07:00:00Z', updated_at: '2027-01-01T07:00:00Z' };
+  copied = DECEMBER;
   parties = { BMG: SWAPPED };
   posted = {};
   errors = {};
@@ -149,7 +153,8 @@ describe('openingWait', () => {
 });
 
 describe('postOpeningEntries', () => {
-  it("does nothing until the books' first day", async () => {
+  it("does nothing, nor reads anything, until the books' first day", async () => {
+    errors = { sync_state: { message: 'sync state is down' }, gl_accounts: { message: 'chart is down' } };
     expect(await run('2026-12-31')).toEqual({ posted: 0, notes: [] });
     expect(await run('2027-03-01', [])).toEqual({ posted: 0, notes: [] });
     expect(calls).toEqual([]);
@@ -212,33 +217,41 @@ describe('postOpeningEntries', () => {
     expect(postings()).toEqual([]);
   });
 
-  it('waits for what would stop it', async () => {
+  it('waits for what would stop it, counting it rather than saying it, as it names an amount', async () => {
     parties = { BMG: SWAPPED.slice(0, 1) };
-    const { posted: count, notes } = await run('2027-01-02');
-    expect(count).toBe(0);
-    expect(notes).toEqual([
-      "BMG's opening entry for December 31, 2026 is waiting: 1200 Accounts Receivable takes nothing, but its customers' lines come to a debit "
-        + "of $300.00, so it can't go customer by customer: copy NetSuite's ledger again (Trial balance vs NetSuite → Copy now). Going live shows it.",
+    expect(await run('2027-01-02')).toEqual({
+      posted: 0, notes: ["BMG's opening entry for December 31, 2026 is waiting on one thing to fix first, which Going live shows."],
+    });
+    // And the copy of NetSuite's ledger no longer comes to NetSuite's own totals.
+    copied = [amount('12', '200.00', '0.00', '2026-12-01'), amount('40', '0.00', '200.00', '2026-12-01')];
+    expect((await run('2027-01-02')).notes).toEqual([
+      "BMG's opening entry for December 31, 2026 is waiting on 2 things to fix first, which Going live shows.",
     ]);
+    expect(postings()).toEqual([]);
   });
 
   it('says what failed, company by company, and carries on', async () => {
-    const both = [...LIVE, { code: '1084' as const, liveFrom: '2027-01-01' }];
+    const both = [...LIVE, { code: '1084' as BooksCompany, liveFrom: '2027-01-01' }];
     parties = { BMG: SWAPPED, 1084: SWAPPED };
     errors = { 'gl_netsuite_totals:BMG': { message: 'totals are down' } };
-    expect(await run('2027-01-02', both)).toEqual({ posted: 1, notes: ["BMG's opening entry for December 31, 2026 couldn't post: totals are down"] });
+    expect(await run('2027-01-02', both)).toEqual({ posted: 1, notes: ["BMG's opening entry for December 31, 2026 couldn't post: Totals are down"] });
     expect(postings().map((p) => p.idempotency_key)).toEqual(['opening_balance:1084:2027-01-01:1']);
 
     calls.length = 0;
     errors = { gl_post_entry: { message: 'gl: 2026-12 is closed for BMG' } };
     expect(await run('2027-01-02')).toEqual({ posted: 0, notes: ["BMG's opening entry for December 31, 2026 couldn't post: 2026-12 is closed for BMG"] });
+    // Never with an amount, as the run's record takes none.
+    errors = { gl_post_entry: { message: 'gl: entry does not balance: debits 300.00 vs credits 290.00' } };
+    expect((await run('2027-01-02')).notes).toEqual(["BMG's opening entry for December 31, 2026 couldn't post: The journal refused the entry."]);
+    errors = { 'gl_opening_parties:BMG': { message: 'timeout after 300.00 seconds' } };
+    expect((await run('2027-01-02')).notes).toEqual(["BMG's opening entry for December 31, 2026 couldn't post: Timeout after … seconds"]);
   });
 
   it("says so when the copy or the chart can't be read", async () => {
     errors = { sync_state: { message: 'sync state is down' } };
-    expect(await run('2027-01-02')).toEqual({ posted: 0, notes: ["The opening entries couldn't be worked out this time: sync state is down"] });
+    expect(await run('2027-01-02')).toEqual({ posted: 0, notes: ["The opening entries couldn't be worked out this time: Sync state is down"] });
     errors = { gl_accounts: { message: 'chart is down' } };
-    expect(await run('2027-01-02')).toEqual({ posted: 0, notes: ["The opening entries couldn't be worked out this time: chart is down"] });
+    expect(await run('2027-01-02')).toEqual({ posted: 0, notes: ["The opening entries couldn't be worked out this time: Chart is down"] });
     expect(calls).toEqual([]);
   });
 });

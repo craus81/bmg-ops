@@ -1124,7 +1124,7 @@ describe('the posting job against the real functions', () => {
       const before = await journal();
       const r = await run();
       expect(r).toMatchObject({ months: [MAR], posted: 0, replaced: 0, reversed: 0, unchanged: 1, left: 2, failedCount: 0, opened: 0 });
-      expect(r.notes).toEqual([waiting("Nothing has been copied from NetSuite's ledger yet: Trial balance vs NetSuite → Copy now."), midRefresh]);
+      expect(r.notes).toEqual(["BMG's opening entry for February 28, 2025 is waiting on 3 things to fix first, which Going live shows.", midRefresh]);
       expect(await journal()).toEqual(before);
       expect(record().last_result).toMatchObject({ months: [MAR], opened: 0 });
     });
@@ -1168,6 +1168,13 @@ describe('the posting job against the real functions', () => {
         { no: before + 2, date: '2025-03-01', key: null, reverses: 4, memo: 'INV202 had another entry standing' },
         { no: before + 3, date: '2025-03-01', key: null, reverses: before + 1, memo: 'INV202 changed in NetSuite' },
         { no: before + 4, date: '2025-03-01', key: 'invoice:202:4', reverses: null, memo: 'INV202, A Customer' },
+      ]);
+
+      // Voided, it goes as before though it's dated the very day they went live; its February entry stays, unchanged.
+      await edit('202', (inv) => { inv.voided = true; });
+      expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 1, unchanged: 2, left: 2, failedCount: 0 });
+      expect((await journal()).slice(before + 4)).toEqual([
+        { no: before + 5, date: '2025-03-01', key: null, reverses: before + 4, memo: 'INV202 voided in NetSuite' },
       ]);
     });
 

@@ -5,7 +5,7 @@ import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { writeSyncStateCursor } from '@/lib/ledger/write';
 import { fetchAllRows } from '@/lib/fetch-all';
 import {
-  BooksError, centsToAmount, postEntry, repostEntry, reverseEntry,
+  centsToAmount, failureReason, postEntry, repostEntry, reverseEntry,
   type BooksCompany, type JournalEntryInput,
 } from './journal';
 import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate, monthsBetween } from './netsuite-gl';
@@ -1239,17 +1239,6 @@ function ledgerCopyEntry(
   };
 }
 
-/** Why a write failed, in words that carry no amount: the run's record is kept where amounts never go. */
-export function failureReason(err: unknown): string {
-  const money = /\$|\bdebits?\b|\bcredits?\b|balance/i;
-  const sentence = (s: string) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`.slice(0, 200);
-  if (err instanceof BooksError) {
-    const told = err.problems.filter((p) => !money.test(p));
-    if (told.length) return sentence(told.join('; '));
-    return err.kind === 'invalid' ? "FleetSuite's entry didn't pass the journal's own checks." : 'The journal refused the entry.';
-  }
-  return sentence(String((err as any)?.message || err).replace(/-?\d[\d,]*\.\d{2}\b/g, '…'));
-}
 
 // ── The run ────────────────────────────────────────────────────────────────
 

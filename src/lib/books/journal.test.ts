@@ -3,6 +3,7 @@ import {
   BooksError,
   booksErrorFrom,
   centsToAmount,
+  failureReason,
   isIsoDate,
   postEntry,
   postPayload,
@@ -202,6 +203,15 @@ describe('postEntry', () => {
     const down = fakeClient({ error: { message: 'fetch failed' } });
     await expect(postEntry(down.client, invoice())).rejects.toMatchObject({ kind: 'failed', message: 'fetch failed' });
     expect(booksErrorFrom(null).kind).toBe('failed');
+  });
+});
+
+describe('failureReason', () => {
+  it('keeps what the journal said, but never an amount', () => {
+    expect(failureReason(new BooksError('refused', ['account 4010 (Old Sales) is inactive']))).toBe('Account 4010 (Old Sales) is inactive');
+    expect(failureReason(new BooksError('refused', ['entry does not balance: debits 10.00 vs credits 9.00']))).toBe('The journal refused the entry.');
+    expect(failureReason(new BooksError('invalid', ["Debits $10.00 don't equal credits $9.00"]))).toBe("FleetSuite's entry didn't pass the journal's own checks.");
+    expect(failureReason(new Error('timeout after 162.00 seconds'))).toBe('Timeout after … seconds');
   });
 });
 
