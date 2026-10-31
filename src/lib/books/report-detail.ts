@@ -1,5 +1,6 @@
 import { toCents, TRAN_TYPE_NAMES } from './netsuite-gl';
 import { COST, kindName, kindOf, listKindOf, listMonthOf, NETSUITE_TYPE } from './differences';
+import type { LineSpan, Pair } from './reports';
 
 /**
  * The detail behind one account line on Reports (migration 400,
@@ -89,4 +90,50 @@ export function detailDocuments(data: AccountDocumentsData, sign: 1 | -1): Detai
       check: kind && kind in NETSUITE_TYPE && listMonth ? { kind: listKindOf(kind), month: listMonth } : null,
     };
   });
+}
+
+/** One row of an account line's documents with each side's running balance. */
+export type LedgerRow =
+  | { kind: 'starting'; balance: Pair }
+  | { kind: 'document'; document: DetailDocument; balance: Pair }
+  | { kind: 'closing'; month: string; amount: Pair; balance: Pair }
+  | { kind: 'ending'; balance: Pair; reached: Pair };
+
+/**
+ * An account line's documents with each side's balance after each one, as
+ * the Excel download lists them (docs/books.md "Excel downloads"): from the
+ * line's balance before its months (a balance sheet account's; income and
+ * expenses start from nothing), through each document in the order given
+ * (by date), and on retained earnings each year's net income at the January
+ * it comes in (yearClosings in reports.ts), to the line itself. `reached` is
+ * where the rows come to, each side: short of the line when some documents
+ * aren't listed, more than the download takes or not in the copy of
+ * NetSuite's ledger yet.
+ */
+export function runningBalances(
+  span: Pick<LineSpan, 'starting' | 'ending'>,
+  closings: Array<{ month: string; closed: Pair }>,
+  documents: DetailDocument[],
+): LedgerRow[] {
+  let balance: Pair = span.starting ?? { fleetsuite: 0, netsuite: 0 };
+  const step = (amount: Pair): Pair => (balance = {
+    fleetsuite: balance.fleetsuite + amount.fleetsuite,
+    netsuite: balance.netsuite + amount.netsuite,
+  });
+  const rows: LedgerRow[] = span.starting ? [{ kind: 'starting', balance }] : [];
+  const waiting = [...closings].sort((x, y) => x.month.localeCompare(y.month));
+  // A year's net income comes in on January 1, before anything dated that day or later.
+  const close = (until: string | null) => {
+    while (waiting.length && (until === null || waiting[0].month <= until)) {
+      const c = waiting.shift()!;
+      rows.push({ kind: 'closing', month: c.month, amount: c.closed, balance: step(c.closed) });
+    }
+  };
+  for (const d of documents) {
+    if (d.date) close(d.date);
+    rows.push({ kind: 'document', document: d, balance: step(d) });
+  }
+  close(null);
+  rows.push({ kind: 'ending', balance: span.ending, reached: balance });
+  return rows;
 }

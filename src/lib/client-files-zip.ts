@@ -15,7 +15,7 @@
 
 import JSZip from 'jszip';
 import { apiFetch } from '@/lib/api-client';
-import { canShareFiles, isNativeApp } from '@/lib/native-files';
+import { saveFile } from '@/lib/native-files';
 
 /** Bigger than this and a phone (or a browser tab) runs out of memory building it. */
 export const MAX_ZIP_BYTES = 500 * 1024 * 1024;
@@ -111,28 +111,8 @@ export async function downloadClientFilesZip(
   onProgress?.('Making the zip…');
   const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' });
   const name = zipFileName(label);
-  await saveZip(blob, name);
+  // JSZip's blob is typed application/zip, so the share sheet knows it.
+  await saveFile(blob, name);
   return { added, skipped };
 }
 
-async function saveZip(blob: Blob, name: string): Promise<void> {
-  if (isNativeApp()) {
-    const file = new File([blob], name, { type: 'application/zip' });
-    if (canShareFiles([file])) {
-      try {
-        await navigator.share({ files: [file], title: name });
-      } catch (e: any) {
-        if (e?.name !== 'AbortError') throw e;
-      }
-      return;
-    }
-  }
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 30_000);
-}

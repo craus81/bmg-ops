@@ -1,5 +1,6 @@
-// Migration 400 lists the documents behind one account's line on Reports.
-// This runs migrations 314 and 359–363 with 396 and 400 in an in-memory
+// Migration 400 lists the documents behind one account's line on Reports,
+// and 460 lets the Excel download take up to 20,000 of them at once. This
+// runs migrations 314 and 359–363 with 396, 400 and 460 in an in-memory
 // Postgres (PGlite) as the app's server login, copies a made-up NetSuite
 // general ledger for both companies, posts FleetSuite's own entries for it
 // (a replaced entry, a typed entry, one reversed in the same month among
@@ -16,6 +17,7 @@ import { toCents } from './netsuite-gl';
 import { detailDocuments, type AccountDocumentData, type AccountDocumentsData } from './report-detail';
 import type { ReportAmount } from './reports';
 
+const JUL = '2026-07-01';
 const AUG = '2026-08-01';
 const SEP = '2026-09-01';
 const OCT = '2026-10-01';
@@ -51,6 +53,7 @@ async function freshDb(): Promise<PGlite> {
   for (const file of [
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '396-books-reports.sql', '400-books-report-detail.sql',
+    '460-books-account-documents-download.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -243,6 +246,31 @@ describe("migration 400's account documents", () => {
       ['Invoice', 'INV1003', 80000, 0, 'fleetsuite', { kind: 'invoice', month: OCT }],
     ]);
   });
+
+  it('gives more than 2,000 documents at once for the Excel download (migration 460), by date and number', async () => {
+    // 2,050 made-up invoices on an account of their own, in July: past
+    // migration 400's 2,000.
+    await db.exec(`
+      INSERT INTO gl_netsuite_transactions (netsuite_id, tran_type, tranid, trandate, posting_month, content_hash, sweep)
+      SELECT (900000 + g)::text, 'CustInvc', 'BULK' || lpad(g::text, 5, '0'), DATE '2026-07-01' + (g % 28), '${JUL}', 'x', 's'
+      FROM generate_series(1, 2050) g;
+      INSERT INTO gl_netsuite_lines (transaction_id, line_id, company_id, netsuite_account_id, posting_month, trandate, debit, credit)
+      SELECT (900000 + g)::text, '0', (SELECT id FROM gl_companies WHERE code = 'BMG'), '650', '${JUL}', DATE '2026-07-01' + (g % 28), 1, 0
+      FROM generate_series(1, 2050) g;
+    `);
+    const all = await documents('650', JUL, JUL, { limit: 20000 });
+    expect(all).toMatchObject({ documents: 2050, differing: 2050, netsuite: '2050.00', fleetsuite: '0' });
+    expect(all.rows).toHaveLength(2050);
+    // Dated the 1st: every 28th invoice, by number.
+    expect(all.rows.slice(0, 2).map((r) => [r.date, r.number])).toEqual([['2026-07-01', 'BULK00028'], ['2026-07-01', 'BULK00056']]);
+    const dates = all.rows.map((r) => r.date!);
+    expect(dates.every((d, i) => i === 0 || dates[i - 1] <= d)).toBe(true);
+    // As many as asked for, the first by date.
+    expect((await documents('650', JUL, JUL, { limit: 2010 })).rows.map((r) => r.doc)).toEqual(all.rows.slice(0, 2010).map((r) => r.doc));
+    // No more than 20,000 however many are asked for (20,000 rows take PGlite minutes, so read the bound).
+    const body = await one<string>(db, `SELECT prosrc AS r FROM pg_proc WHERE proname = 'gl_books_account_documents'`);
+    expect(body).toContain('LIMIT greatest(1, least(coalesce(p_limit, 1000), 20000))');
+  }, 60_000);
 
   it('is for the server alone', async () => {
     await db.exec('RESET ROLE');

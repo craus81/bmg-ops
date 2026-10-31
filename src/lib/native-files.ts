@@ -82,6 +82,45 @@ export function canShareFiles(files: File[]): boolean {
   }
 }
 
+/**
+ * Hand over a file made in memory: in the app, the iOS share sheet (Save to
+ * Files, Mail, AirDrop), since a download link there goes nowhere useful;
+ * anywhere else, or where the sheet can't take the file, a download under
+ * `name`. Backing out of the share sheet isn't a failure.
+ */
+export async function saveFile(blob: Blob, name: string): Promise<void> {
+  if (isNativeApp()) {
+    const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+    if (canShareFiles([file])) {
+      try {
+        await navigator.share({ files: [file], title: name });
+      } catch (e: any) {
+        if (e?.name !== 'AbortError') throw e;
+      }
+      return;
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+/** The file name a response's Content-Disposition gives, the UTF-8 one first; null for none. */
+export function fileNameFromDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const star = header.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) {
+    try { return decodeURIComponent(star[1]); } catch { /* fall through */ }
+  }
+  const plain = header.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1] : null;
+}
+
 const EXT_FOR_TYPE: Record<string, string> = {
   'application/pdf': 'pdf',
   'image/png': 'png',

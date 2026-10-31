@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireSuperAdmin } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { POSTING_COMPANIES } from '@/lib/books/invoice-posting';
-import { loadReports, monthParam } from '@/lib/books/report-data';
-import { report, reportMonths, REPORT_KINDS, type ReportKind } from '@/lib/books/reports';
+import { loadReports, reportRange } from '@/lib/books/report-data';
+import { report, reportMonths } from '@/lib/books/reports';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,15 +27,7 @@ export async function GET(req: NextRequest) {
   const loaded = await loadReports(createServiceClient(), params.get('company'));
   if ('error' in loaded) return NextResponse.json({ error: loaded.error }, { status: 500 });
   const { data, company, through } = loaded;
-
-  const askedKind = params.get('report');
-  const kind: ReportKind = REPORT_KINDS.find((k) => k === askedKind) ?? 'profit_and_loss';
-
-  // The end defaults to last month, the newest one NetSuite may already have
-  // closed, as the trial balance does; the start to the end's month alone.
-  const to = monthParam(params.get('to'), through) ?? loaded.lastMonth;
-  const askedFrom = monthParam(params.get('from'), through);
-  const from = askedFrom && askedFrom <= to ? askedFrom : to;
+  const { kind, from, to } = reportRange(params, loaded);
 
   return NextResponse.json({
     companies: loaded.companies,

@@ -4,7 +4,8 @@ vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
 import {
-  lastReportMonth, lineSpan, report, reportMonths, type ReportAccount, type ReportAmount, type ReportData, type ReportKind, type ReportLine,
+  lastReportMonth, lineSpan, report, reportMonths, yearClosings,
+  type ReportAccount, type ReportAmount, type ReportData, type ReportKind, type ReportLine,
 } from './reports';
 import { trialBalance, type TbAmount } from './trial-balance';
 
@@ -564,6 +565,27 @@ describe("what an account's line is made of (its detail)", () => {
     expect(pair(lineSpan(books(), 'trial_balance', '39', { from: '2026-01-01', to: '2026-01-01' }).ending)).toEqual([-377000, -377000]);
     // Any other account takes in nothing.
     expect(lineSpan(books(), 'balance_sheet', '30', { from: '2025-12-01', to: '2026-01-01' }).closed).toBeNull();
+  });
+
+  it("brings each year's net income into retained earnings at its own January, adding up to what the line takes in", () => {
+    // A sale FleetSuite dated 2024, so 2024 has net income on its side alone.
+    const early = books({ fleetsuite: [fs('40', '2024-06-01', -1000), fs('10', '2024-06-01', 1000)] });
+    const range = { from: '2025-01-01', to: '2026-02-01' };
+    const closings = yearClosings(early, 'balance_sheet', '39', range);
+    expect(closings).toEqual([
+      { month: '2025-01-01', closed: { fleetsuite: 1000, netsuite: 0 } },
+      { month: '2026-01-01', closed: { fleetsuite: -23000, netsuite: -23000 } },
+    ]);
+    const span = lineSpan(early, 'balance_sheet', '39', range);
+    for (const side of ['fleetsuite', 'netsuite'] as const) {
+      expect(closings.reduce((sum, c) => sum + c.closed[side], 0), side).toBe(span.closed![side]);
+    }
+    // A year with no net income either side has none; nor does another account, or months without a January.
+    expect(yearClosings(books(), 'balance_sheet', '39', range)).toEqual([{ month: '2026-01-01', closed: { fleetsuite: -23000, netsuite: -23000 } }]);
+    expect(yearClosings(books(), 'balance_sheet', '30', range)).toEqual([]);
+    expect(yearClosings(books(), 'balance_sheet', '39', { from: '2026-02-01', to: '2026-02-01' })).toEqual([]);
+    // The trial balance reads it debit positive.
+    expect(yearClosings(books(), 'trial_balance', '39', range)).toEqual([{ month: '2026-01-01', closed: { fleetsuite: 23000, netsuite: 23000 } }]);
   });
 
   it('has income and expenses cover only the months picked, with no balance before', () => {

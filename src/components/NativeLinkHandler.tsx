@@ -31,7 +31,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import ProofViewer from '@/components/ProofViewer';
-import { isNativeApp, ensureFreshSession, blobUrlName, withFileExtension } from '@/lib/native-files';
+import { isNativeApp, ensureFreshSession, blobUrlName, fileNameFromDisposition, withFileExtension } from '@/lib/native-files';
 
 type Opened =
   | { kind: 'loading'; url: string; name: string }
@@ -54,16 +54,6 @@ function classify(raw: string): Target {
   if (u.origin !== window.location.origin) return null;
   if (u.pathname.startsWith('/api/')) return { kind: 'file', url: u.href };
   return { kind: 'page', path: u.pathname + u.search + u.hash };
-}
-
-function nameFromDisposition(header: string | null): string | null {
-  if (!header) return null;
-  const star = header.match(/filename\*=UTF-8''([^;]+)/i);
-  if (star) {
-    try { return decodeURIComponent(star[1]); } catch { /* fall through */ }
-  }
-  const plain = header.match(/filename="?([^";]+)"?/i);
-  return plain ? plain[1] : null;
 }
 
 function nameHint(url: string, fallback?: string | null): string {
@@ -116,7 +106,7 @@ export default function NativeLinkHandler() {
         const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
         if (run !== runRef.current) return;
         const realName = withFileExtension(
-          nameFromDisposition(res.headers.get('content-disposition')) || name,
+          fileNameFromDisposition(res.headers.get('content-disposition')) || name,
           blob.type || type,
           head,
         );
