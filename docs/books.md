@@ -61,9 +61,11 @@ adjustment each morning, valued at FleetSuite's own average cost, and
 posted in place of it the same way, part 32, what each customer owes
 and each vendor is owed by how late, the AR and AP agings, next to
 NetSuite's, part 33, each report and an account line's documents as
-an Excel file, with each side's running balance, and part 34, credit memos
+an Excel file, with each side's running balance, part 34, credit memos
 made in FleetSuite against an invoice and sent on to NetSuite, with Books'
-own copy of each, built switched off. The screens are the accounts page at `/admin/books`, the trial
+own copy of each, built switched off, and part 35, vendor credits entered
+in FleetSuite and applied to the vendor's open bills, sent on to NetSuite
+the same way, with Books' own copy of each, built switched off. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -85,7 +87,10 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, and the switches at `/admin/books/switches`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
-super admins can open it while credit memos are switched off.
+super admins can open it while credit memos are switched off. The vendor
+credit screen, `/admin/purchasing/vendor-credit`, is admins', opened from
+More → Purchasing → Vendor Credits: only super admins can open it while
+vendor credits are switched off.
 
 | Piece | Where |
 | --- | --- |
@@ -181,7 +186,10 @@ super admins can open it while credit memos are switched off.
 | Credit memos made in FleetSuite against an invoice, sent on to NetSuite, and Books' own copy of each | `migrations/466-credit-memos-in-fleetsuite.sql`, `src/lib/credit-memo.ts`, `src/lib/credit-item.ts`, `src/lib/books/own-credit-memos.ts`, `getInvoiceRecord`, `createCreditMemoFromInvoice` and `getInvoiceCreditMemos` in `src/lib/netsuite.ts`, `src/app/api/invoices/credit-memo/route.ts`, `src/app/api/admin/credit-item/route.ts` |
 | The credit memo screen, Invoiced's Credit, and Settings' NetSuite Credit Item | `src/app/(main)/invoices/credit-memo/page.tsx`, `src/app/(main)/invoices/page.tsx`, `src/app/(main)/settings/page.tsx` |
 | Credit memo tests | `src/lib/credit-memo.test.ts`, `src/lib/credit-item.test.ts`, `src/lib/credit-memo-route.test.ts`, `src/lib/netsuite-credit-memo.test.ts`, `src/lib/books/own-credit-memos.test.ts`, and the tables and the copy's writer `src/lib/books/own-credit-memos-sql.test.ts` |
-| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
+| Vendor credits entered in FleetSuite and applied to the vendor's open bills, sent on to NetSuite, and Books' own copy of each | `migrations/467-vendor-credits-in-fleetsuite.sql`, `src/lib/vendor-credit.ts`, `src/lib/books/own-vendor-credits.ts`, `getVendorOpenBills`, `findVendorCredit` and `createVendorCredit` in `src/lib/netsuite.ts`, `src/app/api/purchasing/vendor-credit/route.ts` |
+| The vendor credit screen and More → Purchasing's Vendor Credits | `src/app/(main)/admin/purchasing/vendor-credit/page.tsx`, `src/app/(main)/more/page.tsx` |
+| Vendor credit tests | `src/lib/vendor-credit.test.ts`, `src/lib/vendor-credit-route.test.ts`, `src/lib/netsuite-vendor-credit.test.ts`, `src/lib/books/own-vendor-credits.test.ts`, and the tables and the copy's writer `src/lib/books/own-vendor-credits-sql.test.ts` |
+| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql` and `migrations/467-vendor-credits-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -3448,10 +3456,95 @@ puts the unit back on the shelf at O'Fallon.
   booked elsewhere, and how NetSuite applied it to the invoice.
 - A credit memo with no invoice behind it isn't made in FleetSuite.
 
+## Vendor credits made in FleetSuite
+
+From January 1, 2027 admins enter vendors' credits in FleetSuite, and
+FleetSuite makes each one in NetSuite, applies it to the vendor's open
+bills, and keeps Books' own copy (the NetSuite Exit Checklist's January
+pieces, owner decisions 2026-10-31). It's built switched off
+("Switches"): until a super admin turns it on, only super admins can open
+the screen, to see what it would send, and nothing goes to NetSuite. Once
+it's on, admins with Parts Ordering can, and More → Purchasing shows
+Vendor Credits to them.
+
+The screen is `/admin/purchasing/vendor-credit` (`deepLinks.vendorCredit`).
+The person picks the company (BMG unless they pick another), finds the
+vendor in the copy of NetSuite's vendors, and enters the vendor's own
+number for the credit, the date on it, the location and why the vendor
+gave it, which goes on the vendor credit as its memo. Then what it's for
+(`workOutVendorCredit` in `src/lib/vendor-credit.ts`):
+
+- **Money back to an account**: one of the accounts the company can put a
+  bill's line on (Snap a bill's list), with an amount and, if wanted, what
+  it's for. A new line starts on the vendor's usual expense account.
+- **A part going back to the vendor**, from FleetSuite's copy of NetSuite's
+  active items, by quantity and what the vendor credits for each, which
+  starts at what BMG pays for it. A line is its quantity times that, rounded
+  half to even to the cent (`vendor_credit@1`). Parts go back only on BMG's
+  vendor credits. A stock part comes off the shelf, so a credit sending one
+  back is booked at O'Fallon, the only location that keeps stock; the screen
+  says when FleetSuite shows fewer on hand than are going back.
+
+There's no sales tax on a vendor credit, as there's none on a bill. The
+screen reads the vendor's bills NetSuite has open now for the company
+(`getVendorOpenBills`, with the credits already open on the vendor shown
+under them so the same one isn't entered twice). The person ticks the
+bills to apply it to, with how much on each, or presses Apply oldest first
+(`applyOldestFirst`), which goes oldest bill first as far as the credit
+goes, as NetSuite's Auto Apply would. Nothing more than a bill has open,
+nor more than the credit comes to, can be applied. What isn't applied stays
+open on the vendor, for NetSuite to apply when the vendor is next paid.
+
+Make vendor credit sends it once. The page makes an id when it opens, and
+the route (`/api/purchasing/vendor-credit`) works the credit out again from
+the copies and from the vendor's bills as NetSuite has them now, never from
+what the page sent: when that comes to a different total than the page
+showed, nothing is sent and the page says to reload. It asks NetSuite
+whether it already has a vendor credit from that vendor under that number
+(`findVendorCredit`), and sends nothing when it does or when NetSuite can't
+say. It takes a claim on the press (`typed_vendor_credits`), and one press
+being made or made holds the vendor's number, so two screens can't enter the
+same credit twice. Then it makes the vendor credit (`createVendorCredit`:
+the account lines as expenses, the parts as items with the amount worked
+out, the location on the header as a bill's is, in the vendor's currency,
+and the bills picked on its apply list) and keeps NetSuite's id. Pressing
+again says what the first press made; a refusal lets go of the claim and
+shows NetSuite's reason in red, so the same form can try again. Nothing is
+emailed to the vendor. The screen lists the vendor credits entered lately,
+with any NetSuite refused.
+
+Books keeps its own copy of each one, worked out by these rules rather than
+read back from NetSuite (`gl_own_vendor_credits` and their lines, saved only
+by `gl_own_vendor_credit_save`, `src/lib/books/own-vendor-credits.ts`):
+each line's account or part, quantity and rate, the bills it was applied to
+and how much went on each. Its lines must add up to its total and its bills
+to what it applied. Saving it never stops a vendor credit; one that can't
+be saved is said on the screen in red.
+
+Made-up example: a vendor takes back a shelf unit BMG paid $125.50 for and
+refunds a $20.00 restocking fee. One part line, 1 at $125.50, and one
+account line, $20.00 to the shop supplies account, make a $145.50 credit.
+Applied to the vendor's oldest open bill, which has $50.00 left on it, $50.00
+goes there and $95.50 stays open on the vendor; the unit comes off the
+shelf at O'Fallon.
+
+### What isn't done yet
+
+- Books' own copies aren't checked against NetSuite's vendor credits (the
+  copy of NetSuite's bills, `gl_netsuite_bills`, has them as `VendCred`),
+  listed or posted yet. Until they are, NetSuite's vendor credit posts from
+  the copy of NetSuite's ledger as any vendor credit does.
+- Before switching on, check the first few in NetSuite: one applied to two
+  bills (that NetSuite's apply list took each amount as sent), one with a
+  part going back (that the line kept the amount sent with its quantity and
+  rate, and the part left O'Fallon's stock), and one left unapplied.
+- A vendor credit can't yet be made from a bill, or from a return of parts
+  received on a PO; it's entered on its own.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migration 466, `src/lib/books/switches.ts`),
+row each in `books_switches` (migrations 466 and 467, `src/lib/books/switches.ts`),
 and stays off until a super admin turns it on in Books → Switches
 (`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
 on on January 1, 2027, asking the owner once in late December.
@@ -3465,6 +3558,7 @@ in the audit log (`switch_on`, `switch_off`).
 | Piece | What it does once it's on | Where |
 | --- | --- | --- |
 | `credit_memos` | Anyone with Invoicing makes a credit memo against an invoice in FleetSuite, and FleetSuite makes it in NetSuite ("Credit memos made in FleetSuite") | Invoicing → Invoiced → Credit on an invoice |
+| `vendor_credits` | Admins with Parts Ordering enter a vendor's credit in FleetSuite and apply it to that vendor's open bills, and FleetSuite makes it in NetSuite ("Vendor credits made in FleetSuite") | More → Purchasing → Vendor Credits |
 
 ## Posting
 

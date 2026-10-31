@@ -52,6 +52,25 @@ export default function MorePage() {
     return () => { cancelled = true; };
   }, [profile]);
 
+  // Vendor Credits: admins with Parts Ordering once vendor credits are
+  // switched on in Books → Switches; until then super admins only.
+  const canOrderParts = hasFeature('parts_ordering');
+  const [canVendorCredit, setCanVendorCredit] = useState(false);
+  useEffect(() => {
+    if (!canOrderParts) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/purchasing/vendor-credit?status=1');
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setCanVendorCredit(res.ok && !!body.canUse);
+      } catch {
+        if (!cancelled) setCanVendorCredit(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canOrderParts]);
+
   const F = hasFeature; // shorthand
   const [query, setQuery] = useState('');
 
@@ -84,6 +103,7 @@ export default function MorePage() {
     { group: 'purchasing', title: 'Purchase Requests', sub: 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering'), badge: badgeFor('purchase_requests'), list: true },
     { group: 'purchasing', title: 'Purchase Orders', sub: 'Every vendor PO · + New PO, open, undo', path: '/admin/purchasing?tab=vendor-pos', show: F('parts_ordering'), list: true, newPath: isAdmin ? '/admin/purchasing?tab=vendor-pos&new=1' : undefined },
     { group: 'purchasing', title: 'Receiving', sub: 'Check arriving parts in against vendor POs · the badge counts receipts still to enter in NetSuite by hand', path: '/admin/receiving', show: F('parts_ordering'), badge: badgeFor('manual_receipts'), list: true },
+    { group: 'purchasing', title: 'Vendor Credits', sub: 'Enter a vendor’s credit · made in NetSuite and applied to their open bills', path: deepLinks.vendorCredit(), show: canVendorCredit },
     { group: 'purchasing', title: 'Parts Mail', sub: 'Incoming parts & ETAs vs. stock and job allocations', path: '/admin/parts-mail', show: F('upfit_projects') },
     { group: 'purchasing', title: 'Scan Log', sub: 'Review scans, match POs, export & invoice', path: '/admin/scans', show: F('reports') },
 
