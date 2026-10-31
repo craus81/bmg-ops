@@ -39,6 +39,7 @@ import { PartLabel } from '@/components/PartLabel';
 import { canonicalPartFromCache } from '@/lib/parts-cache';
 import { NotInCatalogAdd } from '@/components/AddToCatalog';
 import GraphicsJobClientFiles from '@/components/GraphicsJobClientFiles';
+import { GraphicsMaterialPicker } from '@/components/GraphicsMaterialPicker';
 import GraphicsMaterialsCard from '@/components/GraphicsMaterialsCard';
 import GraphicsRollPlan from '@/components/GraphicsRollPlan';
 import GraphicsPackChecklist from '@/components/GraphicsPackChecklist';
@@ -1555,25 +1556,12 @@ export default function GraphicsJobRecordPage() {
             <>
               <div style={labelStyle}>Vinyl Specifications</div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
-                <div>
-                  <div style={{ ...labelStyle, fontSize: '8px' }}>Vinyl Type</div>
-                  <input style={inputStyle} value={edit.vinyl_type || ''} onChange={e => setEdit({ ...edit, vinyl_type: e.target.value })} placeholder="e.g. 3M IJ180Cv3" />
-                </div>
+                <GraphicsMaterialPicker kind="vinyl" value={edit.vinyl_type} onChange={v => setEdit({ ...edit, vinyl_type: v })} canAddToList={isAdmin} labelStyle={labelStyle} inputStyle={inputStyle} />
                 <div>
                   <div style={{ ...labelStyle, fontSize: '8px' }}>Color</div>
                   <input style={inputStyle} value={edit.vinyl_color || ''} onChange={e => setEdit({ ...edit, vinyl_color: e.target.value })} placeholder="e.g. White" />
                 </div>
-                <div>
-                  <div style={{ ...labelStyle, fontSize: '8px' }}>Laminate</div>
-                  <select style={inputStyle} value={edit.laminate || ''} onChange={e => setEdit({ ...edit, laminate: e.target.value })}>
-                    <option value="">Select...</option>
-                    <option value="N/A">N/A</option>
-                    <option value="8428G">8428G</option>
-                    <option value="8418">8418</option>
-                    <option value="8508">8508</option>
-                    <option value="Other">Other</option>
-                  </select>
-                </div>
+                <GraphicsMaterialPicker kind="laminate" value={edit.laminate} onChange={v => setEdit({ ...edit, laminate: v })} canAddToList={isAdmin} labelStyle={labelStyle} inputStyle={inputStyle} />
                 <div>
                   <div style={{ ...labelStyle, fontSize: '8px' }}>Print</div>
                   <input style={inputStyle} value={edit.print_method || ''} onChange={e => setEdit({ ...edit, print_method: e.target.value })} placeholder="e.g. Solvent" />
@@ -1582,10 +1570,7 @@ export default function GraphicsJobRecordPage() {
                   <div style={{ ...labelStyle, fontSize: '8px' }}>Cut</div>
                   <input style={inputStyle} value={edit.cut_method || ''} onChange={e => setEdit({ ...edit, cut_method: e.target.value })} placeholder="e.g. Contour" />
                 </div>
-                <div>
-                  <div style={{ ...labelStyle, fontSize: '8px' }}>Premask</div>
-                  <input style={inputStyle} value={edit.premask || ''} onChange={e => setEdit({ ...edit, premask: e.target.value })} placeholder="e.g. R-Tape 4075" />
-                </div>
+                <GraphicsMaterialPicker kind="premask" value={edit.premask} onChange={v => setEdit({ ...edit, premask: v })} canAddToList={isAdmin} labelStyle={labelStyle} inputStyle={inputStyle} />
               </div>
             </>
           )}

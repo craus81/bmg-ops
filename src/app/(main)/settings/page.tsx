@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
 import GraphicsReminderSettingsCard from '@/components/GraphicsReminderSettingsCard';
+import { GraphicsMaterialListsCard } from '@/components/GraphicsMaterialPicker';
 import TaxExemptCustomersList from '@/components/TaxExemptCustomersList';
 import PhoneInput from '@/components/PhoneInput';
 import TextSizeToggle from '@/components/TextSizeToggle';
@@ -1316,6 +1317,7 @@ export default function SettingsPage() {
           were), editable by admins. */}
       <div style={{ fontSize: '16px', fontWeight: 800, marginBottom: '10px', marginTop: '20px' }}>Graphics Reminders</div>
       <GraphicsReminderSettingsCard sectionStyle={sectionStyle} canEdit={isAdmin} />
+      {isAdmin && <GraphicsMaterialListsCard sectionStyle={sectionStyle} inputStyle={inputStyle} />}
 
       {/* Customer booking (R5-17) — admin ops config for the public
           pickup/drop-off pages, not owner-only like the money settings. */}

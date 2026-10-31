@@ -79,6 +79,7 @@ import {
 import { closeOnEscape } from '@/lib/modal-escape';
 import { looseMatcher, looseSearchRegex } from '@/lib/loose-search';
 import { graphicsJobQuantity } from '@/lib/graphics-job-quantity';
+import { GraphicsMaterialPicker } from '@/components/GraphicsMaterialPicker';
 
 // 'approved' = the ✓ Approved tab: proof approved, not printing yet. It
 // depends on more than the status, so it's checked with inScope() below.
@@ -2490,34 +2491,12 @@ export default function GraphicsPage() {
                   <>
                     <div style={labelStyle}>Vinyl Specifications</div>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '10px' }}>
-                      <div>
-                        <div style={{ ...labelStyle, fontSize: '8px' }}>Vinyl Type</div>
-                        <select style={inputStyle} value={createForm.vinyl_type} onChange={e => setCreateForm({ ...createForm, vinyl_type: e.target.value })}>
-                          <option value="">Select...</option>
-                          <option value="IJ280 CV4">IJ280 CV4</option>
-                          <option value="IJ175 CV3">IJ175 CV3</option>
-                          <option value="IJ40C">IJ40C</option>
-                          <option value="IJ780CR">IJ780CR</option>
-                          <option value="IJ680CR">IJ680CR</option>
-                          <option value="Banner">Banner</option>
-                          <option value="Other">Other</option>
-                        </select>
-                      </div>
+                      <GraphicsMaterialPicker kind="vinyl" value={createForm.vinyl_type} onChange={v => setCreateForm({ ...createForm, vinyl_type: v })} canAddToList={isAdmin} labelStyle={labelStyle} inputStyle={inputStyle} />
                       <div>
                         <div style={{ ...labelStyle, fontSize: '8px' }}>Color</div>
                         <input style={inputStyle} value={createForm.vinyl_color} onChange={e => setCreateForm({ ...createForm, vinyl_color: e.target.value })} placeholder="e.g. White" />
                       </div>
-                      <div>
-                        <div style={{ ...labelStyle, fontSize: '8px' }}>Laminate</div>
-                        <select style={inputStyle} value={createForm.laminate} onChange={e => setCreateForm({ ...createForm, laminate: e.target.value })}>
-                          <option value="">Select...</option>
-                          <option value="N/A">N/A</option>
-                          <option value="8428G">8428G</option>
-                          <option value="8418">8418</option>
-                          <option value="8508">8508</option>
-                          <option value="Other">Other</option>
-                        </select>
-                      </div>
+                      <GraphicsMaterialPicker kind="laminate" value={createForm.laminate} onChange={v => setCreateForm({ ...createForm, laminate: v })} canAddToList={isAdmin} labelStyle={labelStyle} inputStyle={inputStyle} />
                       <div>
                         <div style={{ ...labelStyle, fontSize: '8px' }}>Print</div>
                         <input style={inputStyle} value={createForm.print_method} onChange={e => setCreateForm({ ...createForm, print_method: e.target.value })} placeholder="e.g. Solvent" />
@@ -2526,10 +2505,7 @@ export default function GraphicsPage() {
                         <div style={{ ...labelStyle, fontSize: '8px' }}>Cut</div>
                         <input style={inputStyle} value={createForm.cut_method} onChange={e => setCreateForm({ ...createForm, cut_method: e.target.value })} placeholder="e.g. Contour" />
                       </div>
-                      <div>
-                        <div style={{ ...labelStyle, fontSize: '8px' }}>Premask</div>
-                        <input style={inputStyle} value={createForm.premask} onChange={e => setCreateForm({ ...createForm, premask: e.target.value })} placeholder="e.g. R-Tape 4075" />
-                      </div>
+                      <GraphicsMaterialPicker kind="premask" value={createForm.premask} onChange={v => setCreateForm({ ...createForm, premask: v })} canAddToList={isAdmin} labelStyle={labelStyle} inputStyle={inputStyle} />
                     </div>
                   </>
                 )}
