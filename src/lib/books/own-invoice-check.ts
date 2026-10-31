@@ -70,7 +70,8 @@ export interface OwnInvoiceData {
   subtotal: string;
   tax: string;
   total: string;
-  lines_from: 'sent' | 'sales_order_copy';
+  /** 'fixed' since migration 471: FleetSuite fixed the invoice, and the copy is its version after the fix. */
+  lines_from: 'sent' | 'sales_order_copy' | 'fixed';
   unknowns: Unknown[];
   made_at: string;
   lines: OwnLineData[];
@@ -719,7 +720,9 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
     `Made from ${MADE_FROM_TEXT[own.made_from] ?? own.made_from} on ${dayText(own.date)}.`,
     own.lines_from === 'sales_order_copy'
       ? "Its lines are what FleetSuite's copy of the sales order still had to bill: NetSuite billed the order whole."
-      : 'Its lines are the ones FleetSuite sent NetSuite, at the prices it sent.',
+      : own.lines_from === 'fixed'
+        ? 'Fixed in FleetSuite: its date and lines are the invoice\'s as FleetSuite fixed it, the lines it kept as NetSuite had them and the ones it changed or added as FleetSuite sent them.'
+        : 'Its lines are the ones FleetSuite sent NetSuite, at the prices it sent.',
     own.tax_basis === 'georgia' ? "No sales tax: work at Social Circle, Georgia isn't taxed."
       : own.tax_basis === 'exempt_customer' ? 'No sales tax: the customer is tax-exempt in FleetSuite.'
         : `Sales tax at ${pct(ownRate)}, the rate in Settings → Sales Tax, on the lines FleetSuite taxes (not service items), each line's rounded to the cent.`,

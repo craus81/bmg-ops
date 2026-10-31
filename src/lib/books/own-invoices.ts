@@ -470,6 +470,153 @@ export async function readSalesOrderCopy(service: SupabaseClient, salesOrderId: 
   };
 }
 
+// ── A fixed invoice's next version ─────────────────────────────────────────
+
+/** A line of an invoice FleetSuite fixed (src/lib/invoice-fix.ts, ownCopyLines). */
+export interface FixedBilledLine {
+  itemId: string | null;
+  itemNumber: string | null;
+  description: string | null;
+  /** Null on a discount or markup. */
+  quantity: number | null;
+  rate: number | null;
+  /** What it charges, a discount negative. */
+  cents: number;
+  /** The sales order line it bills. */
+  orderLine: number | null;
+}
+
+export interface FixedInvoiceCopy {
+  /** 'YYYY-MM-DD'. */
+  date: string;
+  poNumber: string;
+  memo: string;
+  vin: string;
+  lines: FixedBilledLine[];
+}
+
+/** What a fix reads of the copy it makes the next version of, as gl_own_invoices keeps it. */
+export interface SavedOwnInvoice {
+  netsuite_id: string;
+  version: number;
+  customer_netsuite_id: string | null;
+  tax_basis: TaxBasis;
+  /** A fraction, as text or a number. */
+  tax_rate: string | number;
+  terms_days: number | null;
+  unknowns: string[] | null;
+}
+
+/**
+ * The next version of FleetSuite's own copy of an invoice it fixed (migration 471), as gl_own_invoice_fix takes it:
+ * the invoice's date, PO number, memo, VIN and lines as fixed. Its sales tax is FleetSuite's own rule, as when the
+ * copy was made, at the copy's own rate and on its own basis, so a fix that changes one line doesn't change the tax
+ * of the others; its due date is the date plus the copy's terms. FleetSuite now knows every line and price, so only
+ * what it didn't know of the customer, the terms and the location stays unknown. Lines that never post and lines of
+ * nothing are left out, as when the copy was made.
+ */
+export function fixedOwnInvoicePayload(
+  saved: SavedOwnInvoice,
+  fixed: FixedInvoiceCopy,
+  items: OwnInvoiceFacts['items'],
+  opts: { fixId: string; by: string | null },
+): Record<string, unknown> {
+  const taxRate = saved.tax_basis === 'rate' ? Number(saved.tax_rate) || 0 : 0;
+  const lines: OwnInvoiceLine[] = [];
+  for (const l of fixed.lines) {
+    const item = l.itemId ? items.get(l.itemId) : undefined;
+    if ((l.itemId && isLayoutItem(l.itemId, item?.type)) || l.cents === 0) continue;
+    const above = lines[lines.length - 1];
+    const taxable = item?.type && TAKES_OFF.has(item.type) && above
+      ? above.taxable
+      : isPartTaxable({ item_type: item?.type ?? null, taxable_override: item?.taxableOverride ?? null });
+    lines.push({
+      lineNo: lines.length + 1,
+      itemId: l.itemId,
+      itemNumber: l.itemNumber ?? item?.number ?? null,
+      description: l.description,
+      quantity: l.quantity,
+      rate: l.rate,
+      cents: l.cents,
+      priced: true,
+      taxable,
+      taxCents: taxable ? lineTax(l.cents, taxRate) : 0,
+      salesOrderLineId: l.orderLine !== null ? String(l.orderLine) : null,
+    });
+  }
+  const subtotalCents = lines.reduce((sum, l) => sum + l.cents, 0);
+  const taxCents = lines.reduce((sum, l) => sum + l.taxCents, 0);
+  return {
+    netsuite_id: saved.netsuite_id,
+    version: saved.version,
+    fix_id: opts.fixId,
+    fixed_by: opts.by,
+    invoice_date: fixed.date,
+    due_date: saved.terms_days !== null ? addDays(fixed.date, saved.terms_days) : null,
+    po_number: fixed.poNumber,
+    memo: fixed.memo,
+    vin: fixed.vin,
+    subtotal: signedAmount(subtotalCents),
+    tax: signedAmount(taxCents),
+    total: signedAmount(subtotalCents + taxCents),
+    unknowns: (saved.unknowns ?? []).filter((u) => u !== 'lines' && u !== 'prices'),
+    lines: lines.map((l) => ({
+      line_no: l.lineNo,
+      item_netsuite_id: l.itemId,
+      item_number: l.itemNumber,
+      description: l.description,
+      quantity: l.quantity,
+      rate: l.rate,
+      amount: signedAmount(l.cents),
+      priced: true,
+      taxable: l.taxable,
+      tax: signedAmount(l.taxCents),
+      sales_order_line_id: l.salesOrderLineId,
+    })),
+  };
+}
+
+export interface FixedSaveResult {
+  saved: boolean;
+  /** The copy's version now, when it was saved. */
+  version?: number;
+  /** The invoice has no copy of FleetSuite's own: it was made in NetSuite, or before part 23. */
+  none?: boolean;
+  reason?: string;
+}
+
+/**
+ * Makes the next version of FleetSuite's own copy of an invoice it just fixed in NetSuite, keeping the one before.
+ * Never throws: the fix is in NetSuite whatever happens here, so a copy that can't follow is logged, and the check
+ * says it differs until it's put right.
+ */
+export async function saveFixedOwnInvoice(
+  service: SupabaseClient,
+  p: { netsuiteId: string; fixed: FixedInvoiceCopy; fixId: string; by: string | null },
+): Promise<FixedSaveResult> {
+  try {
+    const { data, error } = await service
+      .from('gl_own_invoices')
+      .select('netsuite_id, version, customer_netsuite_id, tax_basis, tax_rate, terms_days, unknowns')
+      .eq('netsuite_id', p.netsuiteId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const saved = data as SavedOwnInvoice | null;
+    if (!saved) return { saved: false, none: true, reason: 'no copy' };
+    const facts = await readOwnInvoiceFacts(service, saved.customer_netsuite_id, p.fixed.lines.map((l) => l.itemId ?? '').filter(Boolean));
+    const payload = fixedOwnInvoicePayload(saved, p.fixed, facts.items, { fixId: p.fixId, by: p.by });
+    const res = await service.rpc('gl_own_invoice_fix', { p: payload });
+    if (res.error) throw new Error(res.error.message);
+    const out = res.data as { saved?: boolean; version?: number; reason?: string } | null;
+    if (out?.saved) return { saved: true, version: out.version };
+    return { saved: false, reason: out?.reason === 'changed' ? 'the copy changed while the fix was being made' : 'the copy is gone' };
+  } catch (err) {
+    const reason = String((err as any)?.message || err).slice(0, 300);
+    console.error(`[books] own copy of fixed NetSuite invoice ${p.netsuiteId} not saved: ${reason}`);
+    return { saved: false, reason };
+  }
+}
+
 // ── Saving ─────────────────────────────────────────────────────────────────
 
 /** What one of the five ways of invoicing knows once NetSuite has made the invoice. */

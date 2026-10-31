@@ -275,6 +275,10 @@ export const deepLinks = {
    *  the Invoiced tab's Credit. Anyone with Invoicing once credit memos are
    *  switched on in Books → Switches; until then super admins only. */
   creditMemo: (invoiceNetsuiteId: string) => `/invoices/credit-memo?${new URLSearchParams({ invoice: invoiceNetsuiteId })}`,
+  /** Fixing one NetSuite invoice after it's made (src/lib/invoice-fix.ts),
+   *  from the Invoiced tab's Fix. Anyone with Invoicing once fixing invoices
+   *  is switched on in Books → Switches; until then super admins only. */
+  invoiceFix: (invoiceNetsuiteId: string) => `/invoices/fix?${new URLSearchParams({ invoice: invoiceNetsuiteId })}`,
   /** A vendor's credit, entered and applied to the vendor's open bills
    *  (src/lib/vendor-credit.ts), from More → Purchasing. Admins with Parts
    *  Ordering once vendor credits are switched on in Books → Switches; until

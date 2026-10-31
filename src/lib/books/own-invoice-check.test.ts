@@ -100,6 +100,14 @@ describe('an own invoice next to NetSuite\'s', () => {
     ]);
   });
 
+  it('says when the copy is the invoice as FleetSuite fixed it', () => {
+    const c = check({ own: own({ lines_from: 'fixed' }) });
+    expect(c.status).toBe('matches');
+    expect(c.workedOut[1]).toBe(
+      "Fixed in FleetSuite: its date and lines are the invoice's as FleetSuite fixed it, the lines it kept as NetSuite had them and the ones it changed or added as FleetSuite sent them.",
+    );
+  });
+
   it('leaves out NetSuite\'s lines that never post and its lines of nothing', () => {
     const c = check({
       netsuite: netsuite({

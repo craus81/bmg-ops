@@ -70,8 +70,10 @@ the same way, with Books' own copy of each, built switched off, part
 one journal entry a month, with Books' own copy of each, built switched
 off, part 37, journal entries typed in FleetSuite, approved by a super
 admin who didn't ask and sent on to NetSuite, with Books' own copy of
-each, built switched off, and part 38, inventory transfers made in
-FleetSuite and sent on to NetSuite, built switched off. The screens are the accounts page at `/admin/books`, the trial
+each, built switched off, part 38, inventory transfers made in
+FleetSuite and sent on to NetSuite, built switched off, and part 39,
+invoices fixed in FleetSuite after they're made and the fix sent on to
+NetSuite, with Books' own copy following, built switched off. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -105,7 +107,9 @@ charges are switched off. The journal entries screen,
 journal entries are switched off. The inventory transfers screen,
 `/admin/inventory-transfers`, is admins', opened from More → Parts &
 Inventory → Inventory Transfers: only super admins can open it while
-inventory transfers are switched off.
+inventory transfers are switched off. The Fix screen, `/invoices/fix`, is
+staff's, opened from Invoicing like the credit memo screen: only super
+admins can open it while fixing invoices is switched off.
 
 | Piece | Where |
 | --- | --- |
@@ -213,7 +217,10 @@ inventory transfers are switched off.
 | Inventory transfers made in FleetSuite and sent on to NetSuite | `migrations/470-inventory-transfers-made-in-fleetsuite.sql`, `src/lib/inventory-transfers.ts`, `findInventoryTransfer`, `getLocationOnHand` and `createInventoryTransfer` in `src/lib/netsuite.ts`, `src/app/api/inventory-transfers/route.ts` |
 | The inventory transfers screen and More → Parts & Inventory's Inventory Transfers | `src/app/(main)/admin/inventory-transfers/page.tsx`, `src/app/(main)/more/page.tsx` |
 | Inventory transfer tests | `src/lib/inventory-transfers.test.ts`, `src/lib/inventory-transfers-route.test.ts`, `src/lib/netsuite-inventory-transfer.test.ts`, and the table and its functions `src/lib/books/inventory-transfers-sql.test.ts` |
-| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql`, `migrations/468-card-charges-in-fleetsuite.sql`, `migrations/469-journal-entries-typed-in-fleetsuite.sql` and `migrations/470-inventory-transfers-made-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
+| Invoices fixed in FleetSuite, the fix sent on to NetSuite, and Books' own copy following | `migrations/471-invoices-fixed-in-fleetsuite.sql`, `src/lib/invoice-fix.ts`, `fixedOwnInvoicePayload` and `saveFixedOwnInvoice` in `src/lib/books/own-invoices.ts`, `getInvoiceRecord` and `patchInvoice` in `src/lib/netsuite.ts`, `src/app/api/invoices/fix/route.ts` |
+| The Fix screen and Invoiced's Fix | `src/app/(main)/invoices/fix/page.tsx`, `src/app/(main)/invoices/page.tsx` |
+| Invoice fix tests | `src/lib/invoice-fix.test.ts`, `src/lib/invoice-fix-route.test.ts`, `src/lib/netsuite-invoice-fix.test.ts`, `src/lib/books/own-invoices.test.ts`, and the tables and their functions `src/lib/books/invoices-fixed-sql.test.ts` |
+| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql`, `migrations/468-card-charges-in-fleetsuite.sql`, `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `migrations/470-inventory-transfers-made-in-fleetsuite.sql` and `migrations/471-invoices-fixed-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -3833,10 +3840,111 @@ of two lines in NetSuite.
   doesn't hold Transfer Inventory for approval. Then make the first real
   transfer here instead of in NetSuite and compare.
 
+## Invoices fixed in FleetSuite
+
+From January 1, 2027 staff fix an invoice after it's made in FleetSuite,
+and FleetSuite makes the change in NetSuite and in Books' own copy of the
+invoice (the NetSuite Exit Checklist's January pieces, owner decisions
+2026-10-31). It's built switched off ("Switches"): until a super admin
+turns it on, only super admins can open the screen, to see what a fix
+would send, and nothing goes to NetSuite. Once it's on, anyone with
+Invoicing who can see prices can.
+
+On Invoicing → Invoiced each NetSuite invoice has a Fix button beside
+Credit, which opens `/invoices/fix?invoice=<NetSuite id>`
+(`deepLinks.invoiceFix`). The screen reads the invoice from NetSuite as it
+is now (`getInvoiceRecord`, `parseFixInvoice` in `src/lib/invoice-fix.ts`),
+every line with it, the ones that only lay it out too. What a fix can
+change (`fixAllows`):
+
+- **Its PO number, memo and VIN**, whatever has been paid on it: 45 and
+  999 characters at most, and a VIN is 17 letters and numbers with no I, O
+  or Q.
+- **While nothing on it is paid or credited, its date and its lines.** Its
+  due date moves with its date by its terms: 30 days after on Net 30, the
+  same day with no terms. Terms FleetSuite can't work out (due on a day of
+  the month) leave NetSuite's due date, and the screen says so. A line's
+  quantity, price each and description, a discount's or markup's amount, a
+  line taken off, and a line added of any item a new invoice can bill,
+  found with the same search as New invoice. A line that takes money off
+  without being a discount (a trade-in, say), or names no item, can only be
+  taken off. Subtotals, descriptions and item groups stay as they are.
+- **Once money is on it**, part paid, paid, or credited by a credit memo
+  FleetSuite made, only its PO number, memo and VIN: a credit memo takes
+  money off instead. A voided invoice can't be fixed.
+- **Undoing a whole invoice** isn't a fix: that's a credit memo for all of
+  it, which the screen links to. NetSuite's Void isn't used, so the books
+  keep what was billed and what was taken back.
+
+Each line is changed by NetSuite's own key for it, as the sales order page
+changes an order's lines, so a line billed off a sales order stays billed
+off it. Only what changed is sent (`planInvoiceFix`). Taking a line off
+sends every line the invoice keeps, each by its key, with `?replace=item`,
+so NetSuite's lines become exactly those. A new price goes at the Custom
+price level, as on the invoices FleetSuite makes. NetSuite works the sales
+tax out again: a line kept keeps its tax box, and a line added is taxed by
+FleetSuite's own rule (`src/lib/line-taxability.ts`): nothing for a
+tax-exempt customer or work at Social Circle, and a discount as the line
+above it. The screen shows the totals now and after the fix, the tax at
+the invoice's own rate, as the credit memo screen reads it; NetSuite's can
+differ by a cent or so. On an invoice that charged no tax, the screen
+can't say what a taxed line added will be charged.
+
+Fix invoice sends it once (`/api/invoices/fix`). The page sends back what
+it read the invoice as (`invoiceFacts`, as a short signature): when
+NetSuite's invoice has changed since, nothing is sent and the page says to
+reload. The route works the fix out again from the invoice as NetSuite has
+it now, never from what the page worked out, and takes a claim on the press
+(`invoice_fixes`, `invoice_fix_claim`, migration 471): pressing again says
+the first press is being sent or went in, and only one fix of an invoice is
+sent at a time. Then it sends NetSuite the change (`patchInvoice`). A
+refusal, in NetSuite's own words (a closed month, say), is kept as refused:
+nothing changed, and the same form can try again. When NetSuite doesn't
+answer or faults, it's kept as unsure and the page says to reload and look:
+a fix that went in shows on the invoice. A send that never finished holds
+the invoice five minutes at most, then counts as unsure. Each fix keeps who
+made it, why, what changed in words, what NetSuite was sent, and NetSuite's
+total after, listed under Fixed before on the screen and in the audit log
+(`invoice_fixes`, `fix`). Nothing is emailed to the customer.
+
+Books' own copy follows (`saveFixedOwnInvoice` in
+`src/lib/books/own-invoices.ts`, `gl_own_invoice_fix`). When FleetSuite has
+its own copy of the invoice (one it made, since part 23), the fix makes the
+copy's next version from the invoice as fixed (`gl_own_invoices.version`,
+`lines_from` 'fixed'): its date, due date, PO number, memo, VIN and lines,
+taxed by FleetSuite's own rule at the copy's own rate. The version before is
+kept in `gl_own_invoice_versions`, and a copy changed since the fix read it
+isn't overwritten. The copy's check (Own invoices) compares it with
+NetSuite's fixed invoice once the copy of NetSuite's ledger has it, and the
+next posting run reposts the invoice when its entry no longer fits. Saving
+it never stops a fix; one that can't be saved is said on the screen in red,
+and the check shows the copy differing until it's put right. An invoice
+made in NetSuite has no copy of FleetSuite's own, so only NetSuite's
+changes.
+
+Made-up example: an invoice bills 2 shelf units at $125.50, taxed at
+8.488%, and 3 hours of labor at $95.00, $557.30, and nothing is paid on it.
+Three were fitted: Fix, the shelf's quantity 2 → 3, why "Billed two, fitted
+three". The screen shows the total going to about $693.46, NetSuite's
+invoice and Books' copy both change, and the copy keeps its first version.
+
+### What isn't done yet
+
+- Its customer, location, terms or sales rep can't be changed: credit it
+  all and invoice it again.
+- Fixing a bill comes next (part 40).
+- Before switching on, try fixes on a test invoice of each kind, typed and
+  billed off a sales order, and check in NetSuite: that it works the tax
+  out again; that the sales order's billed quantities follow a line billed
+  off it that changes or comes off, and that it takes a line added to an
+  invoice off a sales order; that a closed month refuses a fix; and that
+  its answer has `lastModifiedDate`, `dueDate` and each line's `orderLine`
+  as the screen reads them.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 470, `src/lib/books/switches.ts`),
+row each in `books_switches` (migrations 466 to 471, `src/lib/books/switches.ts`),
 and stays off until a super admin turns it on in Books → Switches
 (`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
 on on January 1, 2027, asking the owner once in late December.
@@ -3854,6 +3962,7 @@ in the audit log (`switch_on`, `switch_off`).
 | `card_charges` | Anyone with Payments adds the Chase card's activity and codes each charge to its account, and FleetSuite sends each month's charges to NetSuite as one journal entry ("Card charges coded in FleetSuite") | More → Money & Books → Card Charges |
 | `journal_entries` | Anyone with Payments types a journal entry and asks for approval, a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite ("Journal entries typed in FleetSuite") | More → Money & Books → Journal Entries |
 | `inventory_transfers` | Admins move stock from one of a company's locations to another in FleetSuite, and FleetSuite makes the transfer in NetSuite ("Inventory transfers made in FleetSuite") | More → Parts & Inventory → Inventory Transfers |
+| `invoice_fixes` | Anyone with Invoicing fixes an invoice after it's made, its PO number, memo and VIN, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy ("Invoices fixed in FleetSuite") | Invoicing → Invoiced → Fix on an invoice |
 
 ## Posting
 

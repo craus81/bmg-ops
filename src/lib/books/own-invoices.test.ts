@@ -6,17 +6,21 @@ vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi
 import {
   addDays,
   chicagoDate,
+  fixedOwnInvoicePayload,
   isGeorgia,
   lineTax,
   readOwnInvoiceFacts,
   readSalesOrderCopy,
   ruleLocation,
+  saveFixedOwnInvoice,
   saveOwnInvoice,
   savePayload,
   signedAmount,
   workOutOwnInvoice,
+  type FixedInvoiceCopy,
   type OwnInvoiceFacts,
   type OwnInvoiceInput,
+  type SavedOwnInvoice,
 } from './own-invoices';
 
 const ACME = 'c0000000-0000-4000-8000-00000000000a';
@@ -475,5 +479,98 @@ describe('saving the copy', () => {
   it('says so when the invoice was already saved', async () => {
     const { service } = fakeService(database(), { data: { saved: false, lines: 0 } });
     expect(await saveOwnInvoice(service, { netsuiteId: '5001', madeFrom: 'po', billed: [] }, AT)).toEqual({ saved: false, reason: 'already saved' });
+  });
+});
+
+describe("a fixed invoice's next version", () => {
+  const FIX = 'f0000000-0000-4000-8000-000000000039';
+  const BY = 'a0000000-0000-4000-8000-000000000001';
+  const SAVED: SavedOwnInvoice = {
+    netsuite_id: '5001', version: 1, customer_netsuite_id: '9001', tax_basis: 'rate', tax_rate: '0.100000', terms_days: 30,
+    unknowns: ['lines', 'prices', 'terms'],
+  };
+  // Three shelves where two were billed, the discount under them, labor, a fee of nothing in the catalog, and the
+  // invoice's own subtotal and a $0 note, which never post.
+  const FIXED: FixedInvoiceCopy = {
+    date: '2026-10-25', poNumber: 'PO-78', memo: '', vin: '',
+    lines: [
+      { itemId: '55', itemNumber: 'SHELF-1', description: 'Shelf', quantity: 3, rate: 125.5, cents: 37650, orderLine: 1 },
+      { itemId: '58', itemNumber: 'DISCOUNT', description: null, quantity: null, rate: null, cents: -2000, orderLine: null },
+      { itemId: '-2', itemNumber: 'Subtotal', description: null, quantity: null, rate: null, cents: 35650, orderLine: null },
+      { itemId: '56', itemNumber: null, description: null, quantity: 2, rate: 95, cents: 19000, orderLine: 2 },
+      { itemId: '60', itemNumber: 'SUBTOTAL', description: null, quantity: null, rate: null, cents: 54650, orderLine: null },
+      { itemId: '59', itemNumber: 'DECAL-1', description: 'Note', quantity: 1, rate: 0, cents: 0, orderLine: null },
+      { itemId: null, itemNumber: null, description: 'Fee', quantity: 1, rate: 5, cents: 500, orderLine: null },
+    ],
+  };
+
+  it("is the invoice as fixed, taxed by FleetSuite's own rule at the copy's own rate", () => {
+    const p = fixedOwnInvoicePayload(SAVED, FIXED, facts().items, { fixId: FIX, by: BY });
+    expect(p).toEqual({
+      netsuite_id: '5001', version: 1, fix_id: FIX, fixed_by: BY,
+      invoice_date: '2026-10-25', due_date: '2026-11-24', po_number: 'PO-78', memo: '', vin: '',
+      // 376.50 - 20.00 + 190.00 + 5.00; tax 37.65 - 2.00 + 0.50, labor untaxed.
+      subtotal: '551.50', tax: '36.15', total: '587.65',
+      // FleetSuite knows every line and price of a fixed invoice.
+      unknowns: ['terms'],
+      lines: [
+        { line_no: 1, item_netsuite_id: '55', item_number: 'SHELF-1', description: 'Shelf', quantity: 3, rate: 125.5, amount: '376.50', priced: true, taxable: true, tax: '37.65', sales_order_line_id: '1' },
+        { line_no: 2, item_netsuite_id: '58', item_number: 'DISCOUNT', description: null, quantity: null, rate: null, amount: '-20.00', priced: true, taxable: true, tax: '-2.00', sales_order_line_id: null },
+        { line_no: 3, item_netsuite_id: '56', item_number: 'LABOR', description: null, quantity: 2, rate: 95, amount: '190.00', priced: true, taxable: false, tax: '0.00', sales_order_line_id: '2' },
+        { line_no: 4, item_netsuite_id: null, item_number: null, description: 'Fee', quantity: 1, rate: 5, amount: '5.00', priced: true, taxable: true, tax: '0.50', sales_order_line_id: null },
+      ],
+    });
+  });
+
+  it('follows a discount under an untaxed line, an untaxed copy, and terms it never knew', () => {
+    const lines = [FIXED.lines[3], FIXED.lines[1]];
+    const under = fixedOwnInvoicePayload(SAVED, { ...FIXED, lines }, facts().items, { fixId: FIX, by: null });
+    expect((under.lines as Array<{ taxable: boolean; tax: string }>).map((l) => [l.taxable, l.tax])).toEqual([[false, '0.00'], [false, '0.00']]);
+    expect(under.fixed_by).toBeNull();
+    // No tax on an untaxed copy, whatever rate it kept.
+    for (const tax_basis of ['georgia', 'exempt_customer'] as const) {
+      const untaxed = fixedOwnInvoicePayload({ ...SAVED, tax_basis }, FIXED, facts().items, { fixId: FIX, by: BY });
+      expect(untaxed).toMatchObject({ subtotal: '551.50', tax: '0.00', total: '551.50' });
+    }
+    const unknown = fixedOwnInvoicePayload({ ...SAVED, terms_days: null, unknowns: null }, FIXED, facts().items, { fixId: FIX, by: BY });
+    expect(unknown).toMatchObject({ due_date: null, unknowns: [] });
+    expect(fixedOwnInvoicePayload({ ...SAVED, terms_days: 0 }, FIXED, facts().items, { fixId: FIX, by: BY }).due_date).toBe('2026-10-25');
+  });
+
+  const COPY = { ...SAVED, tax_rate: '0.100000' };
+
+  it('makes the next version of the copy the fix read', async () => {
+    const { service, rpc, queries } = fakeService(database({ gl_own_invoices: [COPY] }), { data: { saved: true, version: 2, lines: 4 } });
+    // As the Fix screen's lines come (ownCopyLines): the ones that only lay the invoice out are already off.
+    const fixed = { ...FIXED, lines: FIXED.lines.filter((l) => l.itemId !== '60') };
+    expect(await saveFixedOwnInvoice(service, { netsuiteId: '5001', fixed, fixId: FIX, by: BY })).toEqual({ saved: true, version: 2 });
+    expect(queries[0]).toMatchObject({ table: 'gl_own_invoices', filters: [['eq', 'netsuite_id', '5001']], single: true });
+    expect(rpc).toHaveBeenCalledTimes(1);
+    const [fn, args] = rpc.mock.calls[0];
+    expect(fn).toBe('gl_own_invoice_fix');
+    expect((args as { p: Record<string, unknown> }).p).toMatchObject({ netsuite_id: '5001', version: 1, fix_id: FIX, subtotal: '551.50', tax: '36.15' });
+  });
+
+  it("says when there's no copy, or the copy changed or went while the fix was made", async () => {
+    const none = fakeService(database({ gl_own_invoices: [] }));
+    expect(await saveFixedOwnInvoice(none.service, { netsuiteId: '5001', fixed: FIXED, fixId: FIX, by: BY })).toEqual({ saved: false, none: true, reason: 'no copy' });
+    expect(none.rpc).not.toHaveBeenCalled();
+    const changed = fakeService(database({ gl_own_invoices: [COPY] }), { data: { saved: false, reason: 'changed', version: 2 } });
+    expect(await saveFixedOwnInvoice(changed.service, { netsuiteId: '5001', fixed: FIXED, fixId: FIX, by: BY }))
+      .toEqual({ saved: false, reason: 'the copy changed while the fix was being made' });
+    const gone = fakeService(database({ gl_own_invoices: [COPY] }), { data: { saved: false, reason: 'none' } });
+    expect(await saveFixedOwnInvoice(gone.service, { netsuiteId: '5001', fixed: FIXED, fixId: FIX, by: BY }))
+      .toEqual({ saved: false, reason: 'the copy is gone' });
+  });
+
+  it('never throws: a failed read or a refused save is only logged', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failing = fakeService(database({ gl_own_invoices: { error: 'statement timeout' } }));
+    expect(await saveFixedOwnInvoice(failing.service, { netsuiteId: '5001', fixed: FIXED, fixId: FIX, by: BY }))
+      .toEqual({ saved: false, reason: 'statement timeout' });
+    const refused = fakeService(database({ gl_own_invoices: [COPY] }), { error: { message: "fixed own invoice 5001's lines don't add up" } });
+    expect(await saveFixedOwnInvoice(refused.service, { netsuiteId: '5001', fixed: FIXED, fixId: FIX, by: BY }))
+      .toEqual({ saved: false, reason: "fixed own invoice 5001's lines don't add up" });
+    expect(error).toHaveBeenCalledWith("[books] own copy of fixed NetSuite invoice 5001 not saved: fixed own invoice 5001's lines don't add up");
   });
 });
