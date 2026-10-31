@@ -5,7 +5,7 @@ import { requireStaff } from '@/lib/api-auth';
 export const maxDuration = 60;
 
 /**
- * GET /api/netsuite/pdf?type=salesOrder|invoice|estimate|purchaseOrder&id=123
+ * GET /api/netsuite/pdf?type=salesOrder|invoice|estimate|purchaseOrder|creditMemo&id=123
  * Generic PDF endpoint for any supported NetSuite transaction type.
  *
  * Answers JSON ({ success, pdfBase64 }) by default. `&format=pdf` answers
@@ -18,12 +18,12 @@ export async function GET(request: NextRequest) {
   if (auth.error) return auth.error;
 
   const { searchParams } = new URL(request.url);
-  const type = searchParams.get('type') as 'salesOrder' | 'invoice' | 'estimate' | 'purchaseOrder' | null;
+  const type = searchParams.get('type') as 'salesOrder' | 'invoice' | 'estimate' | 'purchaseOrder' | 'creditMemo' | null;
   const id = searchParams.get('id');
 
-  if (!type || !['salesOrder', 'invoice', 'estimate', 'purchaseOrder'].includes(type)) {
+  if (!type || !['salesOrder', 'invoice', 'estimate', 'purchaseOrder', 'creditMemo'].includes(type)) {
     return NextResponse.json(
-      { success: false, error: 'Missing or invalid type parameter (salesOrder, invoice, estimate, or purchaseOrder)' },
+      { success: false, error: 'Missing or invalid type parameter (salesOrder, invoice, estimate, purchaseOrder or creditMemo)' },
       { status: 400 }
     );
   }

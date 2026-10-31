@@ -203,3 +203,10 @@ describe('Books agings links', () => {
     expect(deepLinks.booksAging('BMG', 'vendor', '')).toBe('/admin/books/agings/party?company=BMG&kind=vendor&party=none');
   });
 });
+
+describe('Credit memo links', () => {
+  it("opens the credit memo screen on one NetSuite invoice, and Books' switches", () => {
+    expect(deepLinks.creditMemo('7001')).toBe('/invoices/credit-memo?invoice=7001');
+    expect(deepLinks.booksSwitches()).toBe('/admin/books/switches');
+  });
+});

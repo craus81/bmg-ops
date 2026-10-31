@@ -4,7 +4,11 @@ FleetSuite is taking over the books from NetSuite: built hidden through the
 end of 2026, run side by side with NetSuite for all of 2027, and the only
 books from 2028-01-01 (owner decision 2026-10-09/10; the full plan is the
 "Replacing NetSuite with FleetSuite" doc). It keeps two companies: BMG Fleet
-Installations LLC and 1084 Cool Springs LLC, which owns the building.
+Installations LLC and 1084 Cool Springs LLC, which owns the building. From
+January 1, 2027 the team works only in FleetSuite, apart from payments,
+deposits and banking, and FleetSuite sends each document on to NetSuite
+(owner decision 2026-10-31); each piece that takes them out of NetSuite is
+built switched off until then ("Switches").
 
 This file covers part 1, the ledger core, part 2, the chart of accounts
 copied from NetSuite, part 3, NetSuite's general ledger from 2025 copied
@@ -56,8 +60,10 @@ change made with Inventory Adjust checked against NetSuite's inventory
 adjustment each morning, valued at FleetSuite's own average cost, and
 posted in place of it the same way, part 32, what each customer owes
 and each vendor is owed by how late, the AR and AP agings, next to
-NetSuite's, and part 33, each report and an account line's documents as
-an Excel file, with each side's running balance. The screens are the accounts page at `/admin/books`, the trial
+NetSuite's, part 33, each report and an account line's documents as
+an Excel file, with each side's running balance, and part 34, credit memos
+made in FleetSuite against an invoice and sent on to NetSuite, with Books'
+own copy of each, built switched off. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -76,8 +82,10 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, and sales by location at `/admin/books/sales`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
-the accounts page; the others are linked from there.
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, and the switches at `/admin/books/switches`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
+the accounts page; the others are linked from there. The credit memo
+screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
+super admins can open it while credit memos are switched off.
 
 | Piece | Where |
 | --- | --- |
@@ -170,6 +178,10 @@ the accounts page; the others are linked from there.
 | Mistake checks: the night's look for likely mistakes in the copies of NetSuite's bills, checks and card charges, each kept for a super admin to clear | `migrations/431-books-mistake-checks.sql`, `src/lib/books/mistake-checks.ts`, `src/app/api/cron/books-mistake-checks/route.ts` |
 | Mistake checks page and its API | `src/app/(main)/admin/books/mistake-checks/page.tsx`, `src/app/api/admin/books/mistake-checks/route.ts` |
 | Mistake check tests | `src/lib/books/mistake-checks.test.ts`, `src/lib/books/mistake-checks-sql.test.ts`; the daily check's are in its test files |
+| Credit memos made in FleetSuite against an invoice, sent on to NetSuite, and Books' own copy of each | `migrations/466-credit-memos-in-fleetsuite.sql`, `src/lib/credit-memo.ts`, `src/lib/credit-item.ts`, `src/lib/books/own-credit-memos.ts`, `getInvoiceRecord`, `createCreditMemoFromInvoice` and `getInvoiceCreditMemos` in `src/lib/netsuite.ts`, `src/app/api/invoices/credit-memo/route.ts`, `src/app/api/admin/credit-item/route.ts` |
+| The credit memo screen, Invoiced's Credit, and Settings' NetSuite Credit Item | `src/app/(main)/invoices/credit-memo/page.tsx`, `src/app/(main)/invoices/page.tsx`, `src/app/(main)/settings/page.tsx` |
+| Credit memo tests | `src/lib/credit-memo.test.ts`, `src/lib/credit-item.test.ts`, `src/lib/credit-memo-route.test.ts`, `src/lib/netsuite-credit-memo.test.ts`, `src/lib/books/own-credit-memos.test.ts`, and the tables and the copy's writer `src/lib/books/own-credit-memos-sql.test.ts` |
+| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -3352,6 +3364,107 @@ open it.
 - Amounts are compared to the cent, so a bill entered twice with a typo in
   its amount isn't caught.
 - Only expense lines' accounts are looked at, not items'.
+
+## Credit memos made in FleetSuite
+
+From January 1, 2027 staff make credit memos in FleetSuite, and FleetSuite
+makes each one in NetSuite and keeps Books' own copy (the NetSuite Exit
+Checklist's January pieces, owner decisions 2026-10-31). It's built
+switched off ("Switches"): until a super admin turns it on, only super
+admins can open the screen, to see what it would send, and nothing goes to
+NetSuite. Once it's on, anyone with Invoicing can.
+
+On Invoicing → Invoiced each NetSuite invoice has a Credit button, which
+opens `/invoices/credit-memo?invoice=<NetSuite id>`
+(`deepLinks.creditMemo`). The screen reads the invoice from NetSuite as it
+is now (`getInvoiceRecord`), with the credit memos FleetSuite already made
+against it and any others NetSuite has (`getInvoiceCreditMemos`, through
+the transaction line links). Then the person picks what to credit
+(`workOutCreditMemo` in `src/lib/credit-memo.ts`):
+
+- **A line, by quantity and price each**, never more than the invoice
+  billed or charged each, nor more money than is left of the line after
+  earlier credit memos. Credit it all fills in what's left of every line.
+- **A discount or markup**, or a line that took money off such as a
+  trade-in, by its amount. A discount credited back takes money off the
+  credit.
+- **An amount of its own**, such as goodwill, with what it's for. It goes
+  on the credit item, and gives back sales tax only when ticked and the
+  invoice charged tax.
+- **Why**, which goes on the credit memo as its memo.
+
+A stock part credited on its own item goes back on the shelf, as NetSuite
+does with any credit memo, booked to O'Fallon, the only location that keeps
+stock, even when the invoice is from somewhere else. With "Back to stock"
+off (a price fix on a part that stays on the truck, say), the money goes on
+the NetSuite Credit Item instead, which a super admin picks in Settings: a
+Non-inventory, Other charge or Service item, so nothing comes back on the
+shelf (`src/lib/credit-item.ts`, `quote_settings.netsuite_credit_item_id`).
+Until one is picked, only parts coming back can be credited. Labor and
+other items NetSuite keeps no stock of are always credited on their own
+item.
+
+Each line is taxed as the invoice taxed it, at the invoice's own rate:
+NetSuite's rate on the invoice, else its tax code's from the copy of
+NetSuite's lists, else what its tax comes to over its taxed lines. Each
+line's tax is rounded half to even, as Books' own invoices are
+(`credit_tax@1`). An invoice that charged no tax gives none back.
+
+Make credit memo sends it once. The page makes an id when it opens, and the
+route (`/api/invoices/credit-memo`) works the credit memo out again from the
+invoice as NetSuite has it now, never from what the page sent: when that
+comes to a different total than the page showed, nothing is sent and the
+page says to reload. It takes a claim on the press (`invoice_credit_memos`,
+as typed invoices do), makes the credit memo with NetSuite's own Credit on
+the invoice (`createCreditMemoFromInvoice`: the invoice → credit memo
+transform with `?replace=item`, so the credit memo has exactly the lines
+picked), and keeps NetSuite's id and number. Pressing again says what the
+first press made; a refusal lets go of the claim and shows NetSuite's
+reason in red, so the same form can try again. A press still being made
+counts against what's left, so two people can't credit the same thing
+twice. NetSuite applies the credit memo to the invoice while it's still
+owed; anything more stays as the customer's credit. Nothing is emailed to
+the customer. The PDF opens from the screen once it's made.
+
+Books keeps its own copy of each one, worked out by these rules rather than
+read back from NetSuite (`gl_own_credit_memos` and their lines, saved only
+by `gl_own_credit_memo_save`, `src/lib/books/own-credit-memos.ts`): each
+line with the invoice line it credits, its tax, and whether the part came
+back on the shelf or the money went on the credit item. Saving it never
+stops a credit memo; one that can't be saved is said on the screen in red.
+
+Made-up example: an invoice bills 2 shelf units at $125.50, taxed at 8%,
+and 3 hours of labor at $95.00. One unit comes back: crediting 1 at $125.50
+with Back to stock on gives back $125.50 and $10.04 of tax, $135.54, and
+puts the unit back on the shelf at O'Fallon.
+
+### What isn't done yet
+
+- Books' own copies aren't checked against NetSuite's credit memos, listed
+  or posted yet. Until they are, NetSuite's credit memo posts from the copy
+  of NetSuite's ledger as any credit memo does ("Credit memos").
+- Before switching on, check the first few in NetSuite: a credit memo with
+  a discount line, one with a part coming back to O'Fallon from an invoice
+  booked elsewhere, and how NetSuite applied it to the invoice.
+- A credit memo with no invoice behind it isn't made in FleetSuite.
+
+## Switches
+
+Each piece that takes the team out of NetSuite is built switched off, one
+row each in `books_switches` (migration 466, `src/lib/books/switches.ts`),
+and stays off until a super admin turns it on in Books → Switches
+(`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
+on on January 1, 2027, asking the owner once in late December.
+
+While a piece is off, the people who'd use it don't see it at all; super
+admins can open its screen and see what it would send, and its route
+refuses to send anything to NetSuite, for everyone. A switch that can't be
+read counts as off. Every change says who made it and when, on the page and
+in the audit log (`switch_on`, `switch_off`).
+
+| Piece | What it does once it's on | Where |
+| --- | --- | --- |
+| `credit_memos` | Anyone with Invoicing makes a credit memo against an invoice in FleetSuite, and FleetSuite makes it in NetSuite ("Credit memos made in FleetSuite") | Invoicing → Invoiced → Credit on an invoice |
 
 ## Posting
 

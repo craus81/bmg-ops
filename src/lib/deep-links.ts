@@ -271,6 +271,10 @@ export const deepLinks = {
   /** Invoices hub, Invoiced tab — optionally prefilters to one invoice number. */
   invoicesSent: (invoiceNumber?: string | null) =>
     `/invoices?tab=sent${invoiceNumber ? `&invoice=${encodeURIComponent(invoiceNumber)}` : ''}`,
+  /** A credit memo against one NetSuite invoice (src/lib/credit-memo.ts), from
+   *  the Invoiced tab's Credit. Anyone with Invoicing once credit memos are
+   *  switched on in Books → Switches; until then super admins only. */
+  creditMemo: (invoiceNetsuiteId: string) => `/invoices/credit-memo?${new URLSearchParams({ invoice: invoiceNetsuiteId })}`,
   /** Invoices hub — opens the create-invoice dialog for a shipped graphics job.
    *  NOTE: this exact string doubles as the match key that marks the prompt
    *  read once the invoice exists (graphics-invoice-notify.ts) — change both
@@ -507,6 +511,9 @@ export const deepLinks = {
    *  it, next to NetSuite's adjustment: the landing for the daily books
    *  check's notification about one own adjustment. Super admins only. */
   booksOwnAdjustment: (id: string) => `/admin/books/own-adjustments/adjustment?${new URLSearchParams({ id })}`,
+  /** Books → Switches: each piece that takes the team out of NetSuite, built
+   *  switched off (src/lib/books/switches.ts). Super admins only. */
+  booksSwitches: () => '/admin/books/switches',
   /** Books → Snap a bill: a new one, or one already snapped (saved for
    *  later, sent or thrown away) by its id, with its picture. Super admins
    *  only. */

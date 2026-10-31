@@ -97,6 +97,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/spending/route.ts': superAdmin(),
   'src/app/api/admin/books/stock/route.ts': superAdmin(),
   'src/app/api/admin/books/stock/item/route.ts': superAdmin(),
+  'src/app/api/admin/books/switches/route.ts': superAdmin(),
   'src/app/api/admin/books/trial-balance/route.ts': superAdmin(),
   'src/app/api/admin/business-pulse/route.ts': superAdmin(),
   'src/app/api/cron/books-netsuite-gl/route.ts': cron('requireSuperAdmin('),
@@ -121,6 +122,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // Reading which NetSuite item labor bills to is admin (it exposes item
   // ids); setting it is super-admin, like the tax rate — it decides which
   // GL account every labor dollar posts to.
+  'src/app/api/admin/credit-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/discount-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/labor-item/route.ts': { kind: 'superAdmin', contains: ['requireSuperAdmin(', 'requireAdmin('] },
   'src/app/api/admin/link-customer/route.ts': admin(),
@@ -450,6 +452,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/installer/ready-for-install/route.ts': authScoped('field installer flow; vehicle status transition validated in-route'),
   'src/app/api/invoices/backfill-emails/route.ts': admin(),
   'src/app/api/invoices/past-due/route.ts': money(),
+  // Credit memos (migration 466): Invoicing once switched on; until then super admins can look and nothing is sent.
+  'src/app/api/invoices/credit-memo/route.ts': feature('invoicing', "switchIsOn(service, 'credit_memos')"),
   'src/app/api/invoices/new/route.ts': feature('invoicing'),
   'src/app/api/customer-contacts/route.ts': staff(),
   'src/app/api/customer-holds/route.ts': staff(),

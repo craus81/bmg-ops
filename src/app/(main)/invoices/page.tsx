@@ -10,7 +10,9 @@
  *    /api/netsuite/invoice-vehicles bills them (one invoice per group), with
  *    email buttons on the results.
  *  - Sent: recent invoices from both sources, grouped by customer, with
- *    per-invoice and per-customer email actions (shared EmailInvoicesModal).
+ *    per-invoice and per-customer email actions (shared EmailInvoicesModal),
+ *    and Credit on each NetSuite invoice once credit memos are switched on
+ *    (invoices/credit-memo).
  *
  * Deep scan management (PO matching, bulk edit, archive) stays on the Scan
  * Log page; job editing stays on the Graphics page. This page is only about
@@ -200,6 +202,24 @@ export default function InvoicingHubPage() {
     return () => { cancelled = true; clearTimeout(timer); };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- QB_SEARCH_LIMIT is a constant
   }, [tab, search, canSeeMoney]);
+
+  // Credit on each NetSuite invoice: anyone with Invoicing once credit memos
+  // are switched on in Books → Switches; until then super admins only.
+  const [canCredit, setCanCredit] = useState(false);
+  useEffect(() => {
+    if (!canOpen || !canSeeMoney) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/invoices/credit-memo?status=1');
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setCanCredit(res.ok && !!body.canUse);
+      } catch {
+        if (!cancelled) setCanCredit(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canOpen, canSeeMoney]);
 
   // Deep link: /invoices?tab=sent|scans|graphics (used by the dashboard KPI).
   useEffect(() => {
@@ -983,6 +1003,13 @@ export default function InvoicingHubPage() {
                             title="Open this invoice's PDF in a new tab"
                             style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: openingPdf ? 'wait' : 'pointer', padding: '2px 4px' }}
                           >{openingPdf === r.invoiceNumber ? 'Opening…' : 'PDF'}</button>
+                        )}
+                        {canCredit && !r.qbo && r.invoiceId && /^\d+$/.test(r.invoiceId) && (
+                          <button
+                            onClick={() => router.push(deepLinks.creditMemo(r.invoiceId!))}
+                            title="Make a credit memo against this invoice"
+                            style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: '2px 4px' }}
+                          >Credit</button>
                         )}
                         {!r.qbo && (() => {
                           const bad = isBadDelivery(emailedByNumber[r.invoiceNumber]?.delivery_status);
