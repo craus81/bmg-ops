@@ -211,6 +211,8 @@ export default function BooksAccountsPage() {
             <Link href="/admin/books/mistake-checks" style={{ color: 'var(--text-secondary)' }}>Mistake checks</Link>
             {' · '}
             <Link href="/admin/books/switches" style={{ color: 'var(--text-secondary)' }}>Switches</Link>
+            {' · '}
+            <Link href="/admin/books/going-live" style={{ color: 'var(--text-secondary)' }}>Going live</Link>
           </div>
         </div>
         <button
