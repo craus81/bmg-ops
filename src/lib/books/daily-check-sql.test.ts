@@ -6,9 +6,11 @@
 // invoices the way Own invoices does, through migration 407's, at its own
 // fulfillments the way Own fulfillments does, through migration 416's, at the
 // Inventory Adjusts the way Own adjustments does, through migration 457's, and
-// at the likely mistakes the night's look kept, through migration 431's. This
-// runs the same migrations as differences-sql.test.ts, with 401, 406, 407,
-// 416, 431, 435, 454 and 457, in an in-memory Postgres (PGlite) as the app's
+// at the likely mistakes the night's look kept, through migration 431's, and at
+// what NetSuite has instead of FleetSuite's record of a customer or vendor,
+// through migration 480's. This runs the same migrations as
+// differences-sql.test.ts, with 401, 406, 407, 416, 431, 435, 454, 457, 477
+// and 480, in an in-memory Postgres (PGlite) as the app's
 // server login, copies a made-up handful of NetSuite documents for BMG and
 // 1084, posts FleetSuite's entries for some of them, copies a few stock moves
 // and NetSuite's counts, saves an own invoice, an own fulfillment, a few
@@ -62,6 +64,11 @@ async function freshDb(): Promise<PGlite> {
     CREATE TABLE public.payouts (id UUID PRIMARY KEY);
     CREATE TABLE public.po_receipts (id UUID PRIMARY KEY, ns_status TEXT);
     CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
+    -- The books switches as migration 466 makes them, for migration 480 to add its piece to.
+    CREATE TABLE public.books_switches (
+      piece TEXT PRIMARY KEY CHECK (piece IN ('credit_memos')), is_on BOOLEAN NOT NULL DEFAULT false,
+      changed_by UUID REFERENCES profiles(id) ON DELETE SET NULL, changed_at TIMESTAMPTZ
+    );
   `);
   for (const file of [
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
@@ -73,7 +80,7 @@ async function freshDb(): Promise<PGlite> {
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
     '402-books-stock-values.sql', '406-books-party-balances.sql', '407-books-own-invoices.sql', '416-books-own-fulfillments.sql',
     '431-books-mistake-checks.sql', '435-books-own-bills.sql', '454-inventory-adjustments.sql', '457-books-own-adjustments.sql',
-    '477-netsuite-sends.sql',
+    '477-netsuite-sends.sql', '480-fleetsuite-record-wins.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -146,7 +153,10 @@ describe('the daily books check', () => {
   const store = new Map<string, { last_result: unknown; updated_at: string; last_synced_at?: string }>();
   /** When a function or a read of a table fails, by what it was asked (a read's `where`). */
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
-  /** What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes and sends to NetSuite, apart. */
+  /**
+   * What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes,
+   * sends to NetSuite and changes in NetSuite, apart.
+   */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
   let toldOwn: CheckAlert[] = [];
@@ -156,6 +166,7 @@ describe('the daily books check', () => {
   let toldAdjustments: CheckAlert[] = [];
   let toldMistakes: CheckAlert[] = [];
   let toldSends: CheckAlert[] = [];
+  let toldChanges: CheckAlert[] = [];
 
   /** A read of one of the books' tables, or a change to one, built the way supabase-js builds it, run against the database. */
   const read = (table: string) => {
@@ -196,6 +207,7 @@ describe('the daily books check', () => {
       range: (from: number, to: number) => { range = [from, to]; return query; },
       limit: (n: number) => { limit = n; return query; },
       update: (p: Record<string, unknown>) => { patch = p; return query; },
+      maybeSingle: async () => { const r = await run(); return { data: r.data?.[0] ?? null, error: r.error }; },
       then: (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) => run().then(resolve, reject),
     };
     return query;
@@ -204,7 +216,7 @@ describe('the daily books check', () => {
   // sync_state and cron_runs in memory; every function the real one, called the way supabase-js calls it.
   const service = () => ({
     from: (table: string) => {
-      if (['gl_mistake_checks', 'gl_companies', 'gl_periods', 'netsuite_sends', 'profiles'].includes(table)) return read(table);
+      if (['gl_mistake_checks', 'gl_companies', 'gl_periods', 'netsuite_sends', 'profiles', 'books_switches', 'record_differences'].includes(table)) return read(table);
       if (table === 'sync_state') {
         return {
           select: () => ({
@@ -246,9 +258,11 @@ describe('the daily books check', () => {
     toldAdjustments = [];
     toldMistakes = [];
     toldSends = [];
+    toldChanges = [];
     const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
       : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
-        : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : alert.about === 'send' ? toldSends : told);
+        : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : alert.about === 'send' ? toldSends
+          : alert.about === 'change' ? toldChanges : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
@@ -1089,6 +1103,76 @@ describe('the daily books check', () => {
       failing = null;
     }
     await pg.query('DELETE FROM netsuite_sends WHERE id = ANY($1)', [[1, 2, 3, 4, 5, 6, 7].map(ID)]);
+  });
+
+  it('tells once about each change made in NetSuite while FleetSuite’s record wins, at the first look that finds it', async () => {
+    // Made-up differences, noted as the syncs note them (migration 480).
+    const seen = (over: Record<string, unknown>) => ({
+      kind: 'customer', netsuite_id: '2001', name: 'Acme Fleet Services', field: 'email',
+      fleetsuite: 'billing@acmefleet.example', netsuite: 'ap@acmefleet.example', differs: true, ...over,
+    });
+    await pg.query('SELECT note_record_differences($1::jsonb)', [JSON.stringify([seen({})])]);
+    await pg.query('SELECT note_record_differences($1::jsonb)', [JSON.stringify([
+      seen({ kind: 'vendor', netsuite_id: '3001', name: 'Fellers', field: 'phone', fleetsuite: '314-555-0199', netsuite: null }),
+      seen({ netsuite_id: '2002', field: 'name', name: null, fleetsuite: 'Harbor Fleet', netsuite: 'Harbor Fleet LLC' }),
+    ])]);
+    // Oldest first: Acme's an hour before the other two, which were seen in the one call, the vendor's a minute after Harbor's.
+    await pg.exec(`UPDATE record_differences SET first_seen_at = first_seen_at - interval '1 hour' WHERE netsuite_id = '2001'`);
+    await pg.exec(`UPDATE record_differences SET first_seen_at = first_seen_at + interval '1 minute' WHERE netsuite_id = '3001'`);
+    // One already told about, and one dealt with.
+    await pg.query('SELECT note_record_differences($1::jsonb)', [JSON.stringify([seen({ netsuite_id: '2003' }), seen({ netsuite_id: '2004' })])]);
+    await pg.exec(`UPDATE record_differences SET told_at = now() WHERE netsuite_id = '2003'`);
+    await pg.exec(`UPDATE record_differences SET status = 'same', closed_at = now() WHERE netsuite_id = '2004'`);
+    const id = async (netsuiteId: string) => (await pg.query<{ id: string }>('SELECT id FROM record_differences WHERE netsuite_id = $1', [netsuiteId])).rows[0].id;
+
+    // While it's off, nothing is told: none of them can be kept or taken.
+    await look('first');
+    expect(toldChanges).toEqual([]);
+    expect((await pg.query('SELECT 1 FROM record_differences WHERE told_at IS NOT NULL')).rows).toHaveLength(1);
+
+    await pg.exec(`UPDATE books_switches SET is_on = true WHERE piece = 'fleetsuite_records'`);
+    try {
+      // Each counts as told about.
+      expect(await look('first')).toMatchObject({ told: 3 });
+      expect(toldChanges).toEqual([
+        {
+          title: 'Email changed in NetSuite for Acme Fleet Services',
+          body: 'NetSuite has "ap@acmefleet.example" where FleetSuite has "billing@acmefleet.example". '
+            + "FleetSuite's stays until someone keeps it, which sends it on to NetSuite, or takes NetSuite's.",
+          url: `/admin/books/changed-in-netsuite?change=${await id('2001')}`,
+          about: 'change',
+        },
+        expect.objectContaining({ title: 'Name changed in NetSuite for NetSuite ID 2002', url: `/admin/books/changed-in-netsuite?change=${await id('2002')}` }),
+        expect.objectContaining({ title: 'Phone changed in NetSuite for Fellers', body: expect.stringMatching(/^NetSuite has no phone where FleetSuite has "314-555-0199"\./) }),
+      ]);
+      const marked = await pg.query<{ netsuite_id: string }>('SELECT netsuite_id FROM record_differences WHERE told_at IS NOT NULL ORDER BY netsuite_id');
+      expect(marked.rows.map((r) => r.netsuite_id)).toEqual(['2001', '2002', '2003', '3001']);
+
+      // Told once: the next look says nothing of them.
+      await look('second');
+      expect(toldChanges).toEqual([]);
+
+      // One it can't read is said, and the rest of the check goes on; one it can't mark is told again next time.
+      await pg.query('SELECT note_record_differences($1::jsonb)', [JSON.stringify([seen({ netsuite_id: '2005' })])]);
+      failing = (name, args) => name === 'record_differences' && String(args.where).startsWith('id = ANY');
+      try {
+        const result = await look('first');
+        expect(toldChanges.map((a) => a.title)).toEqual(['Email changed in NetSuite for Acme Fleet Services']);
+        expect(result.error).toContain("Changed in NetSuite: couldn't mark what changed in NetSuite told about (record_differences failed)");
+        failing = (name) => name === 'record_differences';
+        const unread = await look('first');
+        expect(unread.error).toContain("Changed in NetSuite: couldn't read what changed in NetSuite (record_differences failed)");
+        expect(unread.heartbeat).toBeDefined();
+        expect(toldChanges).toEqual([]);
+      } finally {
+        failing = null;
+      }
+      await look('first');
+      expect(toldChanges.map((a) => a.url)).toEqual([`/admin/books/changed-in-netsuite?change=${await id('2005')}`]);
+    } finally {
+      await pg.exec(`UPDATE books_switches SET is_on = false WHERE piece = 'fleetsuite_records'`);
+      await pg.exec('DELETE FROM record_differences WHERE true');
+    }
   });
 
   // From here on BMG's books are live, which can't be undone (migration 359).

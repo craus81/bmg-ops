@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-  adjustmentAlertsFor, alertsFor, balanceAlertsFor, balanceKey, billAlertsFor, fulfillmentAlertsFor, lookOf, mistakeAlertsFor, nextCheck,
-  ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
-  type BalanceNews, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews, type SendAlertItem,
-  type StockNews,
+  adjustmentAlertsFor, alertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, fulfillmentAlertsFor, lookOf, mistakeAlertsFor,
+  nextCheck, ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
+  type BalanceNews, type ChangeAlertItem, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews,
+  type SendAlertItem, type StockNews,
 } from './daily-check';
 import type { DiffDocumentData } from './differences';
 import type { OwnAdjustmentCheck } from './own-adjustment-check';
@@ -789,5 +789,51 @@ describe('sendAlertsFor', () => {
       about: 'send',
     }]);
     expect(sendAlertsFor([])).toEqual([]);
+  });
+});
+
+describe('changeAlertsFor', () => {
+  const ids = ['c4a90000-0000-4000-8000-000000000001', 'c4a90000-0000-4000-8000-000000000002',
+    'c4a90000-0000-4000-8000-000000000003', 'c4a90000-0000-4000-8000-000000000004'];
+  const item = (id: string, over: Partial<ChangeAlertItem> = {}): ChangeAlertItem => ({
+    id, kindName: 'Customer', name: 'Acme Fleet Services', fieldName: 'Email', fleetsuite: 'billing@acmefleet.example',
+    netsuite: 'ap@acmefleet.example', ...over,
+  });
+
+  it('names the field, the record and what each has, and opens it on Changed in NetSuite', () => {
+    expect(changeAlertsFor([item(ids[0])])).toEqual([{
+      title: 'Email changed in NetSuite for Acme Fleet Services',
+      body: 'NetSuite has "ap@acmefleet.example" where FleetSuite has "billing@acmefleet.example". '
+        + "FleetSuite's stays until someone keeps it, which sends it on to NetSuite, or takes NetSuite's.",
+      url: `/admin/books/changed-in-netsuite?change=${ids[0]}`,
+      about: 'change',
+    }]);
+  });
+
+  it('says when NetSuite has none, and cuts a long value at a word', () => {
+    expect(changeAlertsFor([item(ids[0], { fieldName: 'Billing address', netsuite: null })])[0].body)
+      .toBe('NetSuite has no billing address where FleetSuite has "billing@acmefleet.example". '
+        + "FleetSuite's stays until someone keeps it, which sends it on to NetSuite, or takes NetSuite's.");
+    const long = `${'Suite 100 Corporate Park Drive '.repeat(4)}O'Fallon`;
+    const [cut] = changeAlertsFor([item(ids[0], { fieldName: 'Billing address', netsuite: long })]);
+    const quoted = cut.body.slice('NetSuite has '.length, cut.body.indexOf(' where FleetSuite'));
+    expect(quoted).toBe('"Suite 100 Corporate Park Drive Suite 100 Corporate Park Drive Suite 100\u2026"');
+    expect(quoted.length).toBeLessThanOrEqual(83);
+    expect(changeAlertsFor([item(ids[0], { netsuite: 'x'.repeat(80) })])[0].body).toContain(`"${'x'.repeat(80)}"`);
+  });
+
+  it('tells about up to three one by one, and more in one notification opening the list', () => {
+    const items = ids.map((id, i) => item(id, {
+      name: ['Acme Fleet Services', 'Fellers', 'Ridge Supply Co', 'Harbor Fleet'][i], fieldName: ['Email', 'Phone', 'Name', 'Billing address'][i],
+    }));
+    expect(changeAlertsFor(items.slice(0, 3)).map((a) => a.url)).toEqual(ids.slice(0, 3).map((id) => deepLinks.booksChangedInNetsuite(id)));
+    expect(changeAlertsFor(items)).toEqual([{
+      title: 'Changed in NetSuite: 4 customer and vendor details',
+      body: 'The email of Acme Fleet Services, the phone of Fellers, the name of Ridge Supply Co and 1 more. '
+        + "FleetSuite's stays until someone keeps it, which sends it on to NetSuite, or takes NetSuite's.",
+      url: '/admin/books/changed-in-netsuite',
+      about: 'change',
+    }]);
+    expect(changeAlertsFor([])).toEqual([]);
   });
 });

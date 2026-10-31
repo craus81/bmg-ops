@@ -34,16 +34,21 @@ const h = vi.hoisted(() => {
     const filters: Array<(r: Record<string, any>) => boolean> = [];
     const sorts: Array<[string, boolean]> = [];
     let limit = Infinity;
+    let changes: Record<string, any> | null = null;
     const rows = () => (state.tables[table] ??= []);
     const sorted = (list: Record<string, any>[]) => [...list].sort((a, b) => {
       for (const [c, ascending] of sorts) if (a[c] !== b[c]) return (a[c] < b[c] ? -1 : 1) * (ascending ? 1 : -1);
       return 0;
     });
-    const run = () => (state.failing.has(table)
-      ? { data: null, error: { message: `${table} can't be read` } }
-      : { data: sorted(rows().filter((r) => filters.every((f) => f(r)))).slice(0, limit).map((r) => ({ ...r })), error: null });
+    const run = () => {
+      if (state.failing.has(table)) return { data: null, error: { message: `${table} can't be read` } };
+      const found = rows().filter((r) => filters.every((f) => f(r)));
+      if (changes) { for (const r of found) Object.assign(r, changes); return { data: null, error: null }; }
+      return { data: sorted(found).slice(0, limit).map((r) => ({ ...r })), error: null };
+    };
     const builder: any = {
       select: () => builder,
+      update: (v: Record<string, any>) => { changes = v; return builder; },
       eq: (c: string, v: unknown) => { filters.push((r) => r[c] === v); return builder; },
       is: (c: string, v: unknown) => { filters.push((r) => (r[c] ?? null) === v); return builder; },
       in: (c: string, v: unknown[]) => { filters.push((r) => v.includes(r[c])); return builder; },
@@ -193,6 +198,7 @@ beforeEach(() => {
       listRow('vendor', '2207', 'Ridge Supply Co', { details: { entity_id: 'V-2207 Ridge Supply', terms_id: '2' } }),
     ],
     profiles: [{ id: USER, full_name: 'Sam Example' }],
+    netsuite_vendors: [{ netsuite_id: '2207', company_name: 'Ridge Supply Co', email: 'ap@ridge.example', phone: '(555) 010-0100', terms: 'Net 30' }],
   };
   switchOn(false);
   state.calls.length = 0;
@@ -656,7 +662,32 @@ describe('once customer and vendor details are switched on', () => {
       },
     });
     expect(state.tables.gl_netsuite_lists.find((r) => r.kind === 'vendor')?.details).toEqual({ entity_id: 'V-2207 Ridge Supply', terms_id: '3' });
+    // FleetSuite's vendor list takes the new terms now, by name.
+    expect(state.tables.netsuite_vendors[0]).toMatchObject({ terms: 'Net 45', email: 'ap@ridge.example', phone: '(555) 010-0100' });
     expect(logAudit).toHaveBeenCalledWith(h.service, expect.objectContaining({ action: 'change_vendor' }));
+  });
+
+  it("writes a vendor's new email and phone into FleetSuite's vendor list, so its next copy doesn't list them as NetSuite's", async () => {
+    const res = await vendors.post({
+      requestId: REQUEST, vendorId: '2207', signature: await vendorSignature(), reason: 'New AP contact', email: ' billing@ridge.example ', phone: '',
+    });
+    expect(res.status).toBe(200);
+    expect(netsuite.patchEntityRecord).toHaveBeenCalledWith('vendor', '2207', expect.objectContaining({ email: 'billing@ridge.example' }));
+    expect(state.tables.netsuite_vendors[0]).toEqual({ netsuite_id: '2207', company_name: 'Ridge Supply Co', email: 'billing@ridge.example', phone: null, terms: 'Net 30' });
+  });
+
+  it("says in the log when FleetSuite's vendor list can't take the change, which is in NetSuite either way", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    state.failing = new Set(['netsuite_vendors']);
+    const res = await vendors.post({ requestId: REQUEST, vendorId: '2207', signature: await vendorSignature(), reason: 'New AP contact', email: 'billing@ridge.example' });
+    expect(res.status).toBe(200);
+    expect(error).toHaveBeenCalledWith("[vendor details] couldn't note 2207's change in FleetSuite's vendor list: netsuite_vendors can't be read");
+    expect(logAudit).toHaveBeenCalledWith(h.service, expect.objectContaining({ action: 'change_vendor' }));
+  });
+
+  it("writes nothing into FleetSuite's vendor list for a change of neither email, phone nor terms", async () => {
+    expect((await vendors.post(await W9())).status).toBe(200);
+    expect(state.tables.netsuite_vendors[0]).toEqual({ netsuite_id: '2207', company_name: 'Ridge Supply Co', email: 'ap@ridge.example', phone: '(555) 010-0100', terms: 'Net 30' });
   });
 
   it("lists a record's own changes, newest first, twenty at most", async () => {

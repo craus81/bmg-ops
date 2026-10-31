@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQuery } from './netsuite';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
+import { keepFleetsuite, noteDifferences, readVendorRecords, recordsWinForSync, FIELDS, type Seen, type VendorFacts } from '@/lib/fleetsuite-records';
 
 /**
  * Vendor master (R6-7). Vendor names live as free text on
@@ -32,6 +33,8 @@ export const vendorKey = (name: string | null | undefined) =>
 export interface VendorSyncResult {
   fetched: number;
   upserted: number;
+  /** Once FleetSuite's record wins: vendors' fields NetSuite newly has something else for. */
+  changedInNetsuite?: number;
   error?: string;
   /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
   syncStateWrite?: HeartbeatResult;
@@ -86,6 +89,32 @@ async function copyVendors(service: SupabaseClient): Promise<VendorSyncResult> {
   }));
   if (mapped.length === 0) return { fetched: 0, upserted: 0 };
 
+  // Once FleetSuite's record wins (part 48, src/lib/fleetsuite-records.ts), a
+  // vendor FleetSuite has keeps its name, email and phone, NetSuite's filling
+  // a blank, and what NetSuite has instead is noted; its terms and whether
+  // it's inactive still come from NetSuite, whose screens and POs go by them.
+  // A copy that can't be read isn't written over, nor one whose switch can't.
+  let fleetsuite: Map<string, VendorFacts> | null;
+  try {
+    fleetsuite = (await recordsWinForSync(service)) ? await readVendorRecords(service) : null;
+  } catch (err: any) {
+    return { fetched: mapped.length, upserted: 0, error: String(err?.message || err).slice(0, 200) };
+  }
+  const seen: Seen[] = [];
+  if (fleetsuite) {
+    for (const row of mapped) {
+      const mine = fleetsuite.get(row.netsuite_id);
+      if (!mine) continue;
+      const kept = keepFleetsuite('vendor', row.netsuite_id, typeof mine.name === 'string' ? mine.name : null, FIELDS.vendor, mine, {
+        name: row.company_name, email: row.email, phone: row.phone,
+      });
+      row.company_name = kept.values.name as string | null;
+      row.email = kept.values.email as string | null;
+      row.phone = kept.values.phone as string | null;
+      seen.push(...kept.seen);
+    }
+  }
+
   let upserted = 0;
   for (let i = 0; i < mapped.length; i += 500) {
     const chunk = mapped.slice(i, i + 500).map(r => ({ ...r, synced_at: new Date().toISOString() }));
@@ -93,7 +122,13 @@ async function copyVendors(service: SupabaseClient): Promise<VendorSyncResult> {
     if (error) return { fetched: mapped.length, upserted, error: error.message };
     upserted += chunk.length;
   }
-  return { fetched: mapped.length, upserted };
+  if (!fleetsuite) return { fetched: mapped.length, upserted };
+  try {
+    return { fetched: mapped.length, upserted, changedInNetsuite: (await noteDifferences(service, 'vendor', seen)).opened };
+  } catch (err: any) {
+    // The next copy, two hours on, sees them again.
+    return { fetched: mapped.length, upserted, error: String(err?.message || err).slice(0, 200) };
+  }
 }
 
 /** Resolve a free-text vendor name to its master row, if one matches. */

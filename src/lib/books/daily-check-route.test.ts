@@ -1,9 +1,10 @@
 // How the daily check's cron route tells the super admins
 // (src/app/api/cron/books-daily-check/route.ts): each alert as its own kind of
-// notification, in the app and by push, and an Inventory Adjust's and a send
-// to NetSuite FleetSuite isn't sure about by email too for whoever has "Copy
-// me on new alerts" ticked, which the registry decides (Craig, 2026-10-28:
-// every new alert copies him). The check itself is held.
+// notification, in the app and by push, and an Inventory Adjust's, a send to
+// NetSuite FleetSuite isn't sure about and a change made in NetSuite to a
+// customer or vendor by email too for whoever has "Copy me on new alerts"
+// ticked, which the registry decides (Craig, 2026-10-28: every new alert
+// copies him). The check itself is held.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import type { CheckAlert } from './daily-check';
@@ -39,13 +40,13 @@ beforeEach(() => {
 });
 
 describe('the books daily check cron', () => {
-  it('tells every super admin of each alert as its kind, emailing only an Inventory Adjust and an unsure send (to whoever is copied)', async () => {
+  it('tells every super admin of each alert as its kind, emailing only an Inventory Adjust, an unsure send and a change in NetSuite (to whoever is copied)', async () => {
     alerts = [
       alert(undefined), alert('stock'), alert('balance'), alert('own'), alert('fulfillment'), alert('bill'), alert('receipt'),
-      alert('adjustment'), alert('mistake'), alert('send'),
+      alert('adjustment'), alert('mistake'), alert('send'), alert('change'),
     ];
     const res = await GET(cron());
-    expect(await res.json()).toEqual({ booksDailyCheck: 'ok', look: 'second', told: 10 });
+    expect(await res.json()).toEqual({ booksDailyCheck: 'ok', look: 'second', told: 11 });
     expect(sent.map((s) => [s.payload.type, s.payload.channels])).toEqual([
       ['books_month_differs', ['in_app', 'push']],
       ['books_stock_differs', ['in_app', 'push']],
@@ -57,6 +58,7 @@ describe('the books daily check cron', () => {
       ['books_own_adjustment_differs', ['in_app', 'push', 'email']],
       ['books_mistake_found', ['in_app', 'push']],
       ['books_netsuite_send_unsure', ['in_app', 'push', 'email']],
+      ['books_record_changed_in_netsuite', ['in_app', 'push', 'email']],
     ]);
     expect(sent.every((s) => s.ids.join() === 'craig,harold')).toBe(true);
     expect(sent[7].payload).toMatchObject({ title: 'About adjustment', body: 'Why.', url: '/admin/books' });

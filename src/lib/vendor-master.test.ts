@@ -42,16 +42,42 @@ describe('matchVendor', () => {
 describe('syncVendors', () => {
   const query = vi.mocked(suiteqlQuery);
   const heartbeat = vi.mocked(recordHeartbeat);
-  // netsuite_vendors as the copy takes it: each upsert's rows, or an error to answer with.
-  const copy = (error: { message: string } | null = null) => {
-    const upserts: Array<{ rows: Array<Record<string, unknown>>; opts: unknown }> = [];
+  type Row = Record<string, unknown>;
+  /**
+   * netsuite_vendors as the copy takes it: each upsert's rows, or an error to answer with. Once FleetSuite's record
+   * wins (`on`), the vendors FleetSuite has (`mine`) are read first, and what NetSuite has instead is noted.
+   * `switchError` is the switch's read failing.
+   */
+  const copy = (
+    error: { message: string } | null = null,
+    opts: { on?: boolean; mine?: Row[]; unread?: boolean; noteError?: string; switchError?: string } = {},
+  ) => {
+    const upserts: Array<{ rows: Row[]; opts: unknown }> = [];
+    const notes: Array<{ fn: string; p: Row[] }> = [];
+    const chain = (answer: () => { data: unknown; error: { message: string } | null }) => {
+      const q: any = { eq: () => q, order: () => q, range: async () => answer() };
+      return q;
+    };
     const service = {
       from: (table: string) => {
+        if (table === 'books_switches') {
+          return { select: () => ({ eq: () => ({ maybeSingle: async () => (opts.switchError
+            ? { data: null, error: { message: opts.switchError } }
+            : { data: opts.on ? { is_on: true } : null, error: null }) }) }) };
+        }
+        if (table === 'record_differences') return { select: () => chain(() => ({ data: [], error: null })) };
         expect(table).toBe('netsuite_vendors');
-        return { upsert: async (rows: Array<Record<string, unknown>>, opts: unknown) => { upserts.push({ rows, opts }); return { error }; } };
+        return {
+          upsert: async (rows: Row[], o: unknown) => { upserts.push({ rows, opts: o }); return { error }; },
+          select: () => chain(() => (opts.unread ? { data: null, error: { message: 'netsuite_vendors timed out' } } : { data: opts.mine ?? [], error: null })),
+        };
+      },
+      rpc: async (fn: string, args: { p: Row[] }) => {
+        notes.push({ fn, p: args.p });
+        return opts.noteError ? { data: null, error: { message: opts.noteError } } : { data: { opened: args.p.length, closed: 0 }, error: null };
       },
     };
-    return { service: service as any, upserts };
+    return { service: service as any, upserts, notes };
   };
 
   beforeEach(() => {
@@ -97,6 +123,73 @@ describe('syncVendors', () => {
     const refused = copy({ message: 'netsuite_vendors is read-only' });
     expect(await syncVendors(refused.service)).toMatchObject({ fetched: 1, upserted: 0, error: 'netsuite_vendors is read-only' });
     expect(heartbeat).toHaveBeenLastCalledWith(refused.service, 'netsuite_vendors', { fetched: 1, upserted: 0, error: 'netsuite_vendors is read-only' }, { startedAt: expect.any(Number), records: 0 });
+  });
+
+  describe("once FleetSuite's record wins", () => {
+    const NETSUITE = [
+      { id: 101, entityid: 'ACME', companyname: 'Acme Supply Company', email: 'ap@acme.example', phone: '555-0100', isinactive: 'T', termsname: 'Net 45' },
+      { id: 102, entityid: 'WIDGET', companyname: 'Widget Works', email: null, phone: '555-0122', isinactive: 'F', termsname: null },
+    ];
+    const MINE = [{ netsuite_id: '101', company_name: 'Acme Supply Co', email: null, phone: '(555) 0100', terms: 'Net 30' }];
+
+    it("keeps the name, email and phone FleetSuite has, NetSuite's filling a blank, and notes what NetSuite has instead", async () => {
+      query.mockResolvedValueOnce({ items: NETSUITE } as any);
+      const { service, upserts, notes } = copy(null, { on: true, mine: MINE });
+      expect(await syncVendors(service)).toEqual({ fetched: 2, upserted: 2, changedInNetsuite: 1, syncStateWrite: { ok: true } });
+      expect(upserts[0].rows).toEqual([
+        // Its terms and whether it's inactive still come from NetSuite.
+        { netsuite_id: '101', entity_id: 'ACME', company_name: 'Acme Supply Co', email: 'ap@acme.example', phone: '(555) 0100', terms: 'Net 45', is_inactive: true, synced_at: expect.any(String) },
+        // One FleetSuite hasn't got comes in as NetSuite has it.
+        { netsuite_id: '102', entity_id: 'WIDGET', company_name: 'Widget Works', email: null, phone: '555-0122', terms: null, is_inactive: false, synced_at: expect.any(String) },
+      ]);
+      expect(notes).toEqual([{ fn: 'note_record_differences', p: [
+        { kind: 'vendor', netsuite_id: '101', name: 'Acme Supply Co', field: 'name', fleetsuite: 'Acme Supply Co', netsuite: 'Acme Supply Company', differs: true },
+      ] }]);
+      expect(heartbeat).toHaveBeenCalledWith(service, 'netsuite_vendors', { fetched: 2, upserted: 2, changedInNetsuite: 1 }, { startedAt: expect.any(Number), records: 2 });
+    });
+
+    it("keeps FleetSuite's email and phone where NetSuite has others, or none", async () => {
+      query.mockResolvedValueOnce({ items: [
+        { id: 103, entityid: 'FELLERS', companyname: 'Fellers', email: 'orders@fellers.example', phone: null, isinactive: 'F', termsname: 'Net 30' },
+      ] } as any);
+      const { service, upserts, notes } = copy(null, { on: true, mine: [{ netsuite_id: '103', company_name: 'Fellers', email: 'ap@fellers.example', phone: '314-555-0199' }] });
+      expect(await syncVendors(service)).toMatchObject({ fetched: 1, upserted: 1, changedInNetsuite: 2 });
+      expect(upserts[0].rows[0]).toMatchObject({ company_name: 'Fellers', email: 'ap@fellers.example', phone: '314-555-0199', terms: 'Net 30' });
+      expect(notes[0].p.map((s) => [s.field, s.netsuite])).toEqual([['email', 'orders@fellers.example'], ['phone', null]]);
+    });
+
+    it("writes nothing when it can't read FleetSuite's vendors, so none is written over", async () => {
+      query.mockResolvedValueOnce({ items: NETSUITE } as any);
+      const { service, upserts, notes } = copy(null, { on: true, unread: true });
+      expect(await syncVendors(service)).toMatchObject({ fetched: 2, upserted: 0, error: "Couldn't read FleetSuite's vendors: netsuite_vendors timed out" });
+      expect(upserts).toEqual([]);
+      expect(notes).toEqual([]);
+    });
+
+    it("writes nothing when it can't tell whether FleetSuite's record wins, rather than take it for off", async () => {
+      query.mockResolvedValueOnce({ items: NETSUITE } as any);
+      const { service, upserts, notes } = copy(null, { mine: MINE, switchError: 'books_switches timed out' });
+      expect(await syncVendors(service)).toMatchObject({
+        fetched: 2, upserted: 0, error: "Couldn't tell whether FleetSuite's record wins: books_switches timed out",
+      });
+      expect(upserts).toEqual([]);
+      expect(notes).toEqual([]);
+    });
+
+    it("says so when what NetSuite has instead can't be noted, for the next copy to see again", async () => {
+      query.mockResolvedValueOnce({ items: NETSUITE } as any);
+      const { service, upserts } = copy(null, { on: true, mine: MINE, noteError: 'deadlock' });
+      expect(await syncVendors(service)).toMatchObject({ fetched: 2, upserted: 2, error: "Couldn't note what NetSuite has instead: deadlock" });
+      expect(upserts[0].rows[0]).toMatchObject({ company_name: 'Acme Supply Co' });
+    });
+
+    it("copies NetSuite's over FleetSuite's while it's off, reading nothing of FleetSuite's", async () => {
+      query.mockResolvedValueOnce({ items: NETSUITE } as any);
+      const { service, upserts, notes } = copy(null, { on: false, mine: MINE });
+      expect(await syncVendors(service)).toEqual({ fetched: 2, upserted: 2, syncStateWrite: { ok: true } });
+      expect(upserts[0].rows[0]).toMatchObject({ company_name: 'Acme Supply Company', email: 'ap@acme.example', phone: '555-0100' });
+      expect(notes).toEqual([]);
+    });
   });
 
   it('runs in the two-hour NetSuite sync, and System Health watches it on that schedule', () => {

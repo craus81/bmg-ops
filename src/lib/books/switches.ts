@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, 478 and 479, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473 and 478 to 480, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -12,12 +12,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * see it at all. A super admin turns it on in Books → Switches. A switch
  * that can't be read counts as off. Estimates in FleetSuite only is the
  * other way round: on, it stops a send (src/lib/estimates-in-fleetsuite.ts),
- * and while it's off estimates push as they do now.
+ * and while it's off estimates push as they do now. So is FleetSuite's
+ * record wins: on, it stops the NetSuite syncs writing over FleetSuite's
+ * customers and vendors, so a sync that can't read it stops rather than
+ * count it as off (readSwitch, src/lib/fleetsuite-records.ts).
  */
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
-  | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite';
+  | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records';
 
 export interface SwitchInfo {
   name: string;
@@ -83,6 +86,13 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     turnOn: "Switch on Estimates in FleetSuite only? From now on nobody can push an estimate to NetSuite, and NetSuite gets each job's sales order when it's made.",
     turnOff: 'Switch off Estimates in FleetSuite only? Estimates can be pushed to NetSuite again, as before.',
   },
+  fleetsuite_records: {
+    name: "FleetSuite's record wins",
+    what: "A change made in NetSuite to a customer's name, email, phone or billing address, or a vendor's name, email or phone, no longer comes into FleetSuite over what FleetSuite has: it's listed under Books → Changed in NetSuite, to keep FleetSuite's (sent on to NetSuite) or take NetSuite's. Until it's on, NetSuite's changes come in as they do today.",
+    where: 'The NetSuite customer and vendor syncs, and Books → Changed in NetSuite',
+    turnOn: "Switch on FleetSuite's record wins? From now on a change made in NetSuite to a customer's or vendor's name, email, phone or address doesn't come into FleetSuite by itself: it's listed under Books → Changed in NetSuite.",
+    turnOff: "Switch off FleetSuite's record wins? NetSuite's changes come into FleetSuite again as before, over what FleetSuite has.",
+  },
 };
 
 export const SWITCH_PIECES = Object.keys(SWITCHES) as SwitchPiece[];
@@ -109,6 +119,16 @@ export async function readSwitches(service: SupabaseClient): Promise<SwitchState
     const row = rows.get(piece);
     return { piece, on: row?.is_on === true, changedBy: row?.changed_by ?? null, changedAt: row?.changed_at ?? null };
   });
+}
+
+/**
+ * Whether one piece is on, for a caller that mustn't take it for off when it
+ * can't tell: off when its row is missing, and a read that fails throws.
+ */
+export async function readSwitch(service: SupabaseClient, piece: SwitchPiece): Promise<boolean> {
+  const { data, error } = await service.from('books_switches').select('is_on').eq('piece', piece).maybeSingle();
+  if (error) throw new Error(error.message);
+  return (data as { is_on?: boolean } | null)?.is_on === true;
 }
 
 /** Whether one piece is on. Off when its row is missing or can't be read. */
