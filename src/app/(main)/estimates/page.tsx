@@ -34,7 +34,7 @@ import {
 } from '@/lib/estimate-review';
 import { flashNote } from '@/lib/focus-note';
 import PartLaborEditor from '@/components/PartLaborEditor';
-import { applyPartLaborToLines } from '@/lib/part-labor';
+import { applyPartLaborToLines, applyLaborToLine } from '@/lib/part-labor';
 import { decodeVIN, isValidVIN } from '@/lib/vin-decoder';
 import { factoryQualifiers } from '@/lib/vin-factory-data';
 import { apiFetch } from '@/lib/api-client';
@@ -542,8 +542,10 @@ export default function EstimatesPage() {
   const { open: openPopout } = usePopout();
   const searchParams = useSearchParams();
   const { user, isAdmin, isSales, isGraphicsProduction, profile, hasFeature, hasRole, loading: authLoading } = useAuth();
-  // Super admins set a part's labor hours right on its line (Craig, 2026-10-23).
+  // Super admins set a part's labor hours right on its line (Craig, 2026-10-23);
+  // any admin can set one line's hours (This line only, 2026-10-30).
   const canSetPartLabor = hasRole('super_admin');
+  const canSetLineLabor = isAdmin || canSetPartLabor;
   // The nav tab was feature-gated but the URL itself was open — the exact
   // gated-by-nav-only pattern the role cleanup ended (audit item 9). Same
   // key now guards every /api/estimates route server-side.
@@ -699,6 +701,13 @@ export default function EstimatesPage() {
   // Which line's labor box is open, and the last labor save's result.
   const [laborEditKey, setLaborEditKey] = useState<string | null>(null);
   const [laborSavedMsg, setLaborSavedMsg] = useState<{ key: string; msg: string } | null>(null);
+  // Generic parts like Miscellaneous (migration 459): labor is per line only.
+  const [genericPartIds, setGenericPartIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    supabase.from('netsuite_parts').select('id').eq('is_generic', true)
+      .then(({ data }: { data: { id: string }[] | null }) => setGenericPartIds(new Set((data || []).map(r => r.id))));
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: load once on mount
+  }, []);
   // Margin floor (%) below which a quote gets flagged — admin-set, shared
   // with the wrap-quote builder via the quote_settings singleton.
   const [linkingSO, setLinkingSO] = useState(false);
@@ -5866,22 +5875,22 @@ export default function EstimatesPage() {
 
                   <div
                     className="est-c-labor"
-                    role={canSetPartLabor && line.part_id && !line.is_custom ? 'button' : undefined}
-                    tabIndex={canSetPartLabor && line.part_id && !line.is_custom ? 0 : undefined}
-                    onClick={canSetPartLabor && line.part_id && !line.is_custom
+                    role={canSetLineLabor && line.part_id && !line.is_custom ? 'button' : undefined}
+                    tabIndex={canSetLineLabor && line.part_id && !line.is_custom ? 0 : undefined}
+                    onClick={canSetLineLabor && line.part_id && !line.is_custom
                       ? () => { setLaborSavedMsg(null); setLaborEditKey(k => (k === line.key ? null : line.key)); }
                       : undefined}
-                    onKeyDown={canSetPartLabor && line.part_id && !line.is_custom
+                    onKeyDown={canSetLineLabor && line.part_id && !line.is_custom
                       ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLaborSavedMsg(null); setLaborEditKey(k => (k === line.key ? null : line.key)); } }
                       : undefined}
-                    title={canSetPartLabor && line.part_id && !line.is_custom
-                      ? 'Tap to set this part\'s labor hours (saves to the part)'
+                    title={canSetLineLabor && line.part_id && !line.is_custom
+                      ? 'Tap to set labor hours for this line'
                       : !line.is_custom && line.labor_hours == null
                       ? 'This part has no labor hours set in the catalog, so it adds nothing to Auto Labor Hours. Set it on the Parts page (0 = no labor).'
                       : line.labor_hours === 0 ? 'No labor for this part' : undefined}
                     style={{
                       fontSize: '10px', color: !line.is_custom && line.labor_hours == null ? '#f59e0b' : (line.labor_hours ?? 0) > 0 ? '#fbbf24' : 'var(--text-label)', textAlign: 'center',
-                      ...(canSetPartLabor && line.part_id && !line.is_custom ? {
+                      ...(canSetLineLabor && line.part_id && !line.is_custom ? {
                         cursor: 'pointer', borderRadius: '6px', padding: '3px 2px',
                         border: `1px solid ${line.labor_hours == null ? '#f59e0b' : 'var(--border)'}`,
                         background: line.labor_hours == null ? 'rgba(245,158,11,0.08)' : 'transparent',
@@ -5925,12 +5934,22 @@ export default function EstimatesPage() {
                   </div>
                 </div>
 
-                {laborEditKey === line.key && line.part_id && canSetPartLabor && (
+                {laborEditKey === line.key && line.part_id && canSetLineLabor && (
                   <PartLaborEditor
                     partId={line.part_id}
                     itemNumber={line.item_number}
                     currentHours={line.labor_hours}
+                    generic={genericPartIds.has(line.part_id)}
+                    canSaveToPart={canSetPartLabor}
                     onClose={() => setLaborEditKey(null)}
+                    onLineOnly={(hours) => {
+                      setLines(prev => applyLaborToLine(prev, line.key, hours));
+                      setLaborEditKey(null);
+                      setLaborSavedMsg({
+                        key: line.key,
+                        msg: hours == null ? 'Labor cleared on this line. Save the estimate to keep it.' : `Set ${hours}h on this line. Save the estimate to keep it.`,
+                      });
+                    }}
                     onSaved={(hours, msg, filledIds) => {
                       const part = { id: line.part_id!, netsuite_id: line.netsuite_item_id };
                       setLines(prev => applyPartLaborToLines(prev, part, hours));

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseLaborHoursInput, applyPartLaborToLines, lineIsPart } from './part-labor';
+import { parseLaborHoursInput, applyPartLaborToLines, applyLaborToLine, lineIsPart } from './part-labor';
+import { isGenericPart } from './generic-parts';
 
 describe('parseLaborHoursInput', () => {
   it('blank clears to not set', () => {
@@ -40,5 +41,23 @@ describe('applyPartLaborToLines', () => {
 
   it('can clear back to not set', () => {
     expect(applyPartLaborToLines(lines, part, null)[1].labor_hours).toBeNull();
+  });
+});
+
+describe('applyLaborToLine (This line only)', () => {
+  const misc = { part_id: 'p-misc', netsuite_item_id: '9', labor_hours: null, is_custom: false };
+  it('changes only the one line, not other lines of the same part', () => {
+    const lines = [{ ...misc, key: 'a' }, { ...misc, key: 'b' }];
+    const out = applyLaborToLine(lines, 'a', 1.5);
+    expect(out.map(l => l.labor_hours)).toEqual([1.5, null]);
+  });
+});
+
+describe('isGenericPart', () => {
+  it('follows the flag only, never the name', () => {
+    expect(isGenericPart({ is_generic: true })).toBe(true);
+    expect(isGenericPart({ is_generic: false })).toBe(false);
+    expect(isGenericPart(null)).toBe(false);
+    expect(isGenericPart({ item_number: 'Miscellaneous' } as any)).toBe(false);
   });
 });

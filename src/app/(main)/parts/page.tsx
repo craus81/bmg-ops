@@ -37,6 +37,8 @@ interface Part {
   item_type: string | null;
   /** FleetSuite's sales-tax setting (migration 336): NULL = by item type. */
   taxable_override: boolean | null;
+  /** Generic part like Miscellaneous (migration 459): labor set per estimate line. */
+  is_generic?: boolean;
   catalog: 'upfit' | 'graphics';
   sales_price: number;
   purchase_price: number;
@@ -469,6 +471,17 @@ export default function PartsPage() {
     setEditingLabor(null);
     setLaborValue('');
     loadParts();
+  };
+
+  // Generic parts (migration 459): labor is set on each estimate line and
+  // never kept on the part, so ticking it also clears the part's labor.
+  const updateGeneric = async (partId: string, value: boolean) => {
+    const { error } = await supabase
+      .from('netsuite_parts')
+      .update({ is_generic: value, ...(value ? { labor_hours: null } : {}), updated_at: new Date().toISOString() })
+      .eq('id', partId);
+    if (error) { await dialog.alert(`Could not save: ${error.message}`); return; }
+    setParts(prev => prev.map(p => p.id === partId ? { ...p, is_generic: value, ...(value ? { labor_hours: null } : {}) } : p));
   };
 
   // Sales tax on quotes (migration 336). FleetSuite-owned like labor hours —
@@ -1313,7 +1326,9 @@ export default function PartsPage() {
                         <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
                           Labor Hours
                         </div>
-                        {isEditingLabor ? (
+                        {part.is_generic ? (
+                          <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-muted)' }}>Set on each estimate</div>
+                        ) : isEditingLabor ? (
                           <div style={{ display: 'flex', gap: '4px' }}>
                             <input
                               type="number"
@@ -1364,6 +1379,23 @@ export default function PartsPage() {
                           </div>
                         )}
                       </div>
+                      {(isAdmin || part.is_generic) && (
+                        <div>
+                          <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
+                            Generic Part
+                          </div>
+                          <label style={{ display: 'flex', gap: '6px', alignItems: 'flex-start', fontSize: '12px', lineHeight: 1.4, cursor: isAdmin ? 'pointer' : 'default' }}>
+                            <input
+                              type="checkbox"
+                              checked={!!part.is_generic}
+                              disabled={!isAdmin}
+                              onChange={e => updateGeneric(part.id, e.target.checked)}
+                              style={{ marginTop: '2px' }}
+                            />
+                            <span style={{ color: 'var(--text-muted)' }}>Labor is set on each estimate line and never saved to this part.</span>
+                          </label>
+                        </div>
+                      )}
                       <div>
                         <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '2px' }}>
                           Reorder At / Up To

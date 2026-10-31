@@ -153,11 +153,13 @@ export async function POST(req: NextRequest) {
     const catalogOverrides: Record<string, 'upfit' | 'graphics'> = {};
     const localVendors: Record<string, string> = {};
     const localPrices: Record<string, number> = {};
+    // Generic parts (migration 459) keep no labor of their own.
+    const genericIds = new Set<string>();
     const { data: overrideRows, error: overrideErr } = await fetchAllRows<any>((from, to) =>
       supabase
         .from('netsuite_parts')
-        .select('netsuite_id, catalog_override, vendor, sales_price')
-        .or('catalog_override.not.is.null,vendor.not.is.null,sales_price.gt.0')
+        .select('netsuite_id, catalog_override, vendor, sales_price, is_generic')
+        .or('catalog_override.not.is.null,vendor.not.is.null,sales_price.gt.0,is_generic.eq.true')
         .not('netsuite_id', 'is', null)
         .order('id')
         .range(from, to));
@@ -173,6 +175,7 @@ export async function POST(req: NextRequest) {
       }
       if (r.netsuite_id && r.vendor) localVendors[String(r.netsuite_id)] = r.vendor;
       if (r.netsuite_id) localPrices[String(r.netsuite_id)] = Number(r.sales_price) || 0;
+      if (r.netsuite_id && r.is_generic) genericIds.add(String(r.netsuite_id));
     }
 
     // Build upsert batch
@@ -207,7 +210,7 @@ export async function POST(req: NextRequest) {
           quantity_available: costInfo.quantityAvailable,
           // Only when NetSuite carries a value — blank must not become 0
           // (migration 258: NULL = not set, 0 = no labor charged).
-          ...(item.labor_hours != null && String(item.labor_hours).trim() !== ''
+          ...(!genericIds.has(nsId) && item.labor_hours != null && String(item.labor_hours).trim() !== ''
             ? { labor_hours: parseFloat(item.labor_hours) || 0 }
             : {}),
           ns_class: className || null,
