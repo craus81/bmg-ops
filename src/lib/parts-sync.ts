@@ -394,10 +394,11 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   const catalogOverrides: Record<string, 'upfit' | 'graphics'> = {};
   const localVendors: Record<string, string> = {};
   const localPrices: Record<string, number> = {};
+  const genericIds = new Set<string>();
   for (const ids of chunk(activeIds, 200)) {
     const { data: rows, error: localErr } = await service
       .from('netsuite_parts')
-      .select('netsuite_id, catalog_override, vendor, sales_price')
+      .select('netsuite_id, catalog_override, vendor, sales_price, is_generic')
       .in('netsuite_id', ids);
     // Fail the run rather than upsert with an incomplete picture: a missed
     // row here reads as "FleetSuite has no price" and lets NetSuite's number
@@ -409,6 +410,7 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
       }
       if (r.netsuite_id && r.vendor) localVendors[String(r.netsuite_id)] = r.vendor;
       if (r.netsuite_id) localPrices[String(r.netsuite_id)] = Number(r.sales_price) || 0;
+      if (r.netsuite_id && r.is_generic) genericIds.add(String(r.netsuite_id));
     }
   }
 
@@ -440,8 +442,9 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
         // Labor hours only when NetSuite actually carries a value (custitem1).
         // A blank used to become 0 on every run — clobbering labor entered
         // in FleetSuite and making "not set" look like "no labor"
-        // (migration 258: NULL = not set, 0 = no labor charged).
-        ...(item.labor_hours != null && String(item.labor_hours).trim() !== ''
+        // (migration 258: NULL = not set, 0 = no labor charged). Generic
+        // parts (migration 462) keep no labor of their own at all.
+        ...(!genericIds.has(nsId) && item.labor_hours != null && String(item.labor_hours).trim() !== ''
           ? { labor_hours: parseFloat(item.labor_hours) || 0 }
           : {}),
         ns_class: className || null,

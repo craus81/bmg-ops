@@ -5,6 +5,7 @@ import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { MAX_PART_LABOR_HOURS } from '@/lib/part-labor';
 import { fillDraftEstimatesLabor } from '@/lib/part-labor-fill';
+import { isGenericPart } from '@/lib/generic-parts';
 
 const Schema = z.object({
   hours: z.number().min(0).max(MAX_PART_LABOR_HOURS).nullable(),
@@ -28,11 +29,16 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     const supabase = createServiceClient();
     const { data: part, error: readErr } = await supabase
       .from('netsuite_parts')
-      .select('id, netsuite_id, item_number, labor_hours')
+      .select('id, netsuite_id, item_number, labor_hours, is_generic')
       .eq('id', params.id)
       .maybeSingle();
     if (readErr) return NextResponse.json({ error: readErr.message }, { status: 500 });
     if (!part) return NextResponse.json({ error: 'Part not found in the catalog' }, { status: 404 });
+    // Generic parts (Miscellaneous…) never carry labor of their own: it is
+    // set per estimate line instead (src/lib/generic-parts.ts).
+    if (isGenericPart(part)) {
+      return NextResponse.json({ error: `${part.item_number} is a generic part, so its labor is set on each estimate line. Use This line only.` }, { status: 400 });
+    }
 
     const { error } = await supabase
       .from('netsuite_parts')

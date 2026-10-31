@@ -6,6 +6,10 @@
  * still-unset lines on other DRAFT estimates (src/lib/part-labor-fill.ts). Changing hours a part already
  * had never touches other estimates, so quotes already priced don't shift.
  *
+ * Since 2026-10-30 the box also has "This line only" (any admin): just that
+ * line's hours change, nothing is saved to the part. Generic parts
+ * (src/lib/generic-parts.ts) only get "This line only".
+ *
  * Migration 258: NULL = not set yet, 0 = no labor charged.
  */
 
@@ -33,6 +37,11 @@ interface LaborLine {
 export function lineIsPart(line: LaborLine, part: { id: string; netsuite_id: string | null }): boolean {
   if (line.part_id) return line.part_id === part.id;
   return !!part.netsuite_id && line.netsuite_item_id === part.netsuite_id;
+}
+
+/** One line gets the new hours ("This line only"); every other line keeps its own. */
+export function applyLaborToLine<T extends LaborLine & { key: string }>(lines: T[], key: string, hours: number | null): T[] {
+  return lines.map(l => (l.key === key ? { ...l, labor_hours: hours } : l));
 }
 
 /** Every line of this part gets the new hours (this estimate only). */
