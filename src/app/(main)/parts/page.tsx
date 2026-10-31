@@ -37,7 +37,7 @@ interface Part {
   item_type: string | null;
   /** FleetSuite's sales-tax setting (migration 336): NULL = by item type. */
   taxable_override: boolean | null;
-  /** Generic part like Miscellaneous (migration 459): labor set per estimate line. */
+  /** Generic part like Miscellaneous (migration 462): labor set per estimate line. */
   is_generic?: boolean;
   catalog: 'upfit' | 'graphics';
   sales_price: number;
@@ -473,7 +473,7 @@ export default function PartsPage() {
     loadParts();
   };
 
-  // Generic parts (migration 459): labor is set on each estimate line and
+  // Generic parts (migration 462): labor is set on each estimate line and
   // never kept on the part, so ticking it also clears the part's labor.
   const updateGeneric = async (partId: string, value: boolean) => {
     const { error } = await supabase

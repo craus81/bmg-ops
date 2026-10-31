@@ -153,7 +153,7 @@ export async function POST(req: NextRequest) {
     const catalogOverrides: Record<string, 'upfit' | 'graphics'> = {};
     const localVendors: Record<string, string> = {};
     const localPrices: Record<string, number> = {};
-    // Generic parts (migration 459) keep no labor of their own.
+    // Generic parts (migration 462) keep no labor of their own.
     const genericIds = new Set<string>();
     const { data: overrideRows, error: overrideErr } = await fetchAllRows<any>((from, to) =>
       supabase

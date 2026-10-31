@@ -443,7 +443,7 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
         // A blank used to become 0 on every run — clobbering labor entered
         // in FleetSuite and making "not set" look like "no labor"
         // (migration 258: NULL = not set, 0 = no labor charged). Generic
-        // parts (migration 459) keep no labor of their own at all.
+        // parts (migration 462) keep no labor of their own at all.
         ...(!genericIds.has(nsId) && item.labor_hours != null && String(item.labor_hours).trim() !== ''
           ? { labor_hours: parseFloat(item.labor_hours) || 0 }
           : {}),

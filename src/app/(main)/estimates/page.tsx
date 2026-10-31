@@ -701,7 +701,7 @@ export default function EstimatesPage() {
   // Which line's labor box is open, and the last labor save's result.
   const [laborEditKey, setLaborEditKey] = useState<string | null>(null);
   const [laborSavedMsg, setLaborSavedMsg] = useState<{ key: string; msg: string } | null>(null);
-  // Generic parts like Miscellaneous (migration 459): labor is per line only.
+  // Generic parts like Miscellaneous (migration 462): labor is per line only.
   const [genericPartIds, setGenericPartIds] = useState<Set<string>>(new Set());
   useEffect(() => {
     supabase.from('netsuite_parts').select('id').eq('is_generic', true)
