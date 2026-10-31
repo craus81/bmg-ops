@@ -10,7 +10,7 @@ export async function readSoBillingLines(salesOrderId: string, locationId: strin
   const soId = parseInt(salesOrderId, 10);
   const loc = parseInt(locationId, 10);
   const head = await suiteqlQuery(`
-    SELECT t.status, t.tranid, t.otherrefnum, c.companyname AS customer_name
+    SELECT t.status, t.tranid, t.otherrefnum, t.entity AS customer_id, c.companyname AS customer_name
     FROM transaction t LEFT JOIN customer c ON t.entity = c.id
     WHERE t.id = ${soId} AND t.type = 'SalesOrd'
   `);
@@ -82,6 +82,7 @@ export async function readSoBillingLines(salesOrderId: string, locationId: strin
     status: String(h.status || ''),
     soNumber: String(h.tranid || ''),
     customerName: h.customer_name || null,
+    customerNetsuiteId: h.customer_id != null ? String(h.customer_id) : null,
     poNumber: h.otherrefnum || null,
     lines,
   };

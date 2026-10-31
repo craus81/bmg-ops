@@ -7,6 +7,7 @@ import { getSalesOrderRecord, patchSalesOrder } from '@/lib/netsuite';
 import { parseSalesOrderRecord, planSalesOrderEdit, type SalesOrderView } from '@/lib/sales-order-edit';
 import { refreshSalesOrderMirror } from '@/lib/sales-order-mirror-refresh';
 import { findSoInvoices } from '@/lib/so-invoices';
+import { fetchEmailedByNumber, type EmailedInfo } from '@/lib/invoice-emails';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -17,7 +18,8 @@ export const maxDuration = 60;
  * the order from NetSuite, PATCH writes the edit to NetSuite and keeps only
  * a note (audit history, the mirror row, the estimate's "changed" stamp).
  *
- *   GET   (staff)  order + lines + invoices + linked estimate/job + history.
+ *   GET   (staff)  order + lines + invoices (with when/who/to whom each was
+ *                  emailed) + linked estimate/job + history.
  *                  Prices and totals are left out for anyone without
  *                  See prices.
  *   PATCH (admin)  { lastModified, header?, lines?, add? } — planned by
@@ -66,8 +68,25 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     findSoInvoices([params.id]).then(r => r.invoices.get(params.id) || []).catch(() => null),
   ]);
 
+  // Has each invoice been emailed to the customer, when, by whom, to whom.
+  const invoiceNumbers = (invoicesRes || []).map(inv => inv.tranid).filter(Boolean);
+  const [emailed, sentByRes] = invoiceNumbers.length === 0
+    ? [{} as Record<string, EmailedInfo>, { data: [] as { invoice_number: string; sent_by: string | null }[] }]
+    : await Promise.all([
+      fetchEmailedByNumber(supabase, invoiceNumbers).catch((): Record<string, EmailedInfo> => ({})),
+      supabase.from('invoice_emails').select('invoice_number, sent_by')
+        .in('invoice_number', invoiceNumbers).order('sent_at', { ascending: false }),
+    ]);
+  const lastSentBy = new Map<string, string | null>();
+  for (const r of (sentByRes.data || []) as { invoice_number: string; sent_by: string | null }[]) {
+    if (!lastSentBy.has(r.invoice_number)) lastSentBy.set(r.invoice_number, r.sent_by);
+  }
+
   const history = historyRes.data || [];
-  const actorIds = [...new Set(history.map(h => h.actor_id).filter((a): a is string => !!a))];
+  const actorIds = [...new Set([
+    ...history.map(h => h.actor_id),
+    ...lastSentBy.values(),
+  ].filter((a): a is string => !!a))];
   const names = new Map<string, string>();
   if (actorIds.length > 0) {
     const { data: profs } = await supabase.from('profiles').select('id, full_name').in('id', actorIds);
@@ -83,6 +102,12 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     // null = the lookup failed (shown as "couldn't check"), never "none".
     invoices: invoicesRes === null ? null : invoicesRes.map(inv => ({
       id: inv.id, tranid: inv.tranid, trandate: inv.trandate, total: seeMoney ? inv.total : null,
+      emailed: emailed[inv.tranid] ? {
+        at: emailed[inv.tranid].sent_at,
+        by: names.get(lastSentBy.get(inv.tranid) || '') || null,
+        to: emailed[inv.tranid].recipients,
+        status: emailed[inv.tranid].delivery_status,
+      } : null,
     })),
     history: history.map(h => ({
       at: h.created_at,
