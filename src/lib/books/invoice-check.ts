@@ -525,16 +525,17 @@ export interface InvoiceBooks {
   nothingToPost?: 'voided' | 'zero';
   /**
    * Which copy of the document the entry that stands was made from, NetSuite's or FleetSuite's own: an invoice's
-   * (own_invoice@1, src/lib/books/own-invoice-posting.ts), a fulfillment's or item receipt's (own_fulfillment@1 and
-   * own_receipt@1, own-stock-posting.ts) or a bill's (own_bill@1, own-bill-posting.ts). Left out for the kinds whose
-   * entries don't say.
+   * (own_invoice@1, src/lib/books/own-invoice-posting.ts), a fulfillment's, item receipt's or adjustment's
+   * (own_fulfillment@1, own_receipt@1 and own_adjustment@1, own-stock-posting.ts) or a bill's (own_bill@1,
+   * own-bill-posting.ts). Left out for the kinds whose entries don't say.
    */
   from?: 'netsuite' | 'fleetsuite';
   /**
    * When FleetSuite has its own copy of the document: whether the books post that copy, and when they don't why; a
-   * receipt's with Books' own key for it, which its page on Own receipts is opened by.
+   * receipt's with Books' own key for it, which its page on Own receipts is opened by, and an adjustment's with
+   * FleetSuite's id for its Inventory Adjust, which its page on Own adjustments is opened by.
    */
-  own?: { posts: boolean; why?: string; receiptKey?: string };
+  own?: { posts: boolean; why?: string; receiptKey?: string; adjustmentId?: string };
 }
 
 /**

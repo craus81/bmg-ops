@@ -36,7 +36,7 @@ import { STOCK_RULE, STOCK_SOURCE_TYPE, type StockSourceType } from './stock-rul
 import { workOutStockMonth, type StockMonthData, type WorkedStockDocument } from './stock-check';
 import { OWN_COMPANY } from './own-invoices';
 import { OWN_INVOICE_RULE, ownCopyDays, ownPick, readOwnCopies, salesTaxAccount, type OwnCopies, type OwnPick } from './own-invoice-posting';
-import { chartNames, ownStockPick, ownStockRule, readOwnStockCopies, readOwnStockSince, type OwnStockEntry, type OwnStockPick } from './own-stock-posting';
+import { chartNames, ownStockPick, ownStockRule, readOwnStockCopies, readOwnStockSince, THEIRS, type OwnStockEntry, type OwnStockPick } from './own-stock-posting';
 import type { CopiesThrough } from './own-fulfillment-check';
 import type { BillCopiesThrough } from './own-bill-check';
 import { OWN_BILL_RULE, ownBillPick, readOwnBillCopies, readOwnBillSince, type OwnBillCopies, type OwnBillEntry, type OwnBillPick } from './own-bill-posting';
@@ -331,11 +331,11 @@ export function replaceBillMemo(worked: WorkedBill, current: { posting_rule?: st
   return switchedMemo(worked.number, current, !!own?.entry, OWN_BILL_RULE, "NetSuite's bill");
 }
 
-/** Why a stock document's entry is replaced, as for an invoice's (decideStockDocument): only a fulfillment or receipt changes copies. */
+/** Why a stock document's entry is replaced, as for an invoice's (decideStockDocument): only a fulfillment, receipt or adjustment changes copies. */
 export function replaceStockMemo(worked: WorkedStockDocument, current: { posting_rule?: string } | null, own?: OwnStockPick | null): string {
   const rule = ownStockRule(worked.entry.type);
   if (!rule) return `${worked.number} changed in NetSuite`;
-  return switchedMemo(worked.number, current, !!own?.entry, rule, worked.entry.type === 'ItemShip' ? "NetSuite's fulfillment" : "NetSuite's receipt");
+  return switchedMemo(worked.number, current, !!own?.entry, rule, `NetSuite's ${THEIRS[worked.entry.type]}`);
 }
 
 /** What NetSuite wouldn't say about a month's invoice lines that the entries depend on; a run leaves such a month alone. */
@@ -378,12 +378,19 @@ function copyBooks(
   books: InvoiceBooks,
   rule: string | undefined,
   ownRule: string | null,
-  own: { entry: unknown; why: string | null; receiptKey?: string } | null | undefined,
+  own: { entry: unknown; why: string | null; receiptKey?: string; adjustmentId?: string } | null | undefined,
 ): InvoiceBooks {
   return {
     ...books,
     ...(rule ? { from: rule === ownRule ? 'fleetsuite' as const : 'netsuite' as const } : {}),
-    ...(own ? { own: { posts: !!own.entry, ...(own.why ? { why: own.why } : {}), ...(own.receiptKey ? { receiptKey: own.receiptKey } : {}) } } : {}),
+    ...(own ? {
+      own: {
+        posts: !!own.entry,
+        ...(own.why ? { why: own.why } : {}),
+        ...(own.receiptKey ? { receiptKey: own.receiptKey } : {}),
+        ...(own.adjustmentId ? { adjustmentId: own.adjustmentId } : {}),
+      },
+    } : {}),
   };
 }
 
@@ -1052,7 +1059,7 @@ const ledgerCopySignature = (worked: WorkedLedgerCopy) => signature(
   })),
 );
 
-/** The lines of Books' own copy's entry of a fulfillment or receipt, as signature compares them. */
+/** The lines of Books' own copy's entry of a fulfillment, receipt or adjustment, as signature compares them. */
 const ownStockSignature = (entry: OwnStockEntry) => signature(
   entry.date,
   entry.lines.map((l) => ({
@@ -1130,8 +1137,8 @@ export function bankJournalEntry(
 
 /**
  * What to do about one stock document of a month, given what the journal holds for it: as for a journal entry, but for
- * a fulfillment or item receipt Books has its own copy of, whose entry posts when ownStockPick says so, as an invoice's
- * own copy's does (decide).
+ * a fulfillment, item receipt or adjustment Books has its own copy of, whose entry posts when ownStockPick says so, as
+ * an invoice's own copy's does (decide).
  */
 export function decideStockDocument(worked: WorkedStockDocument, posting: StockPosting | undefined, own?: OwnStockPick | null): Decision {
   const entry = own?.entry ?? null;
@@ -1151,8 +1158,9 @@ export function stockDocumentBooks(worked: WorkedStockDocument, posting: StockPo
  * FleetSuite's entry for a NetSuite stock document, its `generation`th, made
  * as a journal entry's is, keyed by its STOCK_SOURCE_TYPE: `item_fulfillment:…`
  * and so on, `invoice_cost:…` for an invoice's or credit memo's cost lines.
- * With `own`, the entry of Books' own copy of a fulfillment or receipt
- * instead (own_fulfillment@1 or own_receipt@1), under the same key.
+ * With `own`, the entry of Books' own copy of a fulfillment, receipt or
+ * adjustment instead (own_fulfillment@1, own_receipt@1 or own_adjustment@1),
+ * under the same key.
  */
 export function stockJournalEntry(
   worked: WorkedStockDocument,
@@ -1398,7 +1406,7 @@ export async function postInvoices(
     // they match, as its own invoices do: from the first month it made any, checked against the copies of NetSuite's stock
     // moves, bills and GL as far as each had come.
     const [stockSince, billSince, stockCopied, billsCopied, ledgerCopied] = await Promise.all([
-      readOwnStockSince(service).catch((err) => { throw readFailed("the months of Books' own fulfillments and receipts", err); }),
+      readOwnStockSince(service).catch((err) => { throw readFailed("the months of Books' own fulfillments, receipts and adjustments", err); }),
       readOwnBillSince(service).catch((err) => { throw readFailed("the months of Books' own bills", err); }),
       service.from('sync_state').select('last_synced_at').eq('sync_type', BOOKS_STOCK_SYNC).maybeSingle(),
       service.from('sync_state').select('last_synced_at').eq('sync_type', BOOKS_BILLS_SYNC).maybeSingle(),
@@ -1814,9 +1822,9 @@ export async function postInvoices(
         if (held.error) throw readFailed(entriesOf('stock'), held.error);
         const postings = new Map((((held.data as any)?.documents ?? []) as StockPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
 
-        // Books' own copies of the month's fulfillments and receipts, made on the days they're dated.
+        // Books' own copies of the month's fulfillments, receipts and adjustments, made on the days they're dated.
         const ownStock = await readOwnStockCopies(service, company, stockDocuments.map((w) => w.entry), stockSince, stockThrough)
-          .catch((err) => { throw readFailed(`Books' own copies of ${company}'s fulfillments and receipts for ${monthLabel(month)}`, err); });
+          .catch((err) => { throw readFailed(`Books' own copies of ${company}'s fulfillments, receipts and adjustments for ${monthLabel(month)}`, err); });
 
         const tasks: Array<() => Promise<void>> = [];
         for (const w of stockDocuments) {

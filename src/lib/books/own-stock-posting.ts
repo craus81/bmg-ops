@@ -6,26 +6,29 @@ import { STOCK_SOURCE_TYPE } from './stock-rule';
 import type { StockDocument, WorkedStockDocument } from './stock-check';
 import { checkOwnFulfillments, type CopiesThrough, type FulfilPairsData, type OwnFulfillmentCheck } from './own-fulfillment-check';
 import { checkOwnReceipts, type OwnReceiptCheck, type ReceiptPairsData } from './own-receipt-check';
+import { checkOwnAdjustments, INVENTORY_ADJUST_ACCOUNT, type AdjustPairsData, type OwnAdjustmentCheck } from './own-adjustment-check';
 import { dayText } from './own-invoice-check';
 import { ownCopyDays, type OwnBooksRead } from './own-invoice-posting';
 import { OWN_COMPANY } from './own-invoices';
 
 /**
- * FleetSuite's own fulfillments and receipts posted to its books (migration
- * 456; owner decision 2026-10-30, thread "Replacing NetSuite with
- * FleetSuite", "Own postings", then "Build it"; docs/books.md "Posting
- * FleetSuite's own fulfillments, receipts and bills").
+ * FleetSuite's own fulfillments, receipts and adjustments posted to its books
+ * (migrations 456 and 457; owner decision 2026-10-30, thread "Replacing
+ * NetSuite with FleetSuite", "Own postings", then "Build it"; docs/books.md
+ * "Posting FleetSuite's own fulfillments, receipts and bills").
  *
- * A fulfillment FleetSuite made, or a Receive on the Receiving page that
- * NetSuite took, posts from Books' own copy of it
- * (src/lib/books/own-fulfillments.ts, own-receipts.ts) instead of from
- * NetSuite's document, as an invoice FleetSuite made does
+ * A fulfillment FleetSuite made, a Receive on the Receiving page that
+ * NetSuite took, or an Inventory Adjust, posts from Books' own copy of it
+ * (src/lib/books/own-fulfillments.ts, own-receipts.ts; an Inventory Adjust's
+ * own record, src/lib/inventory-adjust.ts) instead of from NetSuite's
+ * document, as an invoice FleetSuite made does
  * (src/lib/books/own-invoice-posting.ts), when:
- *   - the copy matches NetSuite's document, as Own fulfillments or Own
- *     receipts checks it (src/lib/books/own-fulfillment-check.ts,
- *     own-receipt-check.ts): its date, where it took stock from or the
- *     company it's for, each item and how many, and what that cost or added
- *     to stock;
+ *   - the copy matches NetSuite's document, as Own fulfillments, Own
+ *     receipts or Own adjustments checks it
+ *     (src/lib/books/own-fulfillment-check.ts, own-receipt-check.ts,
+ *     own-adjustment-check.ts): its date, where it took stock from or the
+ *     company it's for, each item and how many, what that cost or added to
+ *     stock, and an adjustment's account;
  *   - and the entry the copy makes is the one NetSuite's makes (its lines in
  *     the copy of NetSuite's GL, as the stock rule posts them), account by
  *     account and on the same day, so nothing in the books moves when a
@@ -47,28 +50,35 @@ import { OWN_COMPANY } from './own-invoices';
  *     what they come to is credited to the account the company's item
  *     receipts hold received stock against until it's billed, the one most of
  *     them credit, as the bill rule picks it (pickReceivedAccount in
- *     src/lib/books/bill-check.ts).
+ *     src/lib/books/bill-check.ts);
+ *   - own_adjustment@1: what the change came to, as the check worked it out
+ *     (the item's average at the location just before), goes onto the item's
+ *     asset account, or comes off it, against the account Inventory Adjust
+ *     posts to (52000 Inventory Adjustment).
  * Each is the document's entry as NetSuite's is, keyed
- * `item_fulfillment:<NetSuite id>:<n>` or `item_receipt:…`, in the month
- * NetSuite booked the document into, its lines naming FleetSuite's own
- * (`own:<item>:cost`, `own:<item>:asset`, `own:received`), each with the
- * customer's or vendor's name and the item in its memo.
+ * `item_fulfillment:<NetSuite id>:<n>`, `item_receipt:…` or
+ * `inventory_adjustment:…`, in the month NetSuite booked the document into,
+ * its lines naming FleetSuite's own (`own:<item>:cost`, `own:<item>:asset`,
+ * `own:received`, `own:adjustment`), each with the customer's or vendor's
+ * name, or the adjustment's reason, and the item in its memo.
  *
  * Pure but for the reads. Amounts are whole cents, debit positive.
  */
 
 export const OWN_FULFILLMENT_RULE = 'own_fulfillment@1';
 export const OWN_RECEIPT_RULE = 'own_receipt@1';
+export const OWN_ADJUSTMENT_RULE = 'own_adjustment@1';
 
-/** The rule a stock document's own copy posts with: a fulfillment's or an item receipt's; null for any other kind. */
+/** The rule a stock document's own copy posts with: a fulfillment's, an item receipt's or an adjustment's; null for any other kind. */
 export function ownStockRule(type: string): string | null {
   if (type === 'ItemShip') return OWN_FULFILLMENT_RULE;
   if (type === 'ItemRcpt') return OWN_RECEIPT_RULE;
+  if (type === 'InvAdjst') return OWN_ADJUSTMENT_RULE;
   return null;
 }
 
 /** NetSuite's document a stock copy stands for, in words. */
-const THEIRS: Readonly<Record<string, string>> = { ItemShip: 'fulfillment', ItemRcpt: 'receipt' };
+export const THEIRS: Readonly<Record<string, string>> = { ItemShip: 'fulfillment', ItemRcpt: 'receipt', InvAdjst: 'adjustment' };
 
 // ── The accounts ───────────────────────────────────────────────────────────
 
@@ -202,6 +212,22 @@ function receiptEntry(check: OwnReceiptCheck, accounts: OwnStockAccountsData, na
   return { lines, problems, costs: [] };
 }
 
+/** A copy of an adjustment's entry: what the change came to onto the item's asset account, or off it, against Inventory Adjust's account. */
+function adjustmentEntry(check: OwnAdjustmentCheck): BuiltEntry {
+  const cents = check.fleetsuiteValue;
+  if (cents === null || cents === 0 || !check.accountId) return { lines: [], problems: [], costs: [] };
+  if (!check.assetAccount) return { lines: [], problems: [{ kind: 'no_asset', item: check.item }], costs: [] };
+  const memo = lineMemo(check.reason, check.item);
+  return {
+    lines: [
+      { lineId: `own:${check.itemId}:asset`, account: check.assetAccount, cents, memo, customerId: null, vendorRef: null, itemNumber: check.item },
+      { lineId: 'own:adjustment', account: check.accountId, cents: -cents, memo, customerId: null, vendorRef: null, itemNumber: check.item },
+    ],
+    problems: [],
+    costs: [],
+  };
+}
+
 /** Why a copy's entry can't be worked out, in a sentence. */
 function problemText(p: OwnStockProblem): string {
   switch (p.kind) {
@@ -296,14 +322,18 @@ export function entryRows(
 
 // ── Picking ────────────────────────────────────────────────────────────────
 
-/** Books' own copies of some NetSuite fulfillments and item receipts, checked, by NetSuite's id, and the accounts they post to. */
+/**
+ * Books' own copies of some NetSuite fulfillments, item receipts and adjustments, checked, by NetSuite's id, and the
+ * accounts the fulfillments and receipts post to (an adjustment's check has its own).
+ */
 export interface OwnStockCopies {
   fulfillments: Map<string, OwnFulfillmentCheck>;
   receipts: Map<string, OwnReceiptCheck>;
+  adjustments: Map<string, OwnAdjustmentCheck>;
   accounts: OwnStockAccountsData;
 }
 
-/** What the books post for a fulfillment or item receipt Books has its own copy of. */
+/** What the books post for a fulfillment, item receipt or adjustment Books has its own copy of. */
 export interface OwnStockPick {
   /** The copy's entry, when the books post it. */
   entry: OwnStockEntry | null;
@@ -319,6 +349,8 @@ export interface OwnStockPick {
   costs: string | null;
   /** Books' own key for a copy of a receipt, which its page is opened by. */
   receiptKey?: string;
+  /** FleetSuite's id for an Inventory Adjust, which its page is opened by. */
+  adjustmentId?: string;
 }
 
 const NUMBER_WORDS = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
@@ -346,19 +378,21 @@ function costsText(costs: CostPlace[], names: ChartNames): string | null {
 
 /**
  * What the books post for a stock document, given Books' own copies and the entry NetSuite's makes with the stock rule
- * (worked.checked.lines). Null when a copy has no say: there's none, the document isn't a fulfillment or item receipt,
- * or it's another company's, or posted to more than one.
+ * (worked.checked.lines). Null when a copy has no say: there's none, the document isn't a fulfillment, item receipt or
+ * adjustment, or it's another company's, or posted to more than one.
  */
 export function ownStockPick(worked: WorkedStockDocument, copies: OwnStockCopies, month: { company: string; names: ChartNames }): OwnStockPick | null {
   const doc = worked.entry;
   const fulfillment = doc.type === 'ItemShip' ? copies.fulfillments.get(doc.netsuite_id) : undefined;
   const receipt = doc.type === 'ItemRcpt' ? copies.receipts.get(doc.netsuite_id) : undefined;
-  const check = fulfillment ?? receipt;
+  const adjustment = doc.type === 'InvAdjst' ? copies.adjustments.get(doc.netsuite_id) : undefined;
+  const check = fulfillment ?? receipt ?? adjustment;
   if (!check) return null;
-  const company = fulfillment ? OWN_COMPANY : receipt!.company;
+  // Fulfillments are BMG's, and so are adjustments: Inventory Adjust adjusts O'Fallon's stock.
+  const company = receipt ? receipt.company : OWN_COMPANY;
   if (company !== month.company || doc.companies.length !== 1 || doc.companies[0] !== month.company) return null;
   const theirs = THEIRS[doc.type];
-  const key = receipt ? { receiptKey: receipt.receiptKey } : {};
+  const key = receipt ? { receiptKey: receipt.receiptKey } : adjustment ? { adjustmentId: adjustment.id } : {};
   const not = (why: string | null, more: Partial<OwnStockPick> = {}): OwnStockPick => ({
     entry: null, why, own: null, differs: null, learned: [], costs: null, ...key, ...more,
   });
@@ -374,7 +408,8 @@ export function ownStockPick(worked: WorkedStockDocument, copies: OwnStockCopies
   // NetSuite's own lines don't balance: whatever stands stays, whichever copy made it.
   if (worked.checked.status === 'unworkable') return not(null);
 
-  const built = fulfillment ? fulfillmentEntry(fulfillment, copies.accounts) : receiptEntry(receipt!, copies.accounts, month.names);
+  const built = fulfillment ? fulfillmentEntry(fulfillment, copies.accounts)
+    : receipt ? receiptEntry(receipt, copies.accounts, month.names) : adjustmentEntry(adjustment!);
   const costs = costsText(built.costs, month.names);
   if (built.problems.length) {
     return not(`FleetSuite's own copy matches NetSuite's ${theirs}, but its entry can't be worked out, so the books post NetSuite's. ${problemText(built.problems[0])}`);
@@ -392,16 +427,18 @@ export function ownStockPick(worked: WorkedStockDocument, copies: OwnStockCopies
 
 // ── Reading ────────────────────────────────────────────────────────────────
 
-/** The first month Books has any own copy of a fulfillment and of a receipt in ('YYYY-MM-01'); null when it has none. */
+/** The first month Books has any own copy of a fulfillment, of a receipt and of an adjustment in ('YYYY-MM-01'); null when it has none. */
 export interface OwnStockSince {
   fulfillments: string | null;
   receipts: string | null;
+  adjustments: string | null;
 }
 
 /**
  * Books' own copies of one company's stock documents of a month (`documents`, gl_stock_month's), made on the days
  * they're dated and none before `since`, each checked against NetSuite's (`through`: how far the copies of NetSuite's
- * stock moves and general ledger had come), and the accounts the matching ones post to. A fulfillment is BMG's alone.
+ * stock moves and general ledger had come), and the accounts the matching fulfillments and receipts post to. A
+ * fulfillment and an adjustment are BMG's alone.
  */
 export async function readOwnStockCopies(
   service: SupabaseClient,
@@ -412,16 +449,22 @@ export async function readOwnStockCopies(
 ): Promise<OwnStockCopies> {
   const shipped = documents.filter((d) => d.type === 'ItemShip');
   const received = documents.filter((d) => d.type === 'ItemRcpt');
+  const adjusted = documents.filter((d) => d.type === 'InvAdjst');
   const ids = new Set(documents.map((d) => d.netsuite_id));
   const shipDays = company === OWN_COMPANY && since.fulfillments ? ownCopyDays(shipped, since.fulfillments) : null;
   const receiveDays = since.receipts ? ownCopyDays(received, since.receipts) : null;
+  const adjustDays = company === OWN_COMPANY && since.adjustments ? ownCopyDays(adjusted, since.adjustments) : null;
 
-  const [ships, receives] = await Promise.all([
+  const [ships, receives, adjusts] = await Promise.all([
     shipDays ? service.rpc('gl_own_fulfillment_pairs', { p_from: shipDays.from, p_to: shipDays.to, p_netsuite_id: null }) : null,
     receiveDays ? service.rpc('gl_own_receipt_pairs', { p_from: receiveDays.from, p_to: receiveDays.to, p_key: null }) : null,
+    adjustDays
+      ? service.rpc('gl_own_adjustment_pairs', { p_from: adjustDays.from, p_to: adjustDays.to, p_id: null, p_account: INVENTORY_ADJUST_ACCOUNT })
+      : null,
   ]);
   if (ships?.error) throw new Error(ships.error.message);
   if (receives?.error) throw new Error(receives.error.message);
+  if (adjusts?.error) throw new Error(adjusts.error.message);
   const fulfillments = new Map(ships
     ? checkOwnFulfillments((ships.data ?? {}) as FulfilPairsData, through).fulfillments
       .filter((f) => ids.has(f.netsuiteId))
@@ -432,7 +475,12 @@ export async function readOwnStockCopies(
       .filter((r): r is OwnReceiptCheck & { netsuiteId: string } => !!r.netsuiteId && ids.has(r.netsuiteId) && r.company === company)
       .map((r) => [r.netsuiteId, r] as const)
     : []);
-  return { fulfillments, receipts, accounts: await readOwnStockAccounts(service, company, fulfillments, receipts) };
+  const adjustments = new Map(adjusts
+    ? checkOwnAdjustments((adjusts.data ?? {}) as AdjustPairsData, through).adjustments
+      .filter((a): a is OwnAdjustmentCheck & { netsuiteId: string } => !!a.netsuiteId && ids.has(a.netsuiteId))
+      .map((a) => [a.netsuiteId, a] as const)
+    : []);
+  return { fulfillments, receipts, adjustments, accounts: await readOwnStockAccounts(service, company, fulfillments, receipts) };
 }
 
 /** The accounts the matching copies post to (gl_own_stock_accounts, migration 456): nothing to read when none matches. */
@@ -457,17 +505,21 @@ export async function readOwnStockAccounts(
   };
 }
 
-/** The first month each kind of own copy was made in, from gl_own_fulfillment_months and gl_own_receipt_months. */
+/** The first month each kind of own copy was made in, from gl_own_fulfillment_months, gl_own_receipt_months and gl_own_adjustment_months. */
 export async function readOwnStockSince(service: SupabaseClient): Promise<OwnStockSince> {
-  const [ships, receives] = await Promise.all([service.rpc('gl_own_fulfillment_months'), service.rpc('gl_own_receipt_months')]);
+  const [ships, receives, adjusts] = await Promise.all([
+    service.rpc('gl_own_fulfillment_months'), service.rpc('gl_own_receipt_months'), service.rpc('gl_own_adjustment_months'),
+  ]);
   if (ships.error) throw new Error(ships.error.message);
   if (receives.error) throw new Error(receives.error.message);
+  if (adjusts.error) throw new Error(adjusts.error.message);
   const first = (rows: unknown) => ((rows ?? []) as Array<{ month: string }>).map((m) => m.month).sort()[0] ?? null;
-  return { fulfillments: first(ships.data), receipts: first(receives.data) };
+  return { fulfillments: first(ships.data), receipts: first(receives.data), adjustments: first(adjusts.data) };
 }
 
 // ── The Own pages ──────────────────────────────────────────────────────────
 
-/** How the journal says what it holds for a fulfillment and an item receipt (gl_stock_postings, migration 456). */
+/** How the journal says what it holds for a fulfillment, an item receipt and an adjustment (gl_stock_postings, migration 456). */
 export const FULFILLMENT_BOOKS: OwnBooksRead = { fn: 'gl_stock_postings', list: 'documents', sourceType: STOCK_SOURCE_TYPE.ItemShip, ownRule: OWN_FULFILLMENT_RULE };
 export const RECEIPT_BOOKS: OwnBooksRead = { fn: 'gl_stock_postings', list: 'documents', sourceType: STOCK_SOURCE_TYPE.ItemRcpt, ownRule: OWN_RECEIPT_RULE };
+export const ADJUSTMENT_BOOKS: OwnBooksRead = { fn: 'gl_stock_postings', list: 'documents', sourceType: STOCK_SOURCE_TYPE.InvAdjst, ownRule: OWN_ADJUSTMENT_RULE };

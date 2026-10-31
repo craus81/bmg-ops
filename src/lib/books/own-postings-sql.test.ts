@@ -2,10 +2,10 @@
 // receipts and bills (migrations 416, 435 and 436) in place of NetSuite's
 // documents when they match them and make the same entry, and the Own pages
 // say which copy made each entry. This runs migration 314 (with stand-ins for
-// the app tables it and 407, 416 and 435 point at) and migrations 359–364,
+// the app tables it and 407, 416, 435 and 454 point at) and migrations 359–364,
 // 367, 370, 374, 376, 377, 380, 382–387, 389–395, 397, 399, 401–405, 407,
-// 409, 416, 435, 436 and 456 in an in-memory Postgres (PGlite) as the app's
-// server login, holds what gl_stock_documents and gl_own_stock_accounts
+// 409, 416, 435, 436, 454, 456 and 457 in an in-memory Postgres (PGlite) as
+// the app's server login, holds what gl_stock_documents and gl_own_stock_accounts
 // return, then runs the posting job against made-up NetSuite documents and
 // Books' own copies of them, and reads what the Own pages show of them.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -80,8 +80,10 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migrations 314, 407, 416 and 435 point at in the app's own schema.
+    -- What migrations 314, 407, 416, 435 and 454 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
+    CREATE TABLE public.netsuite_parts (id UUID PRIMARY KEY);
+    CREATE FUNCTION public.is_admin() RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT false $$;
     CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT, netsuite_id TEXT, tax_exempt BOOLEAN);
     CREATE TABLE public.netsuite_sales_orders (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(), netsuite_id TEXT NOT NULL UNIQUE, tranid TEXT,
@@ -104,7 +106,8 @@ async function freshDb(): Promise<PGlite> {
     '401-books-stock-by-item.sql', '402-books-stock-values.sql', '403-books-stock-item-setup.sql',
     '404-books-stock-ledger-parts.sql', '405-books-stock-account-items.sql',
     '407-books-own-invoices.sql', '409-books-own-invoice-posting.sql',
-    '416-books-own-fulfillments.sql', '435-books-own-bills.sql', '436-books-snap-a-bill.sql', '456-books-own-postings.sql',
+    '416-books-own-fulfillments.sql', '435-books-own-bills.sql', '436-books-snap-a-bill.sql', '454-inventory-adjustments.sql',
+    '456-books-own-postings.sql', '457-books-own-adjustments.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -614,15 +617,15 @@ describe("the posting job, with Books' own fulfillments, receipts and bills", ()
   it("stops the run, saying what it was reading, when the copies, their months or how far NetSuite's copies had come can't be read", async () => {
     const before = await journal();
     for (const [read, error] of [
-      ['gl_own_fulfillment_months', "Reading the months of Books' own fulfillments and receipts: gl_own_fulfillment_months failed"],
-      ['gl_own_receipt_months', "Reading the months of Books' own fulfillments and receipts: gl_own_receipt_months failed"],
+      ['gl_own_fulfillment_months', "Reading the months of Books' own fulfillments, receipts and adjustments: gl_own_fulfillment_months failed"],
+      ['gl_own_receipt_months', "Reading the months of Books' own fulfillments, receipts and adjustments: gl_own_receipt_months failed"],
       ['gl_own_bill_months', "Reading the months of Books' own bills: gl_own_bill_months failed"],
       [BOOKS_STOCK_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_STOCK_SYNC} failed`],
       [BOOKS_BILLS_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_BILLS_SYNC} failed`],
       [BOOKS_GL_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_GL_SYNC} failed`],
-      ['gl_own_fulfillment_pairs', "Reading Books' own copies of BMG's fulfillments and receipts for Feb 2025: gl_own_fulfillment_pairs failed"],
-      ['gl_own_stock_accounts', "Reading Books' own copies of BMG's fulfillments and receipts for Feb 2025: gl_own_stock_accounts failed"],
-      ['gl_own_receipt_pairs', "Reading Books' own copies of BMG's fulfillments and receipts for Mar 2025: gl_own_receipt_pairs failed"],
+      ['gl_own_fulfillment_pairs', "Reading Books' own copies of BMG's fulfillments, receipts and adjustments for Feb 2025: gl_own_fulfillment_pairs failed"],
+      ['gl_own_stock_accounts', "Reading Books' own copies of BMG's fulfillments, receipts and adjustments for Feb 2025: gl_own_stock_accounts failed"],
+      ['gl_own_receipt_pairs', "Reading Books' own copies of BMG's fulfillments, receipts and adjustments for Mar 2025: gl_own_receipt_pairs failed"],
       ['gl_own_bill_pairs', "Reading Books' own copies of BMG's bills for Mar 2025: gl_own_bill_pairs failed"],
     ]) {
       failing.add(read);

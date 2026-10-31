@@ -10,6 +10,7 @@ import {
   typesByArea,
   parseOverrides,
   channelsForType,
+  emailsImmediately,
 } from './notification-registry';
 
 /** Every .ts/.tsx under src/, so the sweep cannot miss a directory. */
@@ -127,6 +128,24 @@ describe('direct messages and mentions', () => {
     expect(channelsForType('mention', { notify_in_app: true, notify_email: false })).toEqual(['in_app', 'push', 'email']);
     expect(channelsForType('mention', { notify_in_app: true, email_mentions: false })).toEqual(['in_app', 'push']);
     expect(channelsForType('mention', { notify_in_app: true, type_channels: { mention: ['in_app'] } })).toEqual(['in_app', 'email']);
+  });
+});
+
+describe("Books' Inventory Adjusts (Craig, 2026-10-28: new alerts copy him by email)", () => {
+  const type = 'books_own_adjustment_differs';
+
+  it('emails only a super admin with "Copy me on new alerts" ticked, in the app and by push otherwise', () => {
+    expect(channelsForType(type, null)).toEqual(['in_app', 'push']);
+    expect(channelsForType(type, { notify_in_app: true, notify_email: true })).toEqual(['in_app', 'push']);
+    expect(channelsForType(type, { notify_in_app: true, copy_new_alerts: false })).toEqual(['in_app', 'push']);
+    expect(channelsForType(type, { notify_in_app: true, copy_new_alerts: true })).toEqual(['in_app', 'push', 'email']);
+    // The matrix can't turn its email on, nor off for someone copied; the bell and push stay theirs to choose.
+    expect(channelsForType(type, { notify_in_app: true, type_channels: { [type]: ['in_app', 'email'] } })).toEqual(['in_app']);
+    expect(channelsForType(type, { notify_in_app: true, copy_new_alerts: true, type_channels: { [type]: [] } })).toEqual(['email']);
+  });
+
+  it('emails right away, as the copy of a new alert', () => {
+    expect(emailsImmediately(type)).toBe(true);
   });
 });
 

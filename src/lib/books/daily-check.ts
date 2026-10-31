@@ -19,6 +19,7 @@ import { checkOwnFulfillments, type CopiesThrough, type FulfilPairsData, type Ow
 import { BOOKS_BILLS_SYNC } from './netsuite-bills';
 import { checkOwnBills, type BillCopiesThrough, type BillPairsData, type OwnBillCheck } from './own-bill-check';
 import { checkOwnReceipts, type OwnReceiptCheck, type ReceiptCopiesThrough, type ReceiptPairsData } from './own-receipt-check';
+import { checkOwnAdjustments, INVENTORY_ADJUST_ACCOUNT, type AdjustPairsData, type OwnAdjustmentCheck } from './own-adjustment-check';
 import { MISTAKE_KINDS, type MistakeKind } from './mistake-checks';
 
 /**
@@ -79,6 +80,13 @@ import { MISTAKE_KINDS, type MistakeKind } from './mistake-checks';
  * than before. A Receive NetSuite didn't take isn't told about: Receiving
  * already lists it to enter by hand.
  *
+ * So is each change made with Inventory Adjust (owner decision 2026-10-30,
+ * "Own postings"; src/lib/books/own-adjustment-check.ts): one that differs
+ * from NetSuite's inventory adjustment is noted at the first look and told
+ * about at the second if it still differs, as is one where more differs than
+ * before. One NetSuite didn't say it made isn't told about: Own adjustments
+ * lists it as incomplete.
+ *
  * And the likely mistakes the nightly mistake checks keep open (owner
  * decision 2026-10-24, "Mistake checks"; src/lib/books/mistake-checks.ts): one
  * the 09:46 look found is noted at the first look and told about at the
@@ -89,14 +97,17 @@ import { MISTAKE_KINDS, type MistakeKind } from './mistake-checks';
  * In-app and push only (books_month_differs, books_stock_differs,
  * books_balance_differs, books_own_invoice_differs,
  * books_own_fulfillment_differs, books_own_bill_differs,
- * books_own_receipt_differs, books_mistake_found). The record in sync_state,
- * 'books_daily_check', holds which months differ and how many of their
- * documents, which items' counts differ and by about how many, whose balances
- * differ and in how many documents, which own invoices, fulfillments, bills
- * and receipts differ and in how many things, and which likely mistakes are
- * open, never an amount, and is left out of HEALTH_MONITORS like the other
- * books jobs; Differences vs NetSuite says when the check last looked.
- * Nothing is written to NetSuite or to the books.
+ * books_own_receipt_differs, books_mistake_found), but for the Inventory
+ * Adjusts (books_own_adjustment_differs), which are emailed too to a super
+ * admin with "Copy me on new alerts" ticked (Craig, 2026-10-28). The record in
+ * sync_state, 'books_daily_check', holds which months differ and how many of
+ * their documents, which items' counts differ and by about how many, whose
+ * balances differ and in how many documents, which own invoices,
+ * fulfillments, bills, receipts and adjustments differ and in how many
+ * things, and which likely mistakes are open, never an amount, and is left
+ * out of HEALTH_MONITORS like the other books jobs; Differences vs NetSuite
+ * says when the check last looked. Nothing is written to NetSuite or to the
+ * books.
  */
 
 export const BOOKS_DAILY_CHECK = 'books_daily_check';
@@ -150,6 +161,8 @@ export interface DailyCheckState {
   bills?: CompanyCheck;
   /** Books' own receipts that differ from NetSuite's item receipts, as its own invoices, by the receipt's key. */
   receipts?: CompanyCheck;
+  /** The Inventory Adjusts that differ from NetSuite's adjustments, as its own invoices, by FleetSuite's id for each. */
+  adjustments?: CompanyCheck;
   /** The likely mistakes open on Mistake checks, as its own invoices, by the item's id, each counted once. */
   mistakes?: CompanyCheck;
 }
@@ -165,6 +178,8 @@ const OWN_KEY_RE = /^\d+$/;
 const MISTAKE_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** An own receipt, by its key: FleetSuite's first row of the Receive. */
 const RECEIPT_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** An Inventory Adjust, by FleetSuite's id for it. */
+const ADJUST_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** How the check keys one customer's ('c:<FleetSuite id>') or vendor's ('v:<NetSuite id>') balance; 'c:' and 'v:' for the lines FleetSuite can't name. */
 export const balanceKey = (kind: PartyKind, party: string) => `${kind === 'customer' ? 'c' : 'v'}:${party}`;
@@ -217,6 +232,7 @@ export function parseCheckState(lastResult: unknown): DailyCheckState {
   const fulfillments = byId(last.fulfillments);
   const bills = byId(last.bills);
   const receipts = byId(last.receipts, RECEIPT_KEY_RE);
+  const adjustments = byId(last.adjustments, ADJUST_KEY_RE);
   const mistakes = byId(last.mistakes, MISTAKE_KEY_RE);
   return {
     companies,
@@ -226,6 +242,7 @@ export function parseCheckState(lastResult: unknown): DailyCheckState {
     ...(fulfillments ? { fulfillments } : {}),
     ...(bills ? { bills } : {}),
     ...(receipts ? { receipts } : {}),
+    ...(adjustments ? { adjustments } : {}),
     ...(mistakes ? { mistakes } : {}),
   };
 }
@@ -273,10 +290,10 @@ export interface CheckAlert {
    * Set on a notification about stock by item (books_stock_differs), a customer's or vendor's balance
    * (books_balance_differs), FleetSuite's own invoices (books_own_invoice_differs), its own fulfillments
    * (books_own_fulfillment_differs), Books' own bills (books_own_bill_differs) and receipts
-   * (books_own_receipt_differs) or likely mistakes (books_mistake_found); one about months has none
-   * (books_month_differs).
+   * (books_own_receipt_differs), the Inventory Adjusts (books_own_adjustment_differs) or likely mistakes
+   * (books_mistake_found); one about months has none (books_month_differs).
    */
-  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'mistake';
+  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -551,6 +568,35 @@ export function receiptAlertsFor(news: MonthNews[], checks: Map<string, OwnRecei
   }));
 }
 
+/**
+ * What the super admins are told about the Inventory Adjusts, as about its own invoices: a notification for each,
+ * linking to its check, or one for them all, linking to the month of the newest with the ones that differ, when there
+ * are more than ONE_BY_ONE.
+ */
+export function adjustmentAlertsFor(news: MonthNews[], checks: Map<string, OwnAdjustmentCheck>): CheckAlert[] {
+  const told = news.map((n) => ({ n, check: checks.get(n.month) })).filter((t): t is { n: MonthNews; check: OwnAdjustmentCheck } => !!t.check);
+  if (!told.length) return [];
+  const why = 'Own adjustments shows why.';
+  const name = (c: OwnAdjustmentCheck) => `${c.number} (${c.item}, ${c.changeText})`;
+  if (told.length > ONE_BY_ONE) {
+    const newest = [...told].sort((a, b) => b.check.date.localeCompare(a.check.date))[0].check;
+    return [{
+      title: `Own adjustments: ${told.length} differ from NetSuite's now`,
+      body: `${listed([...told.slice(0, ONE_BY_ONE).map((t) => name(t.check)), `${told.length - ONE_BY_ONE} more`])}. ${why}`,
+      url: deepLinks.booksOwnAdjustments(newest.date, true),
+      about: 'adjustment',
+    }];
+  }
+  return told.map(({ n, check }) => ({
+    title: n.before === null
+      ? `Own adjustments: ${name(check)} differs from NetSuite's`
+      : `Own adjustments: more of ${name(check)} differs from NetSuite's`,
+    body: `${check.summary} ${why}`,
+    url: deepLinks.booksOwnAdjustment(check.id),
+    about: 'adjustment',
+  }));
+}
+
 /** A likely mistake a notification names: what Mistake checks shows of it. */
 export interface MistakeAlertItem {
   id: string;
@@ -754,6 +800,29 @@ async function lookAtOwnReceipts(
   return { now, checks };
 }
 
+/** The Inventory Adjusts that differ from NetSuite's adjustments now, as Own adjustments checks them, by FleetSuite's id for each. */
+async function lookAtOwnAdjustments(
+  service: SupabaseClient,
+  copies: CopiesThrough,
+): Promise<{ now: DifferingMonths; checks: Map<string, OwnAdjustmentCheck> }> {
+  const months = await service.rpc('gl_own_adjustment_months');
+  if (months.error) throw new Error(`couldn't list the months (${months.error.message})`);
+  const now: DifferingMonths = {};
+  const checks = new Map<string, OwnAdjustmentCheck>();
+  await runLimited(((months.data ?? []) as Array<{ month: string }>).map(({ month }) => async () => {
+    const res = await service.rpc('gl_own_adjustment_pairs', {
+      p_from: month, p_to: monthEnd(month), p_id: null, p_account: INVENTORY_ADJUST_ACCOUNT,
+    });
+    if (res.error) throw new Error(`couldn't check ${monthText(month)}'s adjustments (${res.error.message})`);
+    for (const check of checkOwnAdjustments(res.data as AdjustPairsData, copies).adjustments) {
+      if (check.status !== 'differs') continue;
+      now[check.id] = Math.max(1, check.differing);
+      checks.set(check.id, check);
+    }
+  }), LOOKUPS);
+  return { now, checks };
+}
+
 /** The likely mistakes open on Mistake checks, each counted once, with what to name for each. */
 async function lookAtMistakes(service: SupabaseClient): Promise<{ now: DifferingMonths; items: Map<string, MistakeAlertItem> }> {
   const [rows, companies] = await Promise.all([
@@ -802,7 +871,7 @@ async function balanceNews(
 
 export interface DailyCheckResult {
   look: Look;
-  /** Months, items, balances, own invoices, fulfillments, bills and receipts, and likely mistakes told about. */
+  /** Months, items, balances, own invoices, fulfillments, bills, receipts and adjustments, and likely mistakes told about. */
   told: number;
   /** What the look couldn't do; a company it couldn't look at keeps what the check held for it. */
   error?: string;
@@ -937,6 +1006,20 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     errors.push(`Own receipts: ${reason(err)}`);
   }
 
+  // The Inventory Adjusts, against the copies of NetSuite's stock moves and ledger, as far as they had come. They
+  // start the day Inventory Adjust began making them.
+  let adjustments = held.adjustments;
+  try {
+    const copies: CopiesThrough = { stock: (stockCopy.data?.last_synced_at as string | null | undefined) ?? null, ledger: ledgerThrough };
+    const { now, checks } = await lookAtOwnAdjustments(service, copies);
+    const { check, news } = nextCheck(held.adjustments ?? { known: {}, noted: {} }, now, opts.look);
+    adjustments = check;
+    alerts.push(...adjustmentAlertsFor(news, checks));
+    told += news.length;
+  } catch (err) {
+    errors.push(`Own adjustments: ${reason(err)}`);
+  }
+
   // The likely mistakes nobody has cleared, from the night's look. They too start the day the check began to look.
   let mistakes = held.mistakes;
   try {
@@ -961,6 +1044,7 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     ...(fulfillments ? { fulfillments } : {}),
     ...(bills ? { bills } : {}),
     ...(receipts ? { receipts } : {}),
+    ...(adjustments ? { adjustments } : {}),
     ...(mistakes ? { mistakes } : {}),
   };
   const heartbeat = await recordHeartbeat(service, BOOKS_DAILY_CHECK, record, {

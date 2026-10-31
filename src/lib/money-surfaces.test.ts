@@ -70,10 +70,12 @@ const ALLOWED: Record<string, string> = {
   'src/app/(main)/admin/books/own-bills/bill/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/own-receipts/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/own-receipts/receipt/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
+  'src/app/(main)/admin/books/own-adjustments/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
+  'src/app/(main)/admin/books/own-adjustments/adjustment/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/sales/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/mistake-checks/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/snap-a-bill/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
-  'src/components/BooksOwnPosting.tsx': "FleetSuite's own books — rendered only on Own fulfillments, Own receipts and Own bills, which are super admin only (their APIs are requireSuperAdmin)",
+  'src/components/BooksOwnPosting.tsx': "FleetSuite's own books — rendered only on Own fulfillments, Own receipts, Own adjustments and Own bills, which are super admin only (their APIs are requireSuperAdmin)",
 
   // ── CNI admin console ──
   'src/app/(main)/admin/cni/jobs/[id]/page.tsx': 'cni_admin — admin only',

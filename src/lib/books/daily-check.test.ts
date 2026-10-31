@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  alertsFor, balanceAlertsFor, balanceKey, billAlertsFor, fulfillmentAlertsFor, lookOf, mistakeAlertsFor, nextCheck, ownAlertsFor,
-  parseCheckState, receiptAlertsFor, stockAlertsFor,
+  adjustmentAlertsFor, alertsFor, balanceAlertsFor, balanceKey, billAlertsFor, fulfillmentAlertsFor, lookOf, mistakeAlertsFor, nextCheck,
+  ownAlertsFor, parseCheckState, receiptAlertsFor, stockAlertsFor,
   type BalanceNews, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews, type StockNews,
 } from './daily-check';
 import type { DiffDocumentData } from './differences';
+import type { OwnAdjustmentCheck } from './own-adjustment-check';
 import type { OwnBillCheck } from './own-bill-check';
 import type { OwnFulfillmentCheck } from './own-fulfillment-check';
 import type { OwnInvoiceCheck } from './own-invoice-check';
@@ -100,6 +101,18 @@ describe('parseCheckState', () => {
     }
     for (const bad of [{ known: { 8801: 1 }, noted: {} }, { known: {}, noted: { [`r:${key}`]: 1 } }, { noted: {} }]) {
       expect(parseCheckState({ companies: {}, bills, receipts: bad })).toEqual({ companies: {}, bills });
+    }
+  });
+
+  it("reads what it holds for the Inventory Adjusts, keyed by FleetSuite's id for each, and drops it when it doesn't read", () => {
+    const id = '4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c';
+    const adjustments = { known: { [id]: 2 }, noted: {} };
+    expect(parseCheckState({ companies: {}, adjustments })).toEqual({ companies: {}, adjustments });
+    expect(parseCheckState({ companies: {}, receipts: { known: {}, noted: {} }, adjustments }))
+      .toEqual({ companies: {}, receipts: { known: {}, noted: {} }, adjustments });
+    // NetSuite's id for the adjustment isn't how it's kept, nor is its number.
+    for (const bad of [null, 'x', { known: { 7201: 1 }, noted: {} }, { known: { 'ADJ0143': 1 }, noted: {} }, { known: { [id]: -1 }, noted: {} }, { known: { [id]: 1 } }]) {
+      expect(parseCheckState({ companies: {}, adjustments: bad })).toEqual({ companies: {} });
     }
   });
 
@@ -563,6 +576,46 @@ describe('receiptAlertsFor', () => {
   });
 });
 
+describe('adjustmentAlertsFor', () => {
+  const ids = ['4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b71', '4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b72',
+    '4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b73', '4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b74'];
+  const checked = (id: string, over: Partial<OwnAdjustmentCheck> = {}): OwnAdjustmentCheck => ({
+    id, netsuiteId: '7201', number: 'ADJ0143', date: '2026-10-30', itemId: '9002', item: 'BIN-10', description: null, assetAccount: '190',
+    locationId: '1', location: "O'Fallon", change: -2, changeText: '2 fewer', mode: 'delta', entered: 2, onHandBefore: 10,
+    reason: 'Damaged', note: null, madeBy: 'Pat Example', status: 'differs',
+    summary: "Value: NetSuite's value is $1.00 more.", differing: 1, fleetsuiteValue: -3000, netsuiteValue: -3100,
+    before: { count: 10, valueCents: 15000 }, each: 1500, accountId: '520', fields: [], entry: [], unknowns: [], workedOut: [], ...over,
+  });
+  const news = (id: string, before: number | null = null): MonthNews => ({ month: id, documents: 1, before });
+
+  it('names the adjustment, its item and the change, says what differs, and links to its check', () => {
+    expect(adjustmentAlertsFor([news(ids[0])], new Map([[ids[0], checked(ids[0])]]))).toEqual([{
+      title: "Own adjustments: ADJ0143 (BIN-10, 2 fewer) differs from NetSuite's",
+      body: "Value: NetSuite's value is $1.00 more. Own adjustments shows why.",
+      url: `/admin/books/own-adjustments/adjustment?id=${ids[0]}`,
+      about: 'adjustment',
+    }]);
+    const [more] = adjustmentAlertsFor([news(ids[0], 1)], new Map([[ids[0], checked(ids[0], { change: 4, changeText: '4 more' })]]));
+    expect(more.title).toBe("Own adjustments: more of ADJ0143 (BIN-10, 4 more) differs from NetSuite's");
+  });
+
+  it("tells about up to three one by one, and more in one notification linking to the newest month's that differ", () => {
+    const checks = new Map(ids.map((id, i) => [id, checked(id, { number: `ADJ014${3 + i}`, date: i === 2 ? '2026-11-02' : '2026-10-30' })]));
+    expect(adjustmentAlertsFor(ids.slice(0, 3).map((id) => news(id)), checks)).toHaveLength(3);
+    expect(adjustmentAlertsFor(ids.map((id) => news(id)), checks)).toEqual([{
+      title: "Own adjustments: 4 differ from NetSuite's now",
+      body: 'ADJ0143 (BIN-10, 2 fewer), ADJ0144 (BIN-10, 2 fewer), ADJ0145 (BIN-10, 2 fewer) and 1 more. Own adjustments shows why.',
+      url: '/admin/books/own-adjustments?month=2026-11&only=differs',
+      about: 'adjustment',
+    }]);
+  });
+
+  it('tells nothing of an adjustment it has no check for, nor when nothing changed', () => {
+    expect(adjustmentAlertsFor([news(ids[3])], new Map())).toEqual([]);
+    expect(adjustmentAlertsFor([], new Map())).toEqual([]);
+  });
+});
+
 describe('mistakeAlertsFor', () => {
   const ids = ['0b5c1d2e-3f40-4a51-8b62-7c83d94ea5f1', '0b5c1d2e-3f40-4a51-8b62-7c83d94ea5f2',
     '0b5c1d2e-3f40-4a51-8b62-7c83d94ea5f3', '0b5c1d2e-3f40-4a51-8b62-7c83d94ea5f4'];
@@ -638,6 +691,17 @@ describe('deepLinks.booksOwnFulfillments and booksOwnFulfillment', () => {
     expect(deepLinks.booksOwnFulfillments('2026-10-20', true)).toBe('/admin/books/own-fulfillments?month=2026-10&only=differs');
     expect(deepLinks.booksOwnFulfillments(null, true)).toBe('/admin/books/own-fulfillments?only=differs');
     expect(deepLinks.booksOwnFulfillment('7001')).toBe('/admin/books/own-fulfillments/fulfillment?id=7001');
+  });
+});
+
+describe('deepLinks.booksOwnAdjustments and booksOwnAdjustment', () => {
+  it('open Own adjustments on a month, on the ones that differ when asked, and one Inventory Adjust', () => {
+    expect(deepLinks.booksOwnAdjustments()).toBe('/admin/books/own-adjustments');
+    expect(deepLinks.booksOwnAdjustments('2026-10-30')).toBe('/admin/books/own-adjustments?month=2026-10');
+    expect(deepLinks.booksOwnAdjustments('2026-10-01', true)).toBe('/admin/books/own-adjustments?month=2026-10&only=differs');
+    expect(deepLinks.booksOwnAdjustments(null, true)).toBe('/admin/books/own-adjustments?only=differs');
+    expect(deepLinks.booksOwnAdjustment('4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c'))
+      .toBe('/admin/books/own-adjustments/adjustment?id=4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c');
   });
 });
 

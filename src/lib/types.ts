@@ -806,6 +806,9 @@ export interface NotificationPreferences {
    *  from src/lib/notification-registry.ts; an absent key follows the
    *  account-wide switches, an empty array means send nothing of that type. */
   type_channels?: Record<string, ('in_app' | 'push' | 'email')[]> | null;
+  /** "Copy me on new alerts" (migration 450), set by an admin in Admin → Users
+   *  → Settings; read here only to show the email it decides in the matrix. */
+  copy_new_alerts?: boolean;
 }
 
 // ═══════════ MESSAGING ═══════════

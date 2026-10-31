@@ -481,6 +481,19 @@ export const deepLinks = {
    *  receipt item by item: the landing for the daily books check's
    *  notification about one own receipt. Super admins only. */
   booksOwnReceipt: (receiptKey: string) => `/admin/books/own-receipts/receipt?${new URLSearchParams({ key: receiptKey })}`,
+  /** Books → Own adjustments on the month ('YYYY-MM' or 'YYYY-MM-01') they
+   *  were made in, the newest month when it's left out, only those that
+   *  differ from NetSuite's with `differs`: the landing for the daily books
+   *  check's notification about several own adjustments
+   *  (src/lib/books/daily-check.ts). Super admins only. */
+  booksOwnAdjustments: (month?: string | null, differs = false) => {
+    const query = new URLSearchParams({ ...(month ? { month: month.slice(0, 7) } : {}), ...(differs ? { only: 'differs' } : {}) }).toString();
+    return `/admin/books/own-adjustments${query ? `?${query}` : ''}`;
+  },
+  /** Books → Own adjustments → one Inventory Adjust, by FleetSuite's id for
+   *  it, next to NetSuite's adjustment: the landing for the daily books
+   *  check's notification about one own adjustment. Super admins only. */
+  booksOwnAdjustment: (id: string) => `/admin/books/own-adjustments/adjustment?${new URLSearchParams({ id })}`,
   /** Books → Snap a bill: a new one, or one already snapped (saved for
    *  later, sent or thrown away) by its id, with its picture. Super admins
    *  only. */

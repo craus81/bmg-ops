@@ -47,15 +47,18 @@ export interface NotificationMatrixProps {
    *  mention rows (their fixedChannels). */
   emailMessages?: boolean;
   emailMentions?: boolean;
+  /** "Copy me on new alerts", which owns email on the rows that copy it
+   *  (their fixedChannels). */
+  copyNewAlerts?: boolean;
   onChange: (next: TypeChannelOverrides) => void;
 }
 
-export default function NotificationMatrix({ overrides, accountInApp, accountEmail, emailMessages, emailMentions, onChange }: NotificationMatrixProps) {
+export default function NotificationMatrix({ overrides, accountInApp, accountEmail, emailMessages, emailMentions, copyNewAlerts, onChange }: NotificationMatrixProps) {
   const parsed = useMemo(() => parseOverrides(overrides), [overrides]);
   const groups = useMemo(() => typesByArea(), []);
   const accountPrefs = {
     notify_in_app: accountInApp, notify_email: accountEmail, type_channels: parsed,
-    email_messages: emailMessages, email_mentions: emailMentions,
+    email_messages: emailMessages, email_mentions: emailMentions, copy_new_alerts: copyNewAlerts,
   };
 
   const toggle = (def: NotificationTypeDef, channel: NotifyChannelKey, current: NotifyChannelKey[]) => {

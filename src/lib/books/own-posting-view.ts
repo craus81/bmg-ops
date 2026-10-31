@@ -6,20 +6,22 @@ import { workOutBillMonth } from './bill-check';
 import { readBillMonth } from './invoice-posting';
 import { readOwnBooks, type OwnBooks } from './own-invoice-posting';
 import {
-  FULFILLMENT_BOOKS, RECEIPT_BOOKS, chartNames, entryRows, ownStockPick, readOwnStockAccounts, type EntryRow,
+  ADJUSTMENT_BOOKS, FULFILLMENT_BOOKS, RECEIPT_BOOKS, chartNames, entryRows, ownStockPick, readOwnStockAccounts, type EntryRow,
 } from './own-stock-posting';
 import { BILL_BOOKS, ownBillPick, type OwnBillCopy } from './own-bill-posting';
 import type { OwnFulfillmentCheck } from './own-fulfillment-check';
 import type { OwnReceiptCheck } from './own-receipt-check';
+import type { OwnAdjustmentCheck } from './own-adjustment-check';
 import { OWN_COMPANY } from './own-invoices';
 
 /**
- * How Books' own copies of fulfillments, receipts and bills post, for their
- * pages on Own fulfillments, Own receipts and Own bills (migration 456,
- * docs/books.md "Posting FleetSuite's own fulfillments, receipts and
- * bills"): what the books hold for NetSuite's document, and the copy's entry
- * next to NetSuite's, worked out as the posting run works them out
- * (src/lib/books/own-stock-posting.ts and own-bill-posting.ts).
+ * How Books' own copies of fulfillments, receipts, adjustments and bills
+ * post, for their pages on Own fulfillments, Own receipts, Own adjustments
+ * and Own bills (migrations 456 and 457, docs/books.md "Posting FleetSuite's
+ * own fulfillments, receipts and bills"): what the books hold for NetSuite's
+ * document, and the copy's entry next to NetSuite's, worked out as the
+ * posting run works them out (src/lib/books/own-stock-posting.ts and
+ * own-bill-posting.ts).
  */
 
 /** The chart of accounts as the checks take it, each account with its company's code. */
@@ -38,7 +40,7 @@ export async function readChart(service: SupabaseClient): Promise<ChartAccount[]
   return accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null }));
 }
 
-/** How Books' own copy of a document posts, for its page on Own fulfillments, Own receipts or Own bills. */
+/** How Books' own copy of a document posts, for its page on Own fulfillments, Own receipts, Own adjustments or Own bills. */
 export interface OwnPostingView {
   /** What the books hold for NetSuite's document: the entry that stands, its date and which copy made it; null when none stands. */
   books: OwnBooks | null;
@@ -62,21 +64,26 @@ export interface OwnPostingView {
 const NOTHING = { posts: false, why: null, entry: null, differs: null, costs: null } as const;
 
 /**
- * How Books' own copy of a fulfillment or item receipt posts, for its page: what the books hold for NetSuite's
- * document, and the copy's entry next to NetSuite's when it's worked out, as the posting run works them out.
+ * How Books' own copy of a fulfillment, item receipt or adjustment posts, for its page: what the books hold for
+ * NetSuite's document, and the copy's entry next to NetSuite's when it's worked out, as the posting run works them out.
  */
 export async function readOwnStockView(
   service: SupabaseClient,
-  copy: { kind: 'fulfillment'; check: OwnFulfillmentCheck } | { kind: 'receipt'; check: OwnReceiptCheck & { netsuiteId: string } },
+  copy:
+    | { kind: 'fulfillment'; check: OwnFulfillmentCheck }
+    | { kind: 'receipt'; check: OwnReceiptCheck & { netsuiteId: string } }
+    | { kind: 'adjustment'; check: OwnAdjustmentCheck & { netsuiteId: string } },
 ): Promise<OwnPostingView> {
   const id = copy.check.netsuiteId;
-  const company = copy.kind === 'fulfillment' ? OWN_COMPANY : copy.check.company;
-  const fulfillments = new Map(copy.kind === 'fulfillment' ? [[id, copy.check]] : []);
-  const receipts = new Map(copy.kind === 'receipt' ? [[id, copy.check]] : []);
+  const company = copy.kind === 'receipt' ? copy.check.company : OWN_COMPANY;
+  const fulfillments = new Map<string, OwnFulfillmentCheck>(copy.kind === 'fulfillment' ? [[id, copy.check]] : []);
+  const receipts = new Map<string, OwnReceiptCheck>(copy.kind === 'receipt' ? [[id, copy.check]] : []);
+  const adjustments = new Map<string, OwnAdjustmentCheck>(copy.kind === 'adjustment' ? [[id, copy.check]] : []);
+  const read = copy.kind === 'fulfillment' ? FULFILLMENT_BOOKS : copy.kind === 'receipt' ? RECEIPT_BOOKS : ADJUSTMENT_BOOKS;
   const [chart, documents, held, accounts] = await Promise.all([
     readChart(service),
     service.rpc('gl_stock_documents', { p_company: company, p_ids: [id] }),
-    readOwnBooks(service, copy.kind === 'fulfillment' ? FULFILLMENT_BOOKS : RECEIPT_BOOKS, [{ company, netsuiteId: id }]),
+    readOwnBooks(service, read, [{ company, netsuiteId: id }]),
     readOwnStockAccounts(service, company, fulfillments, receipts),
   ]);
   if (documents.error) throw new Error(documents.error.message);
@@ -86,7 +93,7 @@ export async function readOwnStockView(
 
   const names = chartNames(chart);
   const [worked] = workOutStockMonth({ documents: [doc] }, { company, chart }).documents;
-  const pick = ownStockPick(worked, { fulfillments, receipts, accounts }, { company, names });
+  const pick = ownStockPick(worked, { fulfillments, receipts, adjustments, accounts }, { company, names });
   return {
     books,
     month: doc.posting_month,

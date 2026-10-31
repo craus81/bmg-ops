@@ -106,7 +106,7 @@ interface Summary {
   posted?: number;
   pending?: number;
   nothingToPost?: NothingToPost;
-  /** Invoices, fulfillments, item receipts and bills only: how many of those in the books posted from FleetSuite's own copy. */
+  /** Invoices, fulfillments, item receipts, adjustments and bills only: how many of those in the books posted from FleetSuite's own copy. */
   fromOwn?: number;
 }
 
@@ -126,10 +126,10 @@ interface Books {
   /** An invoice's, a fulfillment's, an item receipt's or a bill's: which copy the entry that stands was made from. */
   from?: 'netsuite' | 'fleetsuite';
   /**
-   * When FleetSuite has its own copy of the document: whether the books post it, when they don't why, and an item
-   * receipt's key to its copy on Own receipts.
+   * When FleetSuite has its own copy of the document: whether the books post it, when they don't why, an item
+   * receipt's key to its copy on Own receipts, and an adjustment's id for its copy on Own adjustments.
    */
-  own?: { posts: boolean; why?: string; receiptKey?: string };
+  own?: { posts: boolean; why?: string; receiptKey?: string; adjustmentId?: string };
 }
 
 /** How the last posting run went (src/lib/books/invoice-posting.ts); counts only. */
@@ -430,12 +430,14 @@ const amountsText = (amounts: NonNullable<Invoice['amounts']>, one: string) => (
   : `NetSuite's own amounts for this ${one}'s lines don't add up to it, so FleetSuite took each line at its net amount.`);
 
 /**
- * Where FleetSuite's own copy of a document is, next to NetSuite's: Own invoices, Own fulfillments, Own receipts or Own
- * bills; null for one of a kind it has no copies of, or an item receipt whose copy's key isn't known.
+ * Where FleetSuite's own copy of a document is, next to NetSuite's: Own invoices, Own fulfillments, Own receipts, Own
+ * adjustments or Own bills; null for one of a kind it has no copies of, or an item receipt or adjustment whose copy
+ * isn't known.
  */
 function ownCopyLink(invoice: Invoice): string | null {
   if (invoice.type === 'ItemShip') return deepLinks.booksOwnFulfillment(invoice.netsuiteId);
   if (invoice.type === 'ItemRcpt') return invoice.books?.own?.receiptKey ? deepLinks.booksOwnReceipt(invoice.books.own.receiptKey) : null;
+  if (invoice.type === 'InvAdjst') return invoice.books?.own?.adjustmentId ? deepLinks.booksOwnAdjustment(invoice.books.own.adjustmentId) : null;
   if (invoice.type === 'VendBill') return deepLinks.booksOwnBill(invoice.netsuiteId);
   return invoice.type ? null : deepLinks.booksOwnInvoice(invoice.netsuiteId);
 }

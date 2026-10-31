@@ -49,9 +49,12 @@ and PO receipt FleetSuite puts into NetSuite, checked against NetSuite's
 each morning, with one bill per approved vendor invoice or installer payout,
 part 28, Snap a bill, which enters a vendor's bill in NetSuite from a
 picture of it, part 29, PO bills, which bills the purchase order a
-snapped bill names, any freight on its own line, and part 30, Books' own
+snapped bill names, any freight on its own line, part 30, Books' own
 copies of fulfillments, receipts and bills posted to the books in place of
-NetSuite's when they match them and make the same entry. The screens are the accounts page at `/admin/books`, the trial
+NetSuite's when they match them and make the same entry, and part 31, each
+change made with Inventory Adjust checked against NetSuite's inventory
+adjustment each morning, valued at FleetSuite's own average cost, and
+posted in place of it the same way. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -65,7 +68,9 @@ behind one at `/admin/books/balances/party`, FleetSuite's own invoices at
 `/admin/books/own-fulfillments/fulfillment`, its own bills at
 `/admin/books/own-bills` and one's check at `/admin/books/own-bills/bill`,
 its own receipts at `/admin/books/own-receipts` and one's check at
-`/admin/books/own-receipts/receipt`, the mistake checks at
+`/admin/books/own-receipts/receipt`, the Inventory Adjusts at
+`/admin/books/own-adjustments` and one's check at
+`/admin/books/own-adjustments/adjustment`, the mistake checks at
 `/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, and sales by location at `/admin/books/sales`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there.
 
@@ -120,7 +125,7 @@ the accounts page; the others are linked from there.
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
-| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs`, `books_balance_differs`, `books_own_invoice_differs`, `books_own_fulfillment_differs`, `books_own_bill_differs`, `books_own_receipt_differs` and `books_mistake_found` in `src/lib/notification-registry.ts` |
+| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs`, `books_balance_differs`, `books_own_invoice_differs`, `books_own_fulfillment_differs`, `books_own_bill_differs`, `books_own_receipt_differs`, `books_own_adjustment_differs` and `books_mistake_found` in `src/lib/notification-registry.ts` |
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
@@ -144,6 +149,9 @@ the accounts page; the others are linked from there.
 | Own bill and receipt tests | `src/lib/books/own-bills.test.ts`, `src/lib/books/own-receipts.test.ts`, `src/lib/books/own-bill-check.test.ts`, `src/lib/books/own-receipt-check.test.ts`, `src/lib/books/own-bills-sql.test.ts`, `src/lib/bill-once.test.ts`; the daily check's are in its test files |
 | Books' own fulfillments, receipts and bills posted in place of NetSuite's when they match, and what the books hold for each on the Own pages | `migrations/456-books-own-postings.sql`, `src/lib/books/own-stock-posting.ts`, `src/lib/books/own-bill-posting.ts`, `src/lib/books/invoice-posting.ts`, `src/lib/books/own-posting-view.ts`, `src/lib/books/own-posting-text.ts`, `src/components/BooksOwnPosting.tsx` |
 | Own posting tests | `src/lib/books/own-stock-posting.test.ts`, `src/lib/books/own-bill-posting.test.ts`, `src/lib/books/own-posting-text.test.ts`, and end to end, with the Own pages' reads, `src/lib/books/own-postings-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
+| The Inventory Adjusts, checked against NetSuite's adjustments and posted in place of them when they match | `migrations/457-books-own-adjustments.sql`, `src/lib/books/own-adjustment-check.ts`, `src/lib/books/own-stock-posting.ts`, `src/lib/books/invoice-posting.ts`; Inventory Adjust's own record is `inventory_adjustments` (`migrations/454-inventory-adjustments.sql`, `src/lib/inventory-adjust.ts`) |
+| Own adjustments and one adjustment's check, and their API | `src/app/(main)/admin/books/own-adjustments/page.tsx`, `src/app/(main)/admin/books/own-adjustments/adjustment/page.tsx`, `src/app/api/admin/books/own-adjustments/route.ts` |
+| Own adjustment tests | `src/lib/books/own-adjustment-check.test.ts`, and end to end `src/lib/books/own-adjustments-sql.test.ts`; the posting's are in `own-stock-posting.test.ts` and `invoice-posting.test.ts`, the daily check's in its test files |
 | Snap a bill: each snapped bill, the reader, the suggestions and checks, sending once, and a vendor's earlier bills | `migrations/436-books-snap-a-bill.sql`, `src/lib/books/bill-reader.ts`, `src/lib/books/snap-a-bill.ts`, `src/lib/books/typed-dollars.ts`, `makeBillOnce` in `src/lib/bill-once.ts`, `createVendorBill` in `src/lib/netsuite.ts` |
 | Snap a bill's page and its API | `src/app/(main)/admin/books/snap-a-bill/page.tsx`, `src/app/api/admin/books/snap-a-bill/route.ts` |
 | Snap a bill tests | `src/lib/books/bill-reader.test.ts`, `src/lib/books/snap-a-bill.test.ts`, `src/lib/books/typed-dollars.test.ts`, `src/lib/books/snap-a-bill-sql.test.ts`; sending once is in `src/lib/bill-once.test.ts`, the bill NetSuite is sent in `src/lib/netsuite.test.ts` |
@@ -1547,10 +1555,11 @@ posts as a journal entry does: once, in the month NetSuite booked it into,
 reversed and posted again when NetSuite changes what it posts, and
 reversed when the GL copy no longer holds a line of it for the company (for
 an invoice or credit memo, a cost line); 1084's post the same way (Both
-companies). A fulfillment FleetSuite made, or a Receive NetSuite took,
-posts from Books' own copy of it instead when that copy matches NetSuite's
-document and makes the same entry ("Posting FleetSuite's own
-fulfillments, receipts and bills").
+companies). A fulfillment FleetSuite made, a Receive NetSuite took, or a
+change made with Inventory Adjust, posts from Books' own copy of it instead
+when that copy matches NetSuite's document and makes the same entry
+("Posting FleetSuite's own fulfillments, receipts and bills", "FleetSuite's
+own adjustments").
 The entries are filed as `item_fulfillment`, `item_receipt`,
 `inventory_adjustment`, `inventory_transfer`, `assembly_build`,
 `assembly_unbuild` and `invoice_cost` (an invoice's and a credit memo's
@@ -1771,6 +1780,21 @@ check; more than three of either at once get one, linking to Own bills or
 Own receipts open on the newest one's month with those that differ. The
 record holds them (`bills` by NetSuite's id for each bill, `receipts` by
 each copy's key) with how many things differ, never an amount.
+
+So are the changes made with Inventory Adjust, the same way (owner decision
+2026-10-30, "Own postings"): one that differs from NetSuite's inventory
+adjustment, on its date, location, change, value or account, is noted at the
+first look and told about at the second if it still differs, and so is one
+where more differs than before. One NetSuite didn't say it made isn't told
+about: Own adjustments lists it as incomplete. Each gets its own notification
+(`books_own_adjustment_differs`, naming NetSuite's number for it, the item and
+the change, in the app and by push) saying what differs first, linking to its
+check; more than three at once get one, linking to Own adjustments open on
+the newest one's month with those that differ. It's the books' first alert
+since "Copy me on new alerts" (Craig, 2026-10-28), so a super admin with that
+ticked is emailed it too, right away; nobody else is. The record
+(`adjustments`) holds them by FleetSuite's id for each, with how many things
+differ, never an amount.
 
 So are the likely mistakes the night's mistake checks keep (owner decision
 2026-10-24, "Mistake checks"): one nobody has cleared is noted at the first
@@ -2619,16 +2643,102 @@ bills"). The daily check tells the super admins when one stops matching
 - Parts Mail's own claim on its bills doesn't ask NetSuite for the bill
   before making one, and isn't taken over when it's left behind.
 
+## FleetSuite's own adjustments
+
+From part 31 (owner decision 2026-10-30, "Own postings", then "Build it",
+its second piece) Books checks each change made with Inventory Adjust
+against NetSuite's inventory adjustment. Inventory Adjust (migration 454,
+`src/lib/inventory-adjust.ts`) makes the adjustment in NetSuite and keeps a
+row of it in `inventory_adjustments`: the item, where, how many more or
+fewer, how it was entered (a number added or taken off, or what was on the
+shelf), the reason, the note, who made it and NetSuite's id and number for
+the adjustment. That row is Books' own copy, so no table is added: migration
+457 only reads it (`gl_own_adjustment_pairs` and `gl_own_adjustment_months`).
+Each is BMG's, as Inventory Adjust adjusts O'Fallon's stock, and is dated
+the day it was made, in Central time.
+
+FleetSuite values the change itself, as it costs its own fulfillments ("What
+it cost"): at the item's average at that location just before, the value
+FleetSuite counted of it there over the count, from its count and value on
+December 31, 2024 and every NetSuite document since that comes before the
+adjustment, by date and then NetSuite's id, to the cent. An item NetSuite
+doesn't keep in stock comes to nothing. The other side goes to 52000
+Inventory Adjustment, the account Inventory Adjust posts to.
+
+### The check
+
+`checkOwnAdjustment` (`src/lib/books/own-adjustment-check.ts`) puts each
+one next to NetSuite's adjustment as the copy of NetSuite's stock moves has
+it (migration 401), valued from the copy of its general ledger: its date,
+where it changed stock, the item and by how many, what that came to against
+what NetSuite's adjustment posted to the inventory accounts, and the account
+on its other side. An Inventory Adjust:
+
+- is **incomplete** when NetSuite didn't say which adjustment it made, so
+  there's none to put it next to;
+- **waits** until the stock copy (every two hours) has NetSuite's adjustment
+  and the ledger copy has its entry. Once the stock copy has run since
+  without it, NetSuite's is gone ("Gone from NetSuite"), as it is when
+  NetSuite deleted it: an adjustment always moves stock. Once the ledger copy
+  has run since with no entry for it, NetSuite's booked nothing;
+- **differs** when anything compared differs;
+- is **incomplete** when nothing compared differs but FleetSuite couldn't
+  work something out (where it changed stock, whether the item is kept in
+  stock, or a value when it counted none there just before), which then
+  isn't compared;
+- **matches** otherwise.
+
+The value follows from the change and where it was made, so when either
+differs the list's sentence doesn't name the value too.
+
+### The pages
+
+`/admin/books/own-adjustments` (`deepLinks.booksOwnAdjustments`,
+`?month=YYYY-MM`, `&only=differs`) lists a month's Inventory Adjusts, those
+that differ first, with what each change came to on FleetSuite's side, on
+NetSuite's and the difference (stock taken out in brackets), the reason and
+who made it, what the books hold for it, how many have each status, how the
+last copies of NetSuite's stock moves, ledger and lists and the daily check
+went, and a search. Each opens `/admin/books/own-adjustments/adjustment?id=`
+(`deepLinks.booksOwnAdjustment`, by FleetSuite's id for it): what's
+compared, side by side with why it differs, the copy's entry next to
+NetSuite's, account by account ("Posting FleetSuite's own fulfillments,
+receipts and bills"), what FleetSuite didn't know and how it worked the
+value out, linking to the item's moves on Stock by item and to the
+adjustment in NetSuite. Invoices vs NetSuite links each adjustment it lists
+that has an Inventory Adjust to it. The daily check tells the super admins
+when one stops matching ("Daily check").
+
+### Posting
+
+The books post an Inventory Adjust in place of NetSuite's adjustment when it
+matches it and makes the same entry, with `own_adjustment@1`, keyed as
+NetSuite's is (`inventory_adjustment:<NetSuite id>:<n>`), as they post the
+own fulfillments and receipts ("Posting FleetSuite's own fulfillments,
+receipts and bills"). One NetSuite didn't say it made posts nothing from
+FleetSuite: NetSuite's adjustment posts as NetSuite booked it.
+
+### What isn't done yet
+
+- There's no history: Inventory Adjust began on 2026-10-30, and an
+  adjustment made in NetSuite by hand has no Inventory Adjust, so it posts
+  from NetSuite's.
+- NetSuite values an adjustment at its own average cost, which a document
+  dated earlier and entered later can move after the fact; FleetSuite's
+  average comes from the copies as they stand, so the two can differ by
+  cents, and NetSuite's posts.
+
 ## Posting FleetSuite's own fulfillments, receipts and bills
 
 From part 30 (owner decision 2026-10-30, "Own postings", then "Build it")
 the books post Books' own copy of a fulfillment FleetSuite made, of a
 Receive NetSuite took and of a bill FleetSuite put into NetSuite, snapped
 bills among them, in place of NetSuite's document, as they post its own
-invoices ("Posting FleetSuite's own invoices"), when:
+invoices ("Posting FleetSuite's own invoices"), and from part 31 a change
+made with Inventory Adjust too ("FleetSuite's own adjustments"), when:
 
 - the copy **matches** NetSuite's document, as Own fulfillments, Own
-  receipts or Own bills checks it; and
+  receipts, Own adjustments or Own bills checks it; and
 - the entry the copy makes is the one NetSuite's makes: the same amount to
   each account, on the same date, and for a bill the payables for the same
   vendor.
@@ -2667,42 +2777,47 @@ The copies' entries (`src/lib/books/own-stock-posting.ts` and
   account, and an item line to where NetSuite puts the item, a stock item
   from a purchase order's line to the account received stock is held
   against until it's billed.
+- **An adjustment** (`own_adjustment@1`): what the change came to, as Own
+  adjustments works it out (the item's average at the location just
+  before), goes onto the item's asset account, or comes off it, against
+  52000 Inventory Adjustment, the account Inventory Adjust posts to.
 
 Each is dated as NetSuite's is, in the month NetSuite booked the document
 into, keyed as NetSuite's is (`item_fulfillment:<NetSuite id>:<n>`,
-`item_receipt:…`, `vendor_bill:…`), and its lines name the copy's own
-(`own:<item>:cost`, `own:<item>:asset`, `own:received`, `own:<line>`).
-Fulfillments are BMG's; a receipt or a bill posts for the company it's
-kept for, and one NetSuite booked to both companies posts from NetSuite's.
+`item_receipt:…`, `inventory_adjustment:…`, `vendor_bill:…`), and its lines
+name the copy's own (`own:<item>:cost`, `own:<item>:asset`, `own:received`,
+`own:adjustment`, `own:<line>`). Fulfillments and adjustments are BMG's; a
+receipt or a bill posts for the company it's kept for, and one NetSuite
+booked to both companies posts from NetSuite's.
 
-The posting run reads the copies of each month's fulfillments, receipts and
-bills, made on the days they're dated, from the first month Books made any,
-and checks each as the Own pages do, against the copies of NetSuite's stock
-moves, bills and general ledger as far as they had come. Migration 456 has
-`gl_stock_postings` and `gl_bill_postings` say which rule made the entry
-that stands (`posting_rule`), so a document whose entry was made by the
-other copy's rule has it replaced, reversed and posted again in one
-transaction, the reversal's memo saying why ("IF-1234 now posts from
+The posting run reads the copies of each month's fulfillments, receipts,
+adjustments and bills, made on the days they're dated, from the first month
+Books made any, and checks each as the Own pages do, against the copies of
+NetSuite's stock moves, bills and general ledger as far as they had come.
+Migration 456 has `gl_stock_postings` and `gl_bill_postings` say which rule
+made the entry that stands (`posting_rule`), so a document whose entry was
+made by the other copy's rule has it replaced, reversed and posted again in
+one transaction, the reversal's memo saying why ("IF-1234 now posts from
 FleetSuite's own copy"). So the first run after part 30 shipped replaced the
-entry of each document whose copy matched, and each lists NetSuite's as an
-earlier entry. A read of the copies that fails stops the run, saying what it
-was reading.
+entry of each document whose copy matched, and the first after part 31 that
+of each adjustment, and each lists NetSuite's as an earlier entry. A read of
+the copies that fails stops the run, saying what it was reading.
 
-Own fulfillments, Own receipts and Own bills show on each row what the books
-hold for NetSuite's document ("Entry 902 · own copy", "Entry 871 ·
-NetSuite's", "Not posted yet") and count them above the list. Each one's
-page says which copy made its entry, what the next run does about it and,
-when NetSuite's posts, why, with a link to the document on Invoices vs
-NetSuite, and puts the copy's entry next to NetSuite's, account by account,
-with what differs in red. On Invoices vs NetSuite each one posted from its
-copy reads "Entry 902 · own copy", its month counts how many did, and
-opening it links to its copy.
+Own fulfillments, Own receipts, Own adjustments and Own bills show on each
+row what the books hold for NetSuite's document ("Entry 902 · own copy",
+"Entry 871 · NetSuite's", "Not posted yet") and count them above the list.
+Each one's page says which copy made its entry, what the next run does about
+it and, when NetSuite's posts, why, with a link to the document on Invoices
+vs NetSuite, and puts the copy's entry next to NetSuite's, account by
+account, with what differs in red. On Invoices vs NetSuite each one posted
+from its copy reads "Entry 902 · own copy", its month counts how many did,
+and opening it links to its copy.
 
 ### What isn't done yet
 
-- Inventory adjustments, transfers, builds and unbuilds and invoices' cost
-  lines post from NetSuite's: Books keeps no copies of them yet. Own
-  adjustments come next.
+- Transfers, builds and unbuilds and invoices' cost lines post from
+  NetSuite's: Books keeps no copies of them yet. So do inventory
+  adjustments made in NetSuite by hand, which have no Inventory Adjust.
 - Bill credits and bill payments post from NetSuite's. A Receive NetSuite
   didn't take posts nothing until it's entered there by hand, and then
   NetSuite's receipt posts, as Receiving doesn't know which it is.

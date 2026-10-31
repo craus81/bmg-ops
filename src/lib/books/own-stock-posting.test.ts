@@ -4,8 +4,11 @@ import type { ChartAccount } from './invoice-check';
 import { workOutStockMonth, type StockDocument } from './stock-check';
 import type { FulfilItemPair, FulfilPairData, FulfilPairsData, OwnFulfillmentCheck } from './own-fulfillment-check';
 import type { OwnReceiptCheck, ReceiptItemPair, ReceiptPairData, ReceiptPairsData } from './own-receipt-check';
+import type { AdjustPairData, AdjustPairsData, OwnAdjustmentCheck } from './own-adjustment-check';
 import {
+  ADJUSTMENT_BOOKS,
   FULFILLMENT_BOOKS,
+  OWN_ADJUSTMENT_RULE,
   OWN_FULFILLMENT_RULE,
   OWN_RECEIPT_RULE,
   RECEIPT_BOOKS,
@@ -24,7 +27,8 @@ import {
   type OwnStockCopies,
 } from './own-stock-posting';
 
-// Made-up books: '190' inventory, '580' and '585' cost of goods, '210' and '211' hold received stock until it's billed.
+// Made-up books: '190' inventory, '580' and '585' cost of goods, '210' and '211' hold received stock until it's billed,
+// '520' takes the other side of an Inventory Adjust.
 const chartAccount = (id: string | null, number: string | null, name: string, type: string): ChartAccount => ({
   netsuite_account_id: id, number, name, account_type: type, company: null, active: true, is_summary: false,
 });
@@ -35,6 +39,7 @@ const CHART: ChartAccount[] = [
   chartAccount('210', '21000', 'Received Not Billed', 'other_current_liability'),
   chartAccount('211', '21100', 'Accrued Purchases', 'other_current_liability'),
   chartAccount('200', '20000', 'Accounts Payable', 'accounts_payable'),
+  chartAccount('520', '52000', 'Inventory Adjustment', 'cost_of_goods_sold'),
 ];
 const NAMES = chartNames(CHART);
 
@@ -43,6 +48,7 @@ const BINS = '9002';
 const HOOKS = '9003';
 const RACK_KIT = '9200';
 const KEY = '0b6a1c3e-5f2d-4c8b-9a7e-1d2c3b4a5f60';
+const ADJUST_ID = '4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c';
 
 /** One of a document's lines in the copy of NetSuite's GL, debit positive. */
 const gl = (line: string, account: string, cents: number, name: string | null = null): StockDocument['lines'][number] => ({
@@ -61,6 +67,13 @@ const shipDoc = (over: Partial<StockDocument> = {}): StockDocument => ({
 const receiptDoc = (over: Partial<StockDocument> = {}): StockDocument => ({
   netsuite_id: '7101', type: 'ItemRcpt', number: 'IR7101', date: '2026-10-22', posting_month: '2026-10-01', companies: ['BMG'],
   lines: [gl('1', '190', 10000, 'Northside Supply'), gl('2', '210', -10000, 'Northside Supply')],
+  ...over,
+});
+
+/** NetSuite's inventory adjustment ADJ7201: two bins fewer, their $30.00 off inventory and onto 52000. */
+const adjustDoc = (over: Partial<StockDocument> = {}): StockDocument => ({
+  netsuite_id: '7201', type: 'InvAdjst', number: 'ADJ7201', date: '2026-10-30', posting_month: '2026-10-01', companies: ['BMG'],
+  lines: [gl('1', '190', -3000), gl('2', '520', 3000)],
   ...over,
 });
 
@@ -106,7 +119,16 @@ const ACCOUNTS: OwnStockAccountsData = {
   received: [{ account: '210', documents: 12 }],
 };
 
-const copies = (over: Partial<OwnStockCopies> = {}): OwnStockCopies => ({ fulfillments: new Map(), receipts: new Map(), accounts: ACCOUNTS, ...over });
+/** The Inventory Adjust that made ADJ7201 as Own adjustments checked it: two bins fewer, at $15.00 each. */
+const adjustment = (over: Partial<OwnAdjustmentCheck> = {}): OwnAdjustmentCheck => ({
+  id: ADJUST_ID, netsuiteId: '7201', number: 'ADJ7201', date: '2026-10-30', itemId: BINS, item: 'BIN-10', assetAccount: '190',
+  change: -2, changeText: '2 fewer', reason: 'Damaged', status: 'matches', summary: "Matches NetSuite's adjustment.", unknowns: [],
+  fleetsuiteValue: -3000, accountId: '520', ...over,
+} as OwnAdjustmentCheck);
+
+const copies = (over: Partial<OwnStockCopies> = {}): OwnStockCopies => ({
+  fulfillments: new Map(), receipts: new Map(), adjustments: new Map(), accounts: ACCOUNTS, ...over,
+});
 
 /** What the books post for a fulfillment, given Books' copy of it. */
 const pickShip = (check: OwnFulfillmentCheck | null = fulfillment(), doc = shipDoc(), accounts = ACCOUNTS, company = 'BMG') =>
@@ -115,6 +137,10 @@ const pickShip = (check: OwnFulfillmentCheck | null = fulfillment(), doc = shipD
 /** What the books post for an item receipt, given Books' copy of it. */
 const pickReceipt = (check: OwnReceiptCheck | null = receipt(), doc = receiptDoc(), accounts = ACCOUNTS, company = 'BMG') =>
   ownStockPick(worked(doc), copies({ receipts: new Map(check ? [[check.netsuiteId ?? '', check]] : []), accounts }), { company, names: NAMES });
+
+/** What the books post for an inventory adjustment, given the Inventory Adjust that made it. */
+const pickAdjust = (check: OwnAdjustmentCheck | null = adjustment(), doc = adjustDoc(), company = 'BMG') =>
+  ownStockPick(worked(doc), copies({ adjustments: new Map(check ? [[check.netsuiteId ?? '', check]] : []) }), { company, names: NAMES });
 
 /** A copy's line: debit positive, with its item. */
 const line = (lineId: string, account: string, cents: number, memo: string | null, itemNumber: string | null) => ({
@@ -131,11 +157,12 @@ const SAID_RACKS = "Each item's cost comes out of its asset account and goes to 
 const SHIP_DIFFERS = "FleetSuite's own copy matches NetSuite's fulfillment, but its entry doesn't match NetSuite's, so the books post NetSuite's: ";
 
 describe('the rules and the accounts', () => {
-  it("is a fulfillment's or an item receipt's own rule, and no other document's", () => {
+  it("is a fulfillment's, an item receipt's or an adjustment's own rule, and no other document's", () => {
     expect(ownStockRule('ItemShip')).toBe(OWN_FULFILLMENT_RULE);
     expect(ownStockRule('ItemRcpt')).toBe(OWN_RECEIPT_RULE);
-    expect([OWN_FULFILLMENT_RULE, OWN_RECEIPT_RULE]).toEqual(['own_fulfillment@1', 'own_receipt@1']);
-    expect(ownStockRule('InvAdjst')).toBeNull();
+    expect(ownStockRule('InvAdjst')).toBe(OWN_ADJUSTMENT_RULE);
+    expect([OWN_FULFILLMENT_RULE, OWN_RECEIPT_RULE, OWN_ADJUSTMENT_RULE]).toEqual(['own_fulfillment@1', 'own_receipt@1', 'own_adjustment@1']);
+    expect(ownStockRule('InvTrnfr')).toBeNull();
     expect(ownStockRule('VendBill')).toBeNull();
   });
 
@@ -192,6 +219,7 @@ describe('the rules and the accounts', () => {
   it('reads what the journal holds for each kind from the stock postings, by its own rule', () => {
     expect(FULFILLMENT_BOOKS).toEqual({ fn: 'gl_stock_postings', list: 'documents', sourceType: 'item_fulfillment', ownRule: 'own_fulfillment@1' });
     expect(RECEIPT_BOOKS).toEqual({ fn: 'gl_stock_postings', list: 'documents', sourceType: 'item_receipt', ownRule: 'own_receipt@1' });
+    expect(ADJUSTMENT_BOOKS).toEqual({ fn: 'gl_stock_postings', list: 'documents', sourceType: 'inventory_adjustment', ownRule: 'own_adjustment@1' });
   });
 });
 
@@ -447,6 +475,75 @@ describe('what the books post for an item receipt from Receiving', () => {
   });
 });
 
+describe('what the books post for an Inventory Adjust', () => {
+  const BINS_OFF = line(`own:${BINS}:asset`, '190', -3000, 'Damaged · BIN-10', 'BIN-10');
+  const ADJUSTED = line('own:adjustment', '520', 3000, 'Damaged · BIN-10', 'BIN-10');
+
+  it("posts what the change came to off the item's asset account and onto Inventory Adjust's, when NetSuite's does the same", () => {
+    const entry = { lines: [BINS_OFF, ADJUSTED], date: '2026-10-30' };
+    expect(pickAdjust()).toEqual({ entry, why: null, own: entry, differs: null, learned: [], costs: null, adjustmentId: ADJUST_ID });
+  });
+
+  it('puts stock added onto the asset account, the other way round', () => {
+    const found = adjustment({ change: 4, changeText: '4 more', reason: 'Found', fleetsuiteValue: 6000 });
+    const doc = adjustDoc({ lines: [gl('1', '520', -6000), gl('2', '190', 6000)] });
+    expect(pickAdjust(found, doc)?.entry?.lines.map((l) => [l.lineId, l.account, l.cents, l.memo])).toEqual([
+      [`own:${BINS}:asset`, '190', 6000, 'Found · BIN-10'], ['own:adjustment', '520', -6000, 'Found · BIN-10'],
+    ]);
+  });
+
+  it("dates it as NetSuite's, in the month NetSuite booked it into", () => {
+    expect(pickAdjust(adjustment({ date: '2026-11-02' }), adjustDoc({ date: '2026-11-02' }))?.entry?.date).toBe('2026-10-31');
+  });
+
+  it("posts NetSuite's when its entry isn't the same, saying how", () => {
+    const cent = adjustDoc({ lines: [gl('1', '190', -3001), gl('2', '520', 3001)] });
+    expect(pickAdjust(adjustment(), cent)).toEqual({
+      ...NOTHING,
+      why: "FleetSuite's own copy matches NetSuite's adjustment, but its entry doesn't match NetSuite's, so the books post NetSuite's: "
+        + 'it posts differently to 19000 Inventory Asset and 52000 Inventory Adjustment.',
+      own: { lines: [BINS_OFF, ADJUSTED], date: '2026-10-30' },
+      differs: 'it posts differently to 19000 Inventory Asset and 52000 Inventory Adjustment',
+      adjustmentId: ADJUST_ID,
+    });
+    expect(pickAdjust(adjustment({ date: '2026-10-29' }))?.differs).toBe("it's dated Oct 29, 2026, and NetSuite's Oct 30, 2026");
+  });
+
+  it("posts NetSuite's, saying why, when the Inventory Adjust doesn't match, or its entry can't be worked out", () => {
+    expect(pickAdjust(adjustment({ status: 'differs' }))?.why).toBe("FleetSuite's own copy differs from NetSuite's adjustment, so the books post NetSuite's.");
+    expect(pickAdjust(adjustment({ status: 'waiting' }))?.why)
+      .toBe("FleetSuite's own copy is waiting for NetSuite's adjustment to be copied, so the books post NetSuite's for now.");
+    expect(pickAdjust(adjustment({ status: 'incomplete', unknowns: ['whether BIN-10 is kept in stock'] }))?.why).toBe(
+      "FleetSuite's own copy matches where it can be checked but is incomplete, so the books post NetSuite's adjustment: "
+        + "FleetSuite didn't know whether BIN-10 is kept in stock.",
+    );
+    expect(pickAdjust(adjustment({ assetAccount: null }))).toEqual({
+      ...NOTHING,
+      why: "FleetSuite's own copy matches NetSuite's adjustment, but its entry can't be worked out, so the books post NetSuite's. "
+        + "BIN-10 has no asset account in the copy of NetSuite's items.",
+      adjustmentId: ADJUST_ID,
+    });
+  });
+
+  it("makes no entry for a change that came to nothing, posting NetSuite's when it booked something", () => {
+    const strap = adjustment({ item: 'STRAP-2', fleetsuiteValue: 0 });
+    expect(pickAdjust(strap, adjustDoc({ lines: [] }))).toEqual({ ...NOTHING, own: { lines: [], date: '2026-10-30' }, adjustmentId: ADJUST_ID });
+    expect(pickAdjust(adjustment({ accountId: null }))?.differs).toBe('it posts differently to 19000 Inventory Asset and 52000 Inventory Adjustment');
+  });
+
+  it("says nothing when NetSuite voided its adjustment, and has no say on another company's or another kind", () => {
+    expect(pickAdjust(adjustment({ status: 'voided' }))).toEqual({ ...NOTHING, adjustmentId: ADJUST_ID });
+    expect(pickAdjust(null)).toBeNull();
+    // Inventory Adjust adjusts O'Fallon's stock, which is BMG's.
+    expect(pickAdjust(adjustment(), adjustDoc({ companies: ['1084'] }), '1084')).toBeNull();
+    expect(pickAdjust(adjustment(), adjustDoc({ companies: ['BMG', '1084'] }))).toBeNull();
+    // An adjustment's copy says nothing of a transfer or a fulfillment with its id.
+    const theirs = copies({ adjustments: new Map([['7201', adjustment()]]) });
+    expect(ownStockPick(worked(adjustDoc({ type: 'InvTrnfr' })), theirs, { company: 'BMG', names: NAMES })).toBeNull();
+    expect(ownStockPick(worked(shipDoc({ netsuite_id: '7201' })), theirs, { company: 'BMG', names: NAMES })).toBeNull();
+  });
+});
+
 describe('reading the copies and their accounts', () => {
   type Answer = { data: unknown; error: { message: string } | null };
   const service = (answers: Record<string, Answer>, calls: unknown[] = []) =>
@@ -463,11 +560,13 @@ describe('reading the copies and their accounts', () => {
     expect(await readOwnStockSince(service({
       gl_own_fulfillment_months: { data: [{ month: '2026-10-01' }, { month: '2026-09-01' }], error: null },
       gl_own_receipt_months: { data: [], error: null },
-    }, calls))).toEqual({ fulfillments: '2026-09-01', receipts: null });
-    expect(calls).toEqual([['gl_own_fulfillment_months'], ['gl_own_receipt_months']]);
-    expect(await readOwnStockSince(service({}))).toEqual({ fulfillments: null, receipts: null });
+      gl_own_adjustment_months: { data: [{ month: '2026-10-01', adjustments: 3 }], error: null },
+    }, calls))).toEqual({ fulfillments: '2026-09-01', receipts: null, adjustments: '2026-10-01' });
+    expect(calls).toEqual([['gl_own_fulfillment_months'], ['gl_own_receipt_months'], ['gl_own_adjustment_months']]);
+    expect(await readOwnStockSince(service({}))).toEqual({ fulfillments: null, receipts: null, adjustments: null });
     await expect(readOwnStockSince(service({ gl_own_fulfillment_months: failing('statement timeout') }))).rejects.toThrow('statement timeout');
     await expect(readOwnStockSince(service({ gl_own_receipt_months: failing('permission denied') }))).rejects.toThrow('permission denied');
+    await expect(readOwnStockSince(service({ gl_own_adjustment_months: failing('canceling statement') }))).rejects.toThrow('canceling statement');
   });
 
   it('reads the accounts only the matching copies post to, and nothing when none matches', async () => {
@@ -536,7 +635,36 @@ describe('reading the copies and their accounts', () => {
     items: { [BINS]: { number: 'BIN-10', type: 'InvtPart', display_name: null } },
     locations: { 1: "O'Fallon" },
   };
-  const THROUGH = { stock: '2026-10-29T12:00:00Z', ledger: '2026-10-29T12:30:00Z' };
+  // An Inventory Adjust as gl_own_adjustment_pairs returns it, next to NetSuite's adjustment.
+  const adjustPair = (id: string, netsuiteId: string | null, date: string): AdjustPairData => ({
+    own: {
+      id, item_id: BINS, item_number: 'BIN-10', location_id: '1', mode: 'delta', entered_qty: '2', change: '-2', on_hand_before: '10',
+      reason: 'Damaged', note: null, netsuite_id: netsuiteId, number: netsuiteId && `ADJ${netsuiteId}`, made_by: 'Pat Example', date,
+      made_at: `${date}T15:00:00Z`,
+    },
+    netsuite: netsuiteId === null ? null : {
+      number: `ADJ${netsuiteId}`, type: 'InvAdjst', date, gone: false,
+      lines: [{ line_id: '1', company: 'BMG', item_id: BINS, location_id: '1', quantity: '-2', moves_stock: true, value: '-30.00' }],
+    },
+    netsuite_gl: netsuiteId === null ? null : {
+      posting_month: '2026-10-01',
+      entry: [{ account_id: '190', debit: '0.00', credit: '30.00', inventory: true }, { account_id: '520', debit: '30.00', credit: '0.00', inventory: false }],
+    },
+    before: { quantity: '10', value: '150.00' },
+  });
+  const ADJUST_PAIRS: AdjustPairsData = {
+    adjustments: [
+      adjustPair(ADJUST_ID, '7201', '2026-10-30'),
+      // Not one of the month's documents, and one NetSuite didn't say it made.
+      adjustPair('5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d', '7202', '2026-10-30'),
+      adjustPair('6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e', null, '2026-10-30'),
+    ],
+    items: { [BINS]: { number: 'BIN-10', type: 'InvtPart', display_name: null, asset_account: '190' } },
+    locations: { 1: "O'Fallon" },
+    accounts: { 190: { number: '19000', name: 'Inventory Asset' } },
+    account: { id: '520', number: '52000', name: 'Inventory Adjustment' },
+  };
+  const THROUGH = { stock: '2026-10-31T12:00:00Z', ledger: '2026-10-31T12:30:00Z' };
   const DOCUMENTS: Array<Pick<StockDocument, 'netsuite_id' | 'type' | 'date'>> = [
     { netsuite_id: '7001', type: 'ItemShip', date: '2026-10-19' },
     { netsuite_id: '7003', type: 'ItemShip', date: '2026-10-05' },
@@ -550,37 +678,45 @@ describe('reading the copies and their accounts', () => {
     const read = await readOwnStockCopies(service({
       gl_own_fulfillment_pairs: { data: FULFIL_PAIRS, error: null },
       gl_own_receipt_pairs: { data: RECEIPT_PAIRS, error: null },
+      gl_own_adjustment_pairs: { data: ADJUST_PAIRS, error: null },
       gl_own_stock_accounts: { data: { items: { [LADDER]: '190', [BINS]: '190' } }, error: null },
-    }, calls), 'BMG', DOCUMENTS, { fulfillments: '2026-10-01', receipts: '2026-10-01' }, THROUGH);
+    }, calls), 'BMG', DOCUMENTS, { fulfillments: '2026-10-01', receipts: '2026-10-01', adjustments: '2026-10-01' }, THROUGH);
     expect(calls).toEqual([
       ['gl_own_fulfillment_pairs', { p_from: '2026-10-05', p_to: '2026-10-19', p_netsuite_id: null }],
       ['gl_own_receipt_pairs', { p_from: '2026-10-21', p_to: '2026-10-28', p_key: null }],
+      ['gl_own_adjustment_pairs', { p_from: '2026-10-30', p_to: '2026-10-30', p_id: null, p_account: '52000' }],
+      // An adjustment's check has its accounts already.
       ['gl_own_stock_accounts', { p_company: 'BMG', p_fulfillments: ['7001'], p_receipts: ['7101'] }],
     ]);
     expect([...read.fulfillments].map(([id, f]) => [id, f.status])).toEqual([['7001', 'matches']]);
     expect([...read.receipts].map(([id, r]) => [id, r.status, r.receiptKey])).toEqual([['7101', 'matches', KEY]]);
+    expect([...read.adjustments].map(([id, a]) => [id, a.status, a.id, a.fleetsuiteValue])).toEqual([['7201', 'matches', ADJUST_ID, -3000]]);
     expect(read.accounts).toEqual({ items: { [LADDER]: '190', [BINS]: '190' }, fulfillments: {}, usual_cost: null, received: [] });
   });
 
   it("reads none from before Books had any, and no fulfillments for another company", async () => {
     const calls: unknown[] = [];
-    const read = await readOwnStockCopies(service({}, calls), '1084', DOCUMENTS, { fulfillments: '2026-10-01', receipts: '2026-10-25' }, THROUGH);
+    const read = await readOwnStockCopies(service({}, calls), '1084', DOCUMENTS, { fulfillments: '2026-10-01', receipts: '2026-10-25', adjustments: '2026-10-01' }, THROUGH);
     expect(calls).toEqual([['gl_own_receipt_pairs', { p_from: '2026-10-25', p_to: '2026-10-28', p_key: null }]]);
-    expect(read).toEqual({ fulfillments: new Map(), receipts: new Map(), accounts: { items: {}, fulfillments: {}, usual_cost: null, received: [] } });
+    expect(read).toEqual({
+      fulfillments: new Map(), receipts: new Map(), adjustments: new Map(), accounts: { items: {}, fulfillments: {}, usual_cost: null, received: [] },
+    });
 
     const later: unknown[] = [];
-    await readOwnStockCopies(service({}, later), 'BMG', DOCUMENTS, { fulfillments: '2026-10-10', receipts: null }, THROUGH);
+    await readOwnStockCopies(service({}, later), 'BMG', DOCUMENTS, { fulfillments: '2026-10-10', receipts: null, adjustments: null }, THROUGH);
     expect(later).toEqual([['gl_own_fulfillment_pairs', { p_from: '2026-10-10', p_to: '2026-10-19', p_netsuite_id: null }]]);
     const none: unknown[] = [];
-    await readOwnStockCopies(service({}, none), 'BMG', DOCUMENTS, { fulfillments: '2026-10-20', receipts: '2026-10-29' }, THROUGH);
+    await readOwnStockCopies(service({}, none), 'BMG', DOCUMENTS, { fulfillments: '2026-10-20', receipts: '2026-10-29', adjustments: '2026-11-01' }, THROUGH);
     expect(none).toEqual([]);
   });
 
   it("says why when the copies can't be read", async () => {
-    const since = { fulfillments: '2026-10-01', receipts: '2026-10-01' };
+    const since = { fulfillments: '2026-10-01', receipts: '2026-10-01', adjustments: '2026-10-01' };
     await expect(readOwnStockCopies(service({ gl_own_fulfillment_pairs: failing('statement timeout') }), 'BMG', DOCUMENTS, since, THROUGH))
       .rejects.toThrow('statement timeout');
     await expect(readOwnStockCopies(service({ gl_own_receipt_pairs: failing('permission denied') }), 'BMG', DOCUMENTS, since, THROUGH))
       .rejects.toThrow('permission denied');
+    await expect(readOwnStockCopies(service({ gl_own_adjustment_pairs: failing('canceling statement') }), 'BMG', DOCUMENTS, since, THROUGH))
+      .rejects.toThrow('canceling statement');
   });
 });
