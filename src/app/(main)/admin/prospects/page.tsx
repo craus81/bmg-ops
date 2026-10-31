@@ -252,6 +252,8 @@ export default function ProspectsPage() {
     if (stage && (stage === 'open' || stage in OPP_STAGES)) setStageFilter(stage);
     const q = searchParams.get('q');
     if (q && !searchParams.get('id') && !searchParams.get('ns')) setSearch(q);
+    // ?new=1 (More → Customers → New) opens the new record form for the tab.
+    if (searchParams.get('new') === '1') { pickKind(kindFor(crmTab)); setShowCreate(true); }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: apply once after load
   }, [loading, searchParams]);
 

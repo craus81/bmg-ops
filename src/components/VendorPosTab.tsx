@@ -107,7 +107,7 @@ function shortDate(d: string | null): string {
   return new Date(`${d.slice(0, 10)}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-export default function VendorPosTab({ isAdmin, onChanged }: { isAdmin: boolean; onChanged: () => void }) {
+export default function VendorPosTab({ isAdmin, onChanged, startNew = false }: { isAdmin: boolean; onChanged: () => void; startNew?: boolean }) {
   const router = useRouter();
   const dialog = useDialog();
   const { canSeeMoney } = useAuth();
@@ -121,6 +121,8 @@ export default function VendorPosTab({ isAdmin, onChanged }: { isAdmin: boolean;
   const [busyLine, setBusyLine] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // startNew: More → Purchase Orders → New opens the form straight away (admins, like the button).
+  useEffect(() => { if (startNew && isAdmin) setCreating(true); }, [startNew, isAdmin]);
 
   // Search waits for a pause in typing.
   useEffect(() => {

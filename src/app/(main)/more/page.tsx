@@ -11,6 +11,7 @@ import { useNavTabs } from '@/components/useNavTabs';
 import { useCollapsed } from '@/components/CollapsibleCard';
 import { resolveDashboardFocus } from '@/lib/dashboard-focus';
 import { MORE_GROUPS, orderMoreGroups, searchMorePages, type MoreGroupId } from '@/lib/more-menu';
+import { deepLinks } from '@/lib/deep-links';
 
 export default function MorePage() {
   const router = useRouter();
@@ -59,8 +60,13 @@ export default function MorePage() {
   // it's for. The description sits behind the (i), so it's kept to two
   // lines on a phone.
   const items: (Item & { group: MoreGroupId })[] = [
-    { group: 'sales', title: 'Customers', sub: 'Customers & sales pipeline', path: '/admin/prospects', show: F('prospects') },
-    { group: 'sales', title: 'Estimates', sub: 'Every estimate · build, chase follow-ups, mark won or lost', path: '/estimates', show: F('estimates') },
+    { group: 'sales', title: 'Customers', sub: 'Customers & sales pipeline', path: '/admin/prospects', show: F('prospects'), list: true, newPath: '/admin/prospects?tab=customers&new=1' },
+    { group: 'sales', title: 'Estimates', sub: 'Every estimate · build, chase follow-ups, mark won or lost', path: '/estimates', show: F('estimates'), list: true, newPath: deepLinks.newEstimate() },
+    { group: 'sales', title: 'Sales Orders', sub: 'Every NetSuite sales order · open, billed or closed · open one to edit or invoice it', path: '/sales-orders', show: F('estimates'), list: true },
+    { group: 'sales', title: 'Invoices', sub: 'Every invoice · + New makes one from nothing · search, PDF, email, past due', path: '/invoices?tab=sent', show: F('invoicing'), list: true, newPath: '/invoices/new' },
+    { group: 'sales', title: 'Ready to Invoice', sub: 'Finished graphics jobs and scanned vehicles waiting for an invoice', path: '/invoices', show: F('invoicing'), list: true },
+    { group: 'sales', title: 'Customer POs', sub: 'POs customers send us (Masterack and others) · import, match, invoice', path: '/admin/pos', show: F('purchase_orders'), list: true, newPath: '/admin/pos?new=1' },
+    { group: 'sales', title: 'Unmatched Sales Orders', sub: 'NetSuite orders with no estimate · accept or reject the best guesses', path: '/admin/so-matches', show: F('quotes'), list: true },
     { group: 'sales', title: 'Pricing Requests', sub: 'Masterack pricing requests · pictures, notes, your price and the PO', path: '/pricing-requests', show: F('estimates') },
     { group: 'sales', title: 'Graphics Builder', sub: 'Measure a vehicle, draw the proof and price the graphics as an estimate', path: '/admin/wrap-quote', show: F('graphics_builder') },
     { group: 'sales', title: 'Upfit Designer', sub: 'Design a van upfit in 3D & turn it into an estimate', path: '/upfit-designer', show: F('upfit_configurator') },
@@ -75,9 +81,9 @@ export default function MorePage() {
     { group: 'shop', title: 'Client Files', sub: 'Every file in Dropbox › OFFICE › Clients · search, open or download', path: '/client-files', show: F('client_files') },
     { group: 'shop', title: 'Proof Search', sub: 'Find proof artwork in Dropbox by customer or part', path: '/admin/proof-search', show: F('proof_search') },
 
-    { group: 'purchasing', title: 'Purchasing', sub: 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering'), badge: badgeFor('purchase_requests') },
-    { group: 'purchasing', title: 'Purchase Orders', sub: 'Manage POs', path: '/admin/pos', show: F('purchase_orders') },
-    { group: 'purchasing', title: 'Receiving', sub: 'Check arriving parts in against vendor POs · the badge counts receipts still to enter in NetSuite by hand', path: '/admin/receiving', show: F('parts_ordering'), badge: badgeFor('manual_receipts') },
+    { group: 'purchasing', title: 'Purchase Requests', sub: 'Requested parts waiting to be ordered, grouped by vendor', path: '/admin/purchasing', show: F('parts_ordering'), badge: badgeFor('purchase_requests'), list: true },
+    { group: 'purchasing', title: 'Purchase Orders', sub: 'Every vendor PO · + New PO, open, undo', path: '/admin/purchasing?tab=vendor-pos', show: F('parts_ordering'), list: true, newPath: isAdmin ? '/admin/purchasing?tab=vendor-pos&new=1' : undefined },
+    { group: 'purchasing', title: 'Receiving', sub: 'Check arriving parts in against vendor POs · the badge counts receipts still to enter in NetSuite by hand', path: '/admin/receiving', show: F('parts_ordering'), badge: badgeFor('manual_receipts'), list: true },
     { group: 'purchasing', title: 'Parts Mail', sub: 'Incoming parts & ETAs vs. stock and job allocations', path: '/admin/parts-mail', show: F('upfit_projects') },
     { group: 'purchasing', title: 'Scan Log', sub: 'Review scans, match POs, export & invoice', path: '/admin/scans', show: F('reports') },
 
@@ -87,9 +93,6 @@ export default function MorePage() {
     { group: 'parts', title: 'Rack Kits', sub: 'How many of each rack kit we can build from the parts on the shelf', path: '/admin/inventory/rack-kits', show: F('parts_catalog') },
     { group: 'parts', title: 'Hitch Kits', sub: 'Labor hours, brake controllers and Curt fitment for the hitch kit builder', path: '/admin/inventory/hitch-kits', show: F('parts_catalog') },
 
-    { group: 'money', title: 'New invoice', sub: 'Pick a customer, type the lines and make a NetSuite invoice · no order needed', path: '/invoices/new', show: F('invoicing') },
-    { group: 'money', title: 'Invoicing', sub: 'Create & email NetSuite invoices from graphics production jobs and scans', path: '/invoices', show: F('invoicing') },
-    { group: 'money', title: 'Unmatched Sales Orders', sub: 'NetSuite orders with no estimate · accept or reject the best guesses', path: '/admin/so-matches', show: F('quotes') },
     { group: 'money', title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: F('vendor_payments') },
     { group: 'money', title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
     { group: 'money', title: 'Books', sub: 'FleetSuite’s own books · reports, accounts, trial balance & NetSuite lists', path: '/admin/books', show: hasRole('super_admin') },
@@ -173,7 +176,7 @@ export default function MorePage() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
             {results.map(item => (
-              <MenuRow key={item.path + item.title} item={item} groupLabel={headerOf(item.group)} onOpen={() => router.push(item.path)} />
+              <MenuRow key={item.path + item.title} item={item} groupLabel={headerOf(item.group)} onOpen={path => router.push(path)} />
             ))}
           </div>
         )
@@ -278,7 +281,12 @@ export default function MorePage() {
   );
 }
 
-interface Item { title: string; sub: string; path: string; show: boolean; badge?: number }
+/**
+ * A page. `list` marks a list of transactions (Sales and Purchasing): its row
+ * gets a List button, and a New button when `newPath` says where a new one
+ * starts (Craig, 2026-10-31).
+ */
+interface Item { title: string; sub: string; path: string; show: boolean; badge?: number; list?: boolean; newPath?: string }
 
 /**
  * One More category. Its header folds it, saved per user like the other
@@ -305,28 +313,39 @@ function MoreGroup({ id, header, items, onOpen }: { id: MoreGroupId; header: str
       </button>
       {!collapsed && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {items.map(item => <MenuRow key={item.path + item.title} item={item} onOpen={() => onOpen(item.path)} />)}
+          {items.map(item => <MenuRow key={item.path + item.title} item={item} onOpen={onOpen} />)}
         </div>
       )}
     </div>
   );
 }
 
+const rowAction = (color: string, border: string): React.CSSProperties => ({
+  flexShrink: 0, padding: '6px 10px', borderRadius: '8px', border: `1px solid ${border}`, background: 'transparent',
+  color, fontSize: '12px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+});
+
 /**
  * A page row: tap the title to open the page, tap (i) to slide its
  * description open underneath, two lines at most (Craig: it should only
  * grow downward).
  */
-function MenuRow({ item, groupLabel, onOpen }: { item: Item; groupLabel?: string; onOpen: () => void }) {
+function MenuRow({ item, groupLabel, onOpen }: { item: Item; groupLabel?: string; onOpen: (path: string) => void }) {
   const [info, setInfo] = useState(false);
   return (
     <div style={{ borderRadius: '14px', border: '1px solid var(--border)', background: 'var(--card)', boxShadow: 'var(--shadow-sm)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingRight: '12px' }}>
-        <button type="button" onClick={onOpen} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '8px', padding: '13px 0 13px 16px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer' }}>
+        <button type="button" onClick={() => onOpen(item.path)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '8px', padding: '13px 0 13px 16px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer' }}>
           <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)', letterSpacing: '-0.2px' }}>{item.title}</span>
           {groupLabel && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{groupLabel}</span>}
         </button>
         {item.badge ? <Badge n={item.badge} /> : null}
+        {item.list && (
+          <button type="button" onClick={() => onOpen(item.path)} aria-label={`${item.title}: list`} style={rowAction('var(--text-primary)', 'var(--border)')}>List</button>
+        )}
+        {item.newPath && (
+          <button type="button" onClick={() => onOpen(item.newPath!)} aria-label={`${item.title}: new`} style={rowAction('#16a34a', 'rgba(22,163,74,0.45)')}>+ New</button>
+        )}
         <button
           type="button"
           onClick={() => setInfo(!info)}

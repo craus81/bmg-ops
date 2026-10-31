@@ -232,6 +232,8 @@ export default function POsPage() {
   useEffect(() => {
     const q = searchParams.get('q');
     if (q) setPoSearch(q);
+    // ?new=1 (More → Customer POs → New) opens the new PO form.
+    if (searchParams.get('new') === '1') setShowCreate(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: read once on mount
   }, []);
   // List filters: attribute filter (billing issues, notes, graphics jobs)
