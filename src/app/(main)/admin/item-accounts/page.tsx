@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
-import TopSaveBar from '@/components/TopSaveBar';
+import TopSaveBar, { LEAVE_WITHOUT_SAVING } from '@/components/TopSaveBar';
 import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
@@ -211,7 +211,16 @@ export default function ItemAccountsPage() {
     return <div style={{ padding: '24px', color: theme.error }}>You need the Vendor Payments permission and price access to change an item&apos;s accounts.</div>;
   }
 
-  const back = () => router.push('/more');
+  // Leaving with boxes changed asks first, as the estimate does: nothing is sent either way.
+  const back = async () => {
+    if (started && !done) {
+      const ok = await dialog.confirm("The item's accounts stay as NetSuite has them. Nothing is sent.", {
+        title: 'Leave without saving your edits?', confirmLabel: LEAVE_WITHOUT_SAVING, cancelLabel: 'Keep editing', destructive: true,
+      });
+      if (!ok) return;
+    }
+    router.push('/more');
+  };
   const startOver = () => { if (item) { setPicked(pickedOf(item)); setReason(''); } };
   const kind = item ? ITEM_KINDS[item.recordType] : null;
 

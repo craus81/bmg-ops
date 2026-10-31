@@ -4302,8 +4302,9 @@ Stock by item's list of items set up wrong at once.
   charge as the wrong one of sale, resale or purchase answers 404, so the
   next is tried; that `incomeAccount`, `cogsAccount`, `assetAccount` and
   `expenseAccount` are what each kind's record calls them, a kit's income
-  account included; and that NetSuite takes a changed inventory asset account
-  on an item with stock on hand.
+  account included; that the item's record answers with its cost of goods
+  sold account, which SuiteQL answers 500 for; and that NetSuite takes a
+  changed inventory asset account on an item with stock on hand.
 
 ## Switches
 

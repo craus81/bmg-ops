@@ -194,9 +194,9 @@ describe('choicesFor', () => {
   });
 
   it('puts accounts with the same number by name, then by id', () => {
-    const same = [acct('3', '40000', 'Sales B', 'income'), acct('2', '40000', 'Sales A', 'income'), acct('1', '40000', 'Sales A', 'income')];
-    expect(choicesFor('incomeAccount', same).map((a) => a.id)).toEqual(['1', '2', '3']);
-    expect(same.map((a) => a.id)).toEqual(['3', '2', '1']);
+    const same = [acct('1', '40000', 'Sales B', 'income'), acct('3', '40000', 'Sales A', 'income'), acct('2', '40000', 'Sales A', 'income')];
+    expect(choicesFor('incomeAccount', same).map((a) => a.id)).toEqual(['2', '3', '1']);
+    expect(same.map((a) => a.id)).toEqual(['1', '3', '2']);
   });
 });
 

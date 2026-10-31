@@ -179,6 +179,7 @@ const COPY = () => [
   itemRow('506', '51-2002-OLD', 'InvtPart', { gone_at: '2026-11-01T00:00:00Z' }),
   itemRow('9999', '99-9999', 'InvtPart'),
   { kind: 'customer', netsuite_id: '501', name: 'Hitch Haulers', parent_netsuite_id: null, active: true, gone_at: null, details: {} },
+  { kind: 'vendor', netsuite_id: '8888', name: 'Ridge Supply Co', parent_netsuite_id: null, active: true, gone_at: null, details: { item_type: 'InvtPart' } },
 ];
 const REQUEST = 'd0000000-0000-4000-8000-000000000001';
 const OFF = 'Changing item accounts is switched off until January 1, 2027.';
