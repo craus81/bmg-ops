@@ -163,8 +163,10 @@ describe('the daily books check', () => {
     let range: [number, number] | null = null;
     const run = async () => {
       if (failing?.(table, {})) return { data: null, error: { message: `${table} failed` } };
+      // A date as PostgREST gives it, 'YYYY-MM-DD'.
+      const cols = columns.replace(/\bbooks_live_from\b/, "to_char(books_live_from, 'YYYY-MM-DD') AS books_live_from");
       const r = await pg.query(
-        `SELECT ${columns} FROM ${table}${where.length ? ` WHERE ${where.map(([col], i) => `${col} = $${i + 1}`).join(' AND ')}` : ''}`
+        `SELECT ${cols} FROM ${table}${where.length ? ` WHERE ${where.map(([col], i) => `${col} = $${i + 1}`).join(' AND ')}` : ''}`
           + `${order ? ` ORDER BY ${order}` : ''}${range ? ` LIMIT ${range[1] - range[0] + 1} OFFSET ${range[0]}` : ''}`,
         where.map(([, value]) => value),
       );
@@ -994,5 +996,39 @@ describe('the daily books check', () => {
 
   it('records which likely mistakes are open by their id alone, never a vendor or an amount', async () => {
     expect(heldMistakes()).toEqual({ known: { [await idOf(TWICE.key)]: 1 }, noted: {} });
+  });
+
+  it("keeps what it held for each company when it couldn't read when their books went live, and says why", async () => {
+    const before = held();
+    failing = (name) => name === 'gl_companies';
+    try {
+      const result = await look('first');
+      expect(result.error).toContain("BMG: couldn't read the companies (gl_companies failed) 1084: couldn't read the companies (gl_companies failed)");
+      expect(held()).toEqual(before);
+    } finally {
+      failing = null;
+    }
+  });
+
+  // Last: a company's books can't stop being live (migration 359).
+  it("looks only at the months since a company's books went live, the opening entry standing in the month before", async () => {
+    // Made-up: BMG's books went live on September 1, 2026, so its December 2025 and August 2026 stay as they were.
+    await pg.query("UPDATE gl_companies SET books_live_from = '2026-09-01' WHERE code = 'BMG'");
+    expect(Object.keys(held().BMG.known)).toEqual(expect.arrayContaining([DEC, AUG, SEP]));
+    const since = Object.fromEntries(Object.entries(held().BMG.known).filter(([month]) => month >= SEP));
+    // What NetSuite changes in August now, the opening entry trues up.
+    await invoice(pg, '5012', '2026-08-26', AUG, 2500, 'Acme Fleet');
+    await look('first');
+    expect(held().BMG).toEqual({ known: since, noted: {} });
+    await look('second');
+    expect(told).toEqual([]);
+
+    // From the day they went live, as before.
+    await invoice(pg, '5013', '2026-09-25', SEP, 7000, 'Acme Fleet');
+    await look('first');
+    await look('second');
+    expect(told.map((a) => a.title)).toEqual(["BMG's books: more of September 2026 differs from NetSuite"]);
+    // 1084's books aren't live, so its August is still looked at.
+    expect(held()['1084']).toEqual({ known: { [AUG]: 1, [SEP]: 1 }, noted: {} });
   });
 });

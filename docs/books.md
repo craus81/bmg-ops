@@ -226,7 +226,7 @@ admins can open it while fixing invoices is switched off.
 | The Fix screen and Invoiced's Fix | `src/app/(main)/invoices/fix/page.tsx`, `src/app/(main)/invoices/page.tsx` |
 | Invoice fix tests | `src/lib/invoice-fix.test.ts`, `src/lib/invoice-fix-route.test.ts`, `src/lib/netsuite-invoice-fix.test.ts`, `src/lib/books/own-invoices.test.ts`, and the tables and their functions `src/lib/books/invoices-fixed-sql.test.ts` |
 | Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql`, `migrations/468-card-charges-in-fleetsuite.sql`, `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `migrations/470-inventory-transfers-made-in-fleetsuite.sql` and `migrations/471-invoices-fixed-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
-| Going live: the entry that opens the books at NetSuite's balances (what still differs on the day), what would stop it posting, and the rehearsal | `src/lib/books/opening-balances.ts`, `src/app/(main)/admin/books/going-live/page.tsx`, `src/app/api/admin/books/going-live/route.ts`; tests `src/lib/books/opening-balances.test.ts`, `src/lib/books/going-live-route.test.ts` |
+| Going live: the entry that opens the books at NetSuite's balances (what still differs on the day, customer by customer and vendor by vendor), what would stop it posting, the rehearsal, the tap that sets the books live, and the posting run posting the entry | `migrations/476-books-going-live.sql`, `src/lib/books/opening-balances.ts`, `src/lib/books/going-live.ts`, `postInvoices`, `liveDecision` and `standingDates` in `src/lib/books/invoice-posting.ts`, the daily check's months in `src/lib/books/daily-check.ts`, `src/app/(main)/admin/books/going-live/page.tsx`, `src/app/api/admin/books/going-live/route.ts`; tests `src/lib/books/opening-balances.test.ts`, `src/lib/books/going-live.test.ts`, `src/lib/books/going-live-route.test.ts`, `src/lib/books/going-live-sql.test.ts`, `src/lib/books/invoice-posting.test.ts`, and the live-books tests in `src/lib/books/invoice-posting-sql.test.ts` and `src/lib/books/daily-check-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -4263,10 +4263,11 @@ A month opens the first time anything posts to it.
 
 ## Going live
 
-`/admin/books/going-live` (Books → Going live, part 42) works out the entry
-that would open a company's books the day after any month since January
-2025 ends, says what would stop it posting, and rehearses going live after
-it. It's read only: nothing is posted and the live date isn't set there.
+`/admin/books/going-live` (Books → Going live, parts 42 and 43) works out
+the entry that would open a company's books the day after any month since
+January 2025 ends, says what would stop it posting, and rehearses going
+live after it. From December 1, 2026 it has the tap that sets the books
+live, and once they are, the opening entries the posting run has posted.
 
 FleetSuite's books already hold NetSuite's balances before 2025 (the
 starting entry) and its own journal since, so the entry is only what still
@@ -4281,14 +4282,25 @@ journal's 2025 and 2026 history kept. The entry is dated that last day as
 an opening balance, the one kind of entry the books take from before the
 day they went live ("Rules the database enforces").
 
+On the receivable and payable accounts it goes customer by customer and
+vendor by vendor (part 43): migration 476's `gl_opening_parties` gives each
+customer's and vendor's balance on those accounts through the day, from
+the copy of NetSuite's ledger and from FleetSuite's journal, who a line is
+for decided as Customer and vendor balances decides it (migration 406),
+and the entry has a line for each one whose balance differs, carrying the
+customer or vendor. So each one's balance opens at NetSuite's too. Such an
+account can need lines when its own balance doesn't differ: one customer
+too high by what another is too low.
+
 What would stop it posting is listed with it: the month isn't over;
 nothing has been copied from NetSuite's ledger; on the day the copy
 differs from NetSuite's own totals (the entry is split by customer and
 vendor from the copy's lines); NetSuite's balances don't balance; earlier
 years' net income differs with no one retained earnings account to take
-it; and a line on an account the chart doesn't have yet, a heading, or an
-account that's only for the other company. The database refuses headings
-and other-company accounts anyway.
+it; a line on an account the chart doesn't have yet, a heading, or an
+account that's only for the other company; and a receivable or payable
+account whose customers' or vendors' lines don't come to what it differs
+by. The database refuses headings and other-company accounts anyway.
 
 The rehearsal (`rehearse`): had the books gone live after that month, the
 balances at the end of the latest month in FleetSuite's books, NetSuite's
@@ -4301,12 +4313,54 @@ The page opens on the month before the live date (`books_live_from`, or
 the planned `PLANNED_LIVE_FROM`, 2027-01-01) once it's over, and until then
 on the same month a year earlier, a rehearsal of the same year end.
 
-The steps:
+### The tap
+
+From `GO_LIVE_FROM` (December 1, 2026) the page offers going live, company
+by company: typing the company's code and Go live sets
+`gl_companies.books_live_from` to January 1, 2027
+(`POST /api/admin/books/going-live`, `goLiveRefusal` in
+`src/lib/books/going-live.ts`), once, audited as `go_live`. It can't be
+undone: migration 359 keeps the date, refuses anything dated before it but
+opening balances, and refuses emptying the journal. So what NetSuite books
+into December after the tap comes in with the opening entry rather than
+document by document, and the nearer to December 31 the tap, the more of
+December stays document by document.
+
+### Once the books are live
+
+- The posting run (`postInvoices`) leaves the months before the live date
+  alone, and every entry dated before it: one whose document NetSuite
+  voids or deletes stands, as does a second one standing for the same
+  document (`standingDates`), and one whose document NetSuite moves into a
+  month since posts afresh there instead of being replaced
+  (`liveDecision`). The opening entry trues them up.
+- The posting run posts the opening entry (`postOpeningEntries`), holding
+  the books' lock, once the month before is over, nothing would stop it,
+  and a whole copy of NetSuite's ledger has been made since that day ended
+  in Central time (`openingWait`). Its key is
+  `opening_balance:<company>:<live date>:<n>`. Whenever NetSuite's numbers
+  for that day change afterwards (the CPA's year-end adjustments), what
+  then differs posts as the next one, "Opening balances trued up". What
+  waits or fails is a note on the run's record, with no amount in it, as
+  the rest of that record has none (`failureReason` in
+  `src/lib/books/journal.ts`): what would stop the entry is only counted
+  there, and the Going live page says what it is.
+  `gl_opening_entries` (migration 476) lists the ones posted, each with
+  the entry that reversed it, if one did.
+- The daily check looks only at the months since the live date. The
+  months before stay as they were and the opening entry stands in the
+  last of them, so Differences vs NetSuite shows that month differing by
+  it ("Opening balance (FleetSuite only)").
+- A document NetSuite moves from a month since back to before the live
+  date keeps its entry in the month since: the daily check tells about
+  it, and a journal entry in FleetSuite puts it right.
+
+### The steps
 
 1. Rehearse as often as needed, on the Going live page.
-2. Set `gl_companies.books_live_from` (planned 2027-01-01). This can't be
-   undone.
-3. Post the opening balance entry dated the day before, with
-   `source_type = 'opening_balance'`, as the Going live page works it out.
-   When NetSuite's earlier months change after that (the CPA's year-end
-   adjustments), what then differs posts as another opening balance entry.
+2. Late in December, go live on the Going live page, BMG and then 1084.
+   This can't be undone.
+3. Once December 31 is over and NetSuite's ledger has been copied whole
+   since, the posting run posts each company's opening entry, and trues it
+   up whenever NetSuite's December numbers change. The Going live page
+   shows each one posted.

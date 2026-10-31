@@ -7,10 +7,11 @@
 // and migrations 359–364, 367, 370, 380, 387, 407 and 409, with the ones the
 // job reads payments, deposits, bills, bill payments, checks, card charges,
 // journal entries, bank deposits, transfers, refunds and stock documents
-// through (374, 376, 377, 382–386, 389–395, 397 and 399), in an in-memory
-// Postgres (PGlite) as the app's server login and holds the functions'
-// rules, then runs the posting job against them with a fake NetSuite that
-// answers the job's own SuiteQL.
+// through (374, 376, 377, 382–386, 389–395, 397 and 399), and the ones it
+// works out a company's opening entry with once its books are live (396 and
+// 476), in an in-memory Postgres (PGlite) as the app's server login and holds
+// the functions' rules, then runs the posting job against them with a fake
+// NetSuite that answers the job's own SuiteQL.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -30,6 +31,7 @@ vi.mock('@/lib/system-health', () => ({
 
 import { BOOKS_INVOICE_POSTING, postInvoices, type InvoicePosting } from './invoice-posting';
 import { BOOKS_LISTS_SYNC } from './netsuite-lists';
+import { BOOKS_GL_SYNC } from './netsuite-gl';
 import type { InvoiceMonthData } from './invoice-check';
 import { savePayload, workOutOwnInvoice, type OwnInvoiceFacts, type OwnInvoiceInput } from './own-invoices';
 
@@ -85,7 +87,7 @@ async function freshDb(): Promise<PGlite> {
     '377-books-differences.sql', '380-books-netsuite-month.sql', '382-books-customer-deposits.sql', '383-books-deposit-posting.sql',
     '384-books-vendor-bills.sql', '385-books-bill-item-accounts.sql', '386-books-bill-posting.sql', '387-books-retired-accounts.sql',
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
-    '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql',
+    '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '396-books-reports.sql',
     '397-books-stock-postings-once.sql', '399-books-customer-refunds.sql',
     // Stock by item, which Books' own fulfillments are costed from.
     '401-books-stock-by-item.sql', '402-books-stock-values.sql', '403-books-stock-item-setup.sql',
@@ -95,6 +97,8 @@ async function freshDb(): Promise<PGlite> {
     // Books' own fulfillments, receipts and bills, which the job reads with NetSuite's.
     '416-books-own-fulfillments.sql', '435-books-own-bills.sql', '436-books-snap-a-bill.sql', '454-inventory-adjustments.sql',
     '456-books-own-postings.sql', '457-books-own-adjustments.sql',
+    // Going live: each customer's balance on the day, and the opening entries posted.
+    '476-books-going-live.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -532,7 +536,10 @@ describe('the posting job against the real functions', () => {
         return {
           select: () => ({
             eq: (_col: string, key: string) => ({
-              maybeSingle: async () => ({ data: store.has(key) ? { last_result: store.get(key).last_result } : null, error: null }),
+              maybeSingle: async () => {
+                const row = store.get(key);
+                return { data: row ? { last_result: row.last_result, last_synced_at: row.last_synced_at ?? null, updated_at: row.updated_at ?? null } : null, error: null };
+              },
             }),
           }),
           upsert: async (row: Record<string, unknown>) => {
@@ -554,7 +561,9 @@ describe('the posting job against the real functions', () => {
         };
       }
       if (table === 'gl_companies') {
-        return { select: async (cols: string) => ({ data: (await pg.query(`SELECT ${cols} FROM gl_companies ORDER BY code`)).rows, error: null }) };
+        // A date as PostgREST gives it, 'YYYY-MM-DD'.
+        const dated = (cols: string) => cols.replace(/\bbooks_live_from\b/, "to_char(books_live_from, 'YYYY-MM-DD') AS books_live_from");
+        return { select: async (cols: string) => ({ data: (await pg.query(`SELECT ${dated(cols)} FROM gl_companies ORDER BY code`)).rows, error: null }) };
       }
       throw new Error(`unexpected table ${table}`);
     },
@@ -1082,6 +1091,139 @@ describe('the posting job against the real functions', () => {
         { no: expect.any(Number), date: '2025-03-01', key: 'invoice:202:2', reverses: null, memo: 'INV202, A Customer' },
       ]);
       expect(await run()).toMatchObject({ posted: 0, replaced: 0, unchanged: 6 });
+    });
+  });
+
+  // Last: a company's books can't stop being live (migration 359), and the journal can't be emptied once they are.
+  describe("once BMG's books are live", () => {
+    // Made-up: BMG's books went live on March 1, 2025, after its January and February invoices posted.
+    const LIVE_FROM = MAR;
+    const waiting = (why: string) => `BMG's opening entry for February 28, 2025 is waiting: ${why} Going live shows it.`;
+    const midRefresh = expect.stringContaining('INV208');
+    /** NetSuite's own totals as the copy of its ledger stores them, every month's as its copied lines add up. */
+    const storeTotals = async () => {
+      const months = (await pg.query(`
+        SELECT c.code AS company, l.netsuite_account_id, to_char(l.posting_month, 'YYYY-MM-DD') AS month,
+               sum(l.debit)::text AS debit, sum(l.credit)::text AS credit, count(*)::int AS line_count
+        FROM gl_netsuite_lines l JOIN gl_companies c ON c.id = l.company_id
+        GROUP BY 1, 2, 3
+      `)).rows;
+      await pg.query('SELECT gl_netsuite_store_totals($1::jsonb)', [JSON.stringify({ opening: [], months })]);
+    };
+    /** A copy of NetSuite's ledger that finished whole at `at`. */
+    const copied = (at: string) => store.set(BOOKS_GL_SYNC, { last_result: {}, last_synced_at: at, updated_at: at });
+    const openings = async () => (await journal()).filter((e) => e.key?.startsWith('opening_balance:'));
+
+    beforeAll(async () => {
+      await startOver();
+      expect(await run()).toMatchObject({ posted: 3, failedCount: 0 });
+      await pg.query("UPDATE gl_companies SET books_live_from = $1 WHERE code = 'BMG'", [LIVE_FROM]);
+    });
+
+    it('posts nothing dated before the day they went live, and says why the opening entry waits', async () => {
+      const before = await journal();
+      const r = await run();
+      expect(r).toMatchObject({ months: [MAR], posted: 0, replaced: 0, reversed: 0, unchanged: 1, left: 2, failedCount: 0, opened: 0 });
+      expect(r.notes).toEqual(["BMG's opening entry for February 28, 2025 is waiting on 3 things to fix first, which Going live shows.", midRefresh]);
+      expect(await journal()).toEqual(before);
+      expect(record().last_result).toMatchObject({ months: [MAR], opened: 0 });
+    });
+
+    it('leaves an entry dated before then as it stands when NetSuite changes or deletes its document', async () => {
+      const before = await journal();
+      await edit('201', (inv) => { inv.deleted = true; });
+      await edit('202', (inv) => { inv.lines = [{ ...inv.lines[0], amount: '90.00' }]; });
+      const r = await run();
+      expect(r).toMatchObject({ posted: 0, replaced: 0, reversed: 0, unchanged: 1, left: 2, failedCount: 0 });
+      expect(r.failed).toBeUndefined();
+      expect(await journal()).toEqual(before);
+    });
+
+    it('posts a document NetSuite books into a month since afresh, its entry from before standing', async () => {
+      await edit('202', (inv) => { inv.booked = MAR; });
+      expect(await run()).toMatchObject({ posted: 1, replaced: 0, reversed: 0, unchanged: 1, left: 2, failedCount: 0 });
+      expect((await journal()).slice(3)).toEqual([{ no: 4, date: '2025-03-01', key: 'invoice:202:2', reverses: null, memo: 'INV202, A Customer' }]);
+      // Its entry from February isn't a second one standing for it.
+      expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 0, unchanged: 2, failedCount: 0 });
+      expect(await journal()).toHaveLength(4);
+    });
+
+    it('replaces an entry dated since as before', async () => {
+      await edit('204', (inv) => { inv.lines = [part('45.00')]; });
+      expect(await run()).toMatchObject({ posted: 0, replaced: 1, reversed: 0, unchanged: 1, left: 2, failedCount: 0 });
+      expect((await journal()).slice(4)).toEqual([
+        { no: 5, date: '2025-03-03', key: null, reverses: 3, memo: 'INV204 changed in NetSuite' },
+        { no: 6, date: '2025-03-03', key: 'invoice:204:2', reverses: null, memo: 'INV204, A Customer' },
+      ]);
+    });
+
+    it('reverses a second entry standing from since then, and leaves the one from before', async () => {
+      const before = (await journal()).length;
+      await pg.query('SELECT gl_post_entry($1::jsonb)', [JSON.stringify({
+        company: 'BMG', entry_date: '2025-03-01', source_type: 'invoice', source_id: '202', posting_rule: 'invoice@1', idempotency_key: 'invoice:202:x',
+        lines: [{ account_id: ACCOUNT[120], debit: '1.00' }, { account_id: ACCOUNT[400], credit: '1.00' }],
+      })]);
+      expect(await run()).toMatchObject({ posted: 0, replaced: 1, reversed: 1, unchanged: 1, left: 2, failedCount: 0 });
+      expect((await journal()).slice(before + 1)).toEqual([
+        { no: before + 2, date: '2025-03-01', key: null, reverses: 4, memo: 'INV202 had another entry standing' },
+        { no: before + 3, date: '2025-03-01', key: null, reverses: before + 1, memo: 'INV202 changed in NetSuite' },
+        { no: before + 4, date: '2025-03-01', key: 'invoice:202:4', reverses: null, memo: 'INV202, A Customer' },
+      ]);
+
+      // Voided, it goes as before though it's dated the very day they went live; its February entry stays, unchanged.
+      await edit('202', (inv) => { inv.voided = true; });
+      expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 1, unchanged: 2, left: 2, failedCount: 0 });
+      expect((await journal()).slice(before + 4)).toEqual([
+        { no: before + 5, date: '2025-03-01', key: null, reverses: before + 4, memo: 'INV202 voided in NetSuite' },
+      ]);
+    });
+
+    it("posts the opening entry once a whole copy of NetSuite's ledger has been made since February ended, customer by customer", async () => {
+      await storeTotals();
+      // February 28 in Central time, not since it ended.
+      copied('2025-03-01T05:00:00Z');
+      let r = await run();
+      expect(r).toMatchObject({ opened: 0, posted: 0, replaced: 0, reversed: 0, failedCount: 0 });
+      expect(r.notes).toEqual([waiting("No whole copy of NetSuite's ledger has been made since February 28, 2025 ended."), midRefresh]);
+      expect(await openings()).toEqual([]);
+
+      copied('2025-03-02T12:00:00Z');
+      r = await run();
+      expect(r).toMatchObject({ opened: 1, posted: 0, replaced: 0, reversed: 0, unchanged: 2, left: 2, failedCount: 0 });
+      expect(r.notes).toEqual([midRefresh]);
+      // What differs on February 28: INV201, which NetSuite deleted, comes off its customer's balance; INV202's February
+      // entry, which NetSuite now books into March; and INV203, which the rule can't work out.
+      const [opening] = await openings();
+      expect(opening).toEqual({
+        no: expect.any(Number), date: '2025-02-28', key: 'opening_balance:BMG:2025-03-01:1', reverses: null, memo: "Opening balances: NetSuite's on February 28, 2025",
+      });
+      expect(await linesOf(opening.no)).toEqual([
+        { account: '120', debit: '0.00', credit: '50.00', division: null, customer_id: null, item_number: null, source_line_ref: null },
+        { account: '120', debit: '0.00', credit: '162.00', division: null, customer_id: CUSTOMER, item_number: null, source_line_ref: null },
+        { account: '220', debit: '12.00', credit: '0.00', division: null, customer_id: null, item_number: null, source_line_ref: null },
+        { account: '400', debit: '200.00', credit: '0.00', division: null, customer_id: null, item_number: null, source_line_ref: null },
+      ]);
+      // Every customer's balance that day is NetSuite's now, so the next run posts nothing more.
+      expect((await pg.query<{ r: unknown }>("SELECT gl_opening_parties('BMG', '2025-02-28') AS r")).rows[0].r).toEqual({ parties: [] });
+      r = await run();
+      expect(r).toMatchObject({ opened: 0, posted: 0, replaced: 0, reversed: 0, failedCount: 0 });
+      expect(r.notes).toEqual([midRefresh]);
+    });
+
+    it('trues the books up again when NetSuite changes a document dated before they went live', async () => {
+      await edit('203', (inv) => { inv.lines = [{ ...inv.lines[0], amount: '35.00' }]; });
+      await storeTotals();
+      expect(await run()).toMatchObject({ opened: 1, posted: 0, replaced: 0, reversed: 0, failedCount: 0 });
+      const trued = await openings();
+      expect(trued.map((e) => [e.date, e.key, e.memo])).toEqual([
+        ['2025-02-28', 'opening_balance:BMG:2025-03-01:1', "Opening balances: NetSuite's on February 28, 2025"],
+        ['2025-02-28', 'opening_balance:BMG:2025-03-01:2', "Opening balances trued up: NetSuite's on February 28, 2025"],
+      ]);
+      expect(await linesOf(trued[1].no)).toEqual([
+        { account: '120', debit: '5.00', credit: '0.00', division: null, customer_id: null, item_number: null, source_line_ref: null },
+        { account: '400', debit: '0.00', credit: '5.00', division: null, customer_id: null, item_number: null, source_line_ref: null },
+      ]);
+      expect(await run()).toMatchObject({ opened: 0, failedCount: 0 });
     });
   });
 });

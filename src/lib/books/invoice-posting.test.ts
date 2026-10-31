@@ -1,12 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { BooksError } from './journal';
 import { workOutMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead } from './invoice-check';
 import {
   bankDocumentBooks, bankJournalEntry, bankPostingFor, billBooks, billJournalEntry, billPaymentBooks, billPaymentJournalEntry, billPostingFor, copiedJournalEntry,
   decide, decideBankDocument, decideBill, decideBillPayment, decideDeposit, decideJournalEntry, decidePayment, decideSpending, depositBooks,
-  depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, failureReason, invoiceBooks, invoiceJournalEntry, journalEntryBooks,
-  parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, replaceBillMemo, replaceMemo, replaceStockMemo, signature,
-  spendingBooks, spendingJournalEntry, spendingPostingFor, decideStockDocument, stockDocumentBooks, stockJournalEntry, stockPostingFor, unsaidFacts,
+  depositEntryLines, depositJournalEntry, depositPostingFor, entryLines, invoiceBooks, invoiceJournalEntry, journalEntryBooks,
+  liveDecision, parsePostingState, paymentBooks, paymentEntryLines, paymentJournalEntry, postingKey, postingQueue, replaceBillMemo, replaceMemo, replaceStockMemo, signature,
+  spendingBooks, spendingJournalEntry, spendingPostingFor, decideStockDocument, standingDates, stockDocumentBooks, stockJournalEntry, stockPostingFor, unsaidFacts,
   type BankPosting, type BillPaymentPosting, type BillPosting, type DepositPosting, type InvoicePosting, type JournalEntryPosting,
   type PaymentPosting, type SpendingPosting, type StockPosting,
 } from './invoice-posting';
@@ -143,6 +142,41 @@ describe('decide', () => {
   it('leaves whatever stands when the lines don\'t come to the invoice\'s total, as when the copy is caught mid-refresh', () => {
     expect(decide(worked(invoice({ lines: invoice().lines.slice(0, 1) })), posting())).toEqual({ kind: 'leave', why: 'total' });
     expect(decide(worked(invoice({ total: '170.00' })), undefined)).toEqual({ kind: 'leave', why: 'total' });
+  });
+});
+
+describe('once the books are live', () => {
+  const LIVE = '2027-01-01';
+  const before = { entry_date: '2026-12-31' };
+  const since = { entry_date: LIVE };
+  const decisions = [
+    { kind: 'post' }, { kind: 'replace' }, { kind: 'reverse', why: 'voided' }, { kind: 'reverse', why: 'nothing' },
+    { kind: 'keep' }, { kind: 'keep', why: 'voided' }, { kind: 'leave', why: 'total' },
+  ] as const;
+
+  it('decides as before until they are, and where the entry standing is dated since or none stands', () => {
+    for (const d of decisions) {
+      expect(liveDecision(d, before, null)).toEqual(d);
+      expect(liveDecision(d, since, LIVE)).toEqual(d);
+      expect(liveDecision(d, null, LIVE)).toEqual(d);
+    }
+  });
+
+  it('leaves an entry dated before they went live as it stands, posting afresh what NetSuite changed', () => {
+    expect(decisions.map((d) => liveDecision(d, before, LIVE))).toEqual([
+      { kind: 'post' }, { kind: 'post' }, { kind: 'keep' }, { kind: 'keep' }, { kind: 'keep' }, { kind: 'keep', why: 'voided' }, { kind: 'leave', why: 'total' },
+    ]);
+  });
+
+  it("lists the dates of a document's entries nothing reversed, newest first, as `unreversed` lists their ids", () => {
+    expect(standingDates({ history: [
+      { entry_no: 3, entry_date: '2026-12-05', reversed_by: null },
+      { entry_no: 5, entry_date: '2026-12-06', reversed_by: 7 },
+      { entry_no: 12, entry_date: '2027-01-04', reversed_by: null },
+      { entry_no: 9, entry_date: '2027-01-01', reversed_by: null },
+    ] })).toEqual(['2027-01-04', '2027-01-01', '2026-12-05']);
+    expect(standingDates({ history: [] })).toEqual([]);
+    expect(standingDates({} as Pick<InvoicePosting, 'history'>)).toEqual([]);
   });
 });
 
@@ -1998,15 +2032,6 @@ describe('stock documents', () => {
         expect(decideStockDocument(w, held({ current }), posts), w.entry.type).toEqual({ kind: 'keep' });
       }
     });
-  });
-});
-
-describe('failureReason', () => {
-  it('keeps what the journal said, but never an amount', () => {
-    expect(failureReason(new BooksError('refused', ['account 4010 (Old Sales) is inactive']))).toBe('Account 4010 (Old Sales) is inactive');
-    expect(failureReason(new BooksError('refused', ['entry does not balance: debits 10.00 vs credits 9.00']))).toBe('The journal refused the entry.');
-    expect(failureReason(new BooksError('invalid', ["Debits $10.00 don't equal credits $9.00"]))).toBe("FleetSuite's entry didn't pass the journal's own checks.");
-    expect(failureReason(new Error('timeout after 162.00 seconds'))).toBe('Timeout after … seconds');
   });
 });
 

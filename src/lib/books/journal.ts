@@ -220,6 +220,18 @@ export function booksErrorFrom(error: { message?: string } | null | undefined): 
     : new BooksError('failed', [message]);
 }
 
+/** Why a write failed, in words that carry no amount: the run's record is kept where amounts never go. */
+export function failureReason(err: unknown): string {
+  const money = /\$|\bdebits?\b|\bcredits?\b|balance/i;
+  const sentence = (s: string) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`.slice(0, 200);
+  if (err instanceof BooksError) {
+    const told = err.problems.filter((p) => !money.test(p));
+    if (told.length) return sentence(told.join('; '));
+    return err.kind === 'invalid' ? "FleetSuite's entry didn't pass the journal's own checks." : 'The journal refused the entry.';
+  }
+  return sentence(String((err as any)?.message || err).replace(/-?\d[\d,]*\.\d{2}\b/g, '…'));
+}
+
 /** Posts one entry. Throws BooksError when it's invalid or refused; a repeated key returns alreadyPosted. */
 export async function postEntry(client: RpcClient, entry: JournalEntryInput): Promise<PostedEntry> {
   const problems = validateEntry(entry);

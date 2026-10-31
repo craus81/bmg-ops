@@ -3,7 +3,10 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
-import { addDays, lastDay, PLANNED_LIVE_FROM, rehearse, workOutOpeningEntry, type OpeningAccount, type OpeningData } from './opening-balances';
+import {
+  addDays, lastDay, longDate, OPENING_RULE, openingJournalEntry, openingKey, PLANNED_LIVE_FROM, rehearse, workOutOpeningEntry,
+  type OpeningAccount, type OpeningData, type OpeningPartyData,
+} from './opening-balances';
 import type { ReportAmount } from './reports';
 import type { TbAmount } from './trial-balance';
 
@@ -258,5 +261,136 @@ describe('rehearse', () => {
     expect(rehearse(books(), JOURNAL, '2025-12-01', '2025-12-01')).toBeNull();
     expect(rehearse(books(), JOURNAL, '2025-12-01', '2025-11-01')).toBeNull();
     expect(rehearse(books(), JOURNAL, '2025-12-01', '2026-01-01')).toMatchObject({ through: '2026-01-01', date: '2026-01-31', differing: 0 });
+  });
+});
+
+describe('workOutOpeningEntry, customer by customer and vendor by vendor', () => {
+  const ACME = 'c0000000-0000-4000-8000-00000000ac3e';
+  const BOLT = 'c0000000-0000-4000-8000-00000000b017';
+  const party = (account: string, kind: 'customer' | 'vendor', id: string, name: string | null, netsuite: string, fleetsuite: string): OpeningPartyData =>
+    ({ account, kind, party: id, name, netsuite, fleetsuite });
+  const PAYABLES = account('a7', '20', '2000', 'Accounts Payable', 'accounts_payable');
+  const accounts = [...ACCOUNTS, PAYABLES];
+  /** December's 300.00 invoice, FleetSuite's for Bolt where NetSuite's is Acme's. */
+  const SWAPPED = [party('12', 'customer', ACME, 'Acme Fleet', '300.00', '0.00'), party('12', 'customer', BOLT, 'Bolt Leasing', '0.00', '300.00')];
+  const split = (parties: OpeningPartyData[], more: Partial<OpeningData> = {}, fleetsuite = JOURNAL) =>
+    workOutOpeningEntry(books({ accounts, ...more }), fleetsuite, '2025-12-01', '2026-10-31', parties);
+
+  it("posts a line for each customer whose balance differs, even when the account's doesn't", () => {
+    const entry = split(SWAPPED);
+    expect(entry.problems).toEqual([]);
+    expect(entry.lines.map((l) => [l.number, l.cents, l.parties])).toEqual([
+      ['1000', 2000, undefined],
+      ['1200', 0, [
+        { kind: 'customer', party: ACME, name: 'Acme Fleet', cents: 30000 },
+        { kind: 'customer', party: BOLT, name: 'Bolt Leasing', cents: -30000 },
+      ]],
+      ['4000', -2000, undefined],
+    ]);
+    // What it posts in all counts each customer's line.
+    expect(entry).toMatchObject({ debit: 32000, credit: 32000 });
+  });
+
+  it("adds a payable account that differs only vendor by vendor, in the chart's order", () => {
+    const entry = split([party('20', 'vendor', '901', 'Parts Co', '-40.00', '0.00'), party('20', 'vendor', '902', 'Vinyl Co', '0.00', '-40.00')]);
+    expect(entry.lines.map((l) => [l.netsuiteAccountId, l.accountId, l.number, l.name, l.fleetsuite, l.netsuite, l.cents])).toEqual([
+      ['10', 'a1', '1000', 'Cash', 103000, 105000, 2000],
+      ['20', 'a7', '2000', 'Accounts Payable', 0, 0, 0],
+      ['40', 'a5', '4000', 'Sales', -48000, -50000, -2000],
+    ]);
+    expect(entry.lines[1].parties).toEqual([
+      { kind: 'vendor', party: '901', name: 'Parts Co', cents: -4000 },
+      { kind: 'vendor', party: '902', name: 'Vinyl Co', cents: 4000 },
+    ]);
+    expect(entry).toMatchObject({ debit: 6000, credit: 6000, problems: [] });
+  });
+
+  it("goes by the account's own difference on one the chart doesn't have as receivable or payable", () => {
+    const entry = split([party('77', 'vendor', '901', 'Parts Co', '-40.00', '0.00'), party('77', 'vendor', '902', null, '0.00', '-40.00')]);
+    expect(entry.lines.find((l) => l.netsuiteAccountId === '77')).toBeUndefined();
+    expect(entry.problems).toEqual([]);
+  });
+
+  it('leaves out customers whose balance matches, and the account when none differ', () => {
+    expect(split([party('12', 'customer', ACME, 'Acme Fleet', '300.00', '300.00')]).lines.map((l) => l.number)).toEqual(['1000', '4000']);
+    expect(split([]).lines.map((l) => l.number)).toEqual(['1000', '4000']);
+  });
+
+  it("splits the account's own difference among its customers", () => {
+    // FleetSuite posted December's invoice at 250.00 where NetSuite has 300.00.
+    const fleetsuite = journal([
+      amount('10', '180.00', '0.00', '2025-01-01'), amount('40', '0.00', '180.00', '2025-01-01'), ...LATER.slice(0, 4),
+      amount('12', '250.00', '0.00', '2025-12-01'), amount('40', '0.00', '250.00', '2025-12-01'), ...LATER.slice(6),
+    ]);
+    const entry = split([party('12', 'customer', ACME, 'Acme Fleet', '300.00', '250.00')], {}, fleetsuite);
+    expect(entry.lines.map((l) => [l.number, l.cents])).toEqual([['1000', 2000], ['1200', 5000], ['4000', -7000]]);
+    expect(entry.lines[1].parties).toEqual([{ kind: 'customer', party: ACME, name: 'Acme Fleet', cents: 5000 }]);
+    expect(entry).toMatchObject({ debit: 7000, credit: 7000, problems: [] });
+
+    // Its customers' lines have to come to it, else the copy was caught mid-refresh.
+    expect(split([party('12', 'customer', ACME, 'Acme Fleet', '300.00', '280.00')], {}, fleetsuite).problems).toEqual([
+      "1200 Accounts Receivable takes a debit of $50.00, but its customers' lines come to a debit of $20.00, so it can't go "
+        + "customer by customer: copy NetSuite's ledger again (Trial balance vs NetSuite → Copy now).",
+    ]);
+    expect(split([], {}, fleetsuite).problems).toEqual([
+      "1200 Accounts Receivable takes a debit of $50.00, but its customers' lines come to nothing, so it can't go "
+        + "customer by customer: copy NetSuite's ledger again (Trial balance vs NetSuite → Copy now).",
+    ]);
+    expect(split([party('12', 'customer', ACME, 'Acme Fleet', '0.00', '20.00')], {}, fleetsuite).problems[0])
+      .toContain('takes a debit of $50.00, but its customers\' lines come to a credit of $20.00');
+    // Worked out without its customers, as Going live did before, the account's own line stands alone.
+    const whole = workOutOpeningEntry(books({ accounts }), fleetsuite, '2025-12-01', '2026-10-31');
+    expect(whole.lines[1]).toEqual({ netsuiteAccountId: '12', accountId: 'a2', number: '1200', name: 'Accounts Receivable', fleetsuite: 25000, netsuite: 30000, cents: 5000 });
+    expect(whole.problems).toEqual([]);
+  });
+
+  it("says so when an account that takes nothing has customers' lines that don't come to nothing", () => {
+    expect(split([party('12', 'customer', ACME, 'Acme Fleet', '300.00', '0.00')]).problems).toEqual([
+      "1200 Accounts Receivable takes nothing, but its customers' lines come to a debit of $300.00, so it can't go customer by "
+        + "customer: copy NetSuite's ledger again (Trial balance vs NetSuite → Copy now).",
+    ]);
+  });
+});
+
+describe('openingJournalEntry', () => {
+  const ACME = 'c0000000-0000-4000-8000-00000000ac3e';
+  const parties: OpeningPartyData[] = [
+    { account: '12', kind: 'customer', party: ACME, name: 'Acme Fleet', netsuite: '300.00', fleetsuite: '0.00' },
+    { account: '12', kind: 'customer', party: '', name: null, netsuite: '0.00', fleetsuite: '300.00' },
+    { account: '20', kind: 'vendor', party: '901', name: 'Parts Co', netsuite: '-40.00', fleetsuite: '0.00' },
+    { account: '20', kind: 'vendor', party: '', name: null, netsuite: '0.00', fleetsuite: '-40.00' },
+  ];
+  const accounts = [...ACCOUNTS, account('a7', '20', '2000', 'Accounts Payable', 'accounts_payable')];
+  const entry = workOutOpeningEntry(books({ accounts }), JOURNAL, '2025-12-01', '2026-01-15', parties);
+
+  it('posts each line, a customer or vendor on each of theirs, dated the day as an opening balance', () => {
+    expect(entry.problems).toEqual([]);
+    expect(openingJournalEntry(entry, 1)).toEqual({
+      company: 'BMG',
+      entryDate: '2025-12-31',
+      sourceType: 'opening_balance',
+      sourceId: null,
+      postingRule: OPENING_RULE,
+      idempotencyKey: 'opening_balance:BMG:2026-01-01:1',
+      memo: "Opening balances: NetSuite's on December 31, 2025",
+      lines: [
+        { accountId: 'a1', debit: '20.00' },
+        { accountId: 'a2', debit: '300.00', memo: 'Acme Fleet', customerId: ACME, vendorRef: null },
+        { accountId: 'a2', credit: '300.00', memo: null, customerId: null, vendorRef: null },
+        { accountId: 'a7', credit: '40.00', memo: 'Parts Co', customerId: null, vendorRef: '901' },
+        { accountId: 'a7', debit: '40.00', memo: null, customerId: null, vendorRef: null },
+        { accountId: 'a5', credit: '20.00' },
+      ],
+    });
+    expect(OPENING_RULE).toBe('opening_balance@1');
+  });
+
+  it('keys and names each after the first as trueing the books up', () => {
+    const second = openingJournalEntry(entry, 2);
+    expect(second).toMatchObject({ idempotencyKey: 'opening_balance:BMG:2026-01-01:2', memo: "Opening balances trued up: NetSuite's on December 31, 2025" });
+    expect(second.lines).toEqual(openingJournalEntry(entry, 1).lines);
+    expect(openingKey('1084', '2027-01-01', 3)).toBe('opening_balance:1084:2027-01-01:3');
+    expect(longDate('2026-12-31')).toBe('December 31, 2026');
+    expect(longDate('2027-01-01')).toBe('January 1, 2027');
   });
 });
