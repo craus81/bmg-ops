@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 469, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 470, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -13,7 +13,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * that can't be read counts as off.
  */
 
-export type SwitchPiece = 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries';
+export type SwitchPiece = 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers';
 
 export interface SwitchInfo {
   name: string;
@@ -43,6 +43,11 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     name: 'Journal entries',
     what: 'Anyone with Payments types a journal entry in FleetSuite and asks for approval, a super admin who didn\'t ask approves it, and FleetSuite makes it in NetSuite and keeps its own copy for the books.',
     where: 'More → Money & Books → Journal Entries',
+  },
+  inventory_transfers: {
+    name: 'Inventory transfers',
+    what: "Admins move stock from one of a company's locations to another in FleetSuite, and FleetSuite makes the transfer in NetSuite.",
+    where: 'More → Parts & Inventory → Inventory Transfers',
   },
 };
 

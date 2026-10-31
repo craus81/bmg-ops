@@ -230,3 +230,11 @@ describe('Journal entry links', () => {
     expect(deepLinks.journalEntries('c0000000-0000-4000-8000-000000000001')).toBe('/admin/journal-entries?id=c0000000-0000-4000-8000-000000000001');
   });
 });
+
+describe('Inventory transfer links', () => {
+  it('opens the inventory transfers screen, or one transfer on it', () => {
+    expect(deepLinks.inventoryTransfers()).toBe('/admin/inventory-transfers');
+    expect(deepLinks.inventoryTransfers(null)).toBe('/admin/inventory-transfers');
+    expect(deepLinks.inventoryTransfers('f0000000-0000-4000-8000-000000000001')).toBe('/admin/inventory-transfers?id=f0000000-0000-4000-8000-000000000001');
+  });
+});

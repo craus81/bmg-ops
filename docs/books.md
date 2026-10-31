@@ -68,9 +68,10 @@ in FleetSuite and applied to the vendor's open bills, sent on to NetSuite
 the same way, with Books' own copy of each, built switched off, part
 36, the Chase card's charges coded in FleetSuite and sent on to NetSuite as
 one journal entry a month, with Books' own copy of each, built switched
-off, and part 37, journal entries typed in FleetSuite, approved by a super
+off, part 37, journal entries typed in FleetSuite, approved by a super
 admin who didn't ask and sent on to NetSuite, with Books' own copy of
-each, built switched off. The screens are the accounts page at `/admin/books`, the trial
+each, built switched off, and part 38, inventory transfers made in
+FleetSuite and sent on to NetSuite, built switched off. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -101,7 +102,10 @@ Money & Books → Card Charges: only super admins can open it while card
 charges are switched off. The journal entries screen,
 `/admin/journal-entries`, is for staff with Payments too, opened from More
 → Money & Books → Journal Entries: only super admins can open it while
-journal entries are switched off.
+journal entries are switched off. The inventory transfers screen,
+`/admin/inventory-transfers`, is admins', opened from More → Parts &
+Inventory → Inventory Transfers: only super admins can open it while
+inventory transfers are switched off.
 
 | Piece | Where |
 | --- | --- |
@@ -206,7 +210,10 @@ journal entries are switched off.
 | Journal entries typed in FleetSuite, approved, sent on to NetSuite, and Books' own copy of each | `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `src/lib/typed-journal-entries.ts`, `src/lib/books/own-journal-entries.ts`, `findJournalEntry` and `createJournalEntry` in `src/lib/netsuite.ts`, `src/app/api/journal-entries/route.ts` |
 | The journal entries screen and More → Money & Books' Journal Entries | `src/app/(main)/admin/journal-entries/page.tsx`, `src/app/(main)/more/page.tsx` |
 | Typed journal entry tests | `src/lib/typed-journal-entries.test.ts`, `src/lib/journal-entries-route.test.ts`, `src/lib/books/own-journal-entries.test.ts`, and the table and its functions `src/lib/books/typed-journal-entries-sql.test.ts` |
-| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql`, `migrations/468-card-charges-in-fleetsuite.sql` and `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
+| Inventory transfers made in FleetSuite and sent on to NetSuite | `migrations/470-inventory-transfers-made-in-fleetsuite.sql`, `src/lib/inventory-transfers.ts`, `findInventoryTransfer`, `getLocationOnHand` and `createInventoryTransfer` in `src/lib/netsuite.ts`, `src/app/api/inventory-transfers/route.ts` |
+| The inventory transfers screen and More → Parts & Inventory's Inventory Transfers | `src/app/(main)/admin/inventory-transfers/page.tsx`, `src/app/(main)/more/page.tsx` |
+| Inventory transfer tests | `src/lib/inventory-transfers.test.ts`, `src/lib/inventory-transfers-route.test.ts`, `src/lib/netsuite-inventory-transfer.test.ts`, and the table and its functions `src/lib/books/inventory-transfers-sql.test.ts` |
+| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql`, `migrations/468-card-charges-in-fleetsuite.sql`, `migrations/469-journal-entries-typed-in-fleetsuite.sql` and `migrations/470-inventory-transfers-made-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -3750,10 +3757,86 @@ admin, it's one journal entry of three lines in NetSuite, dated January 31.
   bookkeeper uses. Then type the first month-end entry here instead of in
   NetSuite and compare.
 
+## Inventory transfers made in FleetSuite
+
+From January 1, 2027 stock moved from one of a company's locations to
+another is moved in FleetSuite, and FleetSuite makes NetSuite's Transfer
+Inventory for it (the NetSuite Exit Checklist's January pieces, owner
+decisions 2026-10-31). It's built switched off ("Switches"): until a super
+admin turns it on, only super admins can open the screen, to make and save
+transfers and see what they'd send, and nothing is moved in NetSuite. Once
+it's on, admins can, as they can use Inventory Adjust, and More → Parts &
+Inventory shows Inventory Transfers to them. Nothing about a transfer
+alerts anyone, as Inventory Adjust doesn't.
+
+The screen is `/admin/inventory-transfers` (`deepLinks.inventoryTransfers`,
+with the transfer's id to open one). A transfer has a company (BMG unless
+they pick another), the location the stock is at (O'Fallon to start with)
+and the one it's going to, both the company's in NetSuite, a date, a memo
+saying why it's moving, and its items. Each item is found by its number or
+name among the active parts NetSuite keeps stock of: inventory and
+assembly items, and a part whose kind the parts list doesn't say, as
+Inventory Adjust takes it. Each says how many move, to four places. Beside
+each is NetSuite's count of it at both locations, as Books' stock copy last
+read it (migration 401), with a warning when more is moving than was
+counted where it's moving from. Save keeps it as a draft
+(`inventory_transfers`, saved only by `inventory_transfer_save`), whole or
+half typed. Only a draft can be changed, and only whoever started it or a
+super admin can delete it.
+
+Move checks it first (`workOutTransfer` in `src/lib/inventory-transfers.ts`,
+`inventory_transfer@1`): the company needs a NetSuite subsidiary; the
+transfer needs a real date, a memo, two different locations of the
+company's, and one item or more, 100 at most; each item must be active,
+kept stock of, on one line only, and moving more than 0 and 1,000,000 at
+most, to four places. The press names the draft as the mover saw it
+(`inventory_transfer_claim`): saved again since, nothing moves. The route
+(`/api/inventory-transfers`) works the transfer out again from its lines as
+they're kept, never from what the page sent, and lets go when they no
+longer make one. The transfer's id, made by the page when it's started, is
+its External ID in NetSuite (`fleetsuite-it-` and the id). The route asks
+NetSuite for it first (`findInventoryTransfer`) and moves nothing when
+NetSuite can't say. Then it reads NetSuite's count now at the location it's
+moving from (`getLocationOnHand`) and moves nothing when an item has fewer
+there than are moving, saying how many NetSuite has. Then it makes it
+(`createInventoryTransfer`: the location it's moving from, the one it's
+going to, and each item's quantity) and keeps NetSuite's id and number on
+the transfer (`inventory_transfer_made`). Pressing again says what it made.
+A refusal makes it a draft again, with NetSuite's reason in red
+(`inventory_transfer_let_go`). When NetSuite may have made it anyway, it's
+held; Ask NetSuite after five minutes finds out, and it finishes or goes
+back to a draft. A made transfer can be copied into a new draft, or moved
+back: the same items, from where they went to where they came from.
+
+A transfer changes where stock is, never how much there is or what it's
+worth: NetSuite moves it at the cost it carries it at. Books already copies
+every NetSuite transfer (the stock copy, migration 401, and the GL copy),
+so one made here is counted in Stock by item and posts from the GL copy as
+any other does (`inventory_transfer` entries, "Stock and cost"), and there's
+no own copy to keep.
+
+Made-up example: four bracket kits and 12.5 feet of wire are moved from
+O'Fallon to the service van, dated January 15, with the memo "Stock for the
+van". NetSuite has 10 kits and 250.5 feet at O'Fallon, so it's one transfer
+of two lines in NetSuite.
+
+### What isn't done yet
+
+- Stock moved between BMG and 1084 isn't a transfer: NetSuite needs a
+  transfer order between the two subsidiaries, and nothing here makes one.
+- An item NetSuite tracks by lot or serial number needs its numbers on the
+  transfer (NetSuite's inventory detail), which the screen doesn't take, so
+  NetSuite refuses it.
+- Before switching on, check against NetSuite: that the screen offers the
+  locations each company really moves stock between; whether a location
+  uses bins; what NetSuite says to a closed month; and that NetSuite
+  doesn't hold Transfer Inventory for approval. Then make the first real
+  transfer here instead of in NetSuite and compare.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 469, `src/lib/books/switches.ts`),
+row each in `books_switches` (migrations 466 to 470, `src/lib/books/switches.ts`),
 and stays off until a super admin turns it on in Books → Switches
 (`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
 on on January 1, 2027, asking the owner once in late December.
@@ -3770,6 +3853,7 @@ in the audit log (`switch_on`, `switch_off`).
 | `vendor_credits` | Admins with Parts Ordering enter a vendor's credit in FleetSuite and apply it to that vendor's open bills, and FleetSuite makes it in NetSuite ("Vendor credits made in FleetSuite") | More → Purchasing → Vendor Credits |
 | `card_charges` | Anyone with Payments adds the Chase card's activity and codes each charge to its account, and FleetSuite sends each month's charges to NetSuite as one journal entry ("Card charges coded in FleetSuite") | More → Money & Books → Card Charges |
 | `journal_entries` | Anyone with Payments types a journal entry and asks for approval, a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite ("Journal entries typed in FleetSuite") | More → Money & Books → Journal Entries |
+| `inventory_transfers` | Admins move stock from one of a company's locations to another in FleetSuite, and FleetSuite makes the transfer in NetSuite ("Inventory transfers made in FleetSuite") | More → Parts & Inventory → Inventory Transfers |
 
 ## Posting
 

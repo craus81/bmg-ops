@@ -46,7 +46,7 @@ export interface RouteGuard {
 }
 
 const staff = (): RouteGuard => ({ kind: 'staff', contains: ['requireStaff('] });
-const admin = (): RouteGuard => ({ kind: 'admin', contains: ['requireAdmin('] });
+const admin = (alsoContains?: string): RouteGuard => ({ kind: 'admin', contains: ['requireAdmin(', ...(alsoContains ? [alsoContains] : [])] });
 const superAdmin = (): RouteGuard => ({ kind: 'superAdmin', contains: ['requireSuperAdmin('] });
 const financials = (): RouteGuard => ({ kind: 'financials', contains: ['requireFinancials('] });
 /** Billing: what a customer was charged, what we paid, what we make. Narrower
@@ -585,6 +585,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/card-charges/route.ts': feature('vendor_payments', "switchIsOn(service, 'card_charges')"),
   // Typed journal entries (migration 469): anyone with Payments once switched on; until then super admins can type and look, and nothing is asked or sent.
   'src/app/api/journal-entries/route.ts': feature('vendor_payments', "switchIsOn(service, 'journal_entries')"),
+  // Inventory transfers (migration 470): admins once switched on, as Inventory Adjust; until then super admins can make and save them, and nothing is moved.
+  'src/app/api/inventory-transfers/route.ts': admin("switchIsOn(service, 'inventory_transfers')"),
   'src/app/api/purchasing/sync-sales-orders/route.ts': admin(),
   'src/app/api/purchase-requests/create-po/route.ts': feature('parts_ordering', 'requireAdmin('),
   'src/app/api/purchase-requests/got-it/route.ts': feature('parts_ordering'),

@@ -98,6 +98,24 @@ export default function MorePage() {
     return () => { cancelled = true; };
   }, [canPayments]);
 
+  // Inventory Transfers: admins once inventory transfers are switched on in
+  // Books → Switches, as Inventory Adjust; until then super admins only.
+  const [canInventoryTransfers, setCanInventoryTransfers] = useState(false);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/inventory-transfers?status=1');
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setCanInventoryTransfers(res.ok && !!body.canUse);
+      } catch {
+        if (!cancelled) setCanInventoryTransfers(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isAdmin]);
+
   const F = hasFeature; // shorthand
   const [query, setQuery] = useState('');
 
@@ -137,6 +155,7 @@ export default function MorePage() {
     { group: 'parts', title: 'Parts Catalog', sub: 'Upfit & graphic parts from NetSuite', path: '/parts', show: F('parts_catalog') },
     { group: 'parts', title: 'Parts', sub: 'Part photos, install files, labor hours and installed photos', path: '/installer-parts', show: F('installer_parts') && !F('parts_catalog') },
     { group: 'parts', title: 'Inventory', sub: 'On hand · allocated to jobs · free · on order, at a glance', path: '/admin/inventory', show: F('parts_catalog') },
+    { group: 'parts', title: 'Inventory Transfers', sub: 'Move stock from one location to another · made in NetSuite as a transfer', path: deepLinks.inventoryTransfers(), show: canInventoryTransfers },
     { group: 'parts', title: 'Rack Kits', sub: 'How many of each rack kit we can build from the parts on the shelf', path: '/admin/inventory/rack-kits', show: F('parts_catalog') },
     { group: 'parts', title: 'Hitch Kits', sub: 'Labor hours, brake controllers and Curt fitment for the hitch kit builder', path: '/admin/inventory/hitch-kits', show: F('parts_catalog') },
 
