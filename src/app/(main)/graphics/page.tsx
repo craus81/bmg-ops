@@ -1194,8 +1194,13 @@ export default function GraphicsPage() {
         await attachPartFilesToGraphicsJob(supabase, prefillPoLink.partNumbers, data.id, user?.id);
       }
 
+      // Made from an estimate: go back to it so it can be converted to a
+      // sales order right away (Craig, 2026-10-30). The estimate names the
+      // new job and scrolls to Convert to Sales Order.
+      const backToEstimate = prefillEstimateLink?.estimateId || null;
+
       setJobs(prev => [data as GraphicsJob, ...prev]);
-      setCreatedToast(data.job_number || jobNumber);
+      if (!backToEstimate) setCreatedToast(data.job_number || jobNumber);
       setShowCreate(false);
       setCreateStep('category');
       setCreateForm({
@@ -1214,8 +1219,17 @@ export default function GraphicsPage() {
       setPrefillPoLink(null);
       setPrefillEstimateLink(null);
       setPrefillCopy(null);
+      if (backToEstimate) router.push(deepLinks.estimate(backToEstimate, { graphicsJobCreated: data.id }));
     }
     setCreating(false);
+  };
+
+  // Cancel / Esc on the New Job form. Opened from an estimate, it goes back
+  // to that estimate (Craig, 2026-10-30) so nobody is left on the board.
+  const closeCreate = () => {
+    const backTo = prefillEstimateLink?.estimateId;
+    setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillCopy(null); setPrefillNote(null);
+    if (backTo) router.push(deepLinks.estimate(backTo));
   };
 
   // Print a packing list for the job. `overrides` lets us merge in fresh
@@ -2206,7 +2220,7 @@ export default function GraphicsPage() {
       {/* ═══════════ CREATE JOB MODAL ═══════════ */}
       {showCreate && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', padding: '0' }}
-          ref={closeOnEscape(() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillCopy(null); setPrefillNote(null); })}
+          ref={closeOnEscape(closeCreate)}
         >
           <div style={{ background: 'var(--card)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: '14px 14px 0 0', padding: '18px', paddingBottom: 'calc(18px + env(safe-area-inset-bottom, 0px))', maxWidth: '500px', width: '100%', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
 
@@ -2306,7 +2320,7 @@ export default function GraphicsPage() {
                 </div>
 
                 <button
-                  onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillCopy(null); setPrefillNote(null); }}
+                  onClick={closeCreate}
                   style={{ width: '100%', padding: '10px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                 >
                   Cancel
@@ -2705,7 +2719,7 @@ export default function GraphicsPage() {
                     {creating ? 'Creating...' : !createForm.title.trim() ? 'Enter a title to continue' : `Create ${GRAPHICS_CATEGORY_LABELS[createForm.job_category as GraphicsJobCategory]} Job`}
                   </button>
                   <button
-                    onClick={() => { setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillCopy(null); setPrefillNote(null); }}
+                    onClick={closeCreate}
                     style={{ width: '100%', padding: '12px', borderRadius: '10px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}
                   >
                     Cancel
