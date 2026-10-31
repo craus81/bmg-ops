@@ -218,6 +218,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Whoever asked for approval, and whoever started the entry when someone else did.' },
+  // A send to NetSuite FleetSuite isn't sure about (part 45, migration 477).
+  // Emailed like the Inventory Adjust alert, only to anyone with "Copy me on
+  // new alerts" (Craig's standing rule, 2026-10-28).
+  { type: 'books_netsuite_send_unsure', label: "FleetSuite isn't sure NetSuite took a send", description: "FleetSuite sent something to NetSuite (a new invoice, a change to a sales order) and NetSuite's answer didn't say whether it was done, or never came, so NetSuite may have done it anyway. Told once, at the daily check's first look after it, until someone notes they've looked for it in NetSuite. Opens it on Books → NetSuite feed, or the feed when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, the only people who can open the books.' },
   { type: 'books_mistake_found', label: 'Books found likely mistakes in NetSuite', description: "FleetSuite's nightly mistake checks found a bill, check or card charge copied from NetSuite that looks like a mistake (entered twice, far off the vendor's usual, a monthly charge missing, or coded to an account the vendor doesn't use) and nobody has cleared it by the daily check's second look. Opens it on Mistake checks, or the list when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
 
   // ── Contract installers (CNI) ─────────────────────────────────────────

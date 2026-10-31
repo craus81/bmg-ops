@@ -85,6 +85,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/lists/route.ts': superAdmin(),
   'src/app/api/admin/books/mistake-checks/route.ts': superAdmin(),
   'src/app/api/admin/books/months/route.ts': superAdmin(),
+  'src/app/api/admin/books/netsuite-feed/route.ts': superAdmin(),
   'src/app/api/admin/books/own-adjustments/route.ts': superAdmin(),
   'src/app/api/admin/books/own-bills/route.ts': superAdmin(),
   'src/app/api/admin/books/own-fulfillments/route.ts': superAdmin(),

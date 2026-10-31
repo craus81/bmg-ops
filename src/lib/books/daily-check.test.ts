@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   adjustmentAlertsFor, alertsFor, balanceAlertsFor, balanceKey, billAlertsFor, fulfillmentAlertsFor, lookOf, mistakeAlertsFor, nextCheck,
-  ownAlertsFor, parseCheckState, receiptAlertsFor, stockAlertsFor,
-  type BalanceNews, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews, type StockNews,
+  ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
+  type BalanceNews, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews, type SendAlertItem,
+  type StockNews,
 } from './daily-check';
 import type { DiffDocumentData } from './differences';
 import type { OwnAdjustmentCheck } from './own-adjustment-check';
@@ -744,5 +745,49 @@ describe('deepLinks.booksDifferences', () => {
   it('opens Differences vs NetSuite on the company and month, as the page reads them', () => {
     expect(deepLinks.booksDifferences('1084', '2026-09-01')).toBe('/admin/books/differences?company=1084&month=2026-09');
     expect(deepLinks.booksDifferences('BMG', '2026-09')).toBe('/admin/books/differences?company=BMG&month=2026-09');
+  });
+});
+
+describe('sendAlertsFor', () => {
+  const ids = ['5e1d0000-0000-4000-8000-000000000001', '5e1d0000-0000-4000-8000-000000000002',
+    '5e1d0000-0000-4000-8000-000000000003', '5e1d0000-0000-4000-8000-000000000004'];
+  // 2:51 PM in O'Fallon.
+  const item = (id: string, over: Partial<SendAlertItem> = {}): SendAlertItem => ({
+    id, what: 'Change to a sales order', at: '2026-10-31T19:51:00Z', who: 'Jessie', error: 'Service unavailable', ...over,
+  });
+
+  it('names the send, when, who sent it and why FleetSuite is unsure, and opens it on the NetSuite feed', () => {
+    expect(sendAlertsFor([item(ids[0])])).toEqual([{
+      title: 'NetSuite feed: not sure about the change to a sales order',
+      body: 'Sent Oct 31, 2:51 PM by Jessie: Service unavailable. NetSuite may have done it anyway, so look for it there before anyone tries again.',
+      url: `/admin/books/netsuite-feed?send=${ids[0]}`,
+      about: 'send',
+    }]);
+  });
+
+  it("says when it never heard back, leaves out who for a scheduled job, and cuts a long reason at a word", () => {
+    expect(sendAlertsFor([item(ids[0], { what: 'New journal entry', who: null, error: null })])[0]).toMatchObject({
+      title: 'NetSuite feed: not sure about the new journal entry',
+      body: 'Sent Oct 31, 2:51 PM: FleetSuite never heard back from NetSuite. NetSuite may have done it anyway, so look for it there before anyone tries again.',
+    });
+    const long = `NetSuite answered: ${'the record is locked by another user '.repeat(6)}`;
+    const [cut] = sendAlertsFor([item(ids[0], { error: long })]);
+    const reason = cut.body.slice('Sent Oct 31, 2:51 PM by Jessie: '.length, cut.body.indexOf(' NetSuite may have'));
+    expect(reason).toMatch(/^NetSuite answered: the record is locked .* by\u2026$/);
+    expect(reason.length).toBeLessThanOrEqual(161);
+    expect(sendAlertsFor([item(ids[0], { error: 'NetSuite didn\u2019t answer in time!' })])[0].body).toContain(': NetSuite didn\u2019t answer in time! NetSuite may');
+  });
+
+  it('tells about up to three one by one, and more in one notification opening the feed', () => {
+    const items = ids.map((id, i) => item(id, { what: ['New invoice', 'New bill', 'Change to an item', 'Deletion of a contact'][i] }));
+    expect(sendAlertsFor(items.slice(0, 3)).map((a) => a.url)).toEqual(ids.slice(0, 3).map((id) => deepLinks.booksNetsuiteFeed(id)));
+    expect(sendAlertsFor(items)).toEqual([{
+      title: "NetSuite feed: 4 sends FleetSuite isn't sure about",
+      body: 'The new invoice, the new bill, the change to an item and 1 more. '
+        + 'NetSuite may have done them anyway, so look for each there before anyone tries again.',
+      url: '/admin/books/netsuite-feed',
+      about: 'send',
+    }]);
+    expect(sendAlertsFor([])).toEqual([]);
   });
 });

@@ -1,11 +1,15 @@
 /**
  * NetSuite REST API Client for Next.js
  * Uses OAuth 1.0a Token-Based Authentication for SuiteQL queries and RESTlet calls
+ *
+ * Every request goes through netsuiteFetch (src/lib/netsuite-sends.ts), never
+ * fetch, so each write is kept on Books → NetSuite feed with NetSuite's answer.
  */
 
 import OAuth from 'oauth-1.0a';
 import CryptoJS from 'crypto-js';
 import { safeStringLiteral } from './sql-safe';
+import { netsuiteFetch } from './netsuite-sends';
 
 interface NetSuiteConfig {
   accountId: string;
@@ -119,7 +123,7 @@ export async function suiteqlQuery(query: string, limit: number = 1000, offset: 
 
     let response: Response;
     try {
-      response = await fetch(url, {
+      response = await netsuiteFetch(url, {
         method: 'POST',
         headers: {
           'Authorization': authHeader,
@@ -231,7 +235,7 @@ export async function callRestlet(
       fetchOptions.body = JSON.stringify(jsonData);
     }
 
-    const response = await fetch(fullUrl, fetchOptions);
+    const response = await netsuiteFetch(fullUrl, fetchOptions);
 
     if (response.ok) return response.json();
 
@@ -604,7 +608,7 @@ export async function createCustomerOrLead(payload: {
   }
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -772,7 +776,7 @@ export async function createItem(payload: {
   }
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -825,7 +829,7 @@ async function patchItemRecord(recordType: string, internalId: string, body: Rec
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'PATCH',
       headers: { 'Authorization': authHeader, 'Content-Type': 'application/json', 'Prefer': 'respondAsync=false' },
       body: JSON.stringify(body),
@@ -1146,7 +1150,7 @@ export async function createContact(payload: {
     const { oauth, token } = createOAuth(config);
     const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -1199,7 +1203,7 @@ export async function updateContact(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'PATCH',
       headers: {
         'Authorization': authHeader,
@@ -1244,7 +1248,7 @@ export async function deleteContact(contactId: string): Promise<{ success: boole
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'DELETE',
       headers: { 'Authorization': authHeader, 'Prefer': 'respondAsync=false' },
       signal: controller.signal,
@@ -1294,7 +1298,7 @@ export async function createNote(payload: {
     const { oauth, token } = createOAuth(config);
     const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -1341,7 +1345,7 @@ export async function deleteCustomer(customerId: string): Promise<{ success: boo
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'DELETE',
       headers: { 'Authorization': authHeader, 'Prefer': 'respondAsync=false' },
       signal: controller.signal,
@@ -1383,7 +1387,7 @@ export async function deactivateCustomer(customerId: string): Promise<{ success:
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'PATCH',
       headers: {
         'Authorization': authHeader,
@@ -1452,7 +1456,7 @@ async function customerRecordCall(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method,
       headers: {
         'Authorization': authHeader,
@@ -1670,7 +1674,7 @@ async function entityRecordCall(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method,
       headers: {
         'Authorization': authHeader,
@@ -1748,7 +1752,7 @@ export async function closeNetSuiteEstimate(nsEstimateId: string): Promise<{ suc
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'PATCH',
       headers: {
         'Authorization': authHeader,
@@ -1816,7 +1820,7 @@ export async function createVendor(payload: {
     const { oauth, token } = createOAuth(config);
     const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
 
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -1989,7 +1993,7 @@ export async function createSalesOrder(payload: {
   }
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -2094,7 +2098,7 @@ export async function createPurchaseOrder(payload: {
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -2174,7 +2178,7 @@ export async function createInventoryAdjustment(payload: {
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -2247,7 +2251,7 @@ async function purchaseOrderRecordCall(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method,
       headers: {
         'Authorization': authHeader,
@@ -2355,7 +2359,7 @@ async function salesOrderRecordCall(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method,
       headers: {
         'Authorization': authHeader,
@@ -2706,7 +2710,7 @@ export async function createDirectInvoice(payload: {
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -2812,7 +2816,7 @@ export async function createEstimate(payload: {
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -3009,7 +3013,7 @@ export async function createVendorBill(payload: {
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -3107,7 +3111,7 @@ export async function getVendorBillRecord(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'GET',
       headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
       signal: controller.signal,
@@ -3193,7 +3197,7 @@ export async function patchVendorBill(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'PATCH',
       headers: {
         'Authorization': authHeader,
@@ -3346,7 +3350,7 @@ export async function createBillFromPo(payload: {
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -3426,7 +3430,7 @@ export async function createItemReceiptFromPo(payload: {
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -3547,7 +3551,7 @@ export async function fulfillSalesOrder(salesOrderId: string): Promise<{
   // may not accept the field at all — retry once without it.
   const attempt = async (body: Record<string, unknown>) => {
     const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
-    return fetch(transformUrl, {
+    return netsuiteFetch(transformUrl, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -3653,7 +3657,7 @@ export async function fulfillSalesOrderLines(payload: {
 
   const attempt = async (body: Record<string, unknown>) => {
     const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
-    return fetch(transformUrl, {
+    return netsuiteFetch(transformUrl, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -3817,7 +3821,7 @@ export async function createInvoiceFromSO(payload: {
   }
 
   try {
-    const response = await fetch(transformUrl, {
+    const response = await netsuiteFetch(transformUrl, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -3893,7 +3897,7 @@ export async function updateInvoiceLocation(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'PATCH',
       headers: {
         'Authorization': authHeader,
@@ -3943,7 +3947,7 @@ export async function getInvoiceRecord(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'GET',
       headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
       signal: controller.signal,
@@ -3991,7 +3995,7 @@ export async function patchInvoice(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'PATCH',
       headers: {
         'Authorization': authHeader,
@@ -4043,7 +4047,7 @@ export async function createCreditMemoFromInvoice(payload: {
 
   const body = { memo: payload.memo, item: { items: payload.lines } };
   try {
-    const response = await fetch(transformUrl, {
+    const response = await netsuiteFetch(transformUrl, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -4271,7 +4275,7 @@ export async function createVendorCredit(p: VendorCreditPayload): Promise<{ succ
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -4379,7 +4383,7 @@ export async function createJournalEntry(p: JournalEntryPayload): Promise<{ succ
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -4506,7 +4510,7 @@ export async function createInventoryTransfer(p: InventoryTransferPayload): Prom
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'POST',
       headers: {
         'Authorization': authHeader,
@@ -4568,7 +4572,7 @@ export async function updateSalesOrderVin(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'PATCH',
       headers: {
         'Authorization': authHeader,
@@ -4629,7 +4633,7 @@ export async function updateSalesOrderLines(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 25000);
   try {
-    const response = await fetch(url, {
+    const response = await netsuiteFetch(url, {
       method: 'PATCH',
       headers: {
         'Authorization': authHeader,

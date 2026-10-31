@@ -579,6 +579,11 @@ export const deepLinks = {
     const query = new URLSearchParams({ ...(company ? { company } : {}), ...(item ? { item } : {}) }).toString();
     return `/admin/books/mistake-checks${query ? `?${query}` : ''}`;
   },
+  /** Books → NetSuite feed, with one send on it picked out by its id: the
+   *  landing for the daily books check's notification about a send to
+   *  NetSuite FleetSuite isn't sure about (src/lib/books/netsuite-feed.ts).
+   *  Super admins only. */
+  booksNetsuiteFeed: (send?: string | null) => `/admin/books/netsuite-feed${send ? `?${new URLSearchParams({ send })}` : ''}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery, suiteqlQueryAll } from '@/lib/netsuite';
+import { netsuiteFetch } from '@/lib/netsuite-sends';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 
@@ -296,7 +297,7 @@ export async function GET(req: NextRequest) {
             console.log(`[customer-sync] Auth header prefix: ${authHeader.substring(0, 80)}...`);
           }
 
-          const res = await fetch(url, {
+          const res = await netsuiteFetch(url, {
             headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
           });
 

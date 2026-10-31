@@ -50,7 +50,7 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
     -- What migrations 314, 416, 435 and 454 point at in the app's own schema.
-    CREATE TABLE public.profiles (id UUID PRIMARY KEY);
+    CREATE TABLE public.profiles (id UUID PRIMARY KEY, full_name TEXT);
     CREATE TABLE public.netsuite_parts (id UUID PRIMARY KEY);
     CREATE FUNCTION public.is_admin() RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT false $$;
     CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT);
@@ -73,6 +73,7 @@ async function freshDb(): Promise<PGlite> {
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
     '402-books-stock-values.sql', '406-books-party-balances.sql', '407-books-own-invoices.sql', '416-books-own-fulfillments.sql',
     '431-books-mistake-checks.sql', '435-books-own-bills.sql', '454-inventory-adjustments.sql', '457-books-own-adjustments.sql',
+    '477-netsuite-sends.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -143,9 +144,9 @@ const post = (pg: PGlite, company: string, kind: string, id: string, date: strin
 describe('the daily books check', () => {
   let pg: PGlite;
   const store = new Map<string, { last_result: unknown; updated_at: string; last_synced_at?: string }>();
-  /** When a function fails, by what it was asked. */
+  /** When a function or a read of a table fails, by what it was asked (a read's `where`). */
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
-  /** What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, and likely mistakes, apart. */
+  /** What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes and sends to NetSuite, apart. */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
   let toldOwn: CheckAlert[] = [];
@@ -154,30 +155,47 @@ describe('the daily books check', () => {
   let toldReceipts: CheckAlert[] = [];
   let toldAdjustments: CheckAlert[] = [];
   let toldMistakes: CheckAlert[] = [];
+  let toldSends: CheckAlert[] = [];
 
-  /** A read of one of the books' tables, built the way supabase-js builds it, run against the database. */
+  /** A read of one of the books' tables, or a change to one, built the way supabase-js builds it, run against the database. */
   const read = (table: string) => {
     let columns = '*';
-    const where: Array<[string, unknown]> = [];
-    let order: string | null = null;
+    const where: string[] = [];
+    const values: unknown[] = [];
+    const param = (value: unknown) => { values.push(value); return `$${values.length}`; };
+    const orders: string[] = [];
     let range: [number, number] | null = null;
+    let limit: number | null = null;
+    let patch: Record<string, unknown> | null = null;
     const run = async () => {
-      if (failing?.(table, {})) return { data: null, error: { message: `${table} failed` } };
+      if (failing?.(table, { where: where.join(' AND ') })) return { data: null, error: { message: `${table} failed` } };
+      const filter = where.length ? ` WHERE ${where.join(' AND ')}` : '';
+      if (patch) {
+        const sets = Object.entries(patch).map(([col, value]) => `${col} = ${param(value)}`);
+        await pg.query(`UPDATE ${table} SET ${sets.join(', ')}${filter}`, values);
+        return { data: null, error: null };
+      }
       // A date as PostgREST gives it, 'YYYY-MM-DD'.
       const cols = columns.replace(/\bbooks_live_from\b/, "to_char(books_live_from, 'YYYY-MM-DD') AS books_live_from")
         .replace(/\bperiod_start\b/, "to_char(period_start, 'YYYY-MM-DD') AS period_start");
-      const r = await pg.query(
-        `SELECT ${cols} FROM ${table}${where.length ? ` WHERE ${where.map(([col], i) => `${col} = $${i + 1}`).join(' AND ')}` : ''}`
-          + `${order ? ` ORDER BY ${order}` : ''}${range ? ` LIMIT ${range[1] - range[0] + 1} OFFSET ${range[0]}` : ''}`,
-        where.map(([, value]) => value),
+      const r = await pg.query<Record<string, unknown>>(
+        `SELECT ${cols} FROM ${table}${filter}${orders.length ? ` ORDER BY ${orders.join(', ')}` : ''}`
+          + `${range ? ` LIMIT ${range[1] - range[0] + 1} OFFSET ${range[0]}` : ''}${limit !== null ? ` LIMIT ${limit}` : ''}`,
+        values,
       );
-      return { data: r.rows, error: null };
+      // A time as PostgREST gives it, an ISO string.
+      return { data: r.rows.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, v instanceof Date ? v.toISOString() : v]))), error: null };
     };
     const query: any = {
       select: (cols: string) => { columns = cols; return query; },
-      eq: (col: string, value: unknown) => { where.push([col, value]); return query; },
-      order: (col: string) => { order = col; return query; },
+      eq: (col: string, value: unknown) => { where.push(`${col} = ${param(value)}`); return query; },
+      is: (col: string, value: null) => { if (value !== null) throw new Error('only is null'); where.push(`${col} IS NULL`); return query; },
+      lt: (col: string, value: unknown) => { where.push(`${col} < ${param(value)}`); return query; },
+      in: (col: string, list: unknown[]) => { where.push(`${col} = ANY(${param(list)})`); return query; },
+      order: (col: string, opts?: { ascending?: boolean }) => { orders.push(`${col} ${opts?.ascending === false ? 'DESC' : 'ASC'}`); return query; },
       range: (from: number, to: number) => { range = [from, to]; return query; },
+      limit: (n: number) => { limit = n; return query; },
+      update: (p: Record<string, unknown>) => { patch = p; return query; },
       then: (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) => run().then(resolve, reject),
     };
     return query;
@@ -186,7 +204,7 @@ describe('the daily books check', () => {
   // sync_state and cron_runs in memory; every function the real one, called the way supabase-js calls it.
   const service = () => ({
     from: (table: string) => {
-      if (table === 'gl_mistake_checks' || table === 'gl_companies' || table === 'gl_periods') return read(table);
+      if (['gl_mistake_checks', 'gl_companies', 'gl_periods', 'netsuite_sends', 'profiles'].includes(table)) return read(table);
       if (table === 'sync_state') {
         return {
           select: () => ({
@@ -227,9 +245,10 @@ describe('the daily books check', () => {
     toldReceipts = [];
     toldAdjustments = [];
     toldMistakes = [];
+    toldSends = [];
     const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
       : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
-        : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : told);
+        : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : alert.about === 'send' ? toldSends : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
@@ -1009,6 +1028,67 @@ describe('the daily books check', () => {
     } finally {
       failing = null;
     }
+  });
+
+  it("tells once about each send to NetSuite it isn't sure about, at the first look that finds it", async () => {
+    // Made-up sends (migration 477), as FleetSuite keeps them.
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+    const JESSIE = 'd0000000-0000-4000-8000-000000000001';
+    await pg.query("INSERT INTO profiles (id, full_name) VALUES ($1, 'Jessie')", [JESSIE]);
+    const send = (id: string, row: Record<string, unknown>) => {
+      const all = { id, started_at: ago(90), method: 'POST', action: 'create', record_type: 'invoice', made_type: 'invoice', ...row };
+      const cols = Object.keys(all);
+      return pg.query(`INSERT INTO netsuite_sends (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`, Object.values(all));
+    };
+    const ID = (n: number) => `e0000000-0000-4000-8000-00000000000${n}`;
+    // NetSuite had a problem of its own: not sure.
+    await send(ID(1), { finished_at: ago(89), outcome: 'unsure', http_status: 503, error: 'Service unavailable', user_id: JESSIE });
+    // Never heard back, ten minutes on.
+    await send(ID(2), { started_at: ago(10), action: 'change', record_type: 'salesOrder', record_id: '4521', made_type: null });
+    // Still on its way: not yet.
+    await send(ID(3), { started_at: ago(1) });
+    // NetSuite took one and refused one: nothing to look for.
+    await send(ID(4), { finished_at: ago(89), outcome: 'took', http_status: 204, made_id: '9001' });
+    await send(ID(5), { finished_at: ago(89), outcome: 'refused', http_status: 400, error: 'Invalid field value' });
+    // One a super admin already looked for, and one already told about.
+    await send(ID(6), { finished_at: ago(89), outcome: 'unsure', looked_at: ago(30), looked_by: JESSIE });
+    await send(ID(7), { finished_at: ago(89), outcome: 'unsure', told_at: ago(60) });
+
+    await look('first');
+    expect(toldSends).toEqual([
+      {
+        title: 'NetSuite feed: not sure about the new invoice',
+        body: expect.stringMatching(/^Sent [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d\d [AP]M by Jessie: Service unavailable\. NetSuite may have done it anyway, so look for it there before anyone tries again\.$/),
+        url: `/admin/books/netsuite-feed?send=${ID(1)}`,
+        about: 'send',
+      },
+      {
+        title: 'NetSuite feed: not sure about the change to a sales order',
+        body: expect.stringMatching(/^Sent [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d\d [AP]M: FleetSuite never heard back from NetSuite\. NetSuite may have done it anyway/),
+        url: `/admin/books/netsuite-feed?send=${ID(2)}`,
+        about: 'send',
+      },
+    ]);
+    const marked = await pg.query<{ id: string }>('SELECT id FROM netsuite_sends WHERE told_at IS NOT NULL ORDER BY id');
+    expect(marked.rows.map((r) => r.id)).toEqual([ID(1), ID(2), ID(7)]);
+
+    // Told once: the next look says nothing of them.
+    await look('second');
+    expect(toldSends).toEqual([]);
+
+    // One it can't read is said, and the rest of the check goes on.
+    failing = (name) => name === 'netsuite_sends';
+    try {
+      const result = await look('first');
+      expect(result.error).toContain("NetSuite feed: couldn't read the sends (netsuite_sends failed)");
+      expect(result.heartbeat).toBeDefined();
+      // Nor when only the ones that never heard back can't be.
+      failing = (name, args) => name === 'netsuite_sends' && String(args.where).includes('outcome IS NULL');
+      expect((await look('first')).error).toContain("NetSuite feed: couldn't read the sends (netsuite_sends failed)");
+    } finally {
+      failing = null;
+    }
+    await pg.query('DELETE FROM netsuite_sends WHERE id = ANY($1)', [[1, 2, 3, 4, 5, 6, 7].map(ID)]);
   });
 
   // From here on BMG's books are live, which can't be undone (migration 359).
