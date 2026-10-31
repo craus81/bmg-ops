@@ -454,6 +454,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/invoices/past-due/route.ts': money(),
   // Credit memos (migration 466): Invoicing once switched on; until then super admins can look and nothing is sent.
   'src/app/api/invoices/credit-memo/route.ts': feature('invoicing', "switchIsOn(service, 'credit_memos')"),
+  'src/app/api/invoices/fix/route.ts': feature('invoicing', "switchIsOn(service, 'invoice_fixes')"),
   'src/app/api/invoices/new/route.ts': feature('invoicing'),
   'src/app/api/customer-contacts/route.ts': staff(),
   'src/app/api/customer-holds/route.ts': staff(),

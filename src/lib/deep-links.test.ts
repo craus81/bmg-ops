@@ -211,6 +211,12 @@ describe('Credit memo links', () => {
   });
 });
 
+describe('Invoice fix links', () => {
+  it('opens the Fix screen on one NetSuite invoice', () => {
+    expect(deepLinks.invoiceFix('7001')).toBe('/invoices/fix?invoice=7001');
+  });
+});
+
 describe('Vendor credit links', () => {
   it('opens the vendor credit screen in Purchasing', () => {
     expect(deepLinks.vendorCredit()).toBe('/admin/purchasing/vendor-credit');

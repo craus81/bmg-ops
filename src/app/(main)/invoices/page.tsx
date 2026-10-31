@@ -12,7 +12,7 @@
  *  - Sent: recent invoices from both sources, grouped by customer, with
  *    per-invoice and per-customer email actions (shared EmailInvoicesModal),
  *    and Credit on each NetSuite invoice once credit memos are switched on
- *    (invoices/credit-memo).
+ *    (invoices/credit-memo), and Fix once fixing invoices is (invoices/fix).
  *
  * Deep scan management (PO matching, bulk edit, archive) stays on the Scan
  * Log page; job editing stays on the Graphics page. This page is only about
@@ -216,6 +216,24 @@ export default function InvoicingHubPage() {
         if (!cancelled) setCanCredit(res.ok && !!body.canUse);
       } catch {
         if (!cancelled) setCanCredit(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canOpen, canSeeMoney]);
+
+  // Fix on each NetSuite invoice, the same way: once fixing invoices is
+  // switched on, anyone with Invoicing; until then super admins only.
+  const [canFix, setCanFix] = useState(false);
+  useEffect(() => {
+    if (!canOpen || !canSeeMoney) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/invoices/fix?status=1');
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setCanFix(res.ok && !!body.canUse);
+      } catch {
+        if (!cancelled) setCanFix(false);
       }
     })();
     return () => { cancelled = true; };
@@ -1010,6 +1028,13 @@ export default function InvoicingHubPage() {
                             title="Make a credit memo against this invoice"
                             style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: '2px 4px' }}
                           >Credit</button>
+                        )}
+                        {canFix && !r.qbo && r.invoiceId && /^\d+$/.test(r.invoiceId) && (
+                          <button
+                            onClick={() => router.push(deepLinks.invoiceFix(r.invoiceId!))}
+                            title="Fix this invoice: its PO number, memo and VIN, and while nothing is paid its date and lines"
+                            style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: '2px 4px' }}
+                          >Fix</button>
                         )}
                         {!r.qbo && (() => {
                           const bad = isBadDelivery(emailedByNumber[r.invoiceNumber]?.delivery_status);

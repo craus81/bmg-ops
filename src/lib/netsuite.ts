@@ -3671,6 +3671,59 @@ export async function getInvoiceRecord(
 }
 
 /**
+ * Fix an invoice from FleetSuite's Fix screen (src/lib/invoice-fix.ts,
+ * planInvoiceFix): its header and its lines, each line by its `line` key.
+ * `replace` (only when a line is taken off) makes the item sublist exactly
+ * the lines sent, every line kept going with its key, as patchSalesOrder
+ * does. NetSuite's refusal comes back as its own words; a request that timed
+ * out, or a fault on NetSuite's side (5xx), is `unsure`, since NetSuite may
+ * have made the change anyway.
+ */
+export async function patchInvoice(
+  invoiceId: string,
+  body: Record<string, unknown>,
+  opts: { replace: boolean },
+): Promise<{ success: boolean; error?: string; unsure?: boolean }> {
+  if (!/^\d+$/.test(invoiceId)) return { success: false, error: 'Bad invoice id' };
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/invoice/${invoiceId}${opts.replace ? '?replace=item' : ''}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite fix invoice error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}`, ...(response.status >= 500 ? { unsure: true } : {}) };
+    }
+    return { success: true };
+  } catch (e: any) {
+    const error = e?.name === 'AbortError' ? 'NetSuite took too long to answer' : `Couldn't reach NetSuite: ${e?.message || 'unknown error'}`;
+    return { success: false, error, unsure: true };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Make a credit memo from an invoice — NetSuite's "Credit" on the invoice —
  * with the lines FleetSuite worked out (src/lib/credit-memo.ts,
  * netsuiteCreditLines). The documented transform endpoint takes the invoice
