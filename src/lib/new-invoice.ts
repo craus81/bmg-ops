@@ -9,6 +9,9 @@
  * freight, discounts; a stock part comes off O'Fallon's stock when NetSuite
  * invoices it), and anyone with the Invoicing permission can make one.
  *
+ * New sales order (Craig 2026-10-31, answers 1A 2A 3A 4B) uses the same lines,
+ * tax and checks with `noun: 'sales order'` (src/lib/new-sales-order.ts).
+ *
  * Pure, so the page and the route agree on the lines, the tax and the total.
  * Tax follows FleetSuite's own rule (src/lib/line-taxability.ts), the same one
  * Books uses: service items untaxed, everything else taxed, a discount taxed
@@ -70,16 +73,17 @@ const lineTax = (lineCents: number, rate: number) => (rate > 0 ? cents((lineCent
 
 /**
  * The invoice's lines, tax and total, and what stops it. `taxRate` is Settings → Sales Tax as a fraction;
- * `taxExempt` is the customer's tax-exempt flag.
+ * `taxExempt` is the customer's tax-exempt flag; `noun` names the document in the problems (default "invoice").
  */
 export function workOutNewInvoice(
   drafts: NewInvoiceLineDraft[],
-  opts: { taxRate: number; taxExempt: boolean; hasCustomer: boolean },
+  opts: { taxRate: number; taxExempt: boolean; hasCustomer: boolean; noun?: string },
 ): WorkedInvoice {
+  const noun = opts.noun || 'invoice';
   const problems: string[] = [];
   if (!opts.hasCustomer) problems.push('Pick the customer.');
   if (drafts.length === 0) problems.push('Add at least one line.');
-  if (drafts.length > MAX_LINES) problems.push(`An invoice can have at most ${MAX_LINES} lines.`);
+  if (drafts.length > MAX_LINES) problems.push(`${noun === 'invoice' ? 'An invoice' : `A ${noun}`} can have at most ${MAX_LINES} lines.`);
 
   const rate = opts.taxExempt ? 0 : Math.max(0, opts.taxRate || 0);
   const lines: WorkedLine[] = [];
@@ -103,7 +107,7 @@ export function workOutNewInvoice(
 
   const subtotalCents = lines.reduce((s, l) => s + l.cents, 0);
   const taxCents = lines.reduce((s, l) => s + (l.taxable ? lineTax(l.cents, rate) : 0), 0);
-  if (lines.length > 0 && subtotalCents <= 0) problems.push('The invoice total has to be more than $0.');
+  if (lines.length > 0 && subtotalCents <= 0) problems.push(`The ${noun} total has to be more than $0.`);
   return { lines, subtotalCents, taxCents, totalCents: subtotalCents + taxCents, problems };
 }
 

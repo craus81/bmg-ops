@@ -5,7 +5,8 @@
  * procure-to-pay", 2026-10-27). Every NetSuite sales order in FleetSuite's
  * copy (/api/sales-orders), Open / Billed / Closed / All, searchable by
  * number, customer, PO, memo or VIN. A row opens the sales order page.
- * Totals only for people who can see prices.
+ * Totals only for people who can see prices. + New sales order
+ * (/sales-orders/new) for anyone who can make one.
  */
 
 import { useEffect, useState } from 'react';
@@ -15,6 +16,7 @@ import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { SO_VIEWS, SO_VIEW_LABELS, type SoView } from '@/lib/sales-order-list';
+import { NEW_SALES_ORDER_FEATURES } from '@/lib/new-sales-order';
 
 interface Row {
   netsuiteId: string;
@@ -44,7 +46,8 @@ function tone(view: Row['view']): { bg: string; fg: string } {
 
 export default function SalesOrdersPage() {
   const router = useRouter();
-  const { canSeeMoney } = useAuth();
+  const { canSeeMoney, hasFeature } = useAuth();
+  const canMake = canSeeMoney && NEW_SALES_ORDER_FEATURES.some(f => hasFeature(f));
   const [view, setView] = useState<SoView>('open');
   const [search, setSearch] = useState('');
   const [q, setQ] = useState('');
@@ -87,9 +90,17 @@ export default function SalesOrdersPage() {
 
   return (
     <div style={{ maxWidth: '960px', margin: '0 auto', padding: '16px', display: 'grid', gap: '12px' }}>
-      <div>
-        <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: theme.textPrimary }}>Sales orders</h1>
-        <div style={{ fontSize: '13px', color: theme.textMuted }}>Every NetSuite sales order. Tap one to open, edit or invoice it.</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', flexWrap: 'wrap' }}>
+        <div style={{ minWidth: 0 }}>
+          <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: theme.textPrimary }}>Sales orders</h1>
+          <div style={{ fontSize: '13px', color: theme.textMuted }}>Every NetSuite sales order. Tap one to open, edit or invoice it.</div>
+        </div>
+        {canMake && (
+          <button onClick={() => router.push('/sales-orders/new')} style={{
+            padding: '9px 14px', borderRadius: '8px', border: 'none', background: '#16a34a', color: '#fff',
+            fontSize: '14px', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+          }}>+ New sales order</button>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>

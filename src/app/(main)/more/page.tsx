@@ -15,7 +15,7 @@ import { deepLinks } from '@/lib/deep-links';
 
 export default function MorePage() {
   const router = useRouter();
-  const { isAdmin, hasRole, hasFeature, profile, signOut } = useAuth();
+  const { isAdmin, hasRole, hasFeature, canSeeMoney, profile, signOut } = useAuth();
   const { mode, setMode, resolvedTheme } = useTheme();
   const { customerOnly } = useNavTabs();
   // R3-20 gave the Purchasing/Receiving rows count badges; R6-13 moved
@@ -158,7 +158,7 @@ export default function MorePage() {
   const items: (Item & { group: MoreGroupId })[] = [
     { group: 'sales', title: 'Customers', sub: 'Customers & sales pipeline', path: '/admin/prospects', show: F('prospects'), list: true, newPath: '/admin/prospects?tab=customers&new=1' },
     { group: 'sales', title: 'Estimates', sub: 'Every estimate · build, chase follow-ups, mark won or lost', path: '/estimates', show: F('estimates'), list: true, newPath: deepLinks.newEstimate() },
-    { group: 'sales', title: 'Sales Orders', sub: 'Every NetSuite sales order · open, billed or closed · open one to edit or invoice it', path: '/sales-orders', show: F('estimates'), list: true },
+    { group: 'sales', title: 'Sales Orders', sub: 'Every NetSuite sales order · + New makes one from nothing · open one to edit or invoice it', path: '/sales-orders', show: F('estimates') || F('invoicing'), list: true, newPath: canSeeMoney ? '/sales-orders/new' : undefined },
     { group: 'sales', title: 'Invoices', sub: 'Every invoice · + New makes one from nothing · search, PDF, email, past due', path: '/invoices?tab=sent', show: F('invoicing'), list: true, newPath: '/invoices/new' },
     { group: 'sales', title: 'Ready to Invoice', sub: 'Finished graphics jobs and scanned vehicles waiting for an invoice', path: '/invoices', show: F('invoicing'), list: true },
     { group: 'sales', title: 'Customer POs', sub: 'POs customers send us (Masterack and others) · import, match, invoice', path: '/admin/pos', show: F('purchase_orders'), list: true, newPath: '/admin/pos?new=1' },
