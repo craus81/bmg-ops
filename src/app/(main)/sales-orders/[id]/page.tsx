@@ -22,6 +22,9 @@ import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { openJobOrder } from '@/lib/job-order-pdf';
 import TopSaveBar from '@/components/TopSaveBar';
+import FulfillInvoiceModal from '@/components/FulfillInvoiceModal';
+import EmailInvoicesModal from '@/components/EmailInvoicesModal';
+import { isBadDelivery } from '@/lib/invoice-emails';
 import { lineAllows, isFullyBilled, type SoLine, type SoHeader, type SoLineEdit, type SoNewLine } from '@/lib/sales-order-edit';
 
 interface SoPage {
@@ -31,7 +34,11 @@ interface SoPage {
   seeMoney: boolean;
   estimate: { id: string; number: string } | null;
   job: { id: string; title: string | null } | null;
-  invoices: { id: string; tranid: string; trandate: string | null; total: number | null }[] | null;
+  invoices: {
+    id: string; tranid: string; trandate: string | null; total: number | null;
+    /** Latest customer email of this invoice; null = never emailed from FleetSuite. */
+    emailed: { at: string; by: string | null; to: string[]; status: string | null } | null;
+  }[] | null;
   history: { at: string; by: string | null; changes: string[] }[];
 }
 
@@ -100,6 +107,8 @@ export default function SalesOrderPage() {
   const [saveErrors, setSaveErrors] = useState<string[]>([]);
   const [saved, setSaved] = useState<string[] | null>(null);
   const [busy, setBusy] = useState<'pdf' | 'job' | null>(null);
+  const [fulfilling, setFulfilling] = useState(false);
+  const [emailing, setEmailing] = useState<{ id: string; tranid: string } | null>(null);
 
   const [hdr, setHdr] = useState({ poNumber: '', memo: '', vin: '', shipDate: '' });
   const [drafts, setDrafts] = useState<Record<number, LineDraft>>({});
@@ -346,6 +355,12 @@ export default function SalesOrderPage() {
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <button onClick={openPdf} disabled={busy !== null} style={btn}>{busy === 'pdf' ? 'Opening…' : 'Sales Order PDF'}</button>
               <button onClick={openJobOrderPdf} disabled={busy !== null} style={btn}>{busy === 'job' ? 'Opening…' : 'Job Order'}</button>
+              {data.canEdit && !/^(billed|closed|cancell?ed)$/i.test(h.status.trim()) && (
+                <button onClick={() => setFulfilling(true)} title="Ship this sales order's parts from O'Fallon and invoice them in NetSuite (part of the order is fine)"
+                  style={{ ...btn, background: 'rgba(245,158,11,0.15)', borderColor: 'rgba(245,158,11,0.6)', color: '#f59e0b' }}>
+                  Fulfill &amp; Invoice
+                </button>
+              )}
               {data.canEdit && <button onClick={startEdit} style={primary}>Edit order</button>}
             </div>
           )}
@@ -560,15 +575,29 @@ export default function SalesOrderPage() {
             <h2 style={{ margin: '0 0 10px', fontSize: '15px', fontWeight: 800 }}>Invoices</h2>
             {data.invoices === null && <div style={{ color: theme.warning, fontSize: '13px' }}>Couldn&apos;t check NetSuite for invoices just now.</div>}
             {data.invoices && data.invoices.length === 0 && <div style={{ color: theme.textMuted, fontSize: '13px' }}>Nothing billed yet.</div>}
-            {data.invoices && data.invoices.map(inv => (
-              <div key={inv.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '6px 0', borderBottom: `1px dashed ${theme.border}`, fontSize: '13px' }}>
-                <button style={{ ...linkBtn, color: 'var(--accent)', paddingLeft: 0 }}
-                  onClick={async () => { const r = await openNetSuitePdf('invoice', inv.id); if (!r.ok) await dialog.alert(`Could not open the invoice: ${r.error}`); }}>
-                  Invoice {inv.tranid}
-                </button>
-                <span style={{ color: theme.textSecondary }}>{fmtDate(inv.trandate)}{inv.total != null ? ` · ${money(inv.total)}` : ''}</span>
-              </div>
-            ))}
+            {data.invoices && data.invoices.map(inv => {
+              const openInvoice = async () => { const r = await openNetSuitePdf('invoice', inv.id); if (!r.ok) await dialog.alert(`Could not open the invoice: ${r.error}`); };
+              const e = inv.emailed;
+              const bad = e && isBadDelivery(e.status);
+              return (
+                <div key={inv.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px 10px', padding: '8px 0', borderBottom: `1px dashed ${theme.border}`, fontSize: '13px' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <button style={{ ...linkBtn, color: 'var(--accent)', paddingLeft: 0 }} onClick={openInvoice}>
+                      Invoice {inv.tranid}
+                    </button>
+                    <div style={{ color: theme.textSecondary }}>{fmtDate(inv.trandate)}{inv.total != null ? ` · ${money(inv.total)}` : ''}</div>
+                    <div style={{ fontSize: '12px', color: !e ? theme.textMuted : bad ? theme.error : theme.success, fontWeight: bad ? 700 : 400 }}>
+                      {!e ? 'Not emailed yet' : `✉ Emailed ${fmtWhen(e.at)}${e.by ? ` by ${e.by}` : ''}${e.to.length ? ` to ${e.to.join(', ')}` : ''}${
+                        bad ? ` · Did not arrive (${e.status})` : e.status === 'delivered' ? ' · Delivered' : ''}`}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button style={{ ...btn, padding: '5px 10px', fontSize: '12px' }} onClick={openInvoice}>🖨 Print</button>
+                    {data.canEdit && <button style={{ ...btn, padding: '5px 10px', fontSize: '12px' }} onClick={() => setEmailing({ id: inv.id, tranid: inv.tranid })}>✉ Email</button>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <div style={card}>
             <h2 style={{ margin: '0 0 10px', fontSize: '15px', fontWeight: 800 }}>Changes made in FleetSuite</h2>
@@ -583,6 +612,17 @@ export default function SalesOrderPage() {
         </div>
       )}
 
+      {fulfilling && (
+        <FulfillInvoiceModal salesOrderId={id} soLabel={`SO ${h.tranId}`} onClose={() => { setFulfilling(false); load(); }} onInvoiced={load} />
+      )}
+      {emailing && (
+        <EmailInvoicesModal
+          customerName={h.customerName || ''}
+          customerNetsuiteId={h.customerId}
+          invoices={[{ invoiceId: emailing.id, invoiceNumber: emailing.tranid, po: h.poNumber || undefined }]}
+          onClose={() => { setEmailing(null); load(); }}
+        />
+      )}
     </div>
   );
 }

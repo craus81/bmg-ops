@@ -498,6 +498,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/sales-orders/[id]/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin(', 'profileCanSeeMoney('] },
   'src/app/api/sales-orders/route.ts': staff(),
   'src/app/api/sales-orders/items/route.ts': admin(),
+  'src/app/api/sales-orders/[id]/fulfill-invoice/route.ts': admin(),
   'src/app/api/netsuite/sales-orders/route.ts': staff(),
   'src/app/api/netsuite/so-invoices/route.ts': staff(),
   'src/app/api/netsuite/transaction-packing/[id]/route.ts': staff(),

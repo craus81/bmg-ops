@@ -47,6 +47,8 @@ export interface SoBillingRead {
   status: string;
   soNumber: string;
   customerName: string | null;
+  /** NetSuite customer id; finds the customer for the invoice email screen. */
+  customerNetsuiteId?: string | null;
   poNumber: string | null;
   lines: SoBillingLine[];
 }

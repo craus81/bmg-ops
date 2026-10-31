@@ -5,7 +5,8 @@
  * orders no vehicle, scan or check-in touches. Lists the order's lines live
  * from NetSuite with what's billed and on hand at O'Fallon, takes a "ship &
  * bill now" quantity per line (partial shipments allowed), and makes the
- * fulfillment and invoice via /api/estimates/[id]/fulfill-invoice. Then
+ * fulfillment and invoice via /api/estimates/[id]/fulfill-invoice (or, from
+ * the sales order page, /api/sales-orders/[id]/fulfill-invoice). Then
  * offers the invoice PDF and the normal invoice email screen — a person
  * presses Send; nothing goes to the customer on its own.
  */
@@ -17,9 +18,13 @@ import EmailInvoicesModal from '@/components/EmailInvoicesModal';
 import { ADJUSTMENT_TYPES, SHIPPED_TYPES, defaultBillNow, openOn, type SoBillingLine } from '@/lib/so-fulfill-invoice';
 
 interface Props {
-  estimateId: string;
+  /** One of the two: the estimate's button, or the sales order page's (NetSuite id). */
+  estimateId?: string;
+  salesOrderId?: string;
   soLabel: string;
   onClose: () => void;
+  /** Called after an invoice is made, so the screen behind can refresh. */
+  onInvoiced?: () => void;
 }
 
 interface Done {
@@ -35,7 +40,10 @@ interface Done {
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
-export default function FulfillInvoiceModal({ estimateId, soLabel, onClose }: Props) {
+export default function FulfillInvoiceModal({ estimateId, salesOrderId, soLabel, onClose, onInvoiced }: Props) {
+  const url = estimateId
+    ? `/api/estimates/${estimateId}/fulfill-invoice`
+    : `/api/sales-orders/${encodeURIComponent(salesOrderId || '')}/fulfill-invoice`;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [so, setSo] = useState<{ soNumber: string; customerName: string | null; poNumber: string | null; lines: SoBillingLine[] } | null>(null);
@@ -50,7 +58,7 @@ export default function FulfillInvoiceModal({ estimateId, soLabel, onClose }: Pr
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/estimates/${estimateId}/fulfill-invoice`);
+      const res = await fetch(url);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Could not read the sales order');
       setSo(data);
@@ -88,7 +96,7 @@ export default function FulfillInvoiceModal({ estimateId, soLabel, onClose }: Pr
     try {
       const billNow: Record<string, number> = {};
       for (const r of rows) if (r.now > 0) billNow[String(r.l.lineSeq)] = r.now;
-      const res = await fetch(`/api/estimates/${estimateId}/fulfill-invoice`, {
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ billNow, ...(memo.trim() ? { memo: memo.trim() } : {}) }),
@@ -96,6 +104,7 @@ export default function FulfillInvoiceModal({ estimateId, soLabel, onClose }: Pr
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Fulfill & Invoice failed');
       setDone(data);
+      onInvoiced?.();
     } catch (e: any) {
       setError(e?.message || 'Fulfill & Invoice failed');
     } finally {
