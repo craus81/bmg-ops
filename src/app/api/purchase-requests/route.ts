@@ -9,6 +9,7 @@ import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
 import { resolveVendorNames, vendorKey } from '@/lib/purchase-request-vendor';
 import { genericLineKey } from '@/lib/generic-lines';
 import { loadGenericItems } from '@/lib/generic-lines-server';
+import { loadStockSnapshot, loadInventorySyncedAt } from '@/lib/stock-snapshot';
 
 const supabase = createServiceClient();
 
@@ -148,6 +149,25 @@ export async function GET(req: NextRequest) {
       }
     }
     for (const r of rows) r.catalog_cost = cost.get(r.item_number) ?? null;
+  }
+  // On hand / available / on order beside each pending row, so whoever
+  // orders sees what's on the shelf and already coming (Craig, 2026-10-30).
+  // ?stockItem= adds one more part, for the Order this part window.
+  if (status === 'pending') {
+    const stockItem = (searchParams.get('stockItem') || '').trim();
+    const stock = await loadStockSnapshot(supabase, [...rows.map(r => r.item_number as string), ...(stockItem ? [stockItem] : [])]);
+    // A generic part (Misc) has no meaningful shelf count, so it shows none.
+    let genericItems = new Set<string>();
+    try { genericItems = await loadGenericItems(supabase, rows.map(r => r.item_number as string)); } catch { /* show stock for all */ }
+    for (const r of rows) {
+      const key = normalizeItemNumber(r.item_number);
+      r.stock = genericItems.has(key) ? null : stock.get(key) ?? null;
+    }
+    return NextResponse.json({
+      success: true, requests: rows,
+      inventorySyncedAt: await loadInventorySyncedAt(supabase),
+      ...(stockItem ? { stockItem: stock.get(normalizeItemNumber(stockItem)) ?? null } : {}),
+    });
   }
   return NextResponse.json({ success: true, requests: rows });
 }

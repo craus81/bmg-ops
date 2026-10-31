@@ -1277,6 +1277,7 @@ export default function UpfitProjectsPage() {
                         <th style={{ padding: '4px 6px', fontWeight: 700 }}>Part</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }}>Need</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }} title="Reserved for this job — click a value to change it">Res.</th>
+                        <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }} title="On the shelf in O'Fallon (NetSuite on hand)">On hand</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }} title="Free stock after every job's reservations">Free</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700, textAlign: 'right' }}>On Order</th>
                         <th style={{ padding: '4px 6px', fontWeight: 700 }}>Status</th>
@@ -1331,6 +1332,7 @@ export default function UpfitProjectsPage() {
                               </button>
                               )}
                             </td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.generic ? '—' : (p.shelf ?? p.on_hand)}</td>
                             <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.generic ? '—' : (p.free ?? p.on_hand)}</td>
                             <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.on_order}</td>
                             <td style={{ padding: '5px 6px', whiteSpace: 'nowrap' }}>

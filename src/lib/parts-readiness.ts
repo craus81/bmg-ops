@@ -46,7 +46,10 @@ export interface PartRow {
   free: number;
   /** allocated + free — what this project can count on right now. */
   usable: number;
+  /** NetSuite "available" — the pool the math ran against. */
   on_hand: number;
+  /** NetSuite's real on-hand: what's on the shelf. */
+  shelf: number;
   on_order: number;
   short: number;
   state: PartState;
@@ -136,7 +139,7 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
 
   interface Working {
     item_number: string; description: string | null; needed: number;
-    availPool: number; allocatedHere: number; allocatedOthers: number;
+    availPool: number; shelf: number; allocatedHere: number; allocatedOthers: number;
     on_order: number; pos: PoRef[]; itemIds: Set<string>;
   }
   const parts = new Map<string, Working>();
@@ -149,7 +152,7 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
     linesByKey.set(key, own);
     const row = parts.get(key) || {
       item_number: key, description: null, needed: 0,
-      availPool: 0, allocatedHere: 0, allocatedOthers: 0,
+      availPool: 0, shelf: 0, allocatedHere: 0, allocatedOthers: 0,
       on_order: 0, pos: [], itemIds: new Set<string>(),
     };
     row.needed += Math.abs(parseFloat(line.quantity || '0')) || 0;
@@ -186,7 +189,7 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
           item_number: key, line_key: g.key, generic: true,
           received: st.received, request_ids: st.requestIds,
           description: g.description, needed: g.needed,
-          allocated: 0, free: 0, usable: 0, on_hand: 0, on_order: st.ordered,
+          allocated: 0, free: 0, usable: 0, on_hand: 0, shelf: 0, on_order: st.ordered,
           short: st.short, state: st.state, allocatable: 0, pos: [],
           netsuite_item_id: [...w.itemIds][0] || null,
           requested: st.requested,
@@ -225,6 +228,7 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
       const onHand = Math.max(0, parseFloat(inv.qty || '0') || 0);
       const avail = inv.avail != null ? Math.max(0, parseFloat(inv.avail || '0') || 0) : onHand;
       row.availPool = avail;
+      row.shelf = onHand;
     }
   } catch { /* non-inventory items have no on-hand — leave 0 */ }
 
@@ -302,7 +306,7 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
     return {
       item_number: w.item_number, line_key: w.item_number, description: w.description, needed: w.needed,
       allocated: w.allocatedHere, free: m.free, usable: m.usable,
-      on_hand: w.availPool, on_order: w.on_order,
+      on_hand: w.availPool, shelf: w.shelf, on_order: w.on_order,
       short: m.short, state: m.state, allocatable: m.allocatable, pos: w.pos,
       netsuite_item_id: [...w.itemIds][0] || null,
       requested: requestedByItem.get(w.item_number) || 0,

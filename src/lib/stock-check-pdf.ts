@@ -42,8 +42,10 @@ export interface StockCheckLine {
   itemNumber: string;
   description: string | null;
   needed: number;
-  /** NetSuite available; undefined when unknown (not in the catalog). */
+  /** NetSuite on hand (the shelf); undefined when unknown (not in the catalog). */
   onHand?: number;
+  /** NetSuite available: on hand less what other orders have committed. */
+  available?: number;
   onOrder: number;
   /** Ticked quantity in the Request parts window; 0 = not being requested. */
   requesting: number;
@@ -74,6 +76,7 @@ export function stockCheckRows(lines: StockCheckLine[]): string[][] {
     l.itemNumber + (l.uncatalogued ? '  (not in catalog)' : l.short ? '  SHORT' : '') + (l.description ? `\n${l.description}` : ''),
     fmtQty(l.needed),
     l.uncatalogued || l.onHand === undefined ? '—' : fmtQty(l.onHand),
+    l.uncatalogued || l.available === undefined ? '—' : fmtQty(l.available),
     l.onOrder > 0 ? fmtQty(l.onOrder) : '0',
     l.requesting > 0 ? fmtQty(l.requesting) : '—',
     '',
@@ -157,27 +160,28 @@ export function buildStockCheckPdf(data: StockCheckData, opts?: { logo?: string 
   y = Math.max(y, refY) + 6;
 
   // ─── Lines (no pricing) ────────────────────────────────────
-  const COUNTED = 5;
-  const OK = 6;
+  const COUNTED = 6;
+  const OK = 7;
   autoTable(doc, {
     startY: y,
-    head: [['Part', 'Needed', 'On hand', 'On order', 'Requesting', 'Counted', 'OK']],
-    body: data.lines.length > 0 ? stockCheckRows(data.lines) : [['No parts on this estimate', '', '', '', '', '', '']],
+    head: [['Part', 'Needed', 'On hand', 'Available', 'On order', 'Requesting', 'Counted', 'OK']],
+    body: data.lines.length > 0 ? stockCheckRows(data.lines) : [['No parts on this estimate', '', '', '', '', '', '', '']],
     styles: { fontSize: 10, cellPadding: 6, valign: 'middle' },
     headStyles: { fillColor: [37, 99, 235], textColor: 255, fontSize: 9 },
     margin: { left: margin, right: margin, bottom: 50 },
     columnStyles: {
       0: { cellWidth: 'auto' },
-      1: { cellWidth: 48, halign: 'right' },
-      2: { cellWidth: 52, halign: 'right' },
-      3: { cellWidth: 54, halign: 'right' },
-      4: { cellWidth: 64, halign: 'right' },
-      5: { cellWidth: 62 },
-      6: { cellWidth: 32, halign: 'center' },
+      1: { cellWidth: 46, halign: 'right' },
+      2: { cellWidth: 48, halign: 'right' },
+      3: { cellWidth: 56, halign: 'right' },
+      4: { cellWidth: 52, halign: 'right' },
+      5: { cellWidth: 62, halign: 'right' },
+      6: { cellWidth: 58 },
+      7: { cellWidth: 30, halign: 'center' },
     },
     didParseCell: (hook) => {
       // Number headings sit over their right-aligned numbers.
-      if (hook.section === 'head' && hook.column.index >= 1 && hook.column.index <= 4) hook.cell.styles.halign = 'right';
+      if (hook.section === 'head' && hook.column.index >= 1 && hook.column.index <= 5) hook.cell.styles.halign = 'right';
       if (hook.section !== 'body' || hook.column.index !== 0 || data.lines.length === 0) return;
       const line = data.lines[hook.row.index];
       if (line?.short) hook.cell.styles.textColor = [196, 39, 29];

@@ -41,6 +41,7 @@ import { trackingUrl } from '@/lib/tracking-url';
 import CreatedBy from '@/components/CreatedBy';
 import VendorPosTab, { confirmPoUndo, runPoUndo } from '@/components/VendorPosTab';
 import PurchasingJobsTab from '@/components/PurchasingJobsTab';
+import { syncedText } from '@/lib/stock-synced-text';
 
 interface RequestRow {
   id: string;
@@ -76,9 +77,13 @@ interface RequestRow {
   ordered_po_number?: string | null;
   /** Catalog purchase price, on pending rows — the PO review's start price. */
   catalog_cost?: number | null;
+  /** Stock beside a pending row (mirror figures, see stock-snapshot.ts). */
+  stock?: { on_hand: number; available: number; on_order: number } | null;
 }
 
 const UNASSIGNED = 'No vendor — assign one';
+
+const fmtStock = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
 /** NetSuite's own printed PO in the in-app PDF viewer; ← comes back here. */
 function poPdfHref(netsuiteId: string, number: string | null | undefined): string {
@@ -109,6 +114,7 @@ export default function PurchasingQueuePage() {
       : 'requests',
   );
   const [requests, setRequests] = useState<RequestRow[]>([]);
+  const [inventorySyncedAt, setInventorySyncedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
@@ -176,7 +182,10 @@ export default function PurchasingQueuePage() {
         fetch('/api/purchase-requests?view=on_order'),
       ]);
       const body = await res.json().catch(() => ({}));
-      if (res.ok && body.success) setRequests(body.requests || []);
+      if (res.ok && body.success) {
+        setRequests(body.requests || []);
+        setInventorySyncedAt(body.inventorySyncedAt || null);
+      }
       const ordBody = await ordRes.json().catch(() => ({}));
       if (ordRes.ok && ordBody.success) setOnOrder(ordBody.requests || []);
     } catch { /* the empty state below says so */ }
@@ -573,6 +582,7 @@ export default function PurchasingQueuePage() {
           ? ' Pick the NetSuite vendor on a group and create the PO right here, or tick rows and Mark ordered with the PO number of an order placed elsewhere.'
           : ' An admin turns a vendor group into a NetSuite PO; readiness cards flip to “on order” once it’s placed.'}
         {' '}A PO entered straight in NetSuite for the same part from the same vendor marks the request ordered on its own after the next sync.
+        {requests.length > 0 && <> Stock under each part is from NetSuite ({syncedText(inventorySyncedAt)}, O’Fallon).</>}
       </div>
 
       {isAdmin && (
@@ -760,6 +770,11 @@ export default function PurchasingQueuePage() {
                       <td style={{ padding: '9px 14px' }}>
                         <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{r.item_number}</div>
                         {r.description && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{r.description}</div>}
+                        {r.stock && (
+                          <div title={`From NetSuite · ${syncedText(inventorySyncedAt)} · O’Fallon`} style={{ fontSize: '10.5px', color: theme.textMuted, whiteSpace: 'nowrap' }}>
+                            On hand {fmtStock(r.stock.on_hand)} · Available {fmtStock(r.stock.available)} · On order {fmtStock(r.stock.on_order)}
+                          </div>
+                        )}
                         {r.note && <div style={{ fontSize: '11px', color: theme.textMuted, fontStyle: 'italic' }}>“{r.note}”</div>}
                         {!r.netsuite_item_id && (
                           <div title="No NetSuite item id resolved — the PO line will need it" style={{ fontSize: '10px', color: '#f59e0b', fontWeight: 700 }}>⚠ no NetSuite item id</div>

@@ -30,6 +30,7 @@ import { theme } from '@/lib/theme';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { startingRequestQty } from '@/lib/estimate-request-qty';
 import { openStockCheckPdf, type StockCheckData } from '@/lib/stock-check-pdf';
+import { syncedText } from '@/lib/stock-synced-text';
 
 const qtyText = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 const keyOf = (p: { line_key?: string; item_number: string }) => p.line_key || p.item_number;
@@ -42,8 +43,10 @@ export interface RequestablePart {
   description: string | null;
   needed: number;
   short: number;
-  /** NetSuite available, shown beside the part. */
+  /** NetSuite available (on hand less other orders' commitments). */
   on_hand?: number;
+  /** NetSuite on hand: what's on the shelf. */
+  shelf?: number;
   on_order: number;
   requested: number;
   to_request: number;
@@ -62,12 +65,15 @@ interface Props {
   title?: string;
   /** Header for the printed stock check sheet. */
   printInfo?: Omit<StockCheckData, 'lines' | 'accepted'>;
+  /** Where the stock figures came from, for the line under the heading. */
+  stockSource?: 'live' | 'mirror';
+  stockSyncedAt?: string | null;
   onClose: () => void;
   /** Fires after the requests land, with how many were created or raised. */
   onDone: (count: number) => void;
 }
 
-export default function EstimatePartsRequestModal({ estimateId, estimateLabel, accepted, parts, title, printInfo, onClose, onDone }: Props) {
+export default function EstimatePartsRequestModal({ estimateId, estimateLabel, accepted, parts, title, printInfo, stockSource, stockSyncedAt, onClose, onDone }: Props) {
   // Needs ordering first, then everything already covered.
   const due = useMemo(() => parts.filter(p => p.to_request > 0), [parts]);
   const covered = useMemo(() => parts.filter(p => p.to_request <= 0), [parts]);
@@ -114,7 +120,8 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
         itemNumber: p.item_number,
         description: p.description,
         needed: p.needed,
-        onHand: p.on_hand,
+        onHand: p.shelf ?? p.on_hand,
+        available: p.on_hand,
         onOrder: p.on_order,
         requesting: ticked.get(keyOf(p)) || 0,
         short: !p.uncatalogued && p.short > 0,
@@ -191,6 +198,9 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
               </button>
             </div>
           )}
+          {stockSource && lines.some(p => !p.uncatalogued) && (
+            <StockSourceLine source={stockSource} syncedAt={stockSyncedAt ?? null} />
+          )}
           {!accepted && (
             <div style={{
               marginTop: '8px', padding: '6px 9px', borderRadius: '7px', fontSize: '11.5px', fontWeight: 700,
@@ -256,9 +266,9 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
                   )}
                   <div style={{ fontSize: '10.5px', color: theme.textMuted, marginTop: '2px' }}>
                     Needed {qtyText(p.needed)}
-                    {!p.uncatalogued && !p.generic && p.on_hand !== undefined && ` · on hand ${qtyText(p.on_hand)}`}
+                    {!p.uncatalogued && !p.generic && p.on_hand !== undefined && ` · on hand ${qtyText(p.shelf ?? p.on_hand)} · available ${qtyText(p.on_hand)}`}
+                    {(!p.generic || p.on_order > 0) && ` · on order ${qtyText(p.on_order)}`}
                     {!p.uncatalogued && !p.generic && p.short > 0 && ` · short ${qtyText(p.short)}`}
-                    {p.on_order > 0 && ` · on order ${qtyText(p.on_order)}`}
                     {p.requested > 0 && ` · already requested ${qtyText(p.requested)}`}
                   </div>
                 </div>
@@ -331,3 +341,17 @@ const toolButton: React.CSSProperties = {
   border: `1px solid ${theme.border}`, background: 'var(--card)', color: theme.textPrimary,
   cursor: 'pointer',
 };
+
+/** "Stock: live from NetSuite" or, when NetSuite didn't answer, the sync time
+ *  the figures date from, so nobody mistakes a 2-hour-old count for today's. */
+function StockSourceLine({ source, syncedAt }: { source: 'live' | 'mirror'; syncedAt: string | null }) {
+  const live = source === 'live';
+  return (
+    <div style={{ marginTop: '8px', fontSize: '11.5px', color: theme.textMuted }}>
+      Stock (O’Fallon):{' '}
+      <b style={{ color: live ? '#22c55e' : '#f59e0b' }}>
+        {live ? 'live from NetSuite, just now' : `NetSuite didn’t answer. ${syncedText(syncedAt)}`}
+      </b>
+    </div>
+  );
+}
