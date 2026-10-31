@@ -22,6 +22,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { isNativeApp, isViewableInApp, fetchStoredFile, canShareFiles } from '@/lib/native-files';
 import ProofViewer from '@/components/ProofViewer';
+import TopSaveBar from '@/components/TopSaveBar';
 import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
@@ -1155,6 +1156,18 @@ export default function GraphicsJobRecordPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {edit && (
+        <TopSaveBar
+          title={job.title}
+          subtitle={isDirty ? 'Unsaved changes' : undefined}
+          onSave={saveJob}
+          saving={saving}
+          saveLabel="Save Changes"
+          savingLabel="Saving..."
+          onCancel={() => setEdit(null)}
+          cancelLabel="Discard Edits"
+        />
+      )}
 
       {/* ── Header ── */}
       <div style={card}>
@@ -1286,29 +1299,13 @@ export default function GraphicsJobRecordPage() {
           ))}
         </div>
         <div style={{ display: 'flex', gap: '6px', marginTop: '12px' }}>
-          {!edit ? (
+          {!edit && (
             <button
               onClick={() => setEdit({ ...job })}
               style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.2)', color: '#60a5fa', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
             >
               Edit Job
             </button>
-          ) : (
-            <>
-              <button
-                onClick={saveJob}
-                disabled={saving}
-                style={{ flex: 1, padding: '10px', borderRadius: '8px', background: '#22c55e', border: 'none', color: '#fff', fontSize: '12px', fontWeight: 800, cursor: 'pointer', opacity: saving ? 0.5 : 1 }}
-              >
-                {saving ? 'Saving...' : isDirty ? 'Save Changes •' : 'Save Changes'}
-              </button>
-              <button
-                onClick={() => setEdit(null)}
-                style={{ flex: 1, padding: '10px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '12px', fontWeight: 700, cursor: 'pointer' }}
-              >
-                Discard Edits
-              </button>
-            </>
           )}
           {!edit && (isProduction || isAdmin || isSales) && (
             <button
@@ -1635,23 +1632,6 @@ export default function GraphicsJobRecordPage() {
             />
           </div>
 
-          {/* Sticky so Save is reachable without scrolling back down a
-              ~20-field form; bottom offset clears the tab bar + iOS safe area. */}
-          <div style={{ display: 'flex', gap: '6px', position: 'sticky', bottom: 'calc(env(safe-area-inset-bottom, 0px) + 64px)', zIndex: 5, background: 'var(--card-bg, rgba(17,24,39,0.92))', padding: '8px', margin: '0 -8px -8px', borderRadius: '10px', backdropFilter: 'blur(6px)' }}>
-            <button
-              onClick={saveJob}
-              disabled={saving}
-              style={{ flex: 1, padding: '12px', borderRadius: '8px', background: '#22c55e', color: '#fff', fontSize: '13px', fontWeight: 800, border: 'none', cursor: 'pointer', opacity: saving ? 0.5 : 1, boxShadow: '0 4px 12px rgba(34,197,94,0.25)' }}
-            >
-              {saving ? 'Saving...' : isDirty ? 'Save Changes •' : 'Save Changes'}
-            </button>
-            <button
-              onClick={() => setEdit(null)}
-              style={{ padding: '12px 18px', borderRadius: '8px', background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-body)', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}
-            >
-              Cancel
-            </button>
-          </div>
         </div>
       )}
 

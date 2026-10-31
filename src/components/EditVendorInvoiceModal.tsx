@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase-browser';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
 import { closeOnEscape } from '@/lib/modal-escape';
+import TopSaveBar from '@/components/TopSaveBar';
 
 interface EditableInvoice {
   id: string;
@@ -131,15 +132,14 @@ export default function EditVendorInvoiceModal({ invoice, onClose, onSaved }: Pr
         background: 'var(--card)', borderRadius: '14px', maxWidth: '540px', width: '100%',
         border: '1px solid var(--border)', boxShadow: '0 16px 60px rgba(0,0,0,0.3)', margin: 'auto 0',
       }}>
-        <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Edit invoice</div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              {invoice.vendor_name}{invoice.invoice_number ? ` · #${invoice.invoice_number}` : ''}
-            </div>
-          </div>
-          <button onClick={onClose} style={{ background: 'transparent', border: 'none', fontSize: '20px', cursor: 'pointer', color: 'var(--text-muted)', padding: '4px 8px' }}>✕</button>
-        </div>
+        <TopSaveBar
+          inModal
+          title="Edit invoice"
+          subtitle={`${invoice.vendor_name || ''}${invoice.invoice_number ? ` · #${invoice.invoice_number}` : ''}` || undefined}
+          onSave={save}
+          saving={saving}
+          onCancel={onClose}
+        />
 
         <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {/* Vendor link — the reason this modal exists */}
@@ -205,12 +205,6 @@ export default function EditVendorInvoiceModal({ invoice, onClose, onSaved }: Pr
           )}
         </div>
 
-        <div style={{ padding: '12px 18px', borderTop: '1px solid var(--border)', display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
-          <button onClick={onClose} style={{ padding: '10px 14px', borderRadius: '10px', border: '1px solid var(--border)', background: 'transparent', color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: 'pointer' }}>Cancel</button>
-          <button onClick={save} disabled={saving} style={{ padding: '10px 18px', borderRadius: '10px', border: 'none', background: '#22c55e', color: '#fff', fontSize: '14px', fontWeight: 800, cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.6 : 1 }}>
-            {saving ? 'Saving…' : 'Save changes'}
-          </button>
-        </div>
       </div>
     </div>
   );

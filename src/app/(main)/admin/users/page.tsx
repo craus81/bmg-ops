@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import TopSaveBar from '@/components/TopSaveBar';
 import { useDialog } from '@/components/DialogProvider';
 import type { Profile, AppRole } from '@/lib/types';
 import { FEATURES, ROLE_DEFAULT_FEATURES, resolveFeatures, type FeatureKey } from '@/lib/features';
@@ -1169,10 +1170,17 @@ export default function UsersPage() {
       {editUser && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', maxWidth: '480px', width: '100%', maxHeight: 'calc(80vh / var(--ts))', overflowY: 'auto' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Edit User</div>
-              <button onClick={() => setEditUser(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '18px', cursor: 'pointer' }}>✕</button>
-            </div>
+            <TopSaveBar
+              inModal
+              title="Edit User"
+              subtitle={editForm.fullName.trim() || editForm.email.trim() || undefined}
+              onSave={handleSaveEdit}
+              saving={saving}
+              savingLabel="Saving..."
+              disabled={!editForm.fullName.trim() || !editForm.email.trim()}
+              onCancel={() => setEditUser(null)}
+              style={{ margin: '-18px -18px 14px', top: '-18px' }}
+            />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div>
@@ -1337,30 +1345,6 @@ export default function UsersPage() {
                 <AdminUserSettings userId={editUser.id} userName={editUser.full_name || editUser.email || 'this user'} />
               )}
 
-              <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-                <button
-                  onClick={handleSaveEdit}
-                  disabled={saving || !editForm.fullName.trim() || !editForm.email.trim()}
-                  style={{
-                    flex: 1, padding: '12px', borderRadius: '10px',
-                    background: '#22c55e', color: '#fff', fontWeight: 800, fontSize: '13px',
-                    border: 'none', cursor: 'pointer',
-                    opacity: saving || !editForm.fullName.trim() || !editForm.email.trim() ? 0.5 : 1,
-                  }}
-                >
-                  {saving ? 'Saving...' : 'Save Changes'}
-                </button>
-                <button
-                  onClick={() => setEditUser(null)}
-                  style={{
-                    padding: '12px 20px', borderRadius: '10px',
-                    background: 'transparent', border: '1px solid var(--border)',
-                    color: 'var(--text-muted)', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
             </div>
           </div>
         </div>

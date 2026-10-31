@@ -6,6 +6,7 @@ import { deepLinks } from '@/lib/deep-links';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import TopSaveBar from '@/components/TopSaveBar';
 import { useDialog } from '@/components/DialogProvider';
 import { storage } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
@@ -4323,6 +4324,21 @@ export default function WrapQuotePage() {
         ))}
       </div>
 
+      {(tab === 'estimator' || tab === 'nesting' || tab === 'quote') && (
+        <TopSaveBar
+          title="Wrap quote"
+          onSave={() => { void saveQuote(); }}
+          saveLabel={savedQuoteId ? 'Update Draft' : 'Save Draft'}
+        />
+      )}
+      {(tab === 'pricing' || tab === 'company') && (
+        <TopSaveBar
+          title={tab === 'pricing' ? 'Film pricing' : 'Company info'}
+          onSave={() => saveSettings()}
+          saving={savingSettings}
+        />
+      )}
+
       {/* ================= ESTIMATOR ================= */}
       {tab === 'estimator' && (
         <div>
@@ -5224,7 +5240,6 @@ export default function WrapQuotePage() {
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '12px' }}>Proof files, vinyl specs, or other documentation — they ride on the estimate&apos;s customer copy (when ticked on the estimate banner) and on proof emails.</div>
             </DropZone>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              <button onClick={() => saveQuote()} style={btnStyle('#60a5fa', 'rgba(59,130,246,0.1)')}>{savedQuoteId ? 'Update Draft' : 'Save Draft'}</button>
               <button
                 onClick={saveAndOpenEstimate}
                 disabled={addingToEstimate || sending}
@@ -5609,9 +5624,6 @@ export default function WrapQuotePage() {
           {laborEditor('preparation', 'Preparation')}
           {laborEditor('installation', 'Installation')}
 
-          <button onClick={() => saveSettings()} disabled={savingSettings} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none', padding: '9px 18px' }}>
-            {savingSettings ? 'Saving…' : 'Save Pricing Settings'}
-          </button>
         </div>
       )}
 
@@ -5646,9 +5658,6 @@ export default function WrapQuotePage() {
               <input value={(settings.company as any)[k] || ''} onChange={e => setSettings(prev => ({ ...prev, company: { ...prev.company, [k]: e.target.value } }))} style={inputStyle} />
             </div>
           ))}
-          <button onClick={() => saveSettings()} disabled={savingSettings} style={{ ...btnStyle('#fff', '#22c55e'), border: 'none', padding: '9px 18px', marginTop: '8px' }}>
-            {savingSettings ? 'Saving…' : 'Save Company Info'}
-          </button>
         </div>
       )}
 

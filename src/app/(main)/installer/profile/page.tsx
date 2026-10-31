@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import TopSaveBar from '@/components/TopSaveBar';
 import PhoneInput from '@/components/PhoneInput';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { apiFetch } from '@/lib/api-client';
@@ -271,6 +272,7 @@ export default function InstallerProfilePage() {
 
   return (
     <div>
+      <TopSaveBar title="My Profile" onSave={handleSave} saving={saving} saveLabel="Save Profile" savingLabel="Saving..." />
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
         <button onClick={() => router.back()} style={{ fontSize: '20px', color: 'var(--text-muted)' }}>←</button>
         <div>
@@ -560,19 +562,7 @@ export default function InstallerProfilePage() {
         )}
       </div>
 
-      {/* Save */}
-      <button
-        onClick={handleSave}
-        disabled={saving}
-        style={{
-          width: '100%', padding: '16px', borderRadius: '12px',
-          background: saving ? 'var(--text-muted)' : 'var(--accent)',
-          color: '#fff', fontSize: '15px', fontWeight: 700, border: 'none',
-          marginBottom: '100px',
-        }}
-      >
-        {saving ? 'Saving...' : 'Save Profile'}
-      </button>
+      <div style={{ height: '100px' }} />
     </div>
   );
 }

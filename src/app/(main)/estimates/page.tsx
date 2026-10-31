@@ -80,6 +80,7 @@ import { DeliveryPicker } from '@/components/DeliveryPicker';
 import { EMPTY_DELIVERY, deliveryColumns, deliveryFromRow, deliveryText, sameDelivery, type Delivery } from '@/lib/delivery';
 import VehicleTemplatePicker from '@/components/VehicleTemplatePicker';
 import { remapWorksheetIds } from '@/lib/estimate-copy-worksheets';
+import TopSaveBar from '@/components/TopSaveBar';
 import { estimateCopiedFrom, oldRecordCopiedFrom } from '@/lib/estimate-copied-from';
 import { sanitizeCopiedProofs } from '@/lib/estimate-copied-proofs';
 import {
@@ -4758,6 +4759,15 @@ export default function EstimatesPage() {
 
   return (
     <div data-form="estimate_builder">
+      <TopSaveBar
+        title={editingId && editingNumber ? `Estimate #${editingNumber}` : 'New Estimate'}
+        subtitle={customerName || undefined}
+        onSave={() => saveEstimate(isPushed ? 'pushed' : 'draft', { offerRevision: true })}
+        saving={saving}
+        saveLabel={editingId ? 'Save Changes' : 'Save Draft'}
+        savingLabel="Saving..."
+        onCancel={leaveBuilder}
+      />
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
         <button
@@ -6838,31 +6848,6 @@ export default function EstimatesPage() {
             </div>
           </div>
         )}
-
-        <div style={{ display: 'flex', gap: '6px' }}>
-          <button
-            onClick={() => saveEstimate(isPushed ? 'pushed' : 'draft', { offerRevision: true })}
-            disabled={saving}
-            style={{
-              flex: 1, padding: '12px', borderRadius: '10px',
-              background: saving ? 'var(--subtle-bg)' : '#22c55e',
-              color: '#fff', fontWeight: 800, fontSize: '13px', border: 'none', cursor: 'pointer',
-              opacity: saving ? 0.5 : 1,
-            }}
-          >
-            {saving ? 'Saving...' : (editingId ? 'Save Changes' : 'Save Draft')}
-          </button>
-          <button
-            onClick={leaveBuilder}
-            style={{
-              padding: '12px 20px', borderRadius: '10px',
-              background: 'transparent', border: '1px solid var(--border)',
-              color: 'var(--text-body)', fontWeight: 700, fontSize: '13px', cursor: 'pointer',
-            }}
-          >
-            Cancel
-          </button>
-        </div>
 
         {/* FleetSuite enhanced-estimate PDF — view, print, or email the
             customer-facing copy (photos + product links). Works on any saved

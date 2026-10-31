@@ -21,6 +21,7 @@ import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { openJobOrder } from '@/lib/job-order-pdf';
+import TopSaveBar from '@/components/TopSaveBar';
 import { lineAllows, isFullyBilled, type SoLine, type SoHeader, type SoLineEdit, type SoNewLine } from '@/lib/sales-order-edit';
 
 interface SoPage {
@@ -300,7 +301,19 @@ export default function SalesOrderPage() {
     : h.subtotal;
 
   return (
-    <div style={{ padding: '16px', maxWidth: '1100px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '14px', paddingBottom: editing ? '110px' : '32px' }}>
+    <div style={{ padding: '16px', maxWidth: '1100px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '14px', paddingBottom: '32px' }}>
+      {editing && edit && (
+        <TopSaveBar
+          title={`Sales Order ${h.tranId}`}
+          subtitle={`${hasRed ? 'Fix the red quantity first' : edit.count === 0 ? 'No changes yet' : `${edit.count} change${edit.count === 1 ? '' : 's'}`} · saves to NetSuite right away`}
+          error={saveErrors.length > 0 ? saveErrors.join('\n') : undefined}
+          onSave={save}
+          saving={saving}
+          disabled={hasRed || edit.count === 0}
+          saveLabel="Save to NetSuite"
+          onCancel={saving ? undefined : cancel}
+        />
+      )}
       <div style={{ fontSize: '13px', color: theme.textSecondary, display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
         <button onClick={() => router.back()} style={{ ...linkBtn, color: theme.textSecondary, paddingLeft: 0 }}>← Back</button>
         {h.customerId && (
@@ -570,35 +583,6 @@ export default function SalesOrderPage() {
         </div>
       )}
 
-      {/* ── Save bar ── */}
-      {editing && edit && (
-        <div style={{
-          position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 40,
-          background: theme.card, borderTop: `2px solid ${theme.accent}`, boxShadow: theme.shadowMd,
-          padding: '12px max(16px, env(safe-area-inset-left, 0px)) calc(12px + env(safe-area-inset-bottom, 0px))',
-        }}>
-          <div style={{ maxWidth: '1100px', margin: '0 auto', display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
-            <div style={{ minWidth: 0, fontSize: '13px' }}>
-              {saveErrors.length > 0 ? (
-                <div style={{ color: theme.error, fontWeight: 700 }}>{saveErrors.map((e, i) => <div key={i}>{e}</div>)}</div>
-              ) : (
-                <>
-                  <b>{hasRed ? 'Fix the red quantity first' : edit.count === 0 ? 'No changes yet' : `${edit.count} change${edit.count === 1 ? '' : 's'}`}</b>
-                  <div style={{ color: theme.textMuted }}>
-                    Saves to NetSuite right away.{data.estimate ? ` Estimate ${data.estimate.number} stays as the customer approved it and gets a note.` : ''}
-                  </div>
-                </>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={cancel} disabled={saving} style={btn}>Cancel</button>
-              <button onClick={save} disabled={saving || hasRed || edit.count === 0} style={{ ...primary, opacity: saving || hasRed || edit.count === 0 ? 0.5 : 1 }}>
-                {saving ? 'Saving…' : 'Save to NetSuite'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

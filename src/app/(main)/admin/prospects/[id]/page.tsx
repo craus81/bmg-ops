@@ -32,6 +32,7 @@ import JSZip from 'jszip';
 import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth } from '@/components/AuthProvider';
+import TopSaveBar from '@/components/TopSaveBar';
 import { useDialog } from '@/components/DialogProvider';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import DropboxProofSearch from '@/components/DropboxProofSearch';
@@ -3253,7 +3254,16 @@ export default function CustomerRecordPage() {
           style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px' }}>
           <div onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Edit record"
             style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '14px', padding: '18px', width: 'min(560px, 100%)', maxHeight: 'calc(90vh / var(--ts))', overflowY: 'auto' }}>
-            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '12px' }}>Edit record</div>
+            <TopSaveBar
+              inModal
+              title="Edit record"
+              subtitle={editForm.company_name.trim() || 'Company name is needed'}
+              onSave={saveEdit}
+              saving={editSaving}
+              disabled={!editForm.company_name.trim()}
+              onCancel={editSaving ? undefined : () => setEditOpen(false)}
+              style={{ margin: '-18px -18px 12px', top: '-18px' }}
+            />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
               <input style={{ ...cInput, gridColumn: '1 / -1' }} placeholder="Company name *" value={editForm.company_name} onChange={e => setEditForm({ ...editForm, company_name: e.target.value })} />
               <input style={cInput} placeholder="Contact name" value={editForm.contact_name} onChange={e => setEditForm({ ...editForm, contact_name: e.target.value })} />
@@ -3305,13 +3315,6 @@ export default function CustomerRecordPage() {
                 padding: '9px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
                 background: 'var(--error-bg)', border: '1px solid var(--error-border)', color: 'var(--error)', cursor: 'pointer',
               }}>Delete</button>
-              <span style={{ flex: 1 }} />
-              <button onClick={() => setEditOpen(false)} disabled={editSaving} style={{ ...btnSm, padding: '9px 14px', fontSize: '12px' }}>Cancel</button>
-              <button onClick={saveEdit} disabled={editSaving || !editForm.company_name.trim()} style={{
-                padding: '9px 18px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                background: editForm.company_name.trim() ? '#22c55e' : 'var(--border)', color: '#fff', border: 'none',
-                cursor: editForm.company_name.trim() ? 'pointer' : 'default', opacity: editSaving ? 0.6 : 1,
-              }}>{editSaving ? 'Saving…' : 'Save'}</button>
             </div>
           </div>
         </div>
