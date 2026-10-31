@@ -10,7 +10,7 @@
 
 import {
   type SendEvent, type SendSummary, type DeliveryStatus, type MarkMethod,
-  parseDocRef, summarizeSends, isInternalKind,
+  parseDocRef, summarizeSends, isInternalKind, approvalFallbackEvent,
 } from './document-sends';
 
 const CHUNK = 50;
@@ -109,6 +109,24 @@ export async function fetchDocumentSends(service: any, refsIn: string[]): Promis
         method: row.method as MarkMethod, by: row.marked_by, to: row.recipients || [],
         status: null, detail: null, mailbox: row.mailbox || null, emailLogId: null,
       });
+    }
+  }
+
+  // Approval sends the estimate's own columns record but email_log doesn't
+  // name (fleet and batch sends before 2026-10-31).
+  const estimateIds = refs.filter(r => r.startsWith('estimate:')).map(r => r.slice('estimate:'.length));
+  for (const part of chunks(estimateIds)) {
+    const { data } = await service
+      .from('estimates')
+      .select('id, sent_for_approval_at, sent_for_approval_by, approval_email_to, approval_email_status, approval_email_detail')
+      .in('id', part)
+      .not('sent_for_approval_at', 'is', null);
+    for (const est of (data || []) as any[]) {
+      const ref = `estimate:${est.id}`;
+      const extra = approvalFallbackEvent(est, events[ref] || []);
+      if (!extra) continue;
+      if (extra.by) peopleIds.add(extra.by);
+      events[ref].push(extra);
     }
   }
 

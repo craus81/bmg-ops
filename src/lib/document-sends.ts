@@ -63,6 +63,7 @@ export function isInternalOnly(recipients: readonly string[]): boolean {
 /** What an email_log kind reads as on a Sent line. */
 const KIND_LABEL: Record<string, string> = {
   estimate_approval: 'Sent for approval',
+  estimate_approval_sms: 'Approval link texted',
   estimate_pdf: 'PDF emailed',
   pro_forma: 'Pro forma emailed',
   estimate_approval_confirmation: 'Approval confirmation emailed',
@@ -156,7 +157,8 @@ export function fmtSentWhen(iso: string, now = new Date()): string {
 }
 
 function statusPhrase(e: SendEvent): string {
-  if (e.source !== 'email') return '';
+  // Texts have no delivery tracking here.
+  if (e.source !== 'email' || e.kind === 'estimate_approval_sms') return '';
   switch (e.status) {
     case 'delivered': return ' · Delivered';
     case 'bounced': return ` · Bounced${e.detail ? `: ${e.detail}` : ''}`;
@@ -225,5 +227,45 @@ export function documentNumbersIn(text: string): {
     invoices: grab(/\bINV[-_ ]?(\d{3,})\b/gi, m => `INV${m[1]}`),
     salesOrders: grab(/\bSO[-_ ]?(\d{3,})\b/gi, m => `SO${m[1]}`),
     purchaseOrders: grab(/\bPO[-_ ]?(\d{3,})\b/gi, m => `PO${m[1]}`),
+  };
+}
+
+/** The approval-send columns every estimate on a send carries (migration 205). */
+export interface EstimateApprovalColumns {
+  sent_for_approval_at: string | null;
+  sent_for_approval_by: string | null;
+  approval_email_to: string[] | null;
+  approval_email_status: string | null;
+  approval_email_detail: string | null;
+}
+
+/**
+ * The approval send an estimate's own columns record, for when email_log
+ * can't name it. A fleet order or batch goes out as one email, and before
+ * 2026-10-31 that email was logged against only the estimate it was sent
+ * from — the other vehicles' estimates read "Not sent" though their
+ * customer got, opened and approved them (Craig, EST-2610-082…086). Only
+ * used when no logged approval email for the estimate is at or after its
+ * sent_for_approval_at, so a logged send is never shown twice.
+ */
+export function approvalFallbackEvent(est: EstimateApprovalColumns, logged: SendEvent[]): SendEvent | null {
+  if (!est.sent_for_approval_at) return null;
+  const sentMs = new Date(est.sent_for_approval_at).getTime();
+  const covered = logged.some(e =>
+    e.source === 'email' && e.kind === 'estimate_approval'
+    && Math.abs(new Date(e.at).getTime() - sentMs) < 10 * 60_000);
+  if (covered) return null;
+  const to = est.approval_email_to || [];
+  return {
+    at: est.sent_for_approval_at,
+    source: 'email',
+    kind: to.length ? 'estimate_approval' : 'estimate_approval_sms',
+    method: null,
+    by: est.sent_for_approval_by,
+    to,
+    status: to.length ? ((est.approval_email_status || 'sent') as DeliveryStatus) : 'delivered',
+    detail: est.approval_email_detail || null,
+    mailbox: null,
+    emailLogId: null,
   };
 }
