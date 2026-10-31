@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   docRef, parseDocRef, docRefsFromContextUrl, isInternalOnly, summarizeSends,
-  sendLine, sendTone, sentChipText, documentNumbersIn, type SendEvent,
+  sendLine, sendTone, sentChipText, documentNumbersIn, approvalFallbackEvent, type SendEvent,
 } from './document-sends';
 
 const ID = '11111111-2222-3333-4444-555555555555';
@@ -83,5 +83,27 @@ describe('documentNumbersIn', () => {
   it('ignores words that only look close', () => {
     const n = documentNumbersIn('Invoice for SOLAR panels, POST 12, investment');
     expect(n).toEqual({ estimates: [], proFormas: [], invoices: [], salesOrders: [], purchaseOrders: [] });
+  });
+});
+
+describe('approvalFallbackEvent', () => {
+  const cols = {
+    sent_for_approval_at: '2026-10-29T14:00:00Z', sent_for_approval_by: 'u1',
+    approval_email_to: ['jerry@clementford.com'], approval_email_status: 'delivered', approval_email_detail: null,
+  };
+  it('shows a fleet sibling as sent from its own columns', () => {
+    const e = approvalFallbackEvent(cols, []);
+    expect(e).toMatchObject({ kind: 'estimate_approval', to: ['jerry@clementford.com'], status: 'delivered', by: 'u1' });
+    expect(sentChipText(summarizeSends([e!]))).toMatch(/· Delivered$/);
+  });
+  it('adds nothing when the send is already logged, or never happened', () => {
+    expect(approvalFallbackEvent(cols, [ev({ kind: 'estimate_approval', at: '2026-10-29T14:00:05Z' })])).toBeNull();
+    expect(approvalFallbackEvent({ ...cols, sent_for_approval_at: null }, [])).toBeNull();
+  });
+  it('still adds an older send when only a later one is logged', () => {
+    expect(approvalFallbackEvent(cols, [ev({ kind: 'estimate_approval', at: '2026-10-31T09:00:00Z' })])).not.toBeNull();
+  });
+  it('reads a text-only send as texted', () => {
+    expect(approvalFallbackEvent({ ...cols, approval_email_to: [] }, [])?.kind).toBe('estimate_approval_sms');
   });
 });
