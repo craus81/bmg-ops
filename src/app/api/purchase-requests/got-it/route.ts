@@ -21,7 +21,7 @@ const Schema = z.object({
  * POST /api/purchase-requests/got-it — "Got it" on a generic part's line
  * (Misc) on the job's Parts Readiness card: it's here, for things bought at
  * the counter or on a card with no PO (Craig, 2026-10-31, option C;
- * migration 460). Marks the line's requests received; with none behind it,
+ * migration 463). Marks the line's requests received; with none behind it,
  * adds one already received, so the line is covered. Undo puts it back.
  *
  * Only generic lines: a real part is received at Receiving against its PO.

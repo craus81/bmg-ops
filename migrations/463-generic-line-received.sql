@@ -1,4 +1,4 @@
--- Migration 460: a generic part's line (Misc) can be marked received.
+-- Migration 463: a generic part's line (Misc) can be marked received.
 --
 -- Generic parts (netsuite_parts.is_generic) are tracked per estimate line,
 -- by description, rather than per part number: each line is its own
