@@ -6,6 +6,7 @@ import { logAudit } from '@/lib/audit';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { ensureUpfitProjectForSo } from '@/lib/upfit-projects';
 import { syncShopInboundForSalesOrder } from '@/lib/shop-inbound';
+import { linkMessage, refreshEstimateInvoices, type EstimateInvoiceResult } from '@/lib/estimate-invoices';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   const { data: estimate, error: estError } = await supabase
     .from('estimates')
-    .select('id, estimate_number, netsuite_so_id, netsuite_so_number, title, customer_name, customer_netsuite_id, grand_total')
+    .select('id, estimate_number, netsuite_so_id, netsuite_so_number, title, customer_name, customer_netsuite_id, grand_total, fleet_checkin_id')
     .eq('id', params.id)
     .maybeSingle();
 
@@ -171,11 +172,27 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     console.error('shop_inbound sync failed after manual SO link:', inboundErr);
   }
 
+  // The invoices billed from the SO come with it (migration 461): saved on
+  // the estimate and passed on to its vehicles. Non-fatal — the link is
+  // saved, and the two-hour sync checks again.
+  let invoices: EstimateInvoiceResult | null = null;
+  try {
+    invoices = await refreshEstimateInvoices(supabase, {
+      id: params.id,
+      netsuite_so_id: so.id,
+      netsuite_so_number: so.tranid,
+      fleet_checkin_id: estimate.fleet_checkin_id || null,
+    });
+  } catch (invErr) {
+    console.error('invoice lookup failed after manual SO link:', invErr);
+  }
+
   return NextResponse.json({
     success: true,
     salesOrderId: so.id,
     salesOrderNumber: so.tranid,
     upfitProject: upfitProject || undefined,
-    message: `Linked SO #${so.tranid} to this estimate.`,
+    invoices: invoices ? { billing: invoices.billing, numbers: invoices.invoices.map(i => i.tranid) } : null,
+    message: linkMessage(so.tranid, invoices),
   });
 }

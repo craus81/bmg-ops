@@ -47,6 +47,7 @@ import { isGraphicsLine } from '@/lib/graphics-lines';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { openJobOrder } from '@/lib/job-order-pdf';
 import FulfillInvoiceModal from '@/components/FulfillInvoiceModal';
+import EstimateInvoices from '@/components/EstimateInvoices';
 import DropShipModal from '@/components/DropShipModal';
 import { readEstimateDraft, writeEstimateDraft, clearEstimateDraft, sweepEstimateDrafts, type EstimateDraft } from '@/lib/estimate-draft';
 import { discountLabel, discountSplit, jobDiscountShare, lineMoney, netUnitPrice, normalizeDiscount, normalizeDiscountDescription, roundCentsHalfEven, normalizeVehicleCount, perVehicleAmount } from '@/lib/estimate-totals';
@@ -7711,6 +7712,10 @@ export default function EstimatesPage() {
             </div>
           );
         })()}
+        {/* The invoices billed from that sales order (migration 461). */}
+        {editingId && estimates.find(e => e.id === editingId)?.netsuite_so_id && (
+          <EstimateInvoices estimateId={editingId} soId={String(estimates.find(e => e.id === editingId)!.netsuite_so_id)} />
+        )}
 
         {/* Fleet order (migration 410): the other vehicles' estimates and
             "Copy for more vehicles". One estimate per vehicle, one graphics
