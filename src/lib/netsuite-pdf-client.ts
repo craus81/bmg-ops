@@ -11,7 +11,7 @@ import { openPdfBytes } from './native-files';
  * (Invoice_INV1532.pdf) so Save keeps it in the app and on a computer.
  */
 export async function openNetSuitePdf(
-  type: 'invoice' | 'salesOrder' | 'estimate',
+  type: 'invoice' | 'salesOrder' | 'estimate' | 'creditMemo',
   id: string,
 ): Promise<{ ok: boolean; error?: string }> {
   return openResolved(type, async () => id);
@@ -37,7 +37,7 @@ export async function openNetSuiteInvoicePdfByNumber(
 }
 
 async function openResolved(
-  type: 'invoice' | 'salesOrder' | 'estimate',
+  type: 'invoice' | 'salesOrder' | 'estimate' | 'creditMemo',
   resolveId: () => Promise<string>,
 ): Promise<{ ok: boolean; error?: string }> {
   // Open the tab first, inside the click, then fill it — any await before

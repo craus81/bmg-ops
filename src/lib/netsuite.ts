@@ -3629,6 +3629,172 @@ export async function updateInvoiceLocation(
 }
 
 /**
+ * An invoice record read live, item sublist included — the credit memo
+ * screen (src/lib/credit-memo.ts parses it). Live because the mirror can be
+ * two hours old and a credit must be worked out against what NetSuite has
+ * now: its lines, its tax and what's still owed.
+ */
+export async function getInvoiceRecord(
+  invoiceId: string | number,
+): Promise<{ success: true; record: any } | { success: false; error: string; notFound?: boolean }> {
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/invoice/${invoiceId}?expandSubResources=true`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'GET' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}`, ...(response.status === 404 ? { notFound: true } : {}) };
+    }
+    const text = await response.text();
+    return { success: true, record: text ? JSON.parse(text) : {} };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Make a credit memo from an invoice — NetSuite's "Credit" on the invoice —
+ * with the lines FleetSuite worked out (src/lib/credit-memo.ts,
+ * netsuiteCreditLines). The documented transform endpoint takes the invoice
+ * in the URL path, so the credit memo is for the invoice's customer, from its
+ * location, and NetSuite applies it to the invoice while it's still owed.
+ * ?replace=item makes the item sublist exactly the lines sent, so nothing
+ * the person didn't pick is credited.
+ */
+export async function createCreditMemoFromInvoice(payload: {
+  invoiceId: string;
+  lines: Record<string, unknown>[];
+  memo: string;
+}): Promise<{ success: boolean; creditMemoId?: string; creditMemoNumber?: string; error?: string }> {
+  if (payload.lines.length === 0) return { success: false, error: 'Nothing to credit' };
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const transformUrl = `${baseUrl}/services/rest/record/v1/invoice/${payload.invoiceId}/!transform/creditMemo?replace=item`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
+
+  const body = { memo: payload.memo, item: { items: payload.lines } };
+  try {
+    const response = await fetch(transformUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create credit memo error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}` };
+    }
+
+    let creditMemoId = '';
+    const location = response.headers.get('Location');
+    if (location) creditMemoId = location.match(/\/(\d+)$/)?.[1] || '';
+
+    let creditMemoNumber = '';
+    try {
+      const result = await response.json();
+      creditMemoId = creditMemoId || result.id?.toString() || '';
+      creditMemoNumber = result.tranId || result.tranid || '';
+    } catch {
+      // 204 No Content
+    }
+
+    if (creditMemoId && !creditMemoNumber) {
+      try {
+        const lookup = await suiteqlQuery(`SELECT tranid FROM transaction WHERE id = ${creditMemoId}`);
+        creditMemoNumber = lookup?.items?.[0]?.tranid || '';
+      } catch {
+        // Non-critical
+      }
+    }
+
+    return { success: true, creditMemoId, creditMemoNumber };
+  } catch (e: any) {
+    return { success: false, error: `Failed to create the credit memo: ${e.message}` };
+  }
+}
+
+/** 'MM/DD/YYYY' (SuiteQL's way) or 'YYYY-MM-DD…' → 'YYYY-MM-DD'; null otherwise. */
+function suiteqlDay(v: unknown): string | null {
+  const s = String(v ?? '').trim();
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (us) return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`;
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null;
+}
+
+/**
+ * Credit memos NetSuite has applied to an invoice, for the credit memo screen
+ * to show before anyone credits it again: read through the transaction line
+ * links the ledger mirror reads payments through (whichever of the two link
+ * tables this account answers), then each one's number, date and total.
+ */
+export async function getInvoiceCreditMemos(
+  invoiceId: string | number,
+): Promise<{ success: true; creditMemos: { id: string; number: string; date: string | null; total: number }[] } | { success: false; error: string }> {
+  const id = String(invoiceId);
+  if (!/^\d+$/.test(id)) return { success: false, error: 'Bad invoice id' };
+  let links: any[] | null = null;
+  let lastError = '';
+  for (const table of ['nexttransactionlinelink', 'previoustransactionlinelink']) {
+    try {
+      links = await suiteqlQueryAll(`SELECT DISTINCT nextdoc FROM ${table} WHERE previousdoc = ${id}`, 1000);
+      break;
+    } catch (e: any) {
+      lastError = e?.message || String(e);
+    }
+  }
+  if (links === null) return { success: false, error: lastError || 'NetSuite refused the link tables' };
+
+  const next = [...new Set(links.map((l) => String(l.nextdoc ?? '')).filter((v) => /^\d+$/.test(v)))];
+  if (next.length === 0) return { success: true, creditMemos: [] };
+  try {
+    const rows = await suiteqlQueryAll(
+      `SELECT t.id, t.tranid, t.trandate, t.foreigntotal FROM transaction t WHERE t.type = 'CustCred' AND t.id IN (${next.slice(0, 200).join(', ')}) ORDER BY t.id`,
+      1000,
+    );
+    return {
+      success: true,
+      creditMemos: rows.map((r: any) => ({
+        id: String(r.id),
+        number: String(r.tranid || r.id),
+        date: suiteqlDay(r.trandate),
+        total: Math.abs(parseFloat(String(r.foreigntotal ?? '0')) || 0),
+      })),
+    };
+  } catch (e: any) {
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
+/**
  * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
  *
  * The SO carries the VIN only when it was created from an estimate that

@@ -209,6 +209,8 @@ export default function BooksAccountsPage() {
             <Link href="/admin/books/own-adjustments" style={{ color: 'var(--text-secondary)' }}>Own adjustments</Link>
             {' · '}
             <Link href="/admin/books/mistake-checks" style={{ color: 'var(--text-secondary)' }}>Mistake checks</Link>
+            {' · '}
+            <Link href="/admin/books/switches" style={{ color: 'var(--text-secondary)' }}>Switches</Link>
           </div>
         </div>
         <button

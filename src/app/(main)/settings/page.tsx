@@ -181,6 +181,17 @@ export default function SettingsPage() {
   const [discountBusy, setDiscountBusy] = useState(false);
   const [discountSaved, setDiscountSaved] = useState(false);
   const [discountError, setDiscountError] = useState('');
+  // The item a credit memo credits money on when no part comes back (migration 466).
+  const [creditItem, setCreditItem] = useState<{
+    configured_item_id: string | null;
+    configured_item_number: string | null;
+    candidates: { id: string; itemNumber: string; itemType: string | null }[];
+    error?: string;
+  } | null>(null);
+  const [creditItemInput, setCreditItemInput] = useState('');
+  const [creditBusy, setCreditBusy] = useState(false);
+  const [creditSaved, setCreditSaved] = useState(false);
+  const [creditError, setCreditError] = useState('');
   // Discounts above this percent of the job need an admin (migration 365).
   const [approvalPctInput, setApprovalPctInput] = useState('');
   const [approvalPctSaved, setApprovalPctSaved] = useState(false);
@@ -223,6 +234,8 @@ export default function SettingsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- load once, when the Company section becomes visible
   useEffect(() => { if (isSuperAdmin) loadLaborItem(); }, [isSuperAdmin]);
   useEffect(() => { if (isSuperAdmin) loadDiscountItem(); }, [isSuperAdmin]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- load once, when the Company section becomes visible
+  useEffect(() => { if (isSuperAdmin) loadCreditItem(); }, [isSuperAdmin]);
 
   // Blended shop labor cost rate (R3-21, migration 269) — super-admin write,
   // same posture as the tax rate and labor item above.
@@ -552,6 +565,44 @@ export default function SettingsPage() {
     // Re-read so the panel shows what the push will actually use, not what
     // was typed.
     await loadDiscountItem();
+  };
+
+  const loadCreditItem = async () => {
+    setCreditBusy(true);
+    setCreditError('');
+    try {
+      const res = await apiFetch('/api/admin/credit-item');
+      const data = await res.json();
+      if (!res.ok) { setCreditError(data?.error || 'Could not read the credit item.'); return; }
+      setCreditItem(data);
+      setCreditItemInput(data.configured_item_number || '');
+    } catch (e: any) {
+      setCreditError(e?.message || 'Could not read the credit item.');
+    } finally {
+      setCreditBusy(false);
+    }
+  };
+
+  const handleSaveCreditItem = async () => {
+    setCreditBusy(true);
+    setCreditError('');
+    try {
+      const res = await apiFetch('/api/admin/credit-item', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ item_number: creditItemInput.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setCreditError(data?.error || 'Could not save the credit item.'); return; }
+      setCreditSaved(true);
+      setTimeout(() => setCreditSaved(false), 2500);
+    } catch (e: any) {
+      setCreditError(e?.message || 'Could not save the credit item.');
+      return;
+    } finally {
+      setCreditBusy(false);
+    }
+    await loadCreditItem();
   };
 
   const handleSaveApprovalPct = async () => {
@@ -1149,6 +1200,83 @@ export default function SettingsPage() {
             </div>
             {discountError && (
               <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{discountError}</div>
+            )}
+          </div>
+
+          <div style={sectionStyle}>
+            <div style={{ fontSize: '14px', fontWeight: 800, color: 'var(--text-body)', marginBottom: '4px' }}>NetSuite Credit Item</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-label)', marginBottom: '10px' }}>
+              A credit memo made in FleetSuite puts a stock part back on the shelf when it credits the part
+              itself. When no part comes back (a price fix, goodwill, or a part credited with Back to stock
+              off) the money goes on this item instead. Pick a Non-inventory, Other charge or Service item
+              whose income account is where those credits belong. Credit memos are switched off until
+              January 1, 2027 (Books → Switches).
+            </div>
+
+            <div style={{ fontSize: '11px', marginBottom: '10px', color: 'var(--text-label)' }}>
+              {creditBusy && !creditItem ? 'Checking NetSuite…' : creditItem?.configured_item_number ? (
+                <>Credits with no part coming back go on{' '}
+                  <b style={{ color: 'var(--text-body)' }}>{creditItem.configured_item_number}</b>.
+                </>
+              ) : creditItem ? (
+                <b style={{ color: '#ef4444' }}>
+                  No credit item picked yet. Credit memos can only credit parts back to stock until one is.
+                </b>
+              ) : 'Not checked yet.'}
+            </div>
+
+            <div style={labelStyle}>NetSuite item name</div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                value={creditItemInput}
+                onChange={e => setCreditItemInput(e.target.value)}
+                placeholder="Exact item name"
+                style={{ ...inputStyle, width: '240px' }}
+              />
+              <button
+                onClick={handleSaveCreditItem}
+                disabled={creditBusy}
+                style={{
+                  padding: '8px 16px', borderRadius: '8px', border: 'none',
+                  background: '#22c55e', color: '#fff',
+                  fontSize: '12px', fontWeight: 800,
+                  cursor: creditBusy ? 'default' : 'pointer', opacity: creditBusy ? 0.5 : 1,
+                }}
+              >
+                {creditBusy ? 'Working...' : creditSaved ? 'Saved!' : 'Save Item'}
+              </button>
+              <button
+                onClick={loadCreditItem}
+                disabled={creditBusy}
+                style={{
+                  padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border-color)',
+                  background: 'transparent', color: 'var(--text-body)',
+                  fontSize: '12px', fontWeight: 700, cursor: creditBusy ? 'default' : 'pointer',
+                }}
+              >
+                Re-check
+              </button>
+            </div>
+            {(creditItem?.candidates?.length || 0) > 0 && (
+              <div style={{ fontSize: '10px', color: 'var(--text-label)', marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <span>Items in NetSuite that look right:</span>
+                {creditItem!.candidates.slice(0, 6).map(c => (
+                  <button
+                    key={c.id}
+                    onClick={() => setCreditItemInput(c.itemNumber)}
+                    style={{
+                      padding: '2px 8px', borderRadius: '6px', border: '1px solid var(--border-color)',
+                      background: 'transparent', color: 'var(--text-body)', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+                    }}
+                  >{c.itemNumber}</button>
+                ))}
+              </div>
+            )}
+            {creditItem?.error && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>Couldn&apos;t look for items in NetSuite: {creditItem.error}</div>
+            )}
+            {creditError && (
+              <div style={{ fontSize: '11px', color: '#ef4444', marginTop: '6px' }}>{creditError}</div>
             )}
           </div>
 
