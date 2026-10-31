@@ -118,7 +118,7 @@ export default function TopSaveBar({
             border: '1px solid var(--border)', color: 'var(--text-body, var(--text-secondary))',
             fontWeight: 700, fontSize: '13px', cursor: 'pointer',
             // One line on a computer; two short lines on a phone (min-width wins).
-            maxWidth: 'min(170px, 30vw)', minWidth: 'min-content', lineHeight: 1.15, textAlign: 'center',
+            maxWidth: 'min(170px, calc(30vw / var(--ts, 1)))', minWidth: 'min-content', lineHeight: 1.15, textAlign: 'center',
           }}
         >
           {twoLineLabel(cancelLabel)}
