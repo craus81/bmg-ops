@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   const params = new URL(req.url).searchParams;
   const service = createServiceClient();
   const [companies, chart, posting, copy, check] = await Promise.all([
-    service.from('gl_companies').select('code, name, netsuite_subsidiary_id').order('code'),
+    service.from('gl_companies').select('id, code, name, netsuite_subsidiary_id').order('code'),
     fetchAllRows<DiffChartAccount>((from, to) => service
       .from('gl_accounts')
       .select('id, netsuite_account_id, number, name')
@@ -90,6 +90,11 @@ export async function GET(req: NextRequest) {
     docs = { counts: (res.data as any)?.counts ?? {}, documents: (res.data as any)?.documents ?? [] };
   }
 
+  // Whether the month is closed in FleetSuite's books (Books → Months): what NetSuite changes in it waits until it's reopened.
+  const companyId = (companies.data || []).find((c) => c.code === company)?.id;
+  const period = await service.from('gl_periods').select('status').eq('company_id', companyId).eq('period_start', month).maybeSingle();
+  if (period.error) return NextResponse.json({ error: period.error.message }, { status: 500 });
+
   const name = accountNamer(chart.data);
   const cmp = compareMonth(index.get(month), month, posted);
   const run = (posting.data?.last_result ?? null) as InvoicePostingResult | null;
@@ -102,6 +107,7 @@ export async function GET(req: NextRequest) {
     month,
     months: monthStatuses(index, posted, through),
     status: cmp.status,
+    closed: period.data?.status === 'closed',
     differing: cmp.differing,
     covered: cmp.covered,
     posts: posted.size > 0,

@@ -76,8 +76,11 @@ invoices fixed in FleetSuite after they're made and the fix sent on to
 NetSuite, with Books' own copy following, built switched off, part 40,
 bills fixed the same way, built switched off, part 41, customers' and
 vendors' details changed in FleetSuite and sent on to NetSuite, built
-switched off, and part 42, the entry that opens the books at NetSuite's
-balances, what still differs on the day, with a rehearsal of going live.
+switched off, part 42, the entry that opens the books at NetSuite's
+balances, what still differs on the day, with a rehearsal of going live,
+part 43, the tap that sets the books live, with the opening entry the
+posting run then posts, and part 44, closing each month in FleetSuite's
+books once it's over, in order, and reopening one for a reason.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -97,7 +100,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, and going live at `/admin/books/going-live`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, and the months at `/admin/books/months`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
 super admins can open it while credit memos are switched off. The vendor
@@ -4254,12 +4257,47 @@ const posted = await postEntry(createServiceClient(), {
 
 ## Closing a month
 
+`/admin/books/months` (Books → Months, part 44) closes a company's months
+in FleetSuite's books once each is over, and reopens one for a reason
+(`src/lib/books/months.ts`, `GET` and `POST /api/admin/books/months`). It
+lists the months from the one the books went live in through this one,
+newest first: whether each is closed and by whom, how it compares with
+NetSuite as Differences vs NetSuite compares it (`comparedMonths`), and
+every close and reopen with its reason (`gl_period_events`, migration 359).
+
+The rules (`closeRefusal` and `reopenRefusal`):
+
+- Nothing closes before the books are live, nor any month before the one
+  they went live in: nothing posts to those but the opening entry.
+- A month closes once its last day is over in Central time, and months
+  close in order, so the first one open is the one to close.
+- Closing a month that doesn't match NetSuite, or where NetSuite has
+  documents of kinds FleetSuite doesn't post yet, needs a reason. One that
+  matches doesn't.
+- Only the latest month closed reopens, and only for a reason.
+
+Both are audited (`close_month`, `reopen_month`), and the journal keeps
+who, when and why.
+
 ```ts
 await setPeriodStatus(client, { company: 'BMG', month: '2027-01', status: 'closed', actor });
 await setPeriodStatus(client, { company: 'BMG', month: '2027-01', status: 'open', actor, reason: 'Missed a vendor bill' });
 ```
 
-A month opens the first time anything posts to it.
+A month opens the first time anything posts to it. A closed one takes
+nothing new: the database refuses any entry dated in it. So the posting
+run leaves a closed month as it stands. A document NetSuite changes, voids
+or deletes there, one it books into or out of it, and a second entry
+standing there all wait, counted on the run's record (`waiting`) with a
+note for each month, and the first run after the month is reopened posts
+them. The daily check still compares a closed month with NetSuite, and
+when one stops matching, its notification says NetSuite's change waits
+until the month is reopened. Differences vs NetSuite says so on a closed
+month too.
+
+Closing a month here doesn't close it in NetSuite, nor does NetSuite's
+close reach FleetSuite: through 2027 NetSuite's months close there as
+before.
 
 ## Going live
 

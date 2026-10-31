@@ -21,6 +21,7 @@ import { checkOwnBills, type BillCopiesThrough, type BillPairsData, type OwnBill
 import { checkOwnReceipts, type OwnReceiptCheck, type ReceiptCopiesThrough, type ReceiptPairsData } from './own-receipt-check';
 import { checkOwnAdjustments, INVENTORY_ADJUST_ACCOUNT, type AdjustPairsData, type OwnAdjustmentCheck } from './own-adjustment-check';
 import { MISTAKE_KINDS, type MistakeKind } from './mistake-checks';
+import { readClosedMonths } from './months';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -327,17 +328,29 @@ function whatDiffers(n: MonthNews, facts: MonthFacts | undefined): string {
 /**
  * What the super admins are told about one company's months: a notification a month, or one for them all, linking to
  * the first, when there are more than ONE_BY_ONE. `hint` says when the last posting run or copy of NetSuite's ledger
- * failed, which can be why.
+ * failed, which can be why; of a month closed in FleetSuite's books (`closed`), it says NetSuite's change waits for it
+ * to be reopened (src/lib/books/months.ts).
  */
-export function alertsFor(company: BooksCompany, news: MonthNews[], facts: Map<string, MonthFacts>, hint = ''): CheckAlert[] {
+export function alertsFor(
+  company: BooksCompany,
+  news: MonthNews[],
+  facts: Map<string, MonthFacts>,
+  hint = '',
+  closed: ReadonlySet<string> = new Set(),
+): CheckAlert[] {
   if (!news.length) return [];
   const books = `${company}'s books`;
   const why = `Differences vs NetSuite shows why.${hint ? ` ${hint}` : ''}`;
   if (news.length > ONE_BY_ONE) {
     const months = news.slice(0, ONE_BY_ONE).map((n) => monthText(n.month));
+    const shut = news.filter((n) => closed.has(n.month)).length;
+    const waits = shut
+      ? ` ${plural(shut, 'of them is', 'of them are')} closed in FleetSuite's books, so what NetSuite changed there waits until `
+        + `${shut === 1 ? "it's" : "they're"} reopened on Books → Months.`
+      : '';
     return [{
       title: `${books}: ${news.length} months differ from NetSuite now`,
-      body: `${listed([...months, `${news.length - ONE_BY_ONE} more`])}. ${why}`,
+      body: `${listed([...months, `${news.length - ONE_BY_ONE} more`])}.${waits} ${why}`,
       url: deepLinks.booksDifferences(company, news[0].month),
     }];
   }
@@ -345,7 +358,9 @@ export function alertsFor(company: BooksCompany, news: MonthNews[], facts: Map<s
     title: n.before === null
       ? `${books}: ${monthText(n.month)} no longer matches NetSuite`
       : `${books}: more of ${monthText(n.month)} differs from NetSuite`,
-    body: `${whatDiffers(n, facts.get(n.month))} ${why}`,
+    body: `${whatDiffers(n, facts.get(n.month))}${closed.has(n.month)
+      ? ` ${monthText(n.month)} is closed in FleetSuite's books, so NetSuite's change waits until it's reopened on Books → Months.`
+      : ''} ${why}`,
     url: deepLinks.booksDifferences(company, n.month),
   }));
 }
@@ -918,15 +933,20 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
   const errors: string[] = [];
   let told = 0;
   // The day each company's books went live, for those that have.
-  const live = await service.from('gl_companies').select('code, books_live_from');
-  const liveFrom = new Map(((live.data ?? []) as Array<{ code: string; books_live_from: string | null }>).map((c) => [c.code, c.books_live_from]));
+  const live = await service.from('gl_companies').select('id, code, books_live_from');
+  const companyRows = (live.data ?? []) as Array<{ id: string; code: string; books_live_from: string | null }>;
+  const liveFrom = new Map(companyRows.map((c) => [c.code, c.books_live_from]));
+  // The months closed in FleetSuite's books, of which a notification says NetSuite's change waits; without them it doesn't say.
+  const closed = live.error
+    ? new Map<BooksCompany, Set<string>>()
+    : await readClosedMonths(service, new Map(companyRows.map((c) => [c.id, c.code]))).catch(() => new Map<BooksCompany, Set<string>>());
   for (const company of POSTING_COMPANIES) {
     try {
       if (live.error) throw new Error(`couldn't read the companies (${live.error.message})`);
       const { now, facts } = await lookAt(service, company, liveFrom.get(company) ?? null);
       const { check, news } = nextCheck(held.companies[company], now, opts.look);
       companies[company] = check;
-      alerts.push(...alertsFor(company, news, facts, hint));
+      alerts.push(...alertsFor(company, news, facts, hint, closed.get(company)));
       told += news.length;
     } catch (err) {
       errors.push(`${company}: ${reason(err)}`);

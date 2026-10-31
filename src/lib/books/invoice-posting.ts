@@ -44,6 +44,7 @@ import { BOOKS_STOCK_SYNC } from './netsuite-stock';
 import { BOOKS_BILLS_SYNC } from './netsuite-bills';
 import { postOpeningEntries } from './going-live';
 import { centralDate } from './mistake-checks';
+import { readClosedMonths } from './months';
 
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
@@ -1253,6 +1254,8 @@ export interface InvoicePostingResult {
   opened?: number;
   /** Documents the rule can't work out yet, or whose copy was mid-refresh, of every kind the run posts: whatever stands for them stayed. */
   left?: number;
+  /** Writes waiting for a month closed in FleetSuite's books to be reopened (src/lib/books/months.ts); only then is it counted. */
+  waiting?: number;
   /** Writes the journal refused or that failed, a few of them with why. */
   failedCount?: number;
   failed?: Array<{ number: string; reason: string }>;
@@ -1399,6 +1402,18 @@ export async function postInvoices(
     const liveOf = new Map(companyRows.flatMap((c): Array<[BooksCompany, string]> => (
       c.books_live_from && (postingCompanies as readonly string[]).includes(c.code) ? [[c.code as BooksCompany, c.books_live_from]] : [])));
 
+    // The months closed in FleetSuite's books (Books → Months) take nothing new: what would write to one waits until it's reopened.
+    const closedOf = await readClosedMonths(service, codeOf).catch((err) => { throw readFailed('the closed months', err); });
+    const waiting = new Map<string, { company: BooksCompany; month: string; writes: number }>();
+    /** Counts a write that would reverse an entry dated `date` or post one then, when its month is closed: true when it waits. */
+    const hold = (company: BooksCompany, date: string | null | undefined) => {
+      const month = monthOfDate(date ?? null);
+      if (!month || !closedOf.get(company)?.has(month)) return false;
+      const key = `${company}|${month}`;
+      waiting.set(key, { company, month, writes: (waiting.get(key)?.writes ?? 0) + 1 });
+      return true;
+    };
+
     const accountIds = new Map<string, string>();
     for (const a of chart.data) if (a.netsuite_account_id) accountIds.set(a.netsuite_account_id, a.id);
     const chartAccounts: ChartAccount[] = chart.data.map(({ id: _id, company_id, ...a }) => ({
@@ -1493,15 +1508,16 @@ export async function postInvoices(
       for (const { posting: p, copy } of held) {
         const number = copy?.number || `NetSuite ${p.source_id}`;
         const shown = named(company, number);
-        const dates = live ? standingDates(p) : [];
+        const dates = live || closedOf.has(company) ? standingDates(p) : [];
         p.unreversed.slice(1).forEach((extra, i) => {
           if (live && !(dates[i + 1] >= live)) return;
+          if (hold(company, dates[i + 1])) return;
           tasks.push(() => reverse(shown, extra, `${number} had another entry standing`));
         });
         // An invoice's or credit memo's cost lines go when NetSuite books no cost on it, whether or not it has it still.
         const deleted = p.source_type === STOCK_SOURCE_TYPE.CustInvc ? 'no longer books a cost' : 'deleted';
         const gone = copy?.deleted ? deleted : copy?.voided ? 'voided' : null;
-        if (p.current && gone && !(live && p.current.entry_date < live)) {
+        if (p.current && gone && !(live && p.current.entry_date < live) && !hold(company, p.current.entry_date)) {
           const entryId = p.current.id;
           tasks.push(() => reverse(shown, entryId, `${number} ${gone} in NetSuite`));
         }
@@ -1557,6 +1573,8 @@ export async function postInvoices(
         result.left! += 1;
         return;
       }
+      // Reversing the entry that stands, or posting one, in a closed month waits for it to be reopened.
+      if (d.kind !== 'post' && current && hold(company, current.entry_date)) return;
       if (d.kind === 'reverse') {
         const memo = `${number} ${d.why === 'voided' ? 'voided' : 'comes to nothing'} in NetSuite`;
         tasks.push(() => reverse(shown, current!.id, memo));
@@ -1569,6 +1587,7 @@ export async function postInvoices(
         return;
       }
       const entry = built.entry;
+      if (hold(company, entry.entryDate)) return;
       tasks.push(async () => {
         if (timeLeft() < WRITE_MIN_LEFT_MS) {
           result.partial = true;
@@ -1909,6 +1928,14 @@ export async function postInvoices(
         + `lines for the company don't balance on their own, so whatever FleetSuite holds for ${one ? 'it' : 'them'} stayed as it is: ${listed(unbalancedStock)}. `
         + `The Stock and cost switch on Invoices vs NetSuite shows ${one ? 'its' : 'their'} lines.`);
     }
+    // Company by company as the run goes, each one's months in order.
+    const waited = [...waiting.values()]
+      .sort((a, b) => postingCompanies.indexOf(a.company) - postingCompanies.indexOf(b.company) || a.month.localeCompare(b.month));
+    for (const { company, month, writes } of waited) {
+      notes.push(`${company}'s ${monthLabel(month)} is closed in FleetSuite's books, so ${plural(writes, 'change', 'changes')} to it `
+        + `${writes === 1 ? 'waits' : 'wait'} until it's reopened on Books → Months.`);
+    }
+    if (waited.length) result.waiting = waited.reduce((n, w) => n + w.writes, 0);
     if (missingAccounts.size) {
       notes.push(`NetSuite account${missingAccounts.size === 1 ? '' : 's'} ${listed([...missingAccounts])} ${missingAccounts.size === 1 ? "isn't" : "aren't"} `
         + 'in the chart of accounts yet, so invoices, credit memos, payments, deposits, bills, bill payments, checks, card charges, journal entries, '

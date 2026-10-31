@@ -565,6 +565,16 @@ describe('the posting job against the real functions', () => {
         const dated = (cols: string) => cols.replace(/\bbooks_live_from\b/, "to_char(books_live_from, 'YYYY-MM-DD') AS books_live_from");
         return { select: async (cols: string) => ({ data: (await pg.query(`SELECT ${dated(cols)} FROM gl_companies ORDER BY code`)).rows, error: null }) };
       }
+      if (table === 'gl_periods') {
+        // The months closed in FleetSuite's books, read as src/lib/books/months.ts reads them.
+        return { select: () => ({ eq: (col: string, value: string) => ({ order: () => ({ range: async (from: number, to: number) => (failing.get('gl_periods')?.({})
+          ? { data: null, error: { message: 'gl_periods failed' } }
+          : {
+            data: (await pg.query(`SELECT id, company_id, to_char(period_start, 'YYYY-MM-DD') AS period_start FROM gl_periods
+              WHERE ${col} = $1 ORDER BY id LIMIT ${to - from + 1} OFFSET ${from}`, [value])).rows,
+            error: null,
+          }) }) }) }) };
+      }
       throw new Error(`unexpected table ${table}`);
     },
     rpc: async (fn: string, args: Record<string, unknown> = {}) => {
@@ -1095,6 +1105,92 @@ describe('the posting job against the real functions', () => {
   });
 
   // Last: a company's books can't stop being live (migration 359), and the journal can't be emptied once they are.
+  // Before going live, which can't be undone: a month closed on Books → Months (src/lib/books/months.ts).
+  describe("a month closed in FleetSuite's books", () => {
+    // Made-up: January and February 2025 closed once the first run had posted their invoices, a second entry standing for
+    // INV202 in March.
+    const status = (month: string, to: 'open' | 'closed', reason: string | null = null) =>
+      pg.query("SELECT gl_set_period_status('BMG', $1::date, $2, NULL, 'Craig', $3)", [month, to, reason]);
+    const waits = (month: string, changes: number) => `BMG's ${month} is closed in FleetSuite's books, so `
+      + `${changes === 1 ? '1 change to it waits' : `${changes} changes to it wait`} until it's reopened on Books → Months.`;
+    const midRefresh = expect.stringContaining('INV208');
+
+    beforeAll(async () => {
+      await startOver();
+      expect(await run()).toMatchObject({ posted: 3, failedCount: 0 });
+      await pg.query('SELECT gl_post_entry($1::jsonb)', [JSON.stringify({
+        company: 'BMG', entry_date: '2025-03-01', source_type: 'invoice', source_id: '202', posting_rule: 'invoice@1', idempotency_key: 'invoice:202:x',
+        lines: [{ account_id: ACCOUNT[120], debit: '1.00' }, { account_id: ACCOUNT[400], credit: '1.00' }],
+      })]);
+      await status(JAN, 'closed');
+      await status(FEB, 'closed');
+    });
+
+    it('leaves what stands in it when NetSuite changes a document there or moves one out, or a second entry stands, and says the change waits', async () => {
+      const before = await journal();
+      // NetSuite moves INV201 into March, and changes INV202, whose second entry stands in March.
+      await edit('201', (inv) => { inv.booked = MAR; });
+      await edit('202', (inv) => { inv.lines = [{ ...inv.lines[0], amount: '90.00' }]; });
+      const r = await run();
+      expect(r).toMatchObject({ posted: 0, replaced: 0, reversed: 0, unchanged: 1, left: 3, waiting: 3, failedCount: 0 });
+      expect(r.failed).toBeUndefined();
+      // Month by month, though INV202's second entry was the first change to wait.
+      expect(r.notes).toEqual([midRefresh, waits('Jan 2025', 1), waits('Feb 2025', 2)]);
+      expect(await journal()).toEqual(before);
+      expect(record().last_result).toMatchObject({ waiting: 3 });
+      expect(JSON.stringify(record().last_result)).not.toMatch(/\d\.\d|\$/);
+    });
+
+    it('reverses nothing in it, posts nothing new into it, and moves no entry into it', async () => {
+      const before = await journal();
+      // NetSuite deletes INV201; INV206's lines are copied now, and NetSuite books it into February; INV204 it moves there from March.
+      await edit('201', (inv) => { inv.deleted = true; });
+      await edit('206', (inv) => { inv.booked = FEB; });
+      await edit('204', (inv) => { inv.booked = FEB; });
+      const r = await run();
+      expect(r).toMatchObject({ posted: 0, replaced: 0, reversed: 0, unchanged: 0, left: 2, waiting: 5, failedCount: 0 });
+      expect(r.notes).toEqual([midRefresh, waits('Jan 2025', 1), waits('Feb 2025', 4)]);
+      expect(await journal()).toEqual(before);
+    });
+
+    it('posts what waited once the month is reopened, and moves no entry out of one still closed', async () => {
+      const before = (await journal()).length;
+      await status(FEB, 'open', 'A late change');
+      // INV202 back into January, which is still closed: its February entry stays.
+      await edit('202', (inv) => { inv.booked = JAN; });
+      let r = await run();
+      expect(r).toMatchObject({ posted: 1, replaced: 1, reversed: 1, waiting: 2, failedCount: 0 });
+      expect(r.notes).toEqual([midRefresh, waits('Jan 2025', 2)]);
+      expect((await journal()).slice(before)).toEqual([
+        { no: before + 1, date: '2025-02-05', key: null, reverses: 2, memo: 'INV202 had another entry standing' },
+        { no: before + 2, date: '2025-03-03', key: null, reverses: 3, memo: 'INV204 changed in NetSuite' },
+        { no: before + 3, date: '2025-02-28', key: 'invoice:204:2', reverses: null, memo: 'INV204, A Customer' },
+        { no: before + 4, date: '2025-02-28', key: 'invoice:206:1', reverses: null, memo: 'INV206, A Customer' },
+      ]);
+
+      await status(JAN, 'open', 'A late change');
+      r = await run();
+      expect(r).toMatchObject({ posted: 0, replaced: 1, reversed: 1, failedCount: 0 });
+      expect(r.waiting).toBeUndefined();
+      expect(r.notes).toEqual([midRefresh]);
+      expect((await journal()).slice(before + 4)).toEqual([
+        { no: before + 5, date: '2025-01-10', key: null, reverses: 1, memo: 'INV201 deleted in NetSuite' },
+        { no: before + 6, date: '2025-03-01', key: null, reverses: 4, memo: 'INV202 changed in NetSuite' },
+        { no: before + 7, date: '2025-01-31', key: 'invoice:202:3', reverses: null, memo: 'INV202, A Customer' },
+      ]);
+      expect((await run()).waiting).toBeUndefined();
+    });
+
+    it("stops, saying so, when it can't read which months are closed", async () => {
+      const before = await journal();
+      failing.set('gl_periods', () => true);
+      const r = await run();
+      failing.clear();
+      expect(r.error).toBe('Reading the closed months: gl_periods failed');
+      expect(await journal()).toEqual(before);
+    });
+  });
+
   describe("once BMG's books are live", () => {
     // Made-up: BMG's books went live on March 1, 2025, after its January and February invoices posted.
     const LIVE_FROM = MAR;
