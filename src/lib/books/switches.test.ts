@@ -34,11 +34,13 @@ const ON: Row = { piece: 'credit_memos', is_on: true, changed_by: 'p1', changed_
 
 describe('switches', () => {
   it('names each piece, where people find it, and only those', () => {
-    expect(SWITCH_PIECES).toEqual(['credit_memos', 'vendor_credits']);
+    expect(SWITCH_PIECES).toEqual(['credit_memos', 'vendor_credits', 'card_charges']);
     expect(SWITCHES.credit_memos.where).toBe('Invoicing → Invoiced → Credit on an invoice');
     expect(SWITCHES.vendor_credits.where).toBe('More → Purchasing → Vendor Credits');
+    expect(SWITCHES.card_charges.where).toBe('More → Money & Books → Card Charges');
     expect(isSwitchPiece('credit_memos')).toBe(true);
     expect(isSwitchPiece('vendor_credits')).toBe(true);
+    expect(isSwitchPiece('card_charges')).toBe(true);
     expect(isSwitchPiece('payroll')).toBe(false);
     expect(isSwitchPiece('toString')).toBe(false);
     expect(isSwitchPiece(null)).toBe(false);
@@ -48,10 +50,12 @@ describe('switches', () => {
     expect(await readSwitches(fakeService({ rows: [ON] }).service)).toEqual([
       { piece: 'credit_memos', on: true, changedBy: 'p1', changedAt: '2026-12-31T15:00:00Z' },
       { piece: 'vendor_credits', on: false, changedBy: null, changedAt: null },
+      { piece: 'card_charges', on: false, changedBy: null, changedAt: null },
     ]);
     expect(await readSwitches(fakeService().service)).toEqual([
       { piece: 'credit_memos', on: false, changedBy: null, changedAt: null },
       { piece: 'vendor_credits', on: false, changedBy: null, changedAt: null },
+      { piece: 'card_charges', on: false, changedBy: null, changedAt: null },
     ]);
     await expect(readSwitches(fakeService({ error: 'denied' }).service)).rejects.toThrow('denied');
   });

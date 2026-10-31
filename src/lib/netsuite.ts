@@ -3959,6 +3959,115 @@ export async function createVendorCredit(p: VendorCreditPayload): Promise<{ succ
 }
 
 /**
+ * The journal entry NetSuite has under FleetSuite's own name for it (its
+ * External ID), or null when it has none, so a send tried again never makes
+ * a second one. Throws when NetSuite can't be asked, so the caller fails
+ * closed (as findVendorCredit).
+ */
+export async function findJournalEntry(externalId: string): Promise<{ journalId: string; number: string } | null> {
+  const ref = externalId.trim();
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(ref)) throw new Error(`"${ref}" isn't an external id FleetSuite makes`);
+  const result = await suiteqlQuery(`
+    SELECT id, tranid
+    FROM transaction
+    WHERE type = 'Journal' AND externalid = '${ref}'
+    ORDER BY id
+    FETCH FIRST 1 ROWS ONLY
+  `);
+  const row = result?.items?.[0];
+  return row ? { journalId: row.id?.toString() ?? '', number: row.tranid ?? '' } : null;
+}
+
+/** What createJournalEntry sends: src/lib/card-charges.ts's netsuiteJournalEntry. */
+export interface JournalEntryPayload {
+  subsidiaryId: string;
+  /** 'YYYY-MM-DD'. */
+  tranDate: string;
+  memo: string;
+  /** FleetSuite's own name for it: NetSuite never takes two records of a kind under one. */
+  externalId: string;
+  /** Each line a debit or a credit, never both. */
+  lines: { accountId: string; debit?: number; credit?: number; memo?: string }[];
+}
+
+/**
+ * Make a journal entry in NetSuite: POST /services/rest/record/v1/journalEntry,
+ * NetSuite's Make Journal Entries, with its lines on the line sublist. Refused
+ * here when its debits and credits don't match to the cent, as NetSuite would.
+ * `unsure` is set when NetSuite may have made it anyway (no answer, a server
+ * error, or no id in its answer): look for it by its External ID before
+ * trying again.
+ */
+export async function createJournalEntry(p: JournalEntryPayload): Promise<{ success: boolean; journalId?: string; error?: string; unsure?: boolean }> {
+  if (p.lines.length < 2) return { success: false, error: 'A journal entry needs two lines or more' };
+  const cents = (n: number | undefined) => Math.round((n ?? 0) * 100);
+  if (p.lines.some((l) => (cents(l.debit) > 0) === (cents(l.credit) > 0) || cents(l.debit) < 0 || cents(l.credit) < 0)) {
+    return { success: false, error: 'Each journal entry line needs a debit or a credit above $0, not both' };
+  }
+  const debits = p.lines.reduce((s, l) => s + cents(l.debit), 0);
+  const credits = p.lines.reduce((s, l) => s + cents(l.credit), 0);
+  if (debits !== credits) return { success: false, error: "The journal entry's debits and credits don't match" };
+
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/journalEntry`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    externalId: p.externalId,
+    subsidiary: { id: p.subsidiaryId },
+    tranDate: p.tranDate,
+    memo: p.memo,
+    line: {
+      items: p.lines.map((l) => ({
+        account: { id: l.accountId },
+        ...(cents(l.debit) > 0 ? { debit: l.debit } : { credit: l.credit }),
+        ...(l.memo ? { memo: l.memo } : {}),
+      })),
+    },
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create journal entry error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      // A 4xx is NetSuite refusing it; after a server error it may have made it anyway.
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}`, ...(response.status >= 500 ? { unsure: true } : {}) };
+    }
+
+    let journalId = response.headers.get('Location')?.match(/\/(\d+)$/)?.[1] || '';
+    if (!journalId) {
+      try {
+        const result = await response.json();
+        journalId = result.id?.toString() || '';
+      } catch {
+        // 204 No Content
+      }
+    }
+    if (!journalId) return { success: false, error: "NetSuite said it made the journal entry but didn't say its id.", unsure: true };
+    return { success: true, journalId };
+  } catch (e: any) {
+    return { success: false, error: `NetSuite didn't answer (${e.message}).`, unsure: true };
+  }
+}
+
+/**
  * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
  *
  * The SO carries the VIN only when it was created from an estimate that

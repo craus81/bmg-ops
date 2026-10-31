@@ -582,6 +582,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/purchasing/demand/dismiss/route.ts': feature('parts_ordering'),
   // Vendor credits (migration 467): admins with Parts Ordering once switched on; until then super admins can look and nothing is sent.
   'src/app/api/purchasing/vendor-credit/route.ts': feature('parts_ordering', "switchIsOn(service, 'vendor_credits')"),
+  'src/app/api/card-charges/route.ts': feature('vendor_payments', "switchIsOn(service, 'card_charges')"),
   'src/app/api/purchasing/sync-sales-orders/route.ts': admin(),
   'src/app/api/purchase-requests/create-po/route.ts': feature('parts_ordering', 'requireAdmin('),
   'src/app/api/purchase-requests/got-it/route.ts': feature('parts_ordering'),

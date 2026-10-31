@@ -914,8 +914,11 @@ export async function readCompanies(service: SupabaseClient): Promise<SnapCompan
   }));
 }
 
-/** Every account a bill's line can go to, each with the companies that can use it, by NetSuite's id. */
-export async function readAccounts(service: SupabaseClient, companies: SnapCompany[]): Promise<Map<string, SnapAccount>> {
+/**
+ * Every account, by NetSuite's id, each with the companies that can use it for a bill's line (or, given `types`, for
+ * those kinds of account).
+ */
+export async function readAccounts(service: SupabaseClient, companies: SnapCompany[], types: readonly string[] = BILL_LINE_ACCOUNT_TYPES): Promise<Map<string, SnapAccount>> {
   const rows = await fetchAllRows<{
     netsuite_account_id: string; number: string | null; name: string; account_type: string; company_id: string | null;
     netsuite_subsidiary_ids: string[] | null; active: boolean; is_summary: boolean;
@@ -929,7 +932,7 @@ export async function readAccounts(service: SupabaseClient, companies: SnapCompa
   const codeOf = new Map(companies.map((c) => [c.id, c.code]));
   const accounts = new Map<string, SnapAccount>();
   for (const a of rows.data) {
-    const usable = a.active && !a.is_summary && BILL_LINE_ACCOUNT_TYPES.includes(a.account_type);
+    const usable = a.active && !a.is_summary && types.includes(a.account_type);
     const companiesFor = usable
       ? companies
         .filter((c) => c.subsidiaryId

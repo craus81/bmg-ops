@@ -71,6 +71,25 @@ export default function MorePage() {
     return () => { cancelled = true; };
   }, [canOrderParts]);
 
+  // Card Charges: anyone with Payments once card charges are switched on in
+  // Books → Switches; until then super admins only.
+  const canPayments = hasFeature('vendor_payments');
+  const [canCardCharges, setCanCardCharges] = useState(false);
+  useEffect(() => {
+    if (!canPayments) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/card-charges?status=1');
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setCanCardCharges(res.ok && !!body.canUse);
+      } catch {
+        if (!cancelled) setCanCardCharges(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canPayments]);
+
   const F = hasFeature; // shorthand
   const [query, setQuery] = useState('');
 
@@ -114,6 +133,7 @@ export default function MorePage() {
     { group: 'parts', title: 'Hitch Kits', sub: 'Labor hours, brake controllers and Curt fitment for the hitch kit builder', path: '/admin/inventory/hitch-kits', show: F('parts_catalog') },
 
     { group: 'money', title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: F('vendor_payments') },
+    { group: 'money', title: 'Card Charges', sub: 'Code the Chase card’s charges · sent to NetSuite as a journal entry each month', path: deepLinks.cardCharges(), show: canCardCharges },
     { group: 'money', title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
     { group: 'money', title: 'Books', sub: 'FleetSuite’s own books · reports, accounts, trial balance & NetSuite lists', path: '/admin/books', show: hasRole('super_admin') },
     { group: 'money', title: 'Ledger', sub: 'QuickBooks history import, customer matching & NetSuite mirror', path: '/admin/ledger', show: F('ledger'), badge: badgeFor('ledger_unmatched_customers') },

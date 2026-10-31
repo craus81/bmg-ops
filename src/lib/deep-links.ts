@@ -280,6 +280,11 @@ export const deepLinks = {
    *  Ordering once vendor credits are switched on in Books → Switches; until
    *  then super admins only. */
   vendorCredit: () => '/admin/purchasing/vendor-credit',
+  /** The Chase card's charges, coded and sent to NetSuite as a journal entry
+   *  each month (src/lib/card-charges.ts), from More → Money & Books. Anyone
+   *  with Payments once card charges are switched on in Books → Switches;
+   *  until then super admins only. */
+  cardCharges: () => '/admin/card-charges',
   /** Invoices hub — opens the create-invoice dialog for a shipped graphics job.
    *  NOTE: this exact string doubles as the match key that marks the prompt
    *  read once the invoice exists (graphics-invoice-notify.ts) — change both
