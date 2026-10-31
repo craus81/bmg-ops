@@ -4,35 +4,19 @@ import { requireFeature } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { createDirectInvoice } from '@/lib/netsuite';
 import { KNOWN_LOCATION_IDS } from '@/lib/invoice-location';
-import { partNumberRegex } from '@/lib/loose-search';
+import { loadTypedItems, searchTypedItems } from '@/lib/typed-line-items';
 import { saveOwnInvoice } from '@/lib/books/own-invoices';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { logAudit } from '@/lib/audit';
 import {
-  MAX_LINES, NOT_BILLABLE_TYPES, booksLines, formatCents, netsuiteLines, workOutNewInvoice,
-  type NewInvoiceItem, type NewInvoiceLineDraft,
+  MAX_LINES, booksLines, formatCents, netsuiteLines, workOutNewInvoice,
+  type NewInvoiceLineDraft,
 } from '@/lib/new-invoice';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 const service = createServiceClient();
-
-const ITEM_COLUMNS = 'netsuite_id, item_number, display_name, description, sales_price, item_type, taxable_override';
-
-type PartRow = {
-  netsuite_id: string | number; item_number: string | null; display_name: string | null; description: string | null;
-  sales_price: number | null; item_type: string | null; taxable_override: boolean | null;
-};
-
-const toItem = (p: PartRow): NewInvoiceItem => ({
-  itemId: String(p.netsuite_id),
-  itemNumber: p.item_number || '',
-  description: p.description || p.display_name || '',
-  itemType: p.item_type ?? null,
-  price: p.sales_price != null ? Number(p.sales_price) : null,
-  taxableOverride: p.taxable_override ?? null,
-});
 
 /**
  * GET /api/invoices/new?q=… — items for a line (any active NetSuite item in the catalog, not layout lines).
@@ -49,22 +33,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ name: data?.company_name ?? null, taxExempt: !!data?.tax_exempt, taxRate: await getSalesTaxRate(service) });
   }
 
-  const q = (req.nextUrl.searchParams.get('q') || '').trim().replace(/[%,()]/g, ' ').slice(0, 60);
-  if (q.length < 2) return NextResponse.json({ items: [] });
-  const like = `%${q}%`;
-  // Part numbers also match with their dashes ignored ("ar2000" → AR-2000).
-  const re = partNumberRegex(q);
-  const { data, error } = await service
-    .from('netsuite_parts')
-    .select(ITEM_COLUMNS)
-    .eq('is_active', true)
-    .not('netsuite_id', 'is', null)
-    .or(`item_number.ilike.${like},display_name.ilike.${like},description.ilike.${like}${re ? `,item_number.imatch."${re}"` : ''}`)
-    .order('item_number')
-    .limit(30);
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  const items = ((data || []) as PartRow[]).filter(p => !NOT_BILLABLE_TYPES.has(String(p.item_type || ''))).map(toItem);
-  return NextResponse.json({ items: items.slice(0, 25) });
+  const { items, error } = await searchTypedItems(service, req.nextUrl.searchParams.get('q') || '');
+  if (error) return NextResponse.json({ error }, { status: 500 });
+  return NextResponse.json({ items });
 }
 
 const Schema = z.object({
@@ -100,11 +71,8 @@ export async function POST(req: NextRequest) {
   const vin = clean(body.vin)?.toUpperCase() ?? null;
 
   // The items as the catalog has them.
-  const ids = [...new Set(body.lines.map(l => l.itemId))];
-  const { data: parts, error: partsError } = await service.from('netsuite_parts').select(ITEM_COLUMNS).in('netsuite_id', ids);
-  if (partsError) return NextResponse.json({ error: partsError.message }, { status: 500 });
-  const byId = new Map(((parts || []) as PartRow[]).map(p => [String(p.netsuite_id), toItem(p)]));
-  const missing = ids.filter(id => !byId.has(id));
+  const { byId, missing, error: partsError } = await loadTypedItems(service, body.lines.map(l => l.itemId));
+  if (partsError) return NextResponse.json({ error: partsError }, { status: 500 });
   if (missing.length > 0) {
     return NextResponse.json({ error: `These items aren't in the parts catalog: ${missing.join(', ')}. Remove them and pick them again.` }, { status: 400 });
   }

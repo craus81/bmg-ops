@@ -1923,7 +1923,8 @@ export function nsItemLine(li: NsPushLine, opts: { pinPrice: boolean }) {
 
 export async function createSalesOrder(payload: {
   customerId: string | number;
-  poNumber: string;
+  /** Left out, the order has no Reference No. */
+  poNumber?: string;
   locationId?: string | number;
   orderDate?: string;
   shipTo?: {
@@ -1933,6 +1934,8 @@ export async function createSalesOrder(payload: {
     state?: string;
     zip?: string;
   };
+  /** A whole shippingAddress body (drop-ship's shippingAddressBody); wins over shipTo. */
+  shippingAddress?: Record<string, unknown>;
   memo?: string;
   /** Written to custbody_vin_number_ — the same custom field the SuiteQL
    *  reads select as `vin`, so the SO shows the VIN wherever we display it. */
@@ -1957,7 +1960,7 @@ export async function createSalesOrder(payload: {
 
   const body: any = {
     entity: { id: payload.customerId },
-    otherRefNum: payload.poNumber,
+    ...(payload.poNumber !== undefined ? { otherRefNum: payload.poNumber } : {}),
     item: { items },
     ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
     ...(payload.vin ? { custbody_vin_number_: payload.vin } : {}),
@@ -1972,7 +1975,9 @@ export async function createSalesOrder(payload: {
   }
 
   // Ship-to address if provided
-  if (payload.shipTo) {
+  if (payload.shippingAddress) {
+    body.shippingAddress = payload.shippingAddress;
+  } else if (payload.shipTo) {
     body.shippingAddress = {
       addressee: payload.shipTo.name || '',
       addr1: payload.shipTo.address || '',

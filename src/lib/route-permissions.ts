@@ -457,6 +457,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/invoices/credit-memo/route.ts': feature('invoicing', "switchIsOn(service, 'credit_memos')"),
   'src/app/api/invoices/fix/route.ts': feature('invoicing', "switchIsOn(service, 'invoice_fixes')"),
   'src/app/api/invoices/new/route.ts': feature('invoicing'),
+  'src/app/api/sales-orders/new/route.ts': authScoped('Estimates OR Invoicing permission (Craig 2026-10-31, New sales order 1A): requireSalesOrderMaker checks each feature', 'profileHasFeature('),
   'src/app/api/customer-contacts/route.ts': staff(),
   'src/app/api/customer-holds/route.ts': staff(),
   'src/app/api/jobs/assign/route.ts': staff(),
