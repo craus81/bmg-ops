@@ -238,7 +238,7 @@ export default function POsPage() {
   }, []);
   // List filters: attribute filter (billing issues, notes, graphics jobs)
   // and a date window on the PO date (imported date when none on record).
-  type PoFilter = 'all' | 'attention' | 'billing' | 'not_invoiced' | 'notes' | 'has_gfx' | 'no_gfx';
+  type PoFilter = 'all' | 'attention' | 'billing' | 'not_invoiced' | 'notes' | 'has_gfx' | 'no_gfx' | 'not_sent';
   const [poFilter, setPoFilter] = useState<PoFilter>('all');
   const [poCustomerFilter, setPoCustomerFilter] = useState<string>('all');
   const [poDateRange, setPoDateRange] = useState<'all' | '30' | '90' | 'month' | 'lastmonth'>('all');
@@ -1804,6 +1804,7 @@ export default function POsPage() {
       case 'notes': return ((po as any).po_notes || []).length > 0;
       case 'has_gfx': return (gfxJobsByPo[po.id] || []).length > 0;
       case 'no_gfx': return (gfxJobsByPo[po.id] || []).length === 0;
+      case 'not_sent': return !po.confirmation_sent_at;
       default: return true;
     }
   };
@@ -1838,6 +1839,7 @@ export default function POsPage() {
     notes: tabPos.filter(p => matchesPoFilter(p, 'notes')).length,
     has_gfx: tabPos.filter(p => matchesPoFilter(p, 'has_gfx')).length,
     no_gfx: tabPos.filter(p => matchesPoFilter(p, 'no_gfx')).length,
+    not_sent: tabPos.filter(p => matchesPoFilter(p, 'not_sent')).length,
   };
   // Distinct customers present in the current tab, for the customer filter
   // dropdown — counts computed the same way as poFilterCounts (before
@@ -1869,6 +1871,7 @@ export default function POsPage() {
     billed: p => billedDollars(p),
     total: p => p.line_items.reduce((s, l) => s + l.quantity * l.unit_price, 0),
     status: p => (PO_STATUS_META[p.status] || { label: p.status }).label,
+    sent: p => p.confirmation_sent_at || '',
   }, { key: 'date', dir: 'desc' });
 
   if (loading) return <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-label)' }}>Loading...</div>;
@@ -2293,6 +2296,7 @@ export default function POsPage() {
                 <option value="notes">Has notes ({poFilterCounts.notes})</option>
                 <option value="has_gfx">Has graphics job ({poFilterCounts.has_gfx})</option>
                 <option value="no_gfx">No graphics job ({poFilterCounts.no_gfx})</option>
+                <option value="not_sent">Confirmation not sent ({poFilterCounts.not_sent})</option>
               </select>
               <FilterLabel>Customer</FilterLabel>
               <select
@@ -3494,6 +3498,7 @@ export default function POsPage() {
                   <SortableTh label="Billed" sortKey="billed" sort={poTableSort} onToggle={togglePoSort} defaultDir="desc" align="right" style={thStyle} />
                   <SortableTh label="Total" sortKey="total" sort={poTableSort} onToggle={togglePoSort} defaultDir="desc" align="right" style={thStyle} />
                   <SortableTh label="Status" sortKey="status" sort={poTableSort} onToggle={togglePoSort} style={thStyle} />
+                  <SortableTh label="Confirmation sent" sortKey="sent" sort={poTableSort} onToggle={togglePoSort} defaultDir="desc" style={thStyle} />
                   <th style={thStyle}>Flags</th>
                 </tr></thead>
                 <tbody>
@@ -3579,6 +3584,13 @@ export default function POsPage() {
                             {statusMeta.label}
                           </span>
                         ))}
+                        {linkCell(tdStyle, po.confirmation_sent_at ? (
+                          <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 7px', borderRadius: '6px', whiteSpace: 'nowrap', background: 'rgba(34,197,94,0.12)', color: '#22c55e' }}>
+                            {new Date(po.confirmation_sent_at).toLocaleDateString([], { month: 'numeric', day: 'numeric' })} · Sent
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 7px', borderRadius: '6px', whiteSpace: 'nowrap', background: 'rgba(245,158,11,0.14)', color: '#f59e0b' }}>Not sent</span>
+                        ), po.confirmation_sent_at ? `Sent to ${(po.confirmation_sent_to || []).join(', ')}` : 'No receipt confirmation emailed yet')}
                         <td style={tdStyle}>
                           {hasFlags || !editMode ? (
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

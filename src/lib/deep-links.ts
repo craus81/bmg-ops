@@ -247,6 +247,8 @@ export const deepLinks = {
    *  records with no CRM row still land). Use when a record only carries
    *  the NetSuite id — estimates, POs, sales orders. */
   customerByNetsuiteId: (netsuiteId: string | number) => `/admin/prospects/ns-${netsuiteId}`,
+  /** Purchasing → Vendor POs, searched to one PO number. */
+  vendorPo: (poNumber: string) => `/admin/purchasing?tab=vendor-pos&q=${encodeURIComponent(poNumber)}`,
   /** Purchasing queue — pending purchase requests grouped by vendor;
    *  ?req= scroll-flashes one request's row. */
   purchaseRequests: (requestId?: string | null) =>

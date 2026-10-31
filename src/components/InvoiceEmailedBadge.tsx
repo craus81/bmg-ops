@@ -5,7 +5,8 @@
  * full send history in its tooltip. Same rendering wherever invoices are
  * listed (Invoicing hub, Scan Log) so "was this emailed, and when?" reads
  * identically everywhere. Render nothing when there's no send on record —
- * pass showUnsent to get an explicit muted "Not emailed" instead.
+ * pass showUnsent to get an orange "NOT SENT" instead, so unsent invoices
+ * stand out (Craig, 2026-10-31).
  */
 
 import { type EmailedInfo, isBadDelivery } from '@/lib/invoice-emails';
@@ -15,10 +16,10 @@ export function InvoiceEmailedBadge({ info, showUnsent = false }: { info: Emaile
     if (!showUnsent) return null;
     return (
       <span style={{
-        fontSize: '9px', fontWeight: 700, padding: '2px 6px', borderRadius: '5px',
-        background: 'rgba(148,163,184,0.1)', color: 'var(--text-muted)',
+        fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px',
+        background: 'rgba(245,158,11,0.14)', color: '#f59e0b',
       }}>
-        Not emailed
+        NOT SENT
       </span>
     );
   }

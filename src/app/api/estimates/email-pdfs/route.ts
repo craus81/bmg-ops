@@ -8,6 +8,7 @@ import { sendEmailDetailed, repFromName, buildNotificationEmail } from '@/lib/re
 import { getEmailSignature } from '@/lib/email-signature';
 import { estimatePdfFilename } from '@/lib/estimate-pdf';
 import { deepLinks } from '@/lib/deep-links';
+import { docRef } from '@/lib/document-sends';
 import { resolveEstimateEmail } from '@/lib/estimate-recipients';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
 import { estimateCustomerKey, MAX_BATCH_ESTIMATES } from '@/lib/estimate-batch';
@@ -164,6 +165,7 @@ async function emailPdfs(req: NextRequest) {
       sentBy: auth.user?.id,
       fromName: repFromName((auth.profile as any)?.full_name),
       contextUrl: deepLinks.estimate(first.id),
+      docRefs: estimates.map(e => docRef('estimate', e.id)),
       customerId: first.customer_id,
       netsuiteCustomerId: first.customer_netsuite_id,
     },

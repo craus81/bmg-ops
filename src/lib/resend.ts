@@ -2,6 +2,7 @@ import { Resend } from 'resend';
 import { createServiceClient } from './supabase-service';
 import { renderSignatureHtml, type EmailSignature } from './email-signature';
 import { resolveCustomerLinkage } from './customer-linkage';
+import { docRefsFromContextUrl } from './document-sends';
 
 const apiKey = process.env.RESEND_API_KEY;
 const fromEmail = process.env.RESEND_FROM_EMAIL || 'notifications@bmgfleet.com';
@@ -57,6 +58,11 @@ export interface EmailMeta {
   /** Extra mail headers — List-Unsubscribe on marketing email
    *  (src/lib/email-unsubscribe.ts). */
   headers?: Record<string, string> | null;
+  /** The documents this email carried (docRef() in document-sends.ts) —
+   *  what every Sent box reads. Leave unset and the one record contextUrl
+   *  points at is used; pass it when an email carries several documents
+   *  or a document contextUrl can't name (sales order, vendor PO). */
+  docRefs?: string[] | null;
 }
 
 /**
@@ -123,6 +129,10 @@ async function logEmailSend(
       subject,
       sent_by: meta?.sentBy || null,
       context_url: meta?.contextUrl || null,
+      doc_refs: (() => {
+        const refs = meta?.docRefs?.length ? meta.docRefs : docRefsFromContextUrl(meta?.contextUrl, meta?.kind);
+        return refs.length ? refs : null;
+      })(),
       customer_id: customerId,
       prospect_id: prospectId,
       // The rendered email, kept for every send so Sent Emails can show

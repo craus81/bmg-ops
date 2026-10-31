@@ -6,6 +6,7 @@ import { generateToken, approvalContentHash } from '@/lib/magic-link-approval';
 import { reconcileLinkedWrapQuotes } from '@/lib/wrap-quote-reconcile';
 import { sendEmailDetailed, repFromName } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
+import { docRef } from '@/lib/document-sends';
 import { sendSMS } from '@/lib/sms-provider';
 import { renderEstimateDocument, renderEstimateBatchDocument, vehicleDescription, type FleetDocVehicle, type BatchDocEstimate } from '@/lib/estimate-document';
 import { getEmailSignature } from '@/lib/email-signature';
@@ -506,7 +507,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           person, subject, html, undefined, undefined,
           auth.user?.email || undefined,
           i === 0 ? bcc : undefined,
-          { kind: 'estimate_approval', cc: null, sentBy: auth.user?.id, fromName: repFromName((auth.profile as any)?.full_name), contextUrl: deepLinks.estimate(estimate.id), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
+          { kind: 'estimate_approval', cc: null, sentBy: auth.user?.id, fromName: repFromName((auth.profile as any)?.full_name), contextUrl: deepLinks.estimate(estimate.id), docRefs: [estimate.id, ...siblings.map(x => x.id)].map(id => docRef('estimate', id)), customerId: estimate.customer_id, netsuiteCustomerId: estimate.customer_netsuite_id },
         );
         (ok ? sent : failed).push(person);
         if (ok && resendId) resendIds.push(resendId);

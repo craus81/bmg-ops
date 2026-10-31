@@ -45,6 +45,8 @@ import { poCreatedBy } from '@/lib/created-by';
 import PoPricingRequestLink from '@/components/PoPricingRequestLink';
 import PoAttentionFlag from '@/components/PoAttentionFlag';
 import { trackingUrl } from '@/lib/tracking-url';
+import SentBox from '@/components/SentBox';
+import { docRef } from '@/lib/document-sends';
 
 type ShipTo = NonNullable<PurchaseOrder['ship_to']>;
 
@@ -1214,6 +1216,16 @@ export default function PoRecordPage() {
             </div>
           </div>
         </div>
+
+        {/* Every confirmation sent for this PO, with delivery (migration 464). */}
+        <SentBox
+          refs={[docRef('customer_po', po.id)]}
+          docLabel={`PO #${po.po_number}`}
+          canMark={false}
+          emptyText="No confirmation emailed yet"
+          refreshKey={po.confirmation_sent_at || ''}
+          style={{ marginTop: '12px' }}
+        />
 
         {/* Ship to */}
         <div style={{ marginTop: '12px' }}>

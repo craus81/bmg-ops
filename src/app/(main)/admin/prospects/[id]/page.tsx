@@ -50,6 +50,8 @@ import { LEAD_SOURCES, OPP_TYPES } from '@/lib/lead-sources';
 import { SortableTh, useTableSort } from '@/components/ui/SortableTh';
 import { usd2 } from '@/lib/financials-print';
 import { exportStatementPDF } from '@/lib/statement-pdf';
+import SentBox from '@/components/SentBox';
+import { docRef } from '@/lib/document-sends';
 import { fetchCompanyLetterhead, type CompanyLetterhead } from '@/lib/company-profile';
 import { AGE_META } from '@/components/FinancialsDrilldown';
 import type { OpenArInvoice, AgingBucketKey, StatementInvoice, StatementScope } from '@/lib/financials-data';
@@ -3365,6 +3367,13 @@ export default function CustomerRecordPage() {
                 <input type="date" value={stTo} onChange={e => setStTo(e.target.value)} style={cInput} />
               </div>
             </div>
+            {(prospect?.netsuite_id || customer?.netsuite_id) && (
+              <SentBox
+                refs={[docRef('statement', String(prospect?.netsuite_id || customer?.netsuite_id))]}
+                docLabel="a statement"
+                emptyText="No statement emailed from FleetSuite yet"
+              />
+            )}
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button onClick={() => generateStatement('pdf')} disabled={stWorking || emailingSt} style={{
                 flex: 1, padding: '9px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, whiteSpace: 'nowrap',

@@ -4,6 +4,7 @@ import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
 import { sendEmailDetailed, buildInvoiceEmail } from '@/lib/resend';
 import { getEmailSignature } from '@/lib/email-signature';
 import { deepLinks } from '@/lib/deep-links';
+import { docRef } from '@/lib/document-sends';
 import { requireRole } from '@/lib/api-auth';
 import { safeStringLiteral, SqlSafeError } from '@/lib/sql-safe';
 import { validateBody, z } from '@/lib/validate';
@@ -221,7 +222,7 @@ export async function POST(req: NextRequest) {
       recipients, subject, html, undefined, attachments, auth.user?.email || undefined, bcc,
       // A single-invoice send deep-links that invoice on the Sent tab; a
       // multi-invoice send links the tab itself (a true digest).
-      { kind: 'invoice', sentBy: auth.user?.id, contextUrl: deepLinks.invoicesSent(invoiceNumbers.length === 1 ? invoiceNumbers[0] : null), customerId: historyCustomerId },
+      { kind: 'invoice', sentBy: auth.user?.id, contextUrl: deepLinks.invoicesSent(invoiceNumbers.length === 1 ? invoiceNumbers[0] : null), customerId: historyCustomerId, docRefs: invoiceNumbers.map((n: string) => docRef('invoice', n)) },
     );
 
     if (!sent) {

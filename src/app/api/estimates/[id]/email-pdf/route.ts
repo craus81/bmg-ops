@@ -8,6 +8,7 @@ import { sendEmailDetailed, repFromName, buildNotificationEmail } from '@/lib/re
 import { getEmailSignature } from '@/lib/email-signature';
 import { estimatePdfFilename, proFormaInvoiceNumber } from '@/lib/estimate-pdf';
 import { deepLinks } from '@/lib/deep-links';
+import { docRef } from '@/lib/document-sends';
 import { loadEstimateAttachmentRows, fetchEstimateAttachments, recordEstimateFilesSent } from '@/lib/estimate-attachments';
 import { resolveEstimateEmail } from '@/lib/estimate-recipients';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/email-attachments';
@@ -161,11 +162,12 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     senderEmail,
     body.bccSelf && senderEmail ? [senderEmail] : undefined,
     {
-      kind: 'estimate_pdf',
+      kind: proForma ? 'pro_forma' : 'estimate_pdf',
       cc: body.cc,
       sentBy: auth.user?.id,
       fromName: repFromName((auth.profile as any)?.full_name),
       contextUrl: deepLinks.estimate(estimate.id),
+      docRefs: [docRef(proForma ? 'pro_forma' : 'estimate', estimate.id)],
       customerId: estimate.customer_id,
       netsuiteCustomerId: estimate.customer_netsuite_id,
     },
