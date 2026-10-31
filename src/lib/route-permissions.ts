@@ -428,6 +428,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/graphics/create-estimate/route.ts': money(),
   'src/app/api/graphics/create-invoice/route.ts': money(),
   'src/app/api/graphics/from-estimate/route.ts': staff(),
+  'src/app/api/graphics/material-options/route.ts': { kind: 'admin', contains: ['requireAdmin(', 'requireStaff('] },
   'src/app/api/graphics/from-wrap-quote/route.ts': staff(),
   'src/app/api/graphics/invoice-pdf/route.ts': money(),
   'src/app/api/graphics/invoice-preview/route.ts': money(),
