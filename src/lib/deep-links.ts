@@ -307,6 +307,12 @@ export const deepLinks = {
    *  details are switched on in Books → Switches; until then super admins
    *  only. */
   vendorDetails: (vendorNetsuiteId?: string | null) => `/admin/vendor-details${vendorNetsuiteId ? `?${new URLSearchParams({ vendor: vendorNetsuiteId })}` : ''}`,
+  /** An item's income, cost and inventory accounts, changed in NetSuite
+   *  (src/lib/item-accounts.ts), from More → Money & Books or Change
+   *  accounts on Books → Stock by item; with an id, that item open. Anyone
+   *  with Payments once item accounts are switched on in Books → Switches;
+   *  until then super admins only. */
+  itemAccounts: (itemNetsuiteId?: string | null) => `/admin/item-accounts${itemNetsuiteId ? `?${new URLSearchParams({ item: itemNetsuiteId })}` : ''}`,
   /** The Chase card's charges, coded and sent to NetSuite as a journal entry
    *  each month (src/lib/card-charges.ts), from More → Money & Books. Anyone
    *  with Payments once card charges are switched on in Books → Switches;

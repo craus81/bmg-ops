@@ -2181,13 +2181,14 @@ does two things (owner decision 2026-10-19, "Flag them"):
   active item NetSuite keeps in stock whose asset account, in the copy of
   NetSuite's lists, the chart of accounts has as anything but an asset
   account, and the asset account most stocked items use. The page lists
-  them in red with what to set the asset account to on the item's
-  Accounting tab in NetSuite, marks their rows, and says so on each one's
-  page; once every one is right, a green chip says the asset accounts
-  check out. An item drops off once NetSuite has it right and the lists
-  copy has read it again. FleetSuite can't read an item's cost of goods
-  sold account (NetSuite answers 500 for it, see "NetSuite's lists"), so the
-  page asks for that one to be checked by hand.
+  them in red with what to set the asset account to, each with Change
+  accounts ("Item accounts changed in FleetSuite"), marks their rows, and
+  says so on each one's page; once every one is right, a green chip says
+  the asset accounts check out. An item drops off once it's changed there,
+  or after a change made in NetSuite once the lists copy has read it again.
+  The lists copy can't read an item's cost of goods sold account (NetSuite
+  answers 500 for it, see "NetSuite's lists"), so the page asks for that one
+  to be checked on Change accounts, which reads the item's own record.
 - **After a sale.** A line neither side has any of on hand, that NetSuite
   values at nothing while FleetSuite's value of it isn't nothing, is value
   left over (`StockLine.leftover`): amber rather than red, counted apart
@@ -4212,10 +4213,102 @@ its billing address. The record of the change says "(ending 6789)".
   digits; and that `is1099Eligible` and `legalName` are what the vendor
   record calls them.
 
+## Item accounts changed in FleetSuite
+
+In the first quarter of 2027 FleetSuite becomes the master for items, with
+each item's income, cost and inventory accounts (the NetSuite Exit
+Checklist's "Customers, vendors and items"; owner decisions 2026-10-31).
+Item Accounts changes the accounts NetSuite posts an item's documents to,
+and FleetSuite makes the change in NetSuite. It's built switched off
+("Switches"): until a super admin turns it on, only super admins can open
+the screen, to see what a change would send, and nothing goes to NetSuite.
+Once it's on, anyone with Payments who can see prices changes an item's
+accounts, and More → Money & Books shows Item Accounts to them.
+
+The screen is `/admin/item-accounts` (`deepLinks.itemAccounts`). It finds an
+item in the copy of NetSuite's items by number or display name, active ones
+first, or opens on one: Change accounts beside each item set up wrong on
+Stock by item, and on its own page. It reads the item from NetSuite as it is
+now (`getItemRecord`). NetSuite files each kind of item under a record type
+of its own and the copy says only roughly which (a service, a non-inventory
+item), so the record types that kind can be are read in turn until one has
+it: a service for sale, for resale, then for purchase. What a change can do
+(`planItemAccounts` in `src/lib/item-accounts.ts`), by the accounts its kind
+of item has:
+
+| Account | What posts to it | It can be | Which items have it |
+| --- | --- | --- | --- |
+| Income account | Its sales | An income or other income account | Every kind but those only bought |
+| Cost of goods sold account | What it cost, when it ships | A cost of goods sold account | Inventory items and assemblies |
+| Inventory asset account | What it cost, while it's on the shelf | A current asset account | Inventory items and assemblies |
+| Expense account | Its bills | A cost of goods sold, expense or other expense account | Non-inventory items, services and other charges bought for resale or only bought |
+
+Each changes only to an account of BMG's that takes postings now (not
+inactive or a summary account), from the chart of accounts, and only to one
+of the kind it can be: an inventory asset account is never a cost of goods
+sold account, which is how two items came to have theirs swapped ("Items set
+up wrong, and value left over"). An account can't be taken off. An account
+of the wrong kind on the item now is marked in red, and a change that leaves
+one so says it. A kit, and a non-inventory item, a service or an other
+charge for sale, has an income account only. Discounts, payments,
+descriptions, subtotals and item groups aren't changed here.
+
+The screen shows the cost of goods sold account, which the copy of
+NetSuite's items can't read (NetSuite answers 500 for it, "NetSuite's
+lists"), since it reads the item's own record.
+
+### Sending
+
+Save to NetSuite works as on Vendor Details: it sends once
+(`/api/item-accounts`); when the item changed in NetSuite since the page read
+it, nothing is sent and the page says to reload; the route works the change
+out again from the item as NetSuite has it now, and takes a claim on the
+press (`detail_changes`, record type `item`, migration 478), one change of an
+item at a time. NetSuite is sent only the accounts that changed
+(`patchItemRecordFields`), and its refusal, in its own words, is kept as
+refused; when it doesn't answer or faults, the change is kept as unsure and
+the page says to reload and look. Each change keeps who made it, why, and
+what changed in words, listed under Changed before and in the audit log
+(`change_item_accounts`).
+
+The copy of NetSuite's items takes the new income, inventory asset and
+expense accounts then too (`noteItemAccountsChanged`), not at its next read
+two hours on at most, since the posting rules read an item's accounts from
+it and Stock by item lists the items whose asset account isn't an asset
+account by it: an item put right leaves that list at once.
+
+Documents already made keep what they posted; the item's next ones post to
+the new accounts. What an inventory item is worth on the shelf stays on its
+old inventory asset account until a journal entry moves it (Journal
+Entries), and the screen says so when the inventory asset account changes.
+
+Made-up example: 51-2002, a stocked shelf kit, has 58000 Cost of Goods Sold
+as its inventory asset account and 19000 Inventory Asset as its cost of
+goods sold account. Change: Cost of goods sold account 19000 Inventory Asset
+→ 58000 Cost of Goods Sold, Inventory asset account 58000 Cost of Goods Sold
+→ 19000 Inventory Asset, why "Set up with its accounts swapped". It leaves
+Stock by item's list of items set up wrong at once.
+
+### What isn't done yet
+
+- A new item still gets the accounts it's made with in NetSuite (an
+  inventory item 19000, 58000 and 47900, `inventoryItemAccounts` in
+  `src/lib/netsuite.ts`; others NetSuite's defaults); they're changed here
+  afterwards.
+- An item's accounts are BMG's: an item in another company's subsidiary
+  isn't offered that company's accounts.
+- Before switching on, try a change on a test item of each kind and check
+  in NetSuite: that a GET for a service, a non-inventory item or an other
+  charge as the wrong one of sale, resale or purchase answers 404, so the
+  next is tried; that `incomeAccount`, `cogsAccount`, `assetAccount` and
+  `expenseAccount` are what each kind's record calls them, a kit's income
+  account included; and that NetSuite takes a changed inventory asset account
+  on an item with stock on hand.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 473, `src/lib/books/switches.ts`),
+row each in `books_switches` (migrations 466 to 473 and 478, `src/lib/books/switches.ts`),
 and stays off until a super admin turns it on in Books → Switches
 (`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
 on on January 1, 2027, asking the owner once in late December.
@@ -4236,6 +4329,7 @@ in the audit log (`switch_on`, `switch_off`).
 | `invoice_fixes` | Anyone with Invoicing fixes an invoice after it's made, its PO number, memo and VIN, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy ("Invoices fixed in FleetSuite") | Invoicing → Invoiced → Fix on an invoice |
 | `bill_fixes` | Admins with Parts Ordering fix a bill after it's made, its number, memo and due date, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy ("Bills fixed in FleetSuite") | More → Purchasing → Fix a Bill, or Fix on Books → Own bills |
 | `customer_vendor_details` | Anyone with Credit Applications changes a customer's terms and credit limit, and anyone with Payments a vendor's email, phone, terms, addresses and 1099 details, and FleetSuite makes the change in NetSuite ("Customer and vendor details changed in FleetSuite") | More → Sales → Customer Terms, or Change on a customer; More → Money & Books → Vendor Details |
+| `item_accounts` | Anyone with Payments changes an item's income account, an inventory item's cost of goods sold and inventory asset accounts, and the expense account of one that's bought, and FleetSuite makes the change in NetSuite ("Item accounts changed in FleetSuite") | More → Money & Books → Item Accounts, or Change accounts on Books → Stock by item |
 
 ## Posting
 
