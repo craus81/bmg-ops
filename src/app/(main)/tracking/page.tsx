@@ -50,19 +50,21 @@ type FilterStatus = VehicleRowKey | 'all';
 /** "Invoiced" pill beside the status badge, once the vehicle's SO is billed
  *  (in NetSuite or by FleetSuite's completion flow). Same shape as
  *  StatusBadge's small size so the two sit together. */
-function InvoicedBadge({ invoiceNumber, showNumber = false }: { invoiceNumber: string | null; showNumber?: boolean }) {
+function InvoicedBadge({ invoiceNumber, showNumber = false, partial = false }: { invoiceNumber: string | null; showNumber?: boolean; partial?: boolean }) {
   if (!invoiceNumber) return null;
   return (
     <span
-      title={`Invoice #${invoiceNumber}`}
+      title={partial ? `Invoice #${invoiceNumber}. The sales order still has more to bill.` : `Invoice #${invoiceNumber}`}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: '4px',
         padding: '3px 8px', borderRadius: '8px',
-        background: 'rgba(167,139,250,0.12)', border: '1px solid rgba(167,139,250,0.45)', color: '#a78bfa',
+        background: partial ? 'rgba(245,158,11,0.12)' : 'rgba(167,139,250,0.12)',
+        border: partial ? '1px solid rgba(245,158,11,0.45)' : '1px solid rgba(167,139,250,0.45)',
+        color: partial ? '#f59e0b' : '#a78bfa',
         fontSize: '11px', fontWeight: 700, whiteSpace: 'nowrap',
       }}
     >
-      ✓ Invoiced{showNumber ? ` #${invoiceNumber}` : ''}
+      {partial ? 'Partly billed' : '✓ Invoiced'}{showNumber ? ` #${invoiceNumber}` : ''}
     </span>
   );
 }
@@ -163,6 +165,9 @@ export default function TrackingPage() {
   // it's basically dead paper — the record shows the invoice in its place.
   // undefined = not looked up yet; [] = looked up, nothing billed.
   const [soInvoices, setSoInvoices] = useState<Record<string, { id: string; tranid: string }[]>>({});
+  // Which of those SOs NetSuite says are fully billed. A partly billed one
+  // shows its invoices as "Partly billed": the rest can still be billed.
+  const [soFullyBilled, setSoFullyBilled] = useState<Record<string, boolean>>({});
   // Why a lookup failed, keyed the same way — shown on the record so a
   // NetSuite error never passes for "not invoiced yet".
   const [soInvoiceErrors, setSoInvoiceErrors] = useState<Record<string, string>>({});
@@ -177,6 +182,12 @@ export default function TrackingPage() {
       if (first) return first.tranid;
     }
     return null;
+  };
+  /** True when the vehicle's only invoices so far are on a partly billed SO. */
+  const vehiclePartlyBilled = (vehicle: FleetCheckin): boolean => {
+    if (String((vehicle as any).invoice_number || '').trim()) return false;
+    return (vehicleSalesOrders[vehicle.id] || []).some(so =>
+      (soInvoices[so.netsuite_sales_order_id] || []).length > 0 && soFullyBilled[so.netsuite_sales_order_id] === false);
   };
   // Emailing one of those invoices — the shared screen, same as the
   // completion modal's ✉ once an SO is billed.
@@ -499,6 +510,7 @@ export default function TrackingPage() {
           throw new Error(data?.error || `HTTP ${res.status}`);
         }
         setSoInvoices(prev => ({ ...prev, [soId]: data.invoices }));
+        setSoFullyBilled(prev => ({ ...prev, [soId]: !!data.fullyBilled }));
         if (data.vehicle?.invoiceNumber) {
           setVehicles(prev => prev.map(v => v.id === checkinId && !(v as any).invoice_number
             ? { ...v, invoice_number: data.vehicle.invoiceNumber, date_invoiced: data.vehicle.dateInvoiced } as any
@@ -653,6 +665,34 @@ export default function TrackingPage() {
       (grouped[row.checkin_id] ||= []).push(row);
     }
     setVehicleSalesOrders(prev => ({ ...prev, ...grouped }));
+
+    // Invoices already found for those SOs through their estimates
+    // (migration 461), so the cards show Invoiced / Partly billed without
+    // opening each record. The live lookup on open still has the last word.
+    const soIds = [...new Set((data as CheckinSalesOrder[]).map(r => r.netsuite_sales_order_id).filter(Boolean))];
+    if (soIds.length === 0) return;
+    const [{ data: ests }, { data: invs }] = await Promise.all([
+      supabase.from('estimates').select('netsuite_so_id, so_billing').in('netsuite_so_id', soIds).not('so_billing', 'is', null),
+      supabase.from('estimate_invoices').select('netsuite_so_id, netsuite_invoice_id, invoice_number, invoice_date').in('netsuite_so_id', soIds).order('invoice_date', { ascending: true }),
+    ]);
+    const billing: Record<string, boolean> = {};
+    for (const e of (ests || []) as any[]) if (e.so_billing !== 'none') billing[String(e.netsuite_so_id)] = e.so_billing === 'full';
+    const found: Record<string, { id: string; tranid: string }[]> = {};
+    for (const r of (invs || []) as any[]) {
+      const list = (found[String(r.netsuite_so_id)] ||= []);
+      if (!list.some(i => i.id === String(r.netsuite_invoice_id))) list.push({ id: String(r.netsuite_invoice_id), tranid: String(r.invoice_number) });
+    }
+    // Never over a live answer already on screen.
+    setSoInvoices(prev => {
+      const next = { ...prev };
+      for (const [so, list] of Object.entries(found)) if (!(so in next)) next[so] = list;
+      return next;
+    });
+    setSoFullyBilled(prev => {
+      const next = { ...prev };
+      for (const [so, full] of Object.entries(billing)) if (!(so in next)) next[so] = full;
+      return next;
+    });
   };
 
   const loadProfiles = async () => {
@@ -1899,7 +1939,7 @@ export default function TrackingPage() {
                       <StatusBadge status={rowKey} />
                       {vehicleInvoiceNumber(vehicle) && (
                         <div style={{ marginTop: '4px' }}>
-                          <InvoicedBadge invoiceNumber={vehicleInvoiceNumber(vehicle)} />
+                          <InvoicedBadge invoiceNumber={vehicleInvoiceNumber(vehicle)} partial={vehiclePartlyBilled(vehicle)} />
                         </div>
                       )}
                       <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
@@ -1994,7 +2034,7 @@ export default function TrackingPage() {
                           {/* Stacked, so a narrow screen keeps room for the name. */}
                           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
                             <StatusBadge status={rowKey} />
-                            <InvoicedBadge invoiceNumber={vehicleInvoiceNumber(vehicle)} showNumber />
+                            <InvoicedBadge invoiceNumber={vehicleInvoiceNumber(vehicle)} showNumber partial={vehiclePartlyBilled(vehicle)} />
                           </div>
                           <button
                             onClick={() => setExpandedId(null)}
@@ -2723,9 +2763,15 @@ export default function TrackingPage() {
                                   <div key={so.id}>
                                     {invoices.length > 0 ? (
                                       <>
-                                        <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--success)', marginBottom: '4px' }}>
-                                          ✓ SO #{so.sales_order_number || so.netsuite_sales_order_id} invoiced
-                                        </div>
+                                        {soFullyBilled[so.netsuite_sales_order_id] === false ? (
+                                          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--warning, #f59e0b)', marginBottom: '4px' }}>
+                                            SO #{so.sales_order_number || so.netsuite_sales_order_id} partly billed. The rest can still be invoiced.
+                                          </div>
+                                        ) : (
+                                          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--success)', marginBottom: '4px' }}>
+                                            ✓ SO #{so.sales_order_number || so.netsuite_sales_order_id} invoiced
+                                          </div>
+                                        )}
                                         {invoices.map(inv => (
                                           <div key={inv.id}>
                                             <NetSuitePdf

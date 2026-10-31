@@ -127,8 +127,15 @@ export async function loadOrderStatus(service: Db, estimate: any): Promise<Order
     String(s.status || '').toUpperCase() === 'G' || /^billed$/i.test(String(s.status_label || '').trim()));
   const vehiclesInvoiced = vehicles.length > 0 && vehicles.every(v => v.invoice_number);
   if (soBilled || vehiclesInvoiced) {
-    const numbers = [...new Set(vehicles.map(v => v.invoice_number).filter(Boolean))];
+    // The invoices billed from the estimate's SO (migration 461), else the
+    // vehicles' own.
+    const { data: estInvoices } = soBilled
+      ? await service.from('estimate_invoices').select('invoice_number, invoice_date').eq('estimate_id', estId)
+      : { data: [] as any[] };
+    const fromSo = ((estInvoices || []) as any[]).map(r => r.invoice_number).filter(Boolean);
+    const numbers = [...new Set(fromSo.length ? fromSo : vehicles.map(v => v.invoice_number).filter(Boolean))];
     let at: string | null = null;
+    for (const r of (estInvoices || []) as any[]) at = latest(at, r.invoice_date || null);
     for (const v of vehicles) at = latest(at, v.date_invoiced || null);
     invoiced = { at, number: numbers.length ? numbers.join(', ') : null };
   }

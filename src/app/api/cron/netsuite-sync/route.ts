@@ -11,6 +11,7 @@ import { syncVendorBillPayments, syncPayoutBillPayments } from '@/lib/vendor-bil
 import { syncArInvoicePayments } from '@/lib/ar-payment-sync';
 import { closeConvertedEstimates } from '@/lib/estimate-close-sync';
 import { syncVehicleInvoices } from '@/lib/so-invoices';
+import { syncEstimateInvoices } from '@/lib/estimate-invoices';
 import { recordHeartbeat } from '@/lib/system-health';
 import { syncVendors } from '@/lib/vendor-master';
 import { syncNetsuiteCreators } from '@/lib/netsuite-creators';
@@ -489,6 +490,19 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error('[cron] Vehicle invoiced sweep error:', err.message);
     results.vehicleInvoices = { error: err.message };
+  }
+
+  // Invoices billed from each linked estimate's SO (migration 461): saved on
+  // the estimate and passed on to its vehicles, never-checked estimates
+  // first, so the ones linked before this existed fill in over a few runs.
+  // Before the AR sweep, for the same reason as the step above.
+  try {
+    results.estimateInvoices = await syncEstimateInvoices(supabase, {
+      deadline: Math.min(startedAt + 105_000, Date.now() + 10_000),
+    });
+  } catch (err: any) {
+    console.error('[cron] Estimate invoices sweep error:', err.message);
+    results.estimateInvoices = { error: err.message };
   }
 
   // ═══════════ 3e. AR (CUSTOMER) PAYMENT SWEEP ═══════════
