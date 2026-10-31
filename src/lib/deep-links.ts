@@ -425,6 +425,17 @@ export const deepLinks = {
    *  admins only. */
   booksBalance: (company: string, kind: string, party: string, differs = false) =>
     `/admin/books/balances/party?${new URLSearchParams({ company, kind, party: party || 'none', ...(differs ? { only: 'differs' } : {}) })}`,
+  /** Books → AR and AP agings on one company's customers (`kind`
+   *  'customer') or vendors ('vendor'), only those whose aging differs from
+   *  NetSuite's with `differs`. Super admins only. */
+  booksAgings: (company: string, kind: string, differs = false) =>
+    `/admin/books/agings?${new URLSearchParams({ company, kind, ...(differs ? { only: 'differs' } : {}) })}`,
+  /** Books → AR and AP agings → one customer's (its FleetSuite id) or
+   *  vendor's (its NetSuite id) open documents, by how late, '' for the
+   *  lines FleetSuite can't name ('none' in the address). Super admins
+   *  only. */
+  booksAging: (company: string, kind: string, party: string) =>
+    `/admin/books/agings/party?${new URLSearchParams({ company, kind, party: party || 'none' })}`,
   /** Books → Own invoices on the month ('YYYY-MM' or 'YYYY-MM-01') they
    *  were made in, the newest month when it's left out, only those that
    *  differ from NetSuite's with `differs`: the landing for the daily books

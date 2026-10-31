@@ -51,17 +51,21 @@ part 28, Snap a bill, which enters a vendor's bill in NetSuite from a
 picture of it, part 29, PO bills, which bills the purchase order a
 snapped bill names, any freight on its own line, part 30, Books' own
 copies of fulfillments, receipts and bills posted to the books in place of
-NetSuite's when they match them and make the same entry, and part 31, each
+NetSuite's when they match them and make the same entry, part 31, each
 change made with Inventory Adjust checked against NetSuite's inventory
 adjustment each morning, valued at FleetSuite's own average cost, and
-posted in place of it the same way. The screens are the accounts page at `/admin/books`, the trial
+posted in place of it the same way, and part 32, what each customer owes
+and each vendor is owed by how late, the AR and AP agings, next to
+NetSuite's. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
 account line's detail at `/admin/books/reports/detail`, stock by item at
 `/admin/books/stock`, an item's moves at `/admin/books/stock/item`,
 customer and vendor balances at `/admin/books/balances`, the documents
-behind one at `/admin/books/balances/party`, FleetSuite's own invoices at
+behind one at `/admin/books/balances/party`, the agings at
+`/admin/books/agings` and one customer's or vendor's at
+`/admin/books/agings/party`, FleetSuite's own invoices at
 `/admin/books/own-invoices` and one's check at
 `/admin/books/own-invoices/invoice`, and its own fulfillments at
 `/admin/books/own-fulfillments` and one's check at
@@ -136,6 +140,9 @@ the accounts page; the others are linked from there.
 | Each customer's and vendor's balance, and the starting entry by name | `migrations/406-books-party-balances.sql`, `src/lib/books/party-balances.ts`, `partyOpeningQuery` and `storePartyOpening` in `src/lib/books/netsuite-gl.ts` |
 | Customer and vendor balances and one balance's documents, and their APIs | `src/app/(main)/admin/books/balances/page.tsx`, `src/app/(main)/admin/books/balances/party/page.tsx`, `src/app/api/admin/books/balances/route.ts`, `src/app/api/admin/books/balances/party/route.ts` |
 | Balance tests | `src/lib/books/party-balances.test.ts`, `src/lib/books/party-balances-sql.test.ts`; the starting entry by name's are in the copy test files, the daily check's in its own |
+| AR and AP agings: NetSuite's open invoices and bills, copied, and each customer's and vendor's open documents both sides | `migrations/458-books-agings.sql`, `src/lib/books/netsuite-open-items.ts`, `src/lib/books/agings.ts`, `src/lib/books/aging-buckets.ts`, `src/app/api/cron/books-netsuite-open-items/route.ts` |
+| AR and AP agings and one customer's or vendor's aging, and their API | `src/app/(main)/admin/books/agings/page.tsx`, `src/app/(main)/admin/books/agings/party/page.tsx`, `src/app/api/admin/books/agings/route.ts` |
+| Aging tests | `src/lib/books/aging-buckets.test.ts`, `src/lib/books/agings.test.ts`, `src/lib/books/netsuite-open-items.test.ts`, and end to end, with the balances they add up to, `src/lib/books/agings-sql.test.ts` |
 | FleetSuite's own invoices, saved as each is made and checked against NetSuite's, and NetSuite's customers in the lists | `migrations/407-books-own-invoices.sql`, `src/lib/books/own-invoices.ts`, `src/lib/books/own-invoice-check.ts`; saved by `src/app/api/vehicle-tracking/invoice/route.ts`, `src/app/api/netsuite/create-invoice/route.ts`, `src/app/api/pos/invoice-open/route.ts`, `src/app/api/netsuite/invoice-vehicles/route.ts` and `src/app/api/graphics/create-invoice/route.ts`, from what `createDirectInvoice` and `createInvoiceFromSO` in `src/lib/netsuite.ts` say they billed |
 | Own invoices and one invoice's check, and their API | `src/app/(main)/admin/books/own-invoices/page.tsx`, `src/app/(main)/admin/books/own-invoices/invoice/page.tsx`, `src/app/api/admin/books/own-invoices/route.ts` |
 | Own invoice tests | `src/lib/books/own-invoices.test.ts`, `src/lib/books/own-invoice-check.test.ts`, `src/lib/books/own-invoices-sql.test.ts`; the customers list's are in the lists test files, the daily check's in its own |
@@ -2204,6 +2211,148 @@ FleetSuite's books name a customer differently from NetSuite's lines (a
 document FleetSuite posted before the mirror matched its customer, or one
 NetSuite names on a line FleetSuite's rule doesn't); the documents on the
 balance's page show which.
+
+## AR and AP agings
+
+`/admin/books/agings` shows who owes BMG and whom BMG owes in one company's
+books, by how late, FleetSuite's books next to NetSuite's (owner decision
+2026-10-31, the NetSuite Exit Checklist's "AR and AP agings"). Customer and
+vendor balances says what each balance is; the agings say how much of it is
+current and how much is 1 to 30, 31 to 60, 61 to 90 or over 90 days past
+due, the buckets Financials ages NetSuite's invoices and bills in
+(`bucketFor` in `src/lib/financials-data.ts`, which `bucketOf` in
+`src/lib/books/aging-buckets.ts` agrees with day for day). Nothing is
+written to NetSuite or to the books, and nobody is told anything: the daily
+check already tells when a balance stops matching (see "Daily check").
+
+### What's open on a document
+
+The documents that age are a customer's invoices and credit memos and a
+vendor's bills and bill credits. NetSuite says what's still open on each
+(`foreignamountunpaid`, as Financials reads it), and that's NetSuite's
+side. FleetSuite's books don't record yet which payment paid which invoice:
+a payment posts against the customer, not the invoice. Until they do,
+what's been paid on a document is NetSuite's, so FleetSuite's side is
+NetSuite's open amount plus whatever FleetSuite's journal has more on the
+document than the copy of NetSuite's general ledger (less, when it has
+less), as migration 458's `gl_party_open_documents` works it out. An
+invoice FleetSuite's books have at $1,250.00 and NetSuite's at $1,200.00,
+with $200.00 still open in NetSuite, has $250.00 open in FleetSuite's. A
+document FleetSuite's books don't have isn't open in them, though
+NetSuite's ledger has it. One from before 2025, which neither ledger has
+line by line (the starting entry holds it), is open on both sides as
+NetSuite says.
+
+A document belongs to a customer or vendor as on Customer and vendor
+balances ("Who a line belongs to"): a customer is the FleetSuite customer
+the ledger mirror matched NetSuite's customer to (`ledger_customers`, an
+exact match), the ones it hasn't matched make the row FleetSuite can't
+name, and a vendor is NetSuite's id for it. A company's documents are those
+whose main line is in the NetSuite subsidiary it's linked to
+(`gl_companies.netsuite_subsidiary_id`).
+
+What a customer's (vendor's) open documents leave of its balance, each
+side, is "Not in an open invoice" ("bill" for a vendor): a payment not
+applied to one yet, a journal entry, or a difference on a document that
+doesn't age, a payment say. So each side's buckets and what's not in an
+open invoice add up to the balance on Customer and vendor balances, and
+every customer's (vendor's), with what of the starting entry isn't split by
+name, to the receivable (payable) accounts.
+
+### How late
+
+Each document is aged from its due date to today in Central time, in whole
+days: one due today or later is current, one due yesterday is 1 day past
+due. One with no due date, most often a credit memo or a bill credit, ages
+from its date. NetSuite's due date is the one on its open document, or, for
+an invoice NetSuite no longer has open, the one the ledger mirror copied
+(`ledger_invoices`). FleetSuite's is the one on FleetSuite's own copy of
+the invoice in the same company (see "FleetSuite's own invoices"), else
+NetSuite's. A document differs when what's open on it isn't the same on
+both sides, or is the same in different buckets (FleetSuite's own copy of
+an invoice due on other terms, say).
+
+### The copy of NetSuite's open documents
+
+NetSuite's side is read whole every two hours, at :29 on odd UTC hours,
+just after the copy of NetSuite's general ledger
+(`/api/cron/books-netsuite-open-items`,
+`src/lib/books/netsuite-open-items.ts`), and when Copy now is pressed on
+the page. One SuiteQL query reads every invoice, credit memo, bill and bill
+credit NetSuite has open (status A), with what's still open on it, its due
+date, and its main line's name and subsidiary, the line on the receivable
+or payable account. NetSuite signs purchase amounts as it pleases, so each
+open amount is taken whole and signed by its type as it sits on the
+account, debit positive: an invoice and a bill credit positive, a credit
+memo and a bill negative. The copy (`gl_netsuite_open_items`) is replaced
+whole each run rather than kept from a window of what changed, since a
+payment applied to an invoice changes what's open on it whether or not
+NetSuite counts that as a change to the invoice. A run that fails keeps the
+last copy, and so does one that finds nothing open while the copy holds
+documents, since a SuiteQL role that sees less is likelier than nothing
+owed; the page says either. A document with no date or an open amount
+FleetSuite can't read isn't copied, and the page names it; one with no
+subsidiary is in neither company's agings, and the page says how many. The
+run is recorded in `sync_state` as `books_netsuite_open_items`, with no
+amounts, and left out of `HEALTH_MONITORS` like the other books jobs.
+
+As on Customer and vendor balances, a document NetSuite changed between
+the copies can differ until the next copies catch it up. Each side still
+adds up to its balance.
+
+### The pages
+
+The page opens on BMG's customers with when NetSuite's open documents and
+its ledger were last copied and FleetSuite's books last posted, and says
+when one of those failed, when the posting run stopped for time, when
+NetSuite's open documents haven't been copied yet, and when the company
+isn't linked to a NetSuite subsidiary. Buttons pick the company and
+Customers or Vendors. The company's totals come first, both sides and the
+difference: each bucket, what's not in an open invoice, what of the
+starting entry isn't split by name, and the total, the receivable (payable)
+accounts, with what's past due. Then each customer (vendor) with something
+open or a balance on either side, by bucket in FleetSuite's books, with
+NetSuite's in red under an amount that differs, how many open documents it
+has and what's not in an open invoice: those that differ first, then the
+largest balance in FleetSuite's books, then by name, the row FleetSuite
+can't name last, 300 at a time. A button shows only those that differ and
+a search finds a name or a NetSuite id; `?only=differs`
+(`deepLinks.booksAgings`) opens the page on those that differ. On a phone
+the four buckets past due fold into one Past due column, so Current, Past
+due and Total fit across the screen, with the name on its own row above
+them, as on Reports.
+
+A name opens `/admin/books/agings/party` (`deepLinks.booksAging`,
+`?company=&kind=&party=`, `party=none` for the row FleetSuite can't name):
+its buckets, what's not in an open invoice and its balance, each side, then
+every open document, the most overdue in FleetSuite's books first, with its
+type, number and date, when it's due and how late it is (one with no due
+date says how old it is), NetSuite's in red when it differs, whether only
+one side's ledger has it, and what's open on it each side. A link opens its
+balance on Customer and vendor balances, with every document behind it.
+
+### What isn't done yet
+
+FleetSuite's books need their own record of which payment paid which
+invoice, and which bill payment paid which bill, before NetSuite stops
+taking payments. Until then FleetSuite's side leans on NetSuite's open
+amounts, which holds while payments, deposits and banking stay in NetSuite
+(owner decision 2026-10-31, "January 2027").
+
+### What isn't known yet
+
+The first look at the real books will show whether SuiteQL in BMG's
+account gives what's open on each document with its main line's name and
+subsidiary as the copy asks. If it doesn't, the copy fails, the page says
+so in red, and NetSuite's side has nothing open until the query is put
+right. It will also show whether NetSuite's open status (A) on a credit
+memo or bill credit means it has something left to apply, as it means on
+an invoice or bill that it isn't paid in full; if not, those are left out
+of the copy and what they hold shows as not in an open invoice, the same on
+both sides. And a company not linked to a NetSuite subsidiary (1084 Cool
+Springs, until the account sync links it, see "Chart of accounts") has
+nothing open on NetSuite's side: the page says so, and FleetSuite's side
+shows only what its books have more than NetSuite's.
 
 ## FleetSuite's own invoices
 
