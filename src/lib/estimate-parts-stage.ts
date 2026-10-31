@@ -111,3 +111,30 @@ export function derivePartsStage(input: PartsStageInput): PartsStageResult | nul
   else if (s && s.onOrder > 0) detail = `${s.onOrder} part${s.onOrder === 1 ? '' : 's'} waiting on another PO · nothing requested yet`;
   return { stage: 'approved', label: PARTS_STAGE_LABELS.approved, detail, ordered: 0, total: 0, poNumbers: [] };
 }
+
+export interface SoStockLine {
+  /** NetSuite transactionline.itemtype: InvtPart, Assembly, Service, … */
+  itemType: string | null;
+  quantity: number;
+  backordered: number;
+}
+
+/** Only these hold stock NetSuite can commit to an order. */
+const STOCKED_TYPES = new Set(['InvtPart', 'Assembly']);
+
+/**
+ * A converted job's stock picture, read from its sales order. NetSuite
+ * commits on-shelf stock to the order's lines and backorders the rest, so a
+ * line with nothing backordered is covered by the order's own commitment.
+ * Fulfilled lines have nothing backordered either, which is right: those
+ * parts already went to the job.
+ */
+export function soStock(lines: SoStockLine[]): { parts: number; short: number; unknown: number; onOrder: number } {
+  const stocked = lines.filter(l => STOCKED_TYPES.has(String(l.itemType || '')) && l.quantity > 0);
+  return {
+    parts: stocked.length,
+    short: stocked.filter(l => l.backordered > 0).length,
+    unknown: 0,
+    onOrder: 0,
+  };
+}

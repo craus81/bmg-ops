@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { derivePartsStage, type PartsStageInput } from './estimate-parts-stage';
+import { derivePartsStage, soStock, type PartsStageInput } from './estimate-parts-stage';
 
 const base: PartsStageInput = { approved: true, soClosed: false, requests: [], dropShips: [], stock: null };
 const req = (item: string, status: string, po: string | null = null) => ({ item_number: item, status, po_number: po });
@@ -43,5 +43,29 @@ describe('derivePartsStage', () => {
     expect(derivePartsStage({ ...base, stock: { parts: 3, short: 2, unknown: 0, onOrder: 0 } })?.detail).toBe('2 parts short · nothing requested yet');
     expect(derivePartsStage({ ...base, stock: { parts: 1, short: 0, unknown: 1, onOrder: 0 } })?.stage).toBe('approved');
     expect(derivePartsStage(base)?.detail).toBe('Parts not ordered yet');
+  });
+});
+
+describe('soStock (converted jobs)', () => {
+  it('counts the order’s own committed stock as in stock', () => {
+    const stock = soStock([
+      { itemType: 'InvtPart', quantity: 2, backordered: 0 },
+      { itemType: 'Assembly', quantity: 1, backordered: 0 },
+      { itemType: 'Service', quantity: 3, backordered: 0 },
+    ]);
+    expect(stock).toEqual({ parts: 2, short: 0, unknown: 0, onOrder: 0 });
+    expect(derivePartsStage({ ...base, stock })?.stage).toBe('parts_in_stock');
+  });
+
+  it('calls a backordered line short', () => {
+    const stock = soStock([
+      { itemType: 'InvtPart', quantity: 4, backordered: 3 },
+      { itemType: 'InvtPart', quantity: 1, backordered: 0 },
+    ]);
+    expect(derivePartsStage({ ...base, stock })?.detail).toBe('1 part short · nothing requested yet');
+  });
+
+  it('a labor-only order needs no parts', () => {
+    expect(derivePartsStage({ ...base, stock: soStock([{ itemType: 'Service', quantity: 8, backordered: 0 }]) })?.detail).toBe('No parts to order');
   });
 });
