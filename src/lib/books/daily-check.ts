@@ -24,6 +24,7 @@ import { MISTAKE_KINDS, type MistakeKind } from './mistake-checks';
 import { readClosedMonths } from './months';
 import { readNames } from './netsuite-feed';
 import { describeSend, NO_ANSWER_MS, type SendAction } from '@/lib/netsuite-sends';
+import { FIELD_NAMES, isBlank, KIND_NAMES, recordsWin, shownValue, type DifferenceRow } from '@/lib/fleetsuite-records';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -102,19 +103,26 @@ import { describeSend, NO_ANSWER_MS, type SendAction } from '@/lib/netsuite-send
  * or that never heard back, which nobody has looked for in NetSuite yet, is
  * told about at the first look that finds it, once.
  *
+ * And what NetSuite has instead of FleetSuite's record of a customer or a
+ * vendor once FleetSuite's record wins (part 48, "FleetSuite's record wins";
+ * src/lib/fleetsuite-records.ts): each field listed on Books → Changed in
+ * NetSuite is told about at the first look that finds it, once, while it's
+ * switched on.
+ *
  * In-app and push only (books_month_differs, books_stock_differs,
  * books_balance_differs, books_own_invoice_differs,
  * books_own_fulfillment_differs, books_own_bill_differs,
  * books_own_receipt_differs, books_mistake_found), but for the Inventory
- * Adjusts (books_own_adjustment_differs) and the sends
- * (books_netsuite_send_unsure), which are emailed too to a super admin with
+ * Adjusts (books_own_adjustment_differs), the sends
+ * (books_netsuite_send_unsure) and what changed in NetSuite
+ * (books_record_changed_in_netsuite), which are emailed too to a super admin with
  * "Copy me on new alerts" ticked (Craig, 2026-10-28). The record in
  * sync_state, 'books_daily_check', holds which months differ and how many of
  * their documents, which items' counts differ and by about how many, whose
  * balances differ and in how many documents, which own invoices,
  * fulfillments, bills, receipts and adjustments differ and in how many
- * things, and which likely mistakes are open, never an amount (each send
- * told about is marked on its own row instead), and is left
+ * things, and which likely mistakes are open, never an amount (each send,
+ * and each change in NetSuite, told about is marked on its own row instead), and is left
  * out of HEALTH_MONITORS like the other books jobs; Differences vs NetSuite
  * says when the check last looked. Nothing is written to NetSuite or to the
  * books.
@@ -301,10 +309,10 @@ export interface CheckAlert {
    * (books_balance_differs), FleetSuite's own invoices (books_own_invoice_differs), its own fulfillments
    * (books_own_fulfillment_differs), Books' own bills (books_own_bill_differs) and receipts
    * (books_own_receipt_differs), the Inventory Adjusts (books_own_adjustment_differs), likely mistakes
-   * (books_mistake_found) or sends to NetSuite FleetSuite isn't sure about (books_netsuite_send_unsure); one about
-   * months has none (books_month_differs).
+   * (books_mistake_found), sends to NetSuite FleetSuite isn't sure about (books_netsuite_send_unsure) or what changed
+   * in NetSuite (books_record_changed_in_netsuite); one about months has none (books_month_differs).
    */
-  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send';
+  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -713,6 +721,48 @@ export function sendAlertsFor(items: SendAlertItem[]): CheckAlert[] {
   }));
 }
 
+/** A field of a customer or vendor NetSuite has something else for, as a notification names it. */
+export interface ChangeAlertItem {
+  id: string;
+  /** 'Customer' or 'Vendor'. */
+  kindName: string;
+  name: string;
+  /** 'Billing address'. */
+  fieldName: string;
+  fleetsuite: string;
+  /** None when NetSuite has none. */
+  netsuite: string | null;
+}
+
+/** A value as a sentence of a notification's length quotes it, cut at a word. */
+const quoted = (text: string) => `"${text.length <= 80 ? text : `${text.slice(0, 80).replace(/\s+\S*$/, '')}…`}"`;
+
+/**
+ * What the super admins are told about what changed in NetSuite: a notification for each, opening it on Books →
+ * Changed in NetSuite, or with more than ONE_BY_ONE at a look one naming the first few, opening the list.
+ */
+export function changeAlertsFor(items: ChangeAlertItem[]): CheckAlert[] {
+  if (!items.length) return [];
+  const whose = (i: ChangeAlertItem) => `the ${i.fieldName.toLowerCase()} of ${i.name}`;
+  if (items.length > ONE_BY_ONE) {
+    const names = listed([...items.slice(0, ONE_BY_ONE).map(whose), `${items.length - ONE_BY_ONE} more`]);
+    return [{
+      title: `Changed in NetSuite: ${items.length} customer and vendor details`,
+      body: `${names.charAt(0).toUpperCase()}${names.slice(1)}. FleetSuite's stays until someone keeps it, which sends it on `
+        + "to NetSuite, or takes NetSuite's.",
+      url: deepLinks.booksChangedInNetsuite(),
+      about: 'change',
+    }];
+  }
+  return items.map((i) => ({
+    title: `${i.fieldName} changed in NetSuite for ${i.name}`,
+    body: `NetSuite has ${i.netsuite === null ? `no ${i.fieldName.toLowerCase()}` : quoted(i.netsuite)} where FleetSuite has `
+      + `${quoted(i.fleetsuite)}. FleetSuite's stays until someone keeps it, which sends it on to NetSuite, or takes NetSuite's.`,
+    url: deepLinks.booksChangedInNetsuite(i.id),
+    about: 'change',
+  }));
+}
+
 // ── Looking ────────────────────────────────────────────────────────────────
 
 /** Months whose documents are looked up at once. */
@@ -967,6 +1017,39 @@ async function markSendsTold(service: SupabaseClient, ids: string[], at: Date): 
   if (error) throw new Error(`couldn't mark the sends told about (${error.message})`);
 }
 
+/** The most changes in NetSuite one look tells about; any more are told about at the next. */
+const CHANGES_AT_A_LOOK = 200;
+
+/**
+ * What NetSuite has instead of FleetSuite's record that nobody has been told about, oldest first, while FleetSuite's
+ * record wins. None while it's off: nothing can be kept or taken then.
+ */
+async function lookAtChanges(service: SupabaseClient): Promise<ChangeAlertItem[]> {
+  if (!(await recordsWin(service))) return [];
+  type Row = Pick<DifferenceRow, 'id' | 'kind' | 'netsuite_id' | 'name' | 'field' | 'fleetsuite_value' | 'netsuite_value'>;
+  const { data, error } = await service.from('record_differences')
+    .select('id, kind, netsuite_id, name, field, fleetsuite_value, netsuite_value')
+    .eq('status', 'open')
+    .is('told_at', null)
+    .order('first_seen_at', { ascending: true }).order('id', { ascending: true })
+    .limit(CHANGES_AT_A_LOOK);
+  if (error) throw new Error(`couldn't read what changed in NetSuite (${error.message})`);
+  return ((data ?? []) as Row[]).map((r) => ({
+    id: r.id,
+    kindName: KIND_NAMES[r.kind] ?? r.kind,
+    name: r.name ?? `NetSuite ID ${r.netsuite_id}`,
+    fieldName: FIELD_NAMES[r.field] ?? r.field,
+    fleetsuite: shownValue(r.fleetsuite_value),
+    netsuite: isBlank(r.netsuite_value) ? null : shownValue(r.netsuite_value),
+  }));
+}
+
+/** Marks what changed in NetSuite told about, so no later look tells about it again. */
+async function markChangesTold(service: SupabaseClient, ids: string[], at: Date): Promise<void> {
+  const { error } = await service.from('record_differences').update({ told_at: at.toISOString() }).in('id', ids).is('told_at', null);
+  if (error) throw new Error(`couldn't mark what changed in NetSuite told about (${error.message})`);
+}
+
 /** The newest documents that differ of each balance a notification names one by one. */
 async function balanceNews(
   service: SupabaseClient,
@@ -1170,6 +1253,17 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     errors.push(`NetSuite feed: ${reason(err)}`);
   }
 
+  // What NetSuite has instead of FleetSuite's record of a customer or vendor, each told about at the first look that
+  // finds it, once, while FleetSuite's record wins.
+  let changes: ChangeAlertItem[] = [];
+  try {
+    changes = await lookAtChanges(service);
+    alerts.push(...changeAlertsFor(changes));
+    told += changes.length;
+  } catch (err) {
+    errors.push(`Changed in NetSuite: ${reason(err)}`);
+  }
+
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.
   if (alerts.length) await opts.tell(alerts);
   if (sends.length) {
@@ -1177,6 +1271,13 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
       await markSendsTold(service, sends.map((s) => s.id), new Date());
     } catch (err) {
       errors.push(`NetSuite feed: ${reason(err)}`);
+    }
+  }
+  if (changes.length) {
+    try {
+      await markChangesTold(service, changes.map((c) => c.id), new Date());
+    } catch (err) {
+      errors.push(`Changed in NetSuite: ${reason(err)}`);
     }
   }
   const result: DailyCheckResult = { look: opts.look, told, ...(errors.length ? { error: errors.join(' ') } : {}) };

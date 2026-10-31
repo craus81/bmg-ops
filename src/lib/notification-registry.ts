@@ -226,6 +226,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Super admins, the only people who can open the books.' },
+  // A change made in NetSuite to a customer or vendor once FleetSuite's record
+  // wins (part 48, migration 480). Emailed like the send alert, only to anyone
+  // with "Copy me on new alerts" (Craig's standing rule, 2026-10-28).
+  { type: 'books_record_changed_in_netsuite', label: "A customer's or vendor's details changed in NetSuite", description: "Once FleetSuite's record wins is switched on, someone changed a customer's name, email, phone or billing address, or a vendor's name, email or phone, in NetSuite, and FleetSuite kept its own. Told once, at the daily check's first look after it. Opens it on Books → Changed in NetSuite, to keep FleetSuite's or take NetSuite's, or the list when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, the only people who can open the books.' },
   { type: 'books_mistake_found', label: 'Books found likely mistakes in NetSuite', description: "FleetSuite's nightly mistake checks found a bill, check or card charge copied from NetSuite that looks like a mistake (entered twice, far off the vendor's usual, a monthly charge missing, or coded to an account the vendor doesn't use) and nobody has cleared it by the daily check's second look. Opens it on Mistake checks, or the list when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
 
   // ── Contract installers (CNI) ─────────────────────────────────────────

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { suiteqlQueryAll } from '@/lib/netsuite';
+import { recordsWinForSync } from '@/lib/fleetsuite-records';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -89,6 +90,12 @@ export async function POST(req: NextRequest) {
 
     contactsTotal = contactRows.length;
 
+    // Once FleetSuite's record wins (part 48, src/lib/fleetsuite-records.ts),
+    // a contact FleetSuite has (the customer's, by name) keeps its title,
+    // email and phone, and a new one still comes in. A switch that can't be
+    // read stops the sync.
+    const keepContacts = await recordsWinForSync(supabase);
+
     // Step 3: Upsert contacts into prospect_contacts, matching by customer_id
     for (const row of contactRows) {
       const custId = row.customer_id?.toString();
@@ -130,10 +137,15 @@ export async function POST(req: NextRequest) {
         // Link back to the NetSuite contact so in-app edits PATCH the same
         // record instead of creating duplicates (migration 178).
         netsuite_contact_id: row.contact_id ? String(row.contact_id) : null,
-      }, { onConflict: 'prospect_id,name' });
+      }, { onConflict: 'prospect_id,name', ...(keepContacts ? { ignoreDuplicates: true } : {}) });
 
       if (!upsertErr) {
         contactsSynced++;
+        // The link to NetSuite's contact is NetSuite's to give, so a contact FleetSuite kept still takes one it lacks.
+        if (keepContacts && row.contact_id) {
+          await supabase.from('prospect_contacts').update({ netsuite_contact_id: String(row.contact_id) })
+            .eq('prospect_id', prospectId).eq('name', name).is('netsuite_contact_id', null);
+        }
       } else {
         contactErrors++;
       }

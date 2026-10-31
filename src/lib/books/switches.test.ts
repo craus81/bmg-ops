@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { SWITCHES, SWITCH_PIECES, isSwitchPiece, readSwitches, setSwitch, switchIsOn } from './switches';
+import { SWITCHES, SWITCH_PIECES, isSwitchPiece, readSwitch, readSwitches, setSwitch, switchIsOn } from './switches';
 
 type Row = { piece: string; is_on: boolean | null; changed_by: string | null; changed_at: string | null };
 
@@ -36,7 +36,7 @@ describe('switches', () => {
   it('names each piece, where people find it, and only those', () => {
     expect(SWITCH_PIECES).toEqual([
       'credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes', 'bill_fixes',
-      'customer_vendor_details', 'item_accounts', 'estimates_in_fleetsuite',
+      'customer_vendor_details', 'item_accounts', 'estimates_in_fleetsuite', 'fleetsuite_records',
     ]);
     expect(SWITCHES.credit_memos.where).toBe('Invoicing → Invoiced → Credit on an invoice');
     expect(SWITCHES.vendor_credits.where).toBe('More → Purchasing → Vendor Credits');
@@ -66,8 +66,15 @@ describe('switches', () => {
       turnOn: "Switch on Estimates in FleetSuite only? From now on nobody can push an estimate to NetSuite, and NetSuite gets each job's sales order when it's made.",
       turnOff: 'Switch off Estimates in FleetSuite only? Estimates can be pushed to NetSuite again, as before.',
     });
-    // Only the piece that's the other way round asks in its own words.
-    expect(SWITCH_PIECES.filter((p) => SWITCHES[p].turnOn !== undefined || SWITCHES[p].turnOff !== undefined)).toEqual(['estimates_in_fleetsuite']);
+    expect(SWITCHES.fleetsuite_records).toEqual({
+      name: "FleetSuite's record wins",
+      what: "A change made in NetSuite to a customer's name, email, phone or billing address, or a vendor's name, email or phone, no longer comes into FleetSuite over what FleetSuite has: it's listed under Books → Changed in NetSuite, to keep FleetSuite's (sent on to NetSuite) or take NetSuite's. Until it's on, NetSuite's changes come in as they do today.",
+      where: 'The NetSuite customer and vendor syncs, and Books → Changed in NetSuite',
+      turnOn: "Switch on FleetSuite's record wins? From now on a change made in NetSuite to a customer's or vendor's name, email, phone or address doesn't come into FleetSuite by itself: it's listed under Books → Changed in NetSuite.",
+      turnOff: "Switch off FleetSuite's record wins? NetSuite's changes come into FleetSuite again as before, over what FleetSuite has.",
+    });
+    // Only the pieces that are the other way round ask in their own words.
+    expect(SWITCH_PIECES.filter((p) => SWITCHES[p].turnOn !== undefined || SWITCHES[p].turnOff !== undefined)).toEqual(['estimates_in_fleetsuite', 'fleetsuite_records']);
     expect(isSwitchPiece('credit_memos')).toBe(true);
     expect(isSwitchPiece('vendor_credits')).toBe(true);
     expect(isSwitchPiece('card_charges')).toBe(true);
@@ -78,6 +85,7 @@ describe('switches', () => {
     expect(isSwitchPiece('customer_vendor_details')).toBe(true);
     expect(isSwitchPiece('item_accounts')).toBe(true);
     expect(isSwitchPiece('estimates_in_fleetsuite')).toBe(true);
+    expect(isSwitchPiece('fleetsuite_records')).toBe(true);
     expect(isSwitchPiece('payroll')).toBe(false);
     expect(isSwitchPiece('toString')).toBe(false);
     expect(isSwitchPiece(null)).toBe(false);
@@ -95,6 +103,7 @@ describe('switches', () => {
       { piece: 'customer_vendor_details', on: false, changedBy: null, changedAt: null },
       { piece: 'item_accounts', on: false, changedBy: null, changedAt: null },
       { piece: 'estimates_in_fleetsuite', on: false, changedBy: null, changedAt: null },
+      { piece: 'fleetsuite_records', on: false, changedBy: null, changedAt: null },
     ]);
     expect(await readSwitches(fakeService().service)).toEqual([
       { piece: 'credit_memos', on: false, changedBy: null, changedAt: null },
@@ -107,6 +116,7 @@ describe('switches', () => {
       { piece: 'customer_vendor_details', on: false, changedBy: null, changedAt: null },
       { piece: 'item_accounts', on: false, changedBy: null, changedAt: null },
       { piece: 'estimates_in_fleetsuite', on: false, changedBy: null, changedAt: null },
+      { piece: 'fleetsuite_records', on: false, changedBy: null, changedAt: null },
     ]);
     await expect(readSwitches(fakeService({ error: 'denied' }).service)).rejects.toThrow('denied');
   });
@@ -118,6 +128,14 @@ describe('switches', () => {
     expect(await switchIsOn(fakeService().service, 'credit_memos')).toBe(false);
     expect(await switchIsOn(fakeService({ rows: [ON], error: 'denied' }).service, 'credit_memos')).toBe(false);
     expect(await switchIsOn(fakeService({ throws: true }).service, 'credit_memos')).toBe(false);
+  });
+
+  it("reads one switch for a caller that mustn't take a failed read for off", async () => {
+    expect(await readSwitch(fakeService({ rows: [ON] }).service, 'credit_memos')).toBe(true);
+    expect(await readSwitch(fakeService({ rows: [ON] }).service, 'vendor_credits')).toBe(false);
+    expect(await readSwitch(fakeService({ rows: [{ ...ON, is_on: null }] }).service, 'credit_memos')).toBe(false);
+    await expect(readSwitch(fakeService({ rows: [ON], error: 'denied' }).service, 'credit_memos')).rejects.toThrow('denied');
+    await expect(readSwitch(fakeService({ throws: true }).service, 'credit_memos')).rejects.toThrow('network down');
   });
 
   it('turns a switch on or off, saying who and what it was before', async () => {

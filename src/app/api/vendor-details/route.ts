@@ -222,6 +222,19 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // FleetSuite's own vendor list takes the new email, phone and terms now, not at its next copy of NetSuite's: once
+  // FleetSuite's record wins (part 48, src/lib/fleetsuite-records.ts), that copy keeps the email and phone FleetSuite
+  // has, and would list the new ones as changed in NetSuite.
+  const listed: Record<string, string | null> = {};
+  if ('email' in plan.body) listed.email = String(plan.body.email ?? '').trim() || null;
+  if ('phone' in plan.body) listed.phone = String(plan.body.phone ?? '').trim() || null;
+  const termsName = termsId ? terms.find((t) => t.id === termsId)?.name : undefined;
+  if (termsName) listed.terms = termsName;
+  if (Object.keys(listed).length) {
+    const { error: listError } = await service.from('netsuite_vendors').update(listed).eq('netsuite_id', vendor.id);
+    if (listError) console.error(`[vendor details] couldn't note ${vendor.id}'s change in FleetSuite's vendor list: ${listError.message}`);
+  }
+
   await logAudit(service, {
     actorId: auth.user.id,
     table: 'detail_changes',

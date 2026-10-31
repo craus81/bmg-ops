@@ -3,6 +3,7 @@ import { suiteqlQuery, suiteqlQueryAll } from '@/lib/netsuite';
 import { netsuiteFetch } from '@/lib/netsuite-sends';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
+import { customerToWrite, noteDifferences, readCustomerRecords, recordsWinForSync, type Seen } from '@/lib/fleetsuite-records';
 
 // Import OAuth helpers for REST Record API
 import OAuth from 'oauth-1.0a';
@@ -176,8 +177,27 @@ export async function GET(req: NextRequest) {
     let firstProspectError: string | null = null;
     const errors: string[] = [];
 
+    // Once FleetSuite's record wins (part 48, src/lib/fleetsuite-records.ts),
+    // a customer FleetSuite has keeps its name, email and phone, NetSuite's
+    // filling a blank, and what NetSuite has instead is noted. Its address is
+    // left as FleetSuite has it: this read has NetSuite's only as one line, so
+    // the two-hourly sync, which reads its parts, notes a different one. A
+    // read of the switch or of FleetSuite's that fails stops the sync.
+    const fleetsuite = (await recordsWinForSync(supabase))
+      ? await readCustomerRecords(supabase, nsCustomers.map((c: any) => String(c.id ?? '')))
+      : null;
+    const seen: Seen[] = [];
+
     for (const nsc of nsCustomers) {
       const nsId = nsc.id?.toString();
+      const mine = fleetsuite?.get(nsId);
+      const { facts, seen: kept } = customerToWrite(nsId, {
+        name: nsc.companyname || nsc.entityid || 'Unknown',
+        email: nsc.email || null,
+        phone: nsc.phone || null,
+        address: null,
+      }, mine, false);
+      seen.push(...kept);
       const allTime = allTimeMap[nsId] || { order_count: 0, total_spend: 0, last_order_date: null };
       const ytd = ytdMap[nsId] || { order_count: 0, total_spend: 0 };
       const ly = lastYearMap[nsId] || { order_count: 0, total_spend: 0 };
@@ -188,11 +208,11 @@ export async function GET(req: NextRequest) {
         .upsert({
           netsuite_id: nsId,
           netsuite_url: nsAccountId ? `${nsBaseUrl}/app/common/entity/custjob.nl?id=${nsId}` : null,
-          company_name: nsc.companyname || nsc.entityid || 'Unknown',
+          company_name: facts.name,
           entity_id: nsc.entityid || '',
-          email: nsc.email || null,
-          phone: nsc.phone || null,
-          address: addressMap[nsId] || null,
+          email: facts.email || null,
+          phone: facts.phone || null,
+          ...(mine ? {} : { address: addressMap[nsId] || null }),
           // NS hierarchy only — the manual parent link (migration 186) is
           // FleetSuite-owned and stays out of this SET list. NetSuite
           // reports a customer as its own parent when it has none.
@@ -220,9 +240,9 @@ export async function GET(req: NextRequest) {
         netsuite_id: nsId,
         netsuite_url: nsAccountId ? `${nsBaseUrl}/app/common/entity/custjob.nl?id=${nsId}` : null,
         netsuite_type: 'customer',
-        company_name: nsc.companyname || nsc.entityid || 'Unknown',
-        email: nsc.email || null,
-        phone: nsc.phone || null,
+        company_name: facts.name,
+        email: facts.email || null,
+        phone: facts.phone || null,
         // No address here on purpose. prospects now stores NetSuite's PARTS
         // (addr1/addr2/city/state/zip) so an edit on the Customer Record can
         // be pushed back line by line, and addressMap above is one flattened
@@ -239,6 +259,19 @@ export async function GET(req: NextRequest) {
         if (prospectsSynced === 0) console.error('[customer-sync] Prospect upsert failed:', prospectErr.message, prospectErr.details, prospectErr.hint, prospectErr.code);
       } else {
         prospectsSynced++;
+      }
+    }
+
+    // What NetSuite has instead. When it can't be noted the customers are
+    // still synced, FleetSuite's kept; the answer says so.
+    let changedInNetsuite: number | null = null;
+    let changedError: string | null = null;
+    if (fleetsuite) {
+      try {
+        changedInNetsuite = (await noteDifferences(supabase, 'customer', seen)).opened;
+      } catch (err: any) {
+        changedError = err?.message || String(err);
+        console.error('[customer-sync] Changed in NetSuite not noted:', changedError);
       }
     }
 
@@ -343,7 +376,8 @@ export async function GET(req: NextRequest) {
               title: c.role?.refName || c.title || null,
               email: c.email || null,
               phone: null, // Phone requires separate SuiteQL sync via Contacts tab
-            }, { onConflict: 'prospect_id,name' });
+              // Once FleetSuite's record wins, a contact FleetSuite has stays as it is.
+            }, { onConflict: 'prospect_id,name', ...(fleetsuite ? { ignoreDuplicates: true } : {}) });
             if (!cErr) contactsSynced++;
             else contactErrors++;
           }
@@ -370,6 +404,8 @@ export async function GET(req: NextRequest) {
       contactsTotal,
       contactsSkipped,
       contactErrors,
+      ...(changedInNetsuite !== null ? { changedInNetsuite } : {}),
+      ...(changedError ? { changedInNetsuiteError: changedError } : {}),
       ...(firstRestError ? { restApiError: { status: firstRestStatus, body: firstRestError } } : {}),
       ...(firstContactError ? { firstContactError } : {}),
       ...(firstError ? { firstError, sampleErrors: errors } : {}),

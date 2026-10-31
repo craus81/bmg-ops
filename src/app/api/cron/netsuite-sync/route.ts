@@ -16,6 +16,9 @@ import { recordHeartbeat } from '@/lib/system-health';
 import { syncVendors } from '@/lib/vendor-master';
 import { syncNetsuiteCreators } from '@/lib/netsuite-creators';
 import { syncNetsuiteTaxExempt } from '@/lib/customer-tax-exempt-sync';
+import {
+  addressLine, customerToWrite, noteDifferences, prospectAddress, readCustomerRecords, recordsWinForSync, type Seen,
+} from '@/lib/fleetsuite-records';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -124,10 +127,6 @@ export async function GET(req: NextRequest) {
       addressesLoaded = true;
     }
 
-    /** The one-line form the customers mirror has always stored. */
-    const composeAddress = (a?: NsAddress): string | null =>
-      a ? ([a.addr1, a.addr2, a.city, a.state, a.zip].filter(Boolean).join(', ') || null) : null;
-
     // Fetch spend data for modified customers
     const currentYear = new Date().getFullYear();
     const lastYear = currentYear - 1;
@@ -158,19 +157,31 @@ export async function GET(req: NextRequest) {
     let customersSynced = 0;
     let prospectsSynced = 0;
 
+    // Once FleetSuite's record wins (part 48, src/lib/fleetsuite-records.ts),
+    // a customer FleetSuite has keeps its name, email, phone and address,
+    // NetSuite's filling a blank, and what NetSuite has instead is noted. One
+    // FleetSuite hasn't got comes in as before. A read of the switch or of
+    // FleetSuite's that fails fails the phase rather than write over what it
+    // couldn't see.
+    const fleetsuite = (await recordsWinForSync(supabase))
+      ? await readCustomerRecords(supabase, nsCustomers.map((c: any) => String(c.id ?? '')))
+      : null;
+    const seen: Seen[] = [];
+
     for (const nsc of nsCustomers) {
       const nsId = nsc.id?.toString();
       // Address columns are written only when the address query actually
       // ran — see addressesLoaded above.
-      const nsAddr = addressMap[nsId];
-      const customerAddress = addressesLoaded ? { address: composeAddress(nsAddr) } : {};
-      const prospectAddress = addressesLoaded ? {
-        address: nsAddr?.addr1 || null,
-        address2: nsAddr?.addr2 || null,
-        city: nsAddr?.city || null,
-        state: nsAddr?.state || null,
-        zip: nsAddr?.zip || null,
-      } : {};
+      const { facts, seen: kept } = customerToWrite(nsId, {
+        name: nsc.companyname || nsc.entityid || 'Unknown',
+        email: nsc.email || null,
+        phone: nsc.phone || null,
+        address: addressMap[nsId] ?? null,
+      }, fleetsuite?.get(nsId), addressesLoaded);
+      seen.push(...kept);
+      // The customers mirror keeps the address as one display line, the CRM record as NetSuite's parts.
+      const customerAddress = addressesLoaded ? { address: addressLine(facts.address) } : {};
+      const prospectAddressParts = addressesLoaded ? prospectAddress(facts.address) : {};
       const at = allTimeMap[nsId] || {};
       const yt = ytdMap[nsId] || {};
       const lyr = lastYearMap[nsId] || {};
@@ -181,10 +192,10 @@ export async function GET(req: NextRequest) {
       const { error } = await supabase.from('customers').upsert({
         netsuite_id: nsId,
         netsuite_url: `${nsBaseUrl}/app/common/entity/custjob.nl?id=${nsId}`,
-        company_name: nsc.companyname || nsc.entityid || 'Unknown',
+        company_name: facts.name,
         entity_id: nsc.entityid || '',
-        email: nsc.email || null,
-        phone: nsc.phone || null,
+        email: facts.email || null,
+        phone: facts.phone || null,
         ...customerAddress,
         // NS hierarchy only — the manual parent link (parent_customer_id/
         // parent_source, migration 186) is FleetSuite-owned and stays out
@@ -208,10 +219,10 @@ export async function GET(req: NextRequest) {
         netsuite_id: nsId,
         netsuite_url: `${nsBaseUrl}/app/common/entity/custjob.nl?id=${nsId}`,
         netsuite_type: 'customer',
-        company_name: nsc.companyname || nsc.entityid || 'Unknown',
-        email: nsc.email || null,
-        phone: nsc.phone || null,
-        ...prospectAddress,
+        company_name: facts.name,
+        email: facts.email || null,
+        phone: facts.phone || null,
+        ...prospectAddressParts,
         status: 'converted',
         source: 'netsuite',
         pushed_at: new Date().toISOString(),
@@ -219,12 +230,20 @@ export async function GET(req: NextRequest) {
       if (!pErr) prospectsSynced++;
     }
 
+    // Noted before the sync's time moves on: when it can't be, the phase
+    // fails and these customers are read again next run.
+    const changed = await noteDifferences(supabase, 'customer', seen);
+
     // Update sync timestamp
     const customersWrite = await recordHeartbeat(
       supabase, 'netsuite_customers', { customersSynced, prospectsSynced, total: nsCustomers.length },
     );
 
-    results.customers = { modified: nsCustomers.length, customersSynced, prospectsSynced, syncStateWrite: customersWrite };
+    results.customers = {
+      modified: nsCustomers.length, customersSynced, prospectsSynced,
+      ...(fleetsuite ? { changedInNetsuite: changed.opened } : {}),
+      syncStateWrite: customersWrite,
+    };
   } catch (err: any) {
     console.error('[cron] Customer sync error:', err.message);
     results.customers = { error: err.message };
@@ -374,6 +393,10 @@ export async function GET(req: NextRequest) {
 
     let contactsSynced = 0;
     let phonesFound = 0;
+    // Once FleetSuite's record wins, a contact FleetSuite has (the customer's,
+    // by name) stays as FleetSuite has it, and a new one still comes in. A
+    // switch that can't be read fails the phase.
+    const keepContacts = await recordsWinForSync(supabase);
 
     for (const row of contactRows) {
       const custId = row.customer_id?.toString();
@@ -396,7 +419,7 @@ export async function GET(req: NextRequest) {
         title: row.title || null,
         email: row.email || null,
         phone,
-      }, { onConflict: 'prospect_id,name' });
+      }, { onConflict: 'prospect_id,name', ...(keepContacts ? { ignoreDuplicates: true } : {}) });
       if (!error) contactsSynced++;
     }
 

@@ -132,9 +132,14 @@ describe('direct messages and mentions', () => {
 });
 
 describe.each([
-  ["Books' Inventory Adjusts", 'books_own_adjustment_differs'],
-  ["sends to NetSuite FleetSuite isn't sure about", 'books_netsuite_send_unsure'],
-])('%s (Craig, 2026-10-28: new alerts copy him by email)', (_what, type) => {
+  ["Books' Inventory Adjusts", 'books_own_adjustment_differs', "An Inventory Adjust differs from NetSuite's"],
+  ["sends to NetSuite FleetSuite isn't sure about", 'books_netsuite_send_unsure', "FleetSuite isn't sure NetSuite took a send"],
+  ["a customer's or vendor's details changed in NetSuite", 'books_record_changed_in_netsuite', "A customer's or vendor's details changed in NetSuite"],
+])('%s (Craig, 2026-10-28: new alerts copy him by email)', (_what, type, label) => {
+
+  it('is listed in Settings → Notifications by what it tells', () => {
+    expect(getNotificationType(type)?.label).toBe(label);
+  });
 
   it('emails only a super admin with "Copy me on new alerts" ticked, in the app and by push otherwise', () => {
     expect(channelsForType(type, null)).toEqual(['in_app', 'push']);
