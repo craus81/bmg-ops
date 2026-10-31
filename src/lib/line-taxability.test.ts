@@ -18,7 +18,21 @@ describe('isPartTaxable', () => {
     expect(isPartTaxable({ item_type: 'Service', taxable_override: null })).toBe(false);
   });
 
+  it('leaves an item numbered 06… untaxed whatever its type, unless an admin says otherwise', () => {
+    for (const t of ['InvtPart', 'NonInvtPart', 'OthCharge', 'Service', null]) {
+      expect(isPartTaxable({ item_type: t, item_number: '06S646' })).toBe(false);
+    }
+    expect(isPartTaxable({ item_type: 'NonInvtPart', item_number: ' 06U233 ' })).toBe(false);
+    expect(isPartTaxable({ item_type: 'NonInvtPart', item_number: '06S646', taxable_override: true })).toBe(true);
+    // Only a leading 06 counts.
+    expect(isPartTaxable({ item_type: 'InvtPart', item_number: '02U233' })).toBe(true);
+    expect(isPartTaxable({ item_type: 'InvtPart', item_number: '1006' })).toBe(true);
+    expect(isPartTaxable({ item_type: 'InvtPart', item_number: '6S646' })).toBe(true);
+  });
+
   it('says why', () => {
+    expect(partTaxReason({ item_type: 'NonInvtPart', item_number: '06S646' })).toBe('Not taxed (06 service number)');
+    expect(partTaxReason({ item_type: 'Service', item_number: '06S646' })).toBe('Not taxed (service item)');
     expect(partTaxReason({ item_type: 'Service' })).toBe('Not taxed (service item)');
     expect(partTaxReason({ item_type: 'InvtPart', taxable_override: false })).toBe('Not taxed (set by an admin)');
     expect(partTaxReason({ item_type: 'InvtPart' })).toBe('Taxed');
@@ -37,7 +51,8 @@ describe('taxabilityResolver', () => {
   const taxed = taxabilityResolver([
     { id: 'p-labor', netsuite_id: '501', item_number: 'Graphics Install Labor', item_type: 'Service' },
     { id: 'p-freight', netsuite_id: '502', item_number: 'Freight', item_type: 'OthCharge', taxable_override: false },
-    { id: 'p-rack', netsuite_id: '503', item_number: '06U357', item_type: 'InvtPart' },
+    { id: 'p-rack', netsuite_id: '503', item_number: '02U357', item_type: 'InvtPart' },
+    { id: 'p-install', netsuite_id: '504', item_number: '06S646', item_type: 'NonInvtPart' },
   ]);
 
   it('matches on part id, then NetSuite id, then item number (any case)', () => {
@@ -46,6 +61,12 @@ describe('taxabilityResolver', () => {
     expect(taxed({ item_number: 'graphics install labor' })).toBe(false);
     expect(taxed({ item_number: ' FREIGHT ' })).toBe(false);
     expect(taxed({ part_id: 'p-rack' })).toBe(true);
+  });
+
+  it('leaves a 06 install untaxed, matched or not', () => {
+    expect(taxed({ part_id: 'p-install' })).toBe(false);
+    expect(taxed({ item_number: '06s646' })).toBe(false);
+    expect(taxed({ item_number: '06T999', is_custom: true })).toBe(false);
   });
 
   it('taxes a line it cannot match', () => {

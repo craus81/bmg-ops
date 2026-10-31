@@ -9,7 +9,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  *
  *  - a part's own `taxable_override`, when an admin has set it, wins;
  *  - otherwise a NetSuite Service item is untaxed (separately billed
- *    install/service work) and every other item type is taxed;
+ *    install/service work), and so is any item whose number starts with
+ *    "06" (BMG's service numbers, whatever type NetSuite gives them; Craig
+ *    2026-10-31, after INV2686 taxed 06S646 where NetSuite didn't);
+ *  - every other item is taxed;
  *  - a line we can't match to a catalog part (custom lines, unknown items) is
  *    taxed, so an unmatched line can never quietly shrink the tax.
  *
@@ -20,13 +23,22 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 export const UNTAXED_ITEM_TYPES = new Set(['Service']);
 
+/** Item numbers that are services, so untaxed, whatever NetSuite's item type says. */
+export const SERVICE_NUMBER_PREFIX = '06';
+
+export function isServiceNumber(itemNumber: unknown): boolean {
+  return String(itemNumber ?? '').trim().startsWith(SERVICE_NUMBER_PREFIX);
+}
+
 export interface PartTaxFields {
   item_type?: string | null;
+  item_number?: string | null;
   taxable_override?: boolean | null;
 }
 
 export function isPartTaxable(part: PartTaxFields): boolean {
   if (part.taxable_override === true || part.taxable_override === false) return part.taxable_override;
+  if (isServiceNumber(part.item_number)) return false;
   return !UNTAXED_ITEM_TYPES.has(String(part.item_type || ''));
 }
 
@@ -34,7 +46,8 @@ export function isPartTaxable(part: PartTaxFields): boolean {
 export function partTaxReason(part: PartTaxFields): string {
   if (part.taxable_override === true) return 'Taxed (set by an admin)';
   if (part.taxable_override === false) return 'Not taxed (set by an admin)';
-  return isPartTaxable(part) ? 'Taxed' : 'Not taxed (service item)';
+  if (isPartTaxable(part)) return 'Taxed';
+  return isServiceNumber(part.item_number) && !UNTAXED_ITEM_TYPES.has(String(part.item_type || '')) ? 'Not taxed (06 service number)' : 'Not taxed (service item)';
 }
 
 /** A line is taxed unless it was explicitly stamped non-taxable. */
@@ -52,7 +65,7 @@ export const CATALOG_TAX_COLUMNS = 'id, netsuite_id, item_number, item_type, tax
 /**
  * A line → taxed? function over a set of catalog rows. Matched on part_id
  * first, then the NetSuite item id, then the item number (case-insensitive).
- * A line that matches nothing is taxed.
+ * A line that matches nothing is taxed, unless its number is a 06 service number.
  */
 export function taxabilityResolver(parts: CatalogTaxRow[]): (line: LineRef) => boolean {
   const byId = new Map<string, boolean>();
@@ -72,6 +85,7 @@ export function taxabilityResolver(parts: CatalogTaxRow[]): (line: LineRef) => b
     const resolved = (pid && byId.has(pid)) ? byId.get(pid)
       : (nsid && byNsId.has(nsid)) ? byNsId.get(nsid)
       : byNumber.get(norm(l.item_number));
+    if (resolved === undefined && isServiceNumber(l.item_number)) return false;
     return resolved !== false;
   };
 }

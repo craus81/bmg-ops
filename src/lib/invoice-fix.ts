@@ -161,7 +161,7 @@ export function parseFixInvoice(rec: any, opts: { taxCodeRate?: number | null } 
       rate: kind === 'quantity' ? listedRate : null,
       cents: kind === 'layout' ? 0 : cents,
       // What NetSuite taxed on this invoice; where it doesn't say, FleetSuite's rule, and nothing when it charged none.
-      taxable: kind !== 'layout' && header.taxCents !== 0 && (said ?? isPartTaxable({ item_type: type })),
+      taxable: kind !== 'layout' && header.taxCents !== 0 && (said ?? isPartTaxable({ item_type: type, item_number: itemNumberOf(it) })),
       orderLine: orderLine !== null && Number.isInteger(orderLine) ? orderLine : null,
     });
   }
@@ -559,7 +559,7 @@ export function planInvoiceFix(inv: FixInvoice, edit: InvoiceFixEdit, facts: Fix
       const above = [...lines].reverse().find((x) => x.kind !== 'layout');
       const taxable = facts.untaxed !== null ? false
         : discount ? (above ? above.taxable : true)
-          : isPartTaxable({ item_type: item.itemType, taxable_override: item.taxableOverride });
+          : isPartTaxable({ item_type: item.itemType, item_number: item.itemNumber, taxable_override: item.taxableOverride });
       added.push(discount
         ? { item: { id: item.itemId }, rate: cents / 100, ...(description ? { description } : {}), isTaxable: taxable }
         : { item: { id: item.itemId }, quantity, price: { id: '-1' }, rate, ...(description ? { description } : {}), isTaxable: taxable });
