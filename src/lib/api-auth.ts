@@ -26,7 +26,13 @@ interface AuthResult {
   error?: NextResponse;
 }
 
-function extractAccessToken(req: NextRequest): string | null {
+/** What a request's sign-in token is read from: a NextRequest, or next/headers' headers() and cookies() together. */
+export interface TokenSource {
+  headers: { get(name: string): string | null };
+  cookies: { getAll(): Array<{ name: string; value: string }> };
+}
+
+function extractAccessToken(req: TokenSource): string | null {
   // 1. Check Authorization header
   const authHeader = req.headers.get('authorization');
   if (authHeader?.startsWith('Bearer ')) {
@@ -90,9 +96,11 @@ function extractAccessToken(req: NextRequest): string | null {
  * Supabase auth cookie / chunked cookies), or null. Exposed for routes
  * where identity is OPTIONAL — the usage-telemetry beacon resolves a role
  * from it when present and treats absence as anonymous, without any of the
- * requireX helpers' 401s. No behaviour change to the guards.
+ * requireX helpers' 401s. No behaviour change to the guards. The NetSuite
+ * feed reads it through next/headers to note who sent each write
+ * (src/lib/netsuite-sends.ts).
  */
-export function getAccessToken(req: NextRequest): string | null {
+export function getAccessToken(req: TokenSource): string | null {
   return extractAccessToken(req);
 }
 

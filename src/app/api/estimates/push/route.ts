@@ -9,6 +9,7 @@ import { resolveLaborItem } from '@/lib/labor-item';
 import { resolveOrPromoteByName } from '@/lib/promote-prospect';
 import { kitTaggedDescription } from '@/lib/estimate-kits';
 import { nsItemLine, type NsPushLine } from '@/lib/netsuite';
+import { netsuiteFetch } from '@/lib/netsuite-sends';
 import { buildDiscountLines, buildLineDiscountLine, estimateNeedsDiscountItem, resolveDiscountItem, type DiscountItem } from '@/lib/discount-item';
 import { untaxedFlag } from '@/lib/so-sync';
 import { normalizeVehicleCount } from '@/lib/estimate-totals';
@@ -128,7 +129,7 @@ async function createNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
     body.istaxable = false;
   }
 
-  const response = await fetch(url, {
+  const response = await netsuiteFetch(url, {
     method: 'POST',
     headers: {
       'Authorization': authHeader,
@@ -218,7 +219,7 @@ async function updateNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
     body.istaxable = false;
   }
 
-  const response = await fetch(url, {
+  const response = await netsuiteFetch(url, {
     method: 'PATCH',
     headers: {
       'Authorization': authHeader,
@@ -244,7 +245,7 @@ async function deleteNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   const authData = oauth.authorize({ url, method: 'DELETE' }, token);
   const authHeader = oauth.toHeader(authData).Authorization;
 
-  const response = await fetch(url, {
+  const response = await netsuiteFetch(url, {
     method: 'DELETE',
     headers: {
       'Authorization': authHeader,

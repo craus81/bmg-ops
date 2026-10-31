@@ -79,8 +79,11 @@ vendors' details changed in FleetSuite and sent on to NetSuite, built
 switched off, part 42, the entry that opens the books at NetSuite's
 balances, what still differs on the day, with a rehearsal of going live,
 part 43, the tap that sets the books live, with the opening entry the
-posting run then posts, and part 44, closing each month in FleetSuite's
-books once it's over, in order, and reopening one for a reason.
+posting run then posts, part 44, closing each month in FleetSuite's
+books once it's over, in order, and reopening one for a reason, and part
+45, the NetSuite feed, which keeps every send FleetSuite makes to NetSuite
+with what NetSuite answered and lists the ones FleetSuite can't be sure
+about until someone has looked for them in NetSuite.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -100,7 +103,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, and the months at `/admin/books/months`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, and the NetSuite feed at `/admin/books/netsuite-feed`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
 super admins can open it while credit memos are switched off. The vendor
@@ -1876,6 +1879,16 @@ on Mistake checks; more than three at once get one naming the first three,
 opening the list. The record (`mistakes`) holds the open ones by their id
 on Mistake checks, never a vendor or an amount. They start the day the
 check began to look at them, so none is taken as known at its first look.
+
+And so are the sends to NetSuite FleetSuite isn't sure about (part 45,
+"NetSuite feed"), but sooner: one NetSuite's answer didn't settle, or that
+never heard back, which nobody has looked for in NetSuite yet, is told
+about at the first look that finds it, once (`told_at` on its own row, not
+the record). Each gets its own notification
+(`books_netsuite_send_unsure`, in the app and by push, and emailed to a
+super admin with "Copy me on new alerts" ticked) saying what it asked for,
+when and by whom, and why FleetSuite can't tell, opening it on the NetSuite
+feed; more than three at once get one, opening the feed.
 
 ## Reports
 
@@ -4298,6 +4311,68 @@ month too.
 Closing a month here doesn't close it in NetSuite, nor does NetSuite's
 close reach FleetSuite: through 2027 NetSuite's months close there as
 before.
+
+## NetSuite feed
+
+From January 2027 the team works only in FleetSuite and FleetSuite sends
+each document on to NetSuite the moment someone saves it, so a send that
+goes wrong needs to be seen, not just by whoever pressed. The NetSuite feed
+(part 45, Books → NetSuite feed, `/admin/books/netsuite-feed`) keeps every
+request FleetSuite makes that writes to NetSuite, with what NetSuite
+answered (`netsuite_sends`, migration 477).
+
+Every request to NetSuite goes through `netsuiteFetch`
+(`src/lib/netsuite-sends.ts`) instead of `fetch`: each one in
+`src/lib/netsuite.ts`, and the routes that sign their own (estimates push,
+the invoice PO fix, the customer sync). A new write there is kept without
+anything more to do. Reads go straight through: any GET, SuiteQL (a POST
+that only reads) and the item script's ping. A write gets a row as it
+starts and the whole row once NetSuite answers, and the caller still gets
+exactly the answer or error `fetch` gave. Keeping it waits at most three
+seconds once NetSuite has answered, and one that fails is a warning in the
+log, never the send's problem.
+
+Each send is one of:
+
+- **Took it:** NetSuite answered 2xx. For a new record, NetSuite's ID for
+  it comes from the answer's `Location`. The item script answers 200
+  either way, so its answer's `success` says which.
+- **Refused:** NetSuite answered 4xx, or the item script said it didn't do
+  it. Nothing was made, so there's nothing to look for. NetSuite's reason
+  is kept.
+- **Not sure:** NetSuite answered 5xx or something FleetSuite couldn't
+  read (as an item script answer that doesn't say `success`), or the
+  request failed or timed out before an answer came. NetSuite may have done
+  it anyway.
+- **No answer:** still without an answer more than five minutes after it
+  started (`NO_ANSWER_MS`), so the server stopped before NetSuite answered.
+  It counts as not sure.
+
+What's kept is never the request's body: the method, what it asked for (a
+new record, a change, a delete, one made from another, as an invoice from
+a sales order), NetSuite's name for the record, the record addressed or
+made, one document number, external ID or name sent or answered to find it
+by (`externalId`, `tranId`, `entityId`, `itemId` or `companyName`), the
+HTTP status, NetSuite's reason with any run of nine or more digits hidden
+(`scrub`), and who was signed in, read from the request's sign-in token (a
+scheduled job's names nobody). That reads `next/headers`, loaded only as a
+send starts: a few phone pages load the NetSuite client, and Next won't
+build a page whose code imports `next/headers` at the top of a file
+(`src/lib/client-graph.test.ts` finds one).
+
+The page shows the last seven days' counts, the sends FleetSuite isn't sure
+about that nobody has looked for yet, and every send, newest first, fifty
+at a time, narrowed to one outcome or kind of record. Each links to the
+record in NetSuite when FleetSuite knows its ID. One FleetSuite isn't sure
+about stays at the top until a super admin taps Looked at it, with a note
+of what they found in NetSuite (`POST /api/admin/books/netsuite-feed`,
+audited `look_at_send`). Only one NetSuite didn't settle can be marked, and
+only once. The daily check tells the super admins about each of those once
+("Daily check").
+
+The feed records; it doesn't retry. A send that isn't sure is looked for in
+NetSuite before anyone tries again, because sending it again is how a
+second copy gets made.
 
 ## Going live
 

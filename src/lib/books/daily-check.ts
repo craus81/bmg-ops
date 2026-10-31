@@ -22,6 +22,8 @@ import { checkOwnReceipts, type OwnReceiptCheck, type ReceiptCopiesThrough, type
 import { checkOwnAdjustments, INVENTORY_ADJUST_ACCOUNT, type AdjustPairsData, type OwnAdjustmentCheck } from './own-adjustment-check';
 import { MISTAKE_KINDS, type MistakeKind } from './mistake-checks';
 import { readClosedMonths } from './months';
+import { readNames } from './netsuite-feed';
+import { describeSend, NO_ANSWER_MS, type SendAction } from '@/lib/netsuite-sends';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -95,17 +97,24 @@ import { readClosedMonths } from './months';
  * again, is told about again. They start the day the check began to look, so
  * the first ones are told about too.
  *
+ * And the sends to NetSuite FleetSuite isn't sure about (part 45, "NetSuite
+ * feed"; src/lib/books/netsuite-feed.ts): one NetSuite's answer didn't settle,
+ * or that never heard back, which nobody has looked for in NetSuite yet, is
+ * told about at the first look that finds it, once.
+ *
  * In-app and push only (books_month_differs, books_stock_differs,
  * books_balance_differs, books_own_invoice_differs,
  * books_own_fulfillment_differs, books_own_bill_differs,
  * books_own_receipt_differs, books_mistake_found), but for the Inventory
- * Adjusts (books_own_adjustment_differs), which are emailed too to a super
- * admin with "Copy me on new alerts" ticked (Craig, 2026-10-28). The record in
+ * Adjusts (books_own_adjustment_differs) and the sends
+ * (books_netsuite_send_unsure), which are emailed too to a super admin with
+ * "Copy me on new alerts" ticked (Craig, 2026-10-28). The record in
  * sync_state, 'books_daily_check', holds which months differ and how many of
  * their documents, which items' counts differ and by about how many, whose
  * balances differ and in how many documents, which own invoices,
  * fulfillments, bills, receipts and adjustments differ and in how many
- * things, and which likely mistakes are open, never an amount, and is left
+ * things, and which likely mistakes are open, never an amount (each send
+ * told about is marked on its own row instead), and is left
  * out of HEALTH_MONITORS like the other books jobs; Differences vs NetSuite
  * says when the check last looked. Nothing is written to NetSuite or to the
  * books.
@@ -291,10 +300,11 @@ export interface CheckAlert {
    * Set on a notification about stock by item (books_stock_differs), a customer's or vendor's balance
    * (books_balance_differs), FleetSuite's own invoices (books_own_invoice_differs), its own fulfillments
    * (books_own_fulfillment_differs), Books' own bills (books_own_bill_differs) and receipts
-   * (books_own_receipt_differs), the Inventory Adjusts (books_own_adjustment_differs) or likely mistakes
-   * (books_mistake_found); one about months has none (books_month_differs).
+   * (books_own_receipt_differs), the Inventory Adjusts (books_own_adjustment_differs), likely mistakes
+   * (books_mistake_found) or sends to NetSuite FleetSuite isn't sure about (books_netsuite_send_unsure); one about
+   * months has none (books_month_differs).
    */
-  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake';
+  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -658,6 +668,51 @@ export function mistakeAlertsFor(news: MonthNews[], items: Map<string, MistakeAl
   }));
 }
 
+/** A send to NetSuite FleetSuite isn't sure about, as a notification names it. */
+export interface SendAlertItem {
+  id: string;
+  /** What it asked NetSuite for: 'New invoice'. */
+  what: string;
+  at: string;
+  who: string | null;
+  /** Why FleetSuite isn't sure; none when it never heard back. */
+  error: string | null;
+}
+
+const sentAt = (iso: string) => new Date(iso).toLocaleString('en-US', {
+  month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago',
+});
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+/** A reason as a sentence of a notification's length, cut at a word. */
+const shortReason = (text: string) => {
+  const cut = text.length <= 160 ? text.trim() : `${text.slice(0, 160).replace(/\s+\S*$/, '')}…`;
+  return /[.!?…]$/.test(cut) ? cut : `${cut}.`;
+};
+
+/**
+ * What the super admins are told about sends to NetSuite FleetSuite isn't sure about: a notification for each, opening
+ * it on the NetSuite feed, or with more than ONE_BY_ONE at a look one naming the first few, opening the feed.
+ */
+export function sendAlertsFor(items: SendAlertItem[]): CheckAlert[] {
+  if (!items.length) return [];
+  if (items.length > ONE_BY_ONE) {
+    const names = listed([...items.slice(0, ONE_BY_ONE).map((i) => `the ${lowerFirst(i.what)}`), `${items.length - ONE_BY_ONE} more`]);
+    return [{
+      title: `NetSuite feed: ${items.length} sends FleetSuite isn't sure about`,
+      body: `${names.charAt(0).toUpperCase()}${names.slice(1)}. NetSuite may have done them anyway, so look for each there before anyone tries again.`,
+      url: deepLinks.booksNetsuiteFeed(),
+      about: 'send',
+    }];
+  }
+  return items.map((i) => ({
+    title: `NetSuite feed: not sure about the ${lowerFirst(i.what)}`,
+    body: `Sent ${sentAt(i.at)}${i.who ? ` by ${i.who}` : ''}: ${shortReason(i.error ?? 'FleetSuite never heard back from NetSuite.')} `
+      + 'NetSuite may have done it anyway, so look for it there before anyone tries again.',
+    url: deepLinks.booksNetsuiteFeed(i.id),
+    about: 'send',
+  }));
+}
+
 // ── Looking ────────────────────────────────────────────────────────────────
 
 /** Months whose documents are looked up at once. */
@@ -873,6 +928,45 @@ async function lookAtMistakes(service: SupabaseClient): Promise<{ now: Differing
   return { now, items };
 }
 
+/** The most sends one look tells about; any more are told about at the next. */
+const SENDS_AT_A_LOOK = 200;
+
+/**
+ * The sends to NetSuite FleetSuite isn't sure about at `now` that nobody has looked for or been told about, oldest
+ * first: NetSuite's answer didn't settle it, or none came within NO_ANSWER_MS.
+ */
+async function lookAtSends(service: SupabaseClient, now: Date): Promise<SendAlertItem[]> {
+  type Row = { id: string; started_at: string; action: SendAction; record_type: string; made_type: string | null; error: string | null; user_id: string | null };
+  const untold = () => service.from('netsuite_sends').select('id, started_at, action, record_type, made_type, error, user_id')
+    .is('looked_at', null)
+    .is('told_at', null);
+  const [answered, unanswered] = await Promise.all([
+    untold().eq('outcome', 'unsure')
+      .order('started_at', { ascending: true }).order('id', { ascending: true }).limit(SENDS_AT_A_LOOK),
+    untold().is('outcome', null).lt('started_at', new Date(now.getTime() - NO_ANSWER_MS).toISOString())
+      .order('started_at', { ascending: true }).order('id', { ascending: true }).limit(SENDS_AT_A_LOOK),
+  ]);
+  const failed = answered.error ?? unanswered.error;
+  if (failed) throw new Error(`couldn't read the sends (${failed.message})`);
+  const rows = ([...(answered.data ?? []), ...(unanswered.data ?? [])] as Row[])
+    .sort((a, b) => a.started_at.localeCompare(b.started_at) || a.id.localeCompare(b.id))
+    .slice(0, SENDS_AT_A_LOOK);
+  const names = await readNames(service, rows.map((r) => r.user_id));
+  return rows.map((r) => ({
+    id: r.id,
+    what: describeSend(r),
+    at: r.started_at,
+    who: r.user_id ? names.get(r.user_id) ?? null : null,
+    error: r.error,
+  }));
+}
+
+/** Marks the sends told about, so no later look tells about them again. */
+async function markSendsTold(service: SupabaseClient, ids: string[], at: Date): Promise<void> {
+  const { error } = await service.from('netsuite_sends').update({ told_at: at.toISOString() }).in('id', ids).is('told_at', null);
+  if (error) throw new Error(`couldn't mark the sends told about (${error.message})`);
+}
+
 /** The newest documents that differ of each balance a notification names one by one. */
 async function balanceNews(
   service: SupabaseClient,
@@ -896,7 +990,7 @@ async function balanceNews(
 
 export interface DailyCheckResult {
   look: Look;
-  /** Months, items, balances, own invoices, fulfillments, bills, receipts and adjustments, and likely mistakes told about. */
+  /** Months, items, balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes and sends told about. */
   told: number;
   /** What the look couldn't do; a company it couldn't look at keeps what the check held for it. */
   error?: string;
@@ -1066,8 +1160,25 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     errors.push(`Mistake checks: ${reason(err)}`);
   }
 
+  // The sends to NetSuite FleetSuite isn't sure about, each told about at the first look that finds it.
+  let sends: SendAlertItem[] = [];
+  try {
+    sends = await lookAtSends(service, new Date());
+    alerts.push(...sendAlertsFor(sends));
+    told += sends.length;
+  } catch (err) {
+    errors.push(`NetSuite feed: ${reason(err)}`);
+  }
+
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.
   if (alerts.length) await opts.tell(alerts);
+  if (sends.length) {
+    try {
+      await markSendsTold(service, sends.map((s) => s.id), new Date());
+    } catch (err) {
+      errors.push(`NetSuite feed: ${reason(err)}`);
+    }
+  }
   const result: DailyCheckResult = { look: opts.look, told, ...(errors.length ? { error: errors.join(' ') } : {}) };
   const record = {
     ...result,

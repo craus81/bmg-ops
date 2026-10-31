@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
+import { netsuiteFetch } from '@/lib/netsuite-sends';
 import { requireRole } from '@/lib/api-auth';
 import OAuth from 'oauth-1.0a';
 import CryptoJS from 'crypto-js';
@@ -34,7 +35,7 @@ function patchInvoice(invoiceId: string, fields: Record<string, any>) {
   const authData = oauth.authorize({ url, method: 'PATCH' }, token);
   const authHeader = oauth.toHeader(authData).Authorization;
 
-  return fetch(url, {
+  return netsuiteFetch(url, {
     method: 'PATCH',
     headers: {
       'Authorization': authHeader,

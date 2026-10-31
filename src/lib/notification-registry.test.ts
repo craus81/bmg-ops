@@ -131,8 +131,10 @@ describe('direct messages and mentions', () => {
   });
 });
 
-describe("Books' Inventory Adjusts (Craig, 2026-10-28: new alerts copy him by email)", () => {
-  const type = 'books_own_adjustment_differs';
+describe.each([
+  ["Books' Inventory Adjusts", 'books_own_adjustment_differs'],
+  ["sends to NetSuite FleetSuite isn't sure about", 'books_netsuite_send_unsure'],
+])('%s (Craig, 2026-10-28: new alerts copy him by email)', (_what, type) => {
 
   it('emails only a super admin with "Copy me on new alerts" ticked, in the app and by push otherwise', () => {
     expect(channelsForType(type, null)).toEqual(['in_app', 'push']);
