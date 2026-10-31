@@ -4073,10 +4073,126 @@ copy keeps its first version.
   bill waiting for approval has posted nothing yet, so Credit all of it says
   so.
 
+## Customer and vendor details changed in FleetSuite
+
+From January 1, 2027 the team changes a customer's terms and credit limit,
+and a vendor's email, phone, terms, addresses and 1099 details, in
+FleetSuite, and FleetSuite makes the change in NetSuite (the NetSuite Exit
+Checklist's January pieces, owner decisions 2026-10-31). A customer's name,
+email, phone and address are changed on its page already (the Customer
+Record's Edit panel, `updateCustomer`). It's built switched off
+("Switches"): until a super admin turns it on, only super admins can open
+the screens, to see what a change would send, and nothing goes to NetSuite.
+Once it's on, anyone with Credit Applications who can see prices changes a
+customer's terms, and More → Sales shows Customer Terms to them; anyone with
+Payments who can see prices changes a vendor's details, and More → Money &
+Books shows Vendor Details.
+
+### A customer's terms
+
+The screen is `/admin/customer-terms` (`deepLinks.customerTerms`). It finds
+a customer in the copy of NetSuite's customer list by name, active ones
+first, or opens on one: Change in the A/R card on a customer's page. It
+reads the customer from NetSuite as it is now (`getEntityRecord`): its
+terms, credit limit and what it owes (`parseTermsCustomer` in
+`src/lib/customer-terms.ts`), with NetSuite's active terms from the copy of
+its lists (`listTerms`). What a change can do (`planCustomerTerms`):
+
+- **Its terms**, any of NetSuite's active ones. Its new invoices default to
+  them, and FleetSuite's own invoices fall due by them; invoices already
+  made keep theirs. Terms aren't taken off.
+- **Its credit limit**, to the cent, $100,000,000 at most, or none: the box
+  left blank sends NetSuite `creditLimit: null`.
+
+### A vendor's details
+
+The screen is `/admin/vendor-details` (`deepLinks.vendorDetails`). It finds
+a vendor in the copy of NetSuite's vendor list by name, or opens on one. It
+reads the vendor from NetSuite as it is now, its address book with it
+(`getEntityRecord`, `expandSubResources`), in `parseDetailsVendor` in
+`src/lib/vendor-details.ts`. What a change can do (`planVendorDetails`):
+
+- **Its email and phone**: an email that looks like one, a phone of seven
+  digits or more, or either left blank.
+- **Its terms**, as a customer's: what its new bills default to, and what
+  Snap a bill's bills fall due by.
+- **Its addresses.** Any one changed, by NetSuite's id for its line in the
+  vendor's address book, sent with everything NetSuite has on it (its third
+  line, phone and country, as read) so nothing on it is lost. One added, a
+  street and city at least, in the US: a vendor's first address is its
+  billing and shipping address. And which one is its billing address
+  (NetSuite's default billing address): the one marked before is unmarked.
+  No address is taken off, and one NetSuite gave no id can't be changed.
+- **Its 1099 details**: whether it gets a 1099 (`is1099Eligible`), its legal
+  name as on its W-9, and its tax ID, nine digits, as 12-3456789 or
+  123-45-6789. A vendor that gets a 1099 with no tax ID in NetSuite is noted
+  on the screen: its 1099 needs one.
+
+A tax ID is never kept in FleetSuite. NetSuite is sent the one typed; the
+screen shows only the four digits NetSuite's ends with, what the page plans
+against has only those, and the record of the change and the audit log say
+"(ending 6789)" (`keptBody`). The database refuses a record of a change
+that holds more of it (`detail_changes_no_tax_id`), NetSuite's words about
+a change it refused are kept with the tax ID taken out (`withoutTaxId`),
+and nothing sent to NetSuite is logged.
+
+### Sending
+
+Save to NetSuite sends it once (`/api/customer-terms`,
+`/api/vendor-details`), as Fix bill does. The page sends back what it read
+the record as (`customerFacts`, `vendorFacts`, as a short signature): when
+NetSuite's record has changed since, nothing is sent and the page says to
+reload. The route works the change out again from the record as NetSuite
+has it now, never from what the page worked out, and takes a claim on the
+press (`detail_changes`, `detail_change_claim`, migration 473): pressing
+again says the first press is being sent or went in, and only one change of
+a record is sent at a time. Then it sends NetSuite only what changed
+(`patchEntityRecord`). A refusal, in NetSuite's own words, is kept as
+refused: nothing changed, and the same form can try again. When NetSuite
+doesn't answer or faults, it's kept as unsure and the page says to reload
+and look. A send that never finished holds the record five minutes at most,
+then counts as unsure. Each change keeps who made it, why, and what changed
+in words, listed under Changed before on the screen and in the audit log
+(`detail_changes`, `change_customer` and `change_vendor`). Nothing is
+emailed to the customer or the vendor.
+
+New terms go into the copy of NetSuite's customer or vendor list then too
+(`noteTermsChanged`), not at its next read two hours on at most, since
+Books' own invoices and Snap a bill read terms from it. One that can't be
+noted is logged, and the next read catches up.
+
+Made-up examples: a customer's credit application is approved at Net 30
+with a $25,000.00 limit, and NetSuite has it on Due on receipt with no
+limit. Change: terms Due on receipt → Net 30, credit limit no limit →
+$25,000.00, why "Credit application approved". Its next invoice falls due
+30 days on. A vendor sends a new W-9 with its legal name, Ridge Supply LLC,
+its tax ID, 12-3456789, and a new remit address. Change: Gets a 1099 no →
+yes, Legal name (none) → Ridge Supply LLC, Tax ID (none) → one ending 6789,
+New address: PO Box 100, Springfield, MO 65801, and that address marked as
+its billing address. The record of the change says "(ending 6789)".
+
+### What isn't done yet
+
+- A new customer or vendor is made where it is now: a vendor with Create in
+  NetSuite on the vendor pickers (`/api/cni/create-vendor`), its terms and
+  1099 details then set here.
+- No address is taken off, and a vendor's name, its company and its
+  currency aren't changed here.
+- Before switching on, try changes on a test customer and a test vendor and
+  check in NetSuite: that `creditLimit: null` takes a limit off; that a
+  vendor's GET with `expandSubResources` gives `addressBook.items` with an
+  id on each line; that an address changed by its line's id keeps the
+  vendor's other addresses (the address book is merged, not replaced) and a
+  line with no id is added; that marking a billing address unmarks the one
+  before; that NetSuite takes `taxIdNum` written 12-3456789 and its GET
+  gives it back, whole or masked, so the screen can show its last four
+  digits; and that `is1099Eligible` and `legalName` are what the vendor
+  record calls them.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 472, `src/lib/books/switches.ts`),
+row each in `books_switches` (migrations 466 to 473, `src/lib/books/switches.ts`),
 and stays off until a super admin turns it on in Books → Switches
 (`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
 on on January 1, 2027, asking the owner once in late December.
@@ -4096,6 +4212,7 @@ in the audit log (`switch_on`, `switch_off`).
 | `inventory_transfers` | Admins move stock from one of a company's locations to another in FleetSuite, and FleetSuite makes the transfer in NetSuite ("Inventory transfers made in FleetSuite") | More → Parts & Inventory → Inventory Transfers |
 | `invoice_fixes` | Anyone with Invoicing fixes an invoice after it's made, its PO number, memo and VIN, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy ("Invoices fixed in FleetSuite") | Invoicing → Invoiced → Fix on an invoice |
 | `bill_fixes` | Admins with Parts Ordering fix a bill after it's made, its number, memo and due date, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy ("Bills fixed in FleetSuite") | More → Purchasing → Fix a Bill, or Fix on Books → Own bills |
+| `customer_vendor_details` | Anyone with Credit Applications changes a customer's terms and credit limit, and anyone with Payments a vendor's email, phone, terms, addresses and 1099 details, and FleetSuite makes the change in NetSuite ("Customer and vendor details changed in FleetSuite") | More → Sales → Customer Terms, or Change on a customer; More → Money & Books → Vendor Details |
 
 ## Posting
 

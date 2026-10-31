@@ -1646,6 +1646,84 @@ export async function updateCustomer(
 }
 
 /**
+ * One call against a customer's or a vendor's record, for Customer Terms
+ * and Vendor Details (src/lib/customer-terms.ts, src/lib/vendor-details.ts):
+ * a GET reads it whole, a vendor's address book with it; a PATCH changes
+ * it. NetSuite's refusal comes back as its own words; a PATCH that timed
+ * out, or a fault on NetSuite's side (5xx), is `unsure`, since NetSuite may
+ * have made the change anyway. Nothing sent is ever logged: a vendor's may
+ * carry its tax ID.
+ */
+async function entityRecordCall(
+  record: 'customer' | 'vendor',
+  id: string,
+  method: 'GET' | 'PATCH',
+  body?: Record<string, unknown>,
+): Promise<{ success: true; record: any } | { success: false; error: string; notFound?: boolean; unsure?: boolean }> {
+  if (!/^\d+$/.test(id)) return { success: false, error: `Bad ${record} id` };
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/${record}/${id}${method === 'GET' && record === 'vendor' ? '?expandSubResources=true' : ''}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        ...(method === 'PATCH' ? { 'Prefer': 'respondAsync=false' } : {}),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return {
+        success: false,
+        error: `NetSuite error (${response.status}): ${detail}`,
+        ...(response.status === 404 ? { notFound: true } : {}),
+        ...(method === 'PATCH' && response.status >= 500 ? { unsure: true } : {}),
+      };
+    }
+    const text = await response.text();
+    return { success: true, record: text ? JSON.parse(text) : {} };
+  } catch (e: any) {
+    const error = e?.name === 'AbortError' ? 'NetSuite took too long to answer' : `Couldn't reach NetSuite: ${e?.message || 'unknown error'}`;
+    return { success: false, error, ...(method === 'PATCH' ? { unsure: true } : {}) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** A customer's or a vendor's record as NetSuite has it now, read live because a change is worked out against it. */
+export async function getEntityRecord(
+  record: 'customer' | 'vendor',
+  id: string,
+): Promise<{ success: true; record: any } | { success: false; error: string; notFound?: boolean }> {
+  const res = await entityRecordCall(record, id, 'GET');
+  return res.success ? res : { success: false, error: res.error, ...(res.notFound ? { notFound: true } : {}) };
+}
+
+/** Changes a customer's or a vendor's record: only the fields in `body`, a vendor's addresses by their lines' ids. */
+export async function patchEntityRecord(
+  record: 'customer' | 'vendor',
+  id: string,
+  body: Record<string, unknown>,
+): Promise<{ success: boolean; error?: string; unsure?: boolean }> {
+  const res = await entityRecordCall(record, id, 'PATCH', body);
+  return res.success ? { success: true } : { success: false, error: res.error, ...(res.unsure ? { unsure: true } : {}) };
+}
+
+/**
  * Close a NetSuite estimate by zeroing its probability.
  *
  * An estimate's Document Status (Open/Processed/Closed/Expired) is DERIVED,

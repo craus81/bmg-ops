@@ -34,7 +34,10 @@ const ON: Row = { piece: 'credit_memos', is_on: true, changed_by: 'p1', changed_
 
 describe('switches', () => {
   it('names each piece, where people find it, and only those', () => {
-    expect(SWITCH_PIECES).toEqual(['credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes', 'bill_fixes']);
+    expect(SWITCH_PIECES).toEqual([
+      'credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes', 'bill_fixes',
+      'customer_vendor_details',
+    ]);
     expect(SWITCHES.credit_memos.where).toBe('Invoicing → Invoiced → Credit on an invoice');
     expect(SWITCHES.vendor_credits.where).toBe('More → Purchasing → Vendor Credits');
     expect(SWITCHES.card_charges.where).toBe('More → Money & Books → Card Charges');
@@ -46,6 +49,11 @@ describe('switches', () => {
       what: "Admins with Parts Ordering fix a bill after it's made, its number, memo and due date, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy for the books.",
       where: 'More → Purchasing → Fix a Bill, or Fix on Books → Own bills',
     });
+    expect(SWITCHES.customer_vendor_details).toEqual({
+      name: 'Customer and vendor details',
+      what: "Anyone with Credit Applications changes a customer's terms and credit limit, and anyone with Payments a vendor's email, phone, terms, addresses and 1099 details, in FleetSuite, and FleetSuite makes the change in NetSuite.",
+      where: 'More → Sales → Customer Terms, or Change on a customer; More → Money & Books → Vendor Details',
+    });
     expect(isSwitchPiece('credit_memos')).toBe(true);
     expect(isSwitchPiece('vendor_credits')).toBe(true);
     expect(isSwitchPiece('card_charges')).toBe(true);
@@ -53,6 +61,7 @@ describe('switches', () => {
     expect(isSwitchPiece('inventory_transfers')).toBe(true);
     expect(isSwitchPiece('invoice_fixes')).toBe(true);
     expect(isSwitchPiece('bill_fixes')).toBe(true);
+    expect(isSwitchPiece('customer_vendor_details')).toBe(true);
     expect(isSwitchPiece('payroll')).toBe(false);
     expect(isSwitchPiece('toString')).toBe(false);
     expect(isSwitchPiece(null)).toBe(false);
@@ -67,6 +76,7 @@ describe('switches', () => {
       { piece: 'inventory_transfers', on: false, changedBy: null, changedAt: null },
       { piece: 'invoice_fixes', on: false, changedBy: null, changedAt: null },
       { piece: 'bill_fixes', on: false, changedBy: null, changedAt: null },
+      { piece: 'customer_vendor_details', on: false, changedBy: null, changedAt: null },
     ]);
     expect(await readSwitches(fakeService().service)).toEqual([
       { piece: 'credit_memos', on: false, changedBy: null, changedAt: null },
@@ -76,6 +86,7 @@ describe('switches', () => {
       { piece: 'inventory_transfers', on: false, changedBy: null, changedAt: null },
       { piece: 'invoice_fixes', on: false, changedBy: null, changedAt: null },
       { piece: 'bill_fixes', on: false, changedBy: null, changedAt: null },
+      { piece: 'customer_vendor_details', on: false, changedBy: null, changedAt: null },
     ]);
     await expect(readSwitches(fakeService({ error: 'denied' }).service)).rejects.toThrow('denied');
   });

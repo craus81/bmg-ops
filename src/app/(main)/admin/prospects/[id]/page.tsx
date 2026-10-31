@@ -433,6 +433,10 @@ export default function CustomerRecordPage() {
   // Terms / credit limit / 12-month invoiced series (NetSuite).
   interface ProfileData { terms: string | null; creditLimit: number | null; nsBalance: number | null; months: { month: string; total: number }[] }
   const [nsProfile, setNsProfile] = useState<ProfileData | null>(null);
+  // Change beside them (Customer Terms, Books part 41): anyone with Credit
+  // Applications once customer and vendor details are switched on in Books →
+  // Switches; until then super admins only.
+  const [canChangeTerms, setCanChangeTerms] = useState(false);
 
   // Files attached to the record (R2 via /api/prospects/files).
   interface ProspectFile { id: string; file_name: string; content_type: string | null; size_bytes: number | null; public_url: string; created_at: string }
@@ -1464,6 +1468,16 @@ export default function CustomerRecordPage() {
     }
   };
 
+  useEffect(() => {
+    if (authLoading || !canSeeMoney || !hasFeature('credit_applications')) return;
+    let cancelled = false;
+    fetch('/api/customer-terms?status=1')
+      .then(res => (res.ok ? res.json() : null))
+      .then(body => { if (!cancelled) setCanChangeTerms(!!body?.canUse); })
+      .catch(() => { /* the link just stays hidden */ });
+    return () => { cancelled = true; };
+  }, [authLoading, canSeeMoney, hasFeature]);
+
   const loadNsProfile = async (nsId: string) => {
     try {
       const res = await fetch(`/api/netsuite/customer-profile?customerId=${nsId}`);
@@ -2369,6 +2383,10 @@ export default function CustomerRecordPage() {
                     </strong>
                   )}
                 </span>
+              )}
+              {canChangeTerms && (customer?.netsuite_id || prospect?.netsuite_id) && (
+                <button onClick={() => router.push(deepLinks.customerTerms(customer?.netsuite_id || prospect?.netsuite_id))}
+                  style={{ ...btnSm, padding: '2px 8px', fontSize: '11.5px' }}>Change</button>
               )}
             </>}>
             <div style={{ display: 'flex', gap: '2px', height: '18px', borderRadius: '6px', overflow: 'hidden', margin: '2px 0 10px' }}>

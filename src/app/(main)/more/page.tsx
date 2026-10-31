@@ -79,11 +79,13 @@ export default function MorePage() {
     return () => { cancelled = true; };
   }, [canOrderParts]);
 
-  // Card Charges and Journal Entries: anyone with Payments once each is
-  // switched on in Books → Switches; until then super admins only.
+  // Card Charges, Journal Entries and Vendor Details: anyone with Payments
+  // once each is switched on in Books → Switches; until then super admins
+  // only.
   const canPayments = hasFeature('vendor_payments');
   const [canCardCharges, setCanCardCharges] = useState(false);
   const [canJournalEntries, setCanJournalEntries] = useState(false);
+  const [canVendorDetails, setCanVendorDetails] = useState(false);
   useEffect(() => {
     if (!canPayments) return;
     let cancelled = false;
@@ -97,14 +99,36 @@ export default function MorePage() {
       }
     };
     (async () => {
-      const [cards, journals] = await Promise.all([canUse('/api/card-charges?status=1'), canUse('/api/journal-entries?status=1')]);
+      const [cards, journals, vendors] = await Promise.all([
+        canUse('/api/card-charges?status=1'), canUse('/api/journal-entries?status=1'), canUse('/api/vendor-details?status=1'),
+      ]);
       if (!cancelled) {
         setCanCardCharges(cards);
         setCanJournalEntries(journals);
+        setCanVendorDetails(vendors);
       }
     })();
     return () => { cancelled = true; };
   }, [canPayments]);
+
+  // Customer Terms: anyone with Credit Applications once customer and vendor
+  // details are switched on in Books → Switches; until then super admins only.
+  const canCreditApplications = hasFeature('credit_applications');
+  const [canCustomerTerms, setCanCustomerTerms] = useState(false);
+  useEffect(() => {
+    if (!canCreditApplications) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/customer-terms?status=1');
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setCanCustomerTerms(res.ok && !!body.canUse);
+      } catch {
+        if (!cancelled) setCanCustomerTerms(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canCreditApplications]);
 
   // Inventory Transfers: admins once inventory transfers are switched on in
   // Books → Switches, as Inventory Adjust; until then super admins only.
@@ -144,6 +168,7 @@ export default function MorePage() {
     { group: 'sales', title: 'Upfit Designer', sub: 'Design a van upfit in 3D & turn it into an estimate', path: '/upfit-designer', show: F('upfit_configurator') },
     { group: 'sales', title: 'After-hours Calls', sub: 'Calls the assistant took after hours · summary, recording, call back', path: '/after-hours-calls', show: F('after_hours_calls') },
     { group: 'sales', title: 'Credit Applications', sub: 'Review net-terms applications from the public form', path: '/admin/credit-applications', show: F('credit_applications') },
+    { group: 'sales', title: 'Customer Terms', sub: 'Change a customer’s terms or credit limit · changed in NetSuite', path: deepLinks.customerTerms(), show: canCustomerTerms },
 
     { group: 'shop', title: 'Schedule', sub: 'Installs, upfits & events · two-way synced with Google Calendar', path: '/admin/schedule', show: F('schedule') },
     { group: 'shop', title: 'Scan & Log', sub: 'Scan VINs and log work', path: '/scan', show: F('scan') },
@@ -171,6 +196,7 @@ export default function MorePage() {
     { group: 'money', title: 'Payments (AP)', sub: 'Approve CNI vendor invoices & push bills to NetSuite', path: '/admin/ap', show: F('vendor_payments') },
     { group: 'money', title: 'Card Charges', sub: 'Code the Chase card’s charges · sent to NetSuite as a journal entry each month', path: deepLinks.cardCharges(), show: canCardCharges },
     { group: 'money', title: 'Journal Entries', sub: 'Type a journal entry · a super admin approves it and it’s made in NetSuite', path: deepLinks.journalEntries(), show: canJournalEntries },
+    { group: 'money', title: 'Vendor Details', sub: 'Change a vendor’s email, terms, addresses or 1099 details · changed in NetSuite', path: deepLinks.vendorDetails(), show: canVendorDetails },
     { group: 'money', title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
     { group: 'money', title: 'Books', sub: 'FleetSuite’s own books · reports, accounts, trial balance & NetSuite lists', path: '/admin/books', show: hasRole('super_admin') },
     { group: 'money', title: 'Ledger', sub: 'QuickBooks history import, customer matching & NetSuite mirror', path: '/admin/ledger', show: F('ledger'), badge: badgeFor('ledger_unmatched_customers') },

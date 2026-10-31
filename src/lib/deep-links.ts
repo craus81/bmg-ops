@@ -295,6 +295,18 @@ export const deepLinks = {
    *  Admins with Parts Ordering once fixing bills is switched on in Books →
    *  Switches; until then super admins only. */
   billFix: (billNetsuiteId?: string | null) => `/admin/purchasing/bill-fix${billNetsuiteId ? `?${new URLSearchParams({ bill: billNetsuiteId })}` : ''}`,
+  /** A customer's terms and credit limit, changed in NetSuite
+   *  (src/lib/customer-terms.ts), from More → Sales or Change beside the
+   *  terms on a customer's page; with an id, that customer open. Anyone
+   *  with Credit Applications once customer and vendor details are switched
+   *  on in Books → Switches; until then super admins only. */
+  customerTerms: (customerNetsuiteId?: string | null) => `/admin/customer-terms${customerNetsuiteId ? `?${new URLSearchParams({ customer: customerNetsuiteId })}` : ''}`,
+  /** A vendor's email, phone, terms, addresses and 1099 details, changed in
+   *  NetSuite (src/lib/vendor-details.ts), from More → Money & Books; with
+   *  an id, that vendor open. Anyone with Payments once customer and vendor
+   *  details are switched on in Books → Switches; until then super admins
+   *  only. */
+  vendorDetails: (vendorNetsuiteId?: string | null) => `/admin/vendor-details${vendorNetsuiteId ? `?${new URLSearchParams({ vendor: vendorNetsuiteId })}` : ''}`,
   /** The Chase card's charges, coded and sent to NetSuite as a journal entry
    *  each month (src/lib/card-charges.ts), from More → Money & Books. Anyone
    *  with Payments once card charges are switched on in Books → Switches;

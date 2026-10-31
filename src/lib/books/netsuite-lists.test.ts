@@ -18,7 +18,9 @@ import {
   mapList,
   mapListRow,
   mapTaxAccounts,
+  listTerms,
   namesField,
+  noteTermsChanged,
   readList,
   recordNotFound,
   type ListDef,
@@ -261,5 +263,73 @@ describe('mapping NetSuite rows', () => {
     expect(joinWords(['rates'])).toBe('rates');
     expect(joinWords(['rates', 'tax agencies'])).toBe('rates and tax agencies');
     expect(joinWords(['names', 'rates', 'tax agencies'])).toBe('names, rates and tax agencies');
+  });
+});
+
+describe('terms FleetSuite changes in NetSuite', () => {
+  /** A stand-in for the service client: what its one read answers, what the list's apply answers, and everything asked. */
+  const fake = (read: { data?: unknown; error?: { message: string } }, applyError?: { message: string }) => {
+    const asked: Array<[string, unknown[]]> = [];
+    const called: Array<[string, unknown]> = [];
+    const answer = () => ({ data: read.data ?? null, error: read.error ?? null });
+    const builder: any = new Proxy({}, {
+      get: (_t, name: string) => {
+        if (name === 'then') return (resolve: (v: unknown) => unknown) => resolve(answer());
+        if (name === 'maybeSingle') return async () => answer();
+        return (...args: unknown[]) => { asked.push([name, args]); return builder; };
+      },
+    });
+    const service = {
+      from: (table: string) => { asked.push(['from', [table]]); return builder; },
+      rpc: async (fn: string, args: unknown) => { called.push([fn, args]); return { data: null, error: applyError ?? null }; },
+    };
+    return { service: service as any, asked, called };
+  };
+  // Made-up data.
+  const ROW = {
+    netsuite_id: '2207', name: 'Ridge Supply Co', parent_netsuite_id: null, active: true, details: { entity_id: 'V-2207', terms_id: '2' },
+  };
+
+  it("puts a record's new terms in its row of the copy, keeping the rest of it", async () => {
+    const { service, asked, called } = fake({ data: { ...ROW, kind: 'vendor', gone_at: null } });
+    expect(await noteTermsChanged(service, 'vendor', '2207', '3')).toEqual({ noted: true });
+    expect(asked).toEqual([
+      ['from', ['gl_netsuite_lists']],
+      ['select', ['netsuite_id, name, parent_netsuite_id, active, details']],
+      ['eq', ['kind', 'vendor']],
+      ['eq', ['netsuite_id', '2207']],
+      ['is', ['gone_at', null]],
+    ]);
+    expect(called).toEqual([['gl_netsuite_lists_apply', { p: { kind: 'vendor', rows: [{ ...ROW, details: { entity_id: 'V-2207', terms_id: '3' } }] } }]]);
+
+    const bare = fake({ data: { ...ROW, netsuite_id: '4410', details: null } });
+    await noteTermsChanged(bare.service, 'customer', '4410', '1');
+    expect(bare.called).toEqual([['gl_netsuite_lists_apply', { p: { kind: 'customer', rows: [{ ...ROW, netsuite_id: '4410', details: { terms_id: '1' } }] } }]]);
+  });
+
+  it("writes nothing when the copy has no row for the record, and says what couldn't be read or written", async () => {
+    const none = fake({});
+    expect(await noteTermsChanged(none.service, 'customer', '4410', '2')).toEqual({ noted: false });
+    expect(none.called).toEqual([]);
+    await expect(noteTermsChanged(fake({ error: { message: 'gl_netsuite_lists is busy' } }).service, 'customer', '4410', '2'))
+      .rejects.toThrow('gl_netsuite_lists is busy');
+    await expect(noteTermsChanged(fake({ data: ROW }, { message: 'apply refused' }).service, 'vendor', '2207', '2')).rejects.toThrow('apply refused');
+  });
+
+  it("lists NetSuite's active terms by name", async () => {
+    const { service, asked } = fake({ data: [{ netsuite_id: '1', name: 'Due on receipt' }, { netsuite_id: '2', name: 'Net 30' }] });
+    expect(await listTerms(service)).toEqual([{ id: '1', name: 'Due on receipt' }, { id: '2', name: 'Net 30' }]);
+    expect(asked).toEqual([
+      ['from', ['gl_netsuite_lists']],
+      ['select', ['netsuite_id, name']],
+      ['eq', ['kind', 'term']],
+      ['eq', ['active', true]],
+      ['is', ['gone_at', null]],
+      ['order', ['name', { ascending: true }]],
+      ['order', ['netsuite_id', { ascending: true }]],
+      ['limit', [500]],
+    ]);
+    expect(await listTerms(fake({}).service)).toEqual([]);
+    await expect(listTerms(fake({ error: { message: 'timeout' } }).service)).rejects.toThrow("couldn't read NetSuite's terms (timeout)");
   });
 });

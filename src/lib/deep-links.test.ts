@@ -233,6 +233,19 @@ describe('Bill fix links', () => {
   });
 });
 
+describe('Customer and vendor details links', () => {
+  it('opens Customer Terms and Vendor Details, on one NetSuite customer or vendor when given one', () => {
+    expect(deepLinks.customerTerms()).toBe('/admin/customer-terms');
+    expect(deepLinks.customerTerms(null)).toBe('/admin/customer-terms');
+    expect(deepLinks.customerTerms('')).toBe('/admin/customer-terms');
+    expect(deepLinks.customerTerms('4410')).toBe('/admin/customer-terms?customer=4410');
+    expect(deepLinks.vendorDetails()).toBe('/admin/vendor-details');
+    expect(deepLinks.vendorDetails(null)).toBe('/admin/vendor-details');
+    expect(deepLinks.vendorDetails('')).toBe('/admin/vendor-details');
+    expect(deepLinks.vendorDetails('2207')).toBe('/admin/vendor-details?vendor=2207');
+  });
+});
+
 describe('Card charge links', () => {
   it('opens the card charges screen', () => {
     expect(deepLinks.cardCharges()).toBe('/admin/card-charges');
