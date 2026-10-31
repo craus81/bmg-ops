@@ -71,9 +71,14 @@ one journal entry a month, with Books' own copy of each, built switched
 off, part 37, journal entries typed in FleetSuite, approved by a super
 admin who didn't ask and sent on to NetSuite, with Books' own copy of
 each, built switched off, part 38, inventory transfers made in
-FleetSuite and sent on to NetSuite, built switched off, and part 39,
+FleetSuite and sent on to NetSuite, built switched off, part 39,
 invoices fixed in FleetSuite after they're made and the fix sent on to
-NetSuite, with Books' own copy following, built switched off. The screens are the accounts page at `/admin/books`, the trial
+NetSuite, with Books' own copy following, built switched off, part 40,
+bills fixed the same way, built switched off, part 41, customers' and
+vendors' details changed in FleetSuite and sent on to NetSuite, built
+switched off, and part 42, the entry that opens the books at NetSuite's
+balances, what still differs on the day, with a rehearsal of going live.
+The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -92,7 +97,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, and the switches at `/admin/books/switches`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, and going live at `/admin/books/going-live`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
 super admins can open it while credit memos are switched off. The vendor
@@ -221,6 +226,7 @@ admins can open it while fixing invoices is switched off.
 | The Fix screen and Invoiced's Fix | `src/app/(main)/invoices/fix/page.tsx`, `src/app/(main)/invoices/page.tsx` |
 | Invoice fix tests | `src/lib/invoice-fix.test.ts`, `src/lib/invoice-fix-route.test.ts`, `src/lib/netsuite-invoice-fix.test.ts`, `src/lib/books/own-invoices.test.ts`, and the tables and their functions `src/lib/books/invoices-fixed-sql.test.ts` |
 | Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql`, `migrations/468-card-charges-in-fleetsuite.sql`, `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `migrations/470-inventory-transfers-made-in-fleetsuite.sql` and `migrations/471-invoices-fixed-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
+| Going live: the entry that opens the books at NetSuite's balances (what still differs on the day), what would stop it posting, and the rehearsal | `src/lib/books/opening-balances.ts`, `src/app/(main)/admin/books/going-live/page.tsx`, `src/app/api/admin/books/going-live/route.ts`; tests `src/lib/books/opening-balances.test.ts`, `src/lib/books/going-live-route.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -1886,8 +1892,9 @@ have. NetSuite's side is NetSuite's own totals, as `gl_netsuite_totals`
 gives them to the trial balance check. FleetSuite's books post from January
 2025, so both sides start from NetSuite's balances on December 31, 2024
 (the starting entry), and anything FleetSuite's journal holds dated earlier
-adds to its side. When FleetSuite posts its own opening balances (Going
-live, step 3), its side must start from those instead, or they count twice.
+adds to its side. The opening balance entry FleetSuite posts when its books
+go live is only what still differs on the day ("Going live"), so it adds
+to its side like any other entry.
 
 `src/lib/books/reports.ts` lays each report out as NetSuite's is:
 
@@ -4256,12 +4263,50 @@ A month opens the first time anything posts to it.
 
 ## Going live
 
-1. Rehearse as often as needed: load, compare with NetSuite, `resetJournal`,
-   repeat.
+`/admin/books/going-live` (Books → Going live, part 42) works out the entry
+that would open a company's books the day after any month since January
+2025 ends, says what would stop it posting, and rehearses going live after
+it. It's read only: nothing is posted and the live date isn't set there.
+
+FleetSuite's books already hold NetSuite's balances before 2025 (the
+starting entry) and its own journal since, so the entry is only what still
+differs from NetSuite's own totals on that month's last day, laid out as
+the trial balance is (`workOutOpeningEntry` in
+`src/lib/books/opening-balances.ts`): a line for each account that
+differs, bringing it to NetSuite's balance, the year's income and expenses
+on their own accounts and earlier years' net income on retained earnings.
+So the books open at NetSuite's numbers line for line, and Reports, the
+balances, the agings and the daily check carry on as they are, with the
+journal's 2025 and 2026 history kept. The entry is dated that last day as
+an opening balance, the one kind of entry the books take from before the
+day they went live ("Rules the database enforces").
+
+What would stop it posting is listed with it: the month isn't over;
+nothing has been copied from NetSuite's ledger; on the day the copy
+differs from NetSuite's own totals (the entry is split by customer and
+vendor from the copy's lines); NetSuite's balances don't balance; earlier
+years' net income differs with no one retained earnings account to take
+it; and a line on an account the chart doesn't have yet, a heading, or an
+account that's only for the other company. The database refuses headings
+and other-company accounts anyway.
+
+The rehearsal (`rehearse`): had the books gone live after that month, the
+balances at the end of the latest month in FleetSuite's books, NetSuite's
+numbers up to the day and FleetSuite's own journal since
+(`gl_books_totals`, as Reports reads it), next to NetSuite's own, laid out
+as the trial balance is. The entry makes the two agree on the day, so a
+line differs only where FleetSuite has posted something differently since.
+
+The page opens on the month before the live date (`books_live_from`, or
+the planned `PLANNED_LIVE_FROM`, 2027-01-01) once it's over, and until then
+on the same month a year earlier, a rehearsal of the same year end.
+
+The steps:
+
+1. Rehearse as often as needed, on the Going live page.
 2. Set `gl_companies.books_live_from` (planned 2027-01-01). This can't be
    undone.
-3. Post the opening balances dated the day before, with
-   `source_type = 'opening_balance'`, worked out from the copy of NetSuite's
-   general ledger. When NetSuite's earlier months change after that (the
-   CPA's year-end adjustments), the copy follows and the difference posts
-   as another opening balance entry.
+3. Post the opening balance entry dated the day before, with
+   `source_type = 'opening_balance'`, as the Going live page works it out.
+   When NetSuite's earlier months change after that (the CPA's year-end
+   adjustments), what then differs posts as another opening balance entry.

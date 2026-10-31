@@ -57,6 +57,7 @@ const ALLOWED: Record<string, string> = {
   'src/app/(main)/admin/books/trial-balance/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/invoices/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/differences/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
+  'src/app/(main)/admin/books/going-live/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/reports/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/reports/detail/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
   'src/app/(main)/admin/books/stock/page.tsx': "FleetSuite's own books — super admin only (the page redirects everyone else; its API is requireSuperAdmin)",
