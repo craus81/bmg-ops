@@ -7,6 +7,9 @@ import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
 import { BOOKS_STOCK_SYNC } from '@/lib/books/netsuite-stock';
 import { BOOKS_DAILY_CHECK } from '@/lib/books/daily-check';
 import { checkOwnReceipts, type OwnReceiptCheck, type ReceiptPairsData } from '@/lib/books/own-receipt-check';
+import { readOwnBooks } from '@/lib/books/own-invoice-posting';
+import { RECEIPT_BOOKS } from '@/lib/books/own-stock-posting';
+import { readOwnStockView } from '@/lib/books/own-posting-view';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,7 +44,10 @@ const withLinks = (receipt: OwnReceiptCheck) => ({
  * src/lib/books/own-receipt-check.ts), with every month that has any and how
  * the copies the check reads from last went.
  * GET /api/admin/books/own-receipts?key=<receipt key> — one of them, item by
- * item. Amounts are whole cents.
+ * item. Amounts are whole cents. Each one NetSuite took says what the books
+ * hold for NetSuite's receipt and which copy made it, and one on its own how
+ * this copy posts: its entry next to NetSuite's, and why NetSuite's posts
+ * when it does (migration 456, src/lib/books/own-posting-view.ts).
  *
  * Super admin only, as the rest of the books (docs/books.md "FleetSuite's
  * own bills and receipts").
@@ -71,7 +77,15 @@ export async function GET(req: NextRequest) {
     if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
     const [receipt] = checkOwnReceipts(res.data as ReceiptPairsData, copies).receipts;
     if (!receipt) return NextResponse.json({ error: 'Books has no copy of that receipt' }, { status: 404 });
-    return NextResponse.json({ receipt: withLinks(receipt) });
+    // A Receive NetSuite didn't take has nothing to post.
+    const netsuiteId = receipt.netsuiteId;
+    if (!netsuiteId) return NextResponse.json({ receipt: { ...withLinks(receipt), books: null }, posting: null });
+    try {
+      const posting = await readOwnStockView(service, { kind: 'receipt', check: { ...receipt, netsuiteId } });
+      return NextResponse.json({ receipt: { ...withLinks(receipt), books: posting.books }, posting });
+    } catch (err) {
+      return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+    }
   }
 
   const [months, lists, check] = await Promise.all([
@@ -90,6 +104,13 @@ export async function GET(req: NextRequest) {
     if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
     checked = checkOwnReceipts(res.data as ReceiptPairsData, copies);
   }
+  const receipts = checked?.receipts ?? [];
+  let books: Awaited<ReturnType<typeof readOwnBooks>>;
+  try {
+    books = await readOwnBooks(service, RECEIPT_BOOKS, receipts.flatMap((r) => (r.netsuiteId ? [{ company: r.company, netsuiteId: r.netsuiteId }] : [])));
+  } catch (err) {
+    return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+  }
 
   const state = (row: typeof stock) =>
     row.data ? { at: row.data.updated_at as string, error: ((row.data.last_result ?? null) as { error?: string } | null)?.error ?? null } : null;
@@ -98,7 +119,8 @@ export async function GET(req: NextRequest) {
     months: monthList,
     month: month ? `${month}-01` : null,
     // The list leaves the item by item check to the receipt's own page.
-    receipts: (checked?.receipts ?? []).map(({ fields: _fields, items: _items, workedOut: _workedOut, ...row }) => withLinks(row as OwnReceiptCheck)),
+    receipts: receipts.map(({ fields: _fields, items: _items, workedOut: _workedOut, ...row }) => (
+      { ...withLinks(row as OwnReceiptCheck), books: (row.netsuiteId && books.get(row.netsuiteId)) || null })),
     counts: checked?.counts ?? null,
     lastStock: state(stock),
     lastLedger: state(ledger),

@@ -36,6 +36,9 @@ import {
 } from '@/lib/books/invoice-posting';
 import { OWN_COMPANY } from '@/lib/books/own-invoices';
 import { ownCopyDays, ownPick, readOwnCopies, salesTaxAccount, type OwnCopies } from '@/lib/books/own-invoice-posting';
+import { chartNames, ownStockPick, readOwnStockCopies, readOwnStockSince, type OwnStockCopies } from '@/lib/books/own-stock-posting';
+import { ownBillPick, readOwnBillCopies, readOwnBillSince, type OwnBillCopies } from '@/lib/books/own-bill-posting';
+import { BOOKS_STOCK_SYNC } from '@/lib/books/netsuite-stock';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { compactSuiteqlError } from '@/lib/sales-order-sync';
 
@@ -84,7 +87,9 @@ const POSTING_BUDGET_MS = 240_000;
  * that it has nothing to post, and `lastRun` is how the last one went. An
  * invoice FleetSuite made also says which copy its entry was made from and
  * whether the books post FleetSuite's own copy of it, or why not (migration
- * 409, src/lib/books/own-invoice-posting.ts).
+ * 409, src/lib/books/own-invoice-posting.ts), and so does a fulfillment, item
+ * receipt or bill Books has its own copy of (migration 456,
+ * src/lib/books/own-stock-posting.ts and own-bill-posting.ts).
  *
  * Super admin only: the books are being built hidden, for the owner, until
  * they're ready (docs/books.md). It only reads.
@@ -215,23 +220,37 @@ export async function GET(req: NextRequest) {
 
   if (kind === 'stock') {
     // Straight from the copy of NetSuite's GL, as journal entries are: an invoice's or credit memo's cost lines only.
-    const [res, gl] = await Promise.all([
+    const [res, gl, stockCopy] = await Promise.all([
       service.rpc('gl_stock_month', { p_company: company, p_month: month }),
-      service.from('sync_state').select('updated_at').eq('sync_type', BOOKS_GL_SYNC).maybeSingle(),
+      service.from('sync_state').select('updated_at, last_synced_at').eq('sync_type', BOOKS_GL_SYNC).maybeSingle(),
+      service.from('sync_state').select('last_synced_at').eq('sync_type', BOOKS_STOCK_SYNC).maybeSingle(),
     ]);
-    const failed = res.error || gl.error;
+    const failed = res.error || gl.error || stockCopy.error;
     if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
     const documents = ((res.data ?? {}) as Partial<StockMonthData>).documents ?? [];
     let held: Map<string, StockPosting> | null = null;
+    let copies: OwnStockCopies | null = null;
     if (posts) {
       held = new Map();
       if (documents.length) {
-        const books = await service.rpc('gl_stock_postings', { p_company: company, p_source_ids: documents.map((d) => d.netsuite_id), p_lines: true });
+        const through = { stock: stockCopy.data?.last_synced_at ?? null, ledger: gl.data?.last_synced_at ?? null };
+        const [books, own] = await Promise.all([
+          service.rpc('gl_stock_postings', { p_company: company, p_source_ids: documents.map((d) => d.netsuite_id), p_lines: true }),
+          // Books' own copies of the month's fulfillments and receipts, as the posting run reads them, so what this shows is what it posts.
+          readOwnStockSince(service)
+            .then((since) => readOwnStockCopies(service, company, documents, since, through))
+            .then((read) => ({ read, error: null }), (err: Error) => ({ read: null, error: err })),
+        ]);
         if (books.error) return NextResponse.json({ error: books.error.message }, { status: 500 });
+        if (own.error) return NextResponse.json({ error: own.error.message }, { status: 500 });
         for (const p of ((books.data as any)?.documents ?? []) as StockPosting[]) held.set(postingKey(p.source_type, p.source_id), p);
+        copies = own.read;
       }
     }
-    const check = checkStockMonth({ documents }, { company, chart }, held ? (w) => stockDocumentBooks(w, stockPostingFor(held!, w)) : undefined);
+    const names = chartNames(chart);
+    const check = checkStockMonth({ documents }, { company, chart }, held
+      ? (w) => stockDocumentBooks(w, stockPostingFor(held!, w), copies ? ownStockPick(w, copies, { company, names }) : null)
+      : undefined);
     if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
     return NextResponse.json({
       rule: STOCK_RULE, kind, ...page, listsCopiedAt: null, glCopiedAt: gl.data?.updated_at ?? null, posts, ...check,
@@ -295,14 +314,16 @@ export async function GET(req: NextRequest) {
 
   if (kind === 'bill') {
     // The month as the posting job reads it, so what this shows is what it posts.
-    const [read, copy] = await Promise.all([
+    const [read, copy, gl] = await Promise.all([
       readBillMonth(service, company, month).then((data) => ({ data, error: null }), (err: Error) => ({ data: null, error: err })),
-      service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_BILLS_SYNC).maybeSingle(),
+      service.from('sync_state').select('last_result, updated_at, last_synced_at').eq('sync_type', BOOKS_BILLS_SYNC).maybeSingle(),
+      service.from('sync_state').select('last_synced_at').eq('sync_type', BOOKS_GL_SYNC).maybeSingle(),
     ]);
-    const failed = read.error || copy.error;
+    const failed = read.error || copy.error || gl.error;
     if (failed) return NextResponse.json({ error: failed.message }, { status: 500 });
     const data = read.data!;
     let held: Map<string, BillPosting> | null = null;
+    let copies: OwnBillCopies = new Map();
     if (posts) {
       const mine = data.bills.filter((b) => b.companies.includes(company)).map((b) => b.netsuite_id);
       held = new Map();
@@ -311,8 +332,20 @@ export async function GET(req: NextRequest) {
         if (books.error) return NextResponse.json({ error: books.error.message }, { status: 500 });
         for (const p of ((books.data as any)?.bills ?? []) as BillPosting[]) held.set(postingKey(p.source_type, p.source_id), p);
       }
+      // Books' own copies of the month's bills, as the posting run reads them, so what this shows is what it posts.
+      try {
+        const since = await readOwnBillSince(service);
+        const days = since ? ownCopyDays(data.bills, since) : null;
+        const through = { bills: copy.data?.last_synced_at ?? null, ledger: gl.data?.last_synced_at ?? null };
+        if (days) copies = await readOwnBillCopies(service, days.from, days.to, through);
+      } catch (err) {
+        return NextResponse.json({ error: (err as Error).message }, { status: 500 });
+      }
     }
-    const check = checkBillMonth(data, { company, chart }, held ? (w) => billBooks(w, billPostingFor(held!, w)) : undefined);
+    const names = chartNames(chart);
+    const check = checkBillMonth(data, { company, chart }, held
+      ? (w) => billBooks(w, billPostingFor(held!, w), ownBillPick(w, copies.get(w.bill.netsuite_id), { company, names }))
+      : undefined);
     if (params.get('summary') === '1') return NextResponse.json({ company, month, kind, summary: check.summary });
     return NextResponse.json({
       rule: BILL_RULE, kind, ...page, listsCopiedAt: lists.data?.updated_at ?? null, posts, copy: copyOf(copy.data), ...check,

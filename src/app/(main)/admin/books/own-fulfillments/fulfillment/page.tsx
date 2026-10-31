@@ -8,6 +8,8 @@ import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { OwnCheckStatus } from '@/lib/books/own-invoice-check';
 import type { FulfilItemPair, OwnFulfillmentCheck } from '@/lib/books/own-fulfillment-check';
+import type { OwnPostingView } from '@/lib/books/own-posting-view';
+import { OwnBooksLine, OwnEntry } from '@/components/BooksOwnPosting';
 
 /**
  * Books → Own fulfillments → one of FleetSuite's own fulfillments, next to
@@ -17,10 +19,12 @@ import type { FulfilItemPair, OwnFulfillmentCheck } from '@/lib/books/own-fulfil
  * What's compared, each with FleetSuite's and NetSuite's side and why they
  * differ; each item FleetSuite took from stock paired with NetSuite's, with
  * the count and value FleetSuite costed it from (each item opens its moves
- * on Stock by item); what NetSuite's fulfillment posted; what FleetSuite
- * couldn't work out; and how it worked its copy out. Super admins only, as
- * the books are; opened from Own fulfillments or the daily check's
- * notification (?id=, NetSuite's id for the fulfillment).
+ * on Stock by item); what the books hold for it, and the entry this copy
+ * makes next to NetSuite's, or when it isn't worked out what NetSuite's
+ * fulfillment posted (migration 456, src/lib/books/own-posting-view.ts);
+ * what FleetSuite couldn't work out; and how it worked its copy out. Super
+ * admins only, as the books are; opened from Own fulfillments or the daily
+ * check's notification (?id=, NetSuite's id for the fulfillment).
  */
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' });
@@ -126,6 +130,7 @@ export default function BooksOwnFulfillmentPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
   const [fulfillment, setFulfillment] = useState<OwnFulfillmentCheck | null>(null);
+  const [posting, setPosting] = useState<OwnPostingView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -136,6 +141,7 @@ export default function BooksOwnFulfillmentPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
       setFulfillment(json.fulfillment);
+      setPosting(json.posting ?? null);
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Could not load the fulfillment');
@@ -173,8 +179,9 @@ export default function BooksOwnFulfillmentPage() {
             </div>
             <div style={{ fontSize: '12px', color: f.status === 'differs' ? RED : 'var(--text-muted)', marginTop: '4px' }}>{f.summary}</div>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              FleetSuite&apos;s own copy, made when it invoiced {f.madeFromText} off {f.salesOrder}. Nothing is posted from it yet.
+              FleetSuite&apos;s own copy, made when it invoiced {f.madeFromText} off {f.salesOrder}.
             </div>
+            <OwnBooksLine posting={posting} status={f.status} theirs="fulfillment" company="BMG" kind="stock" netsuiteId={f.netsuiteId} date={f.date} />
             {f.invoice && (
               <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
                 Invoiced as{' '}
@@ -210,6 +217,8 @@ export default function BooksOwnFulfillmentPage() {
               </tbody>
             </table>
           </div>
+
+          <OwnEntry posting={posting} />
 
           {f.items.length > 0 && (
             <>
@@ -258,7 +267,8 @@ export default function BooksOwnFulfillmentPage() {
             </>
           )}
 
-          {f.entry.length > 0 && (
+          {/* The entry above puts NetSuite's posting next to this copy's once it's worked out. */}
+          {f.entry.length > 0 && !posting?.entry?.length && (
             <>
               <div style={heading}>What NetSuite&apos;s fulfillment posted</div>
               <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px' }}>

@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { workOutMonth, type ChartAccount, type InvoiceMonthData, type LineFactsRead } from './invoice-check';
 import { entryLines } from './invoice-posting';
 import type { OwnCheckStatus, OwnInvoiceCheck, OwnInvoiceData, OwnLineData, OwnPairsData } from './own-invoice-check';
-import { ownBooks, ownCopyDays, ownEntry, ownPick, readOwnCopies, salesTaxAccount, type OwnCopy, type OwnMonth } from './own-invoice-posting';
+import { ownBooks, ownCopyDays, ownEntry, ownPick, readOwnBooks, readOwnCopies, salesTaxAccount, type OwnCopy, type OwnMonth } from './own-invoice-posting';
 
 // Made-up books: '120' receivable, '400' income, '220' sales tax payable; '221' is 1084's sales tax, '229' a summary.
 const CHART: ChartAccount[] = [
@@ -252,6 +252,56 @@ describe('what the books hold for each invoice', () => {
       ['102', { entryNo: 8, date: '2026-10-15', from: 'netsuite' }],
       ['103', { entryNo: 9, date: '2026-10-15', from: 'netsuite' }],
     ]);
+  });
+
+  it("is a fulfillment's, receipt's or bill's the same way, given its kind and its own copies' rule", () => {
+    const current = (entry_no: number, posting_rule?: string) => ({ id: `e${entry_no}`, entry_no, entry_date: '2026-10-19', posting_rule });
+    const postings = [
+      { source_type: 'item_fulfillment', source_id: '7001', current: current(21, 'own_fulfillment@1') },
+      { source_type: 'item_fulfillment', source_id: '7002', current: current(22, 'stock@1') },
+      { source_type: 'item_receipt', source_id: '7101', current: current(23, 'own_receipt@1') },
+      { source_type: 'invoice', source_id: '101', current: current(7, 'own_invoice@1') },
+    ];
+    expect([...ownBooks(postings, 'item_fulfillment', 'own_fulfillment@1')]).toEqual([
+      ['7001', { entryNo: 21, date: '2026-10-19', from: 'fleetsuite' }],
+      ['7002', { entryNo: 22, date: '2026-10-19', from: 'netsuite' }],
+    ]);
+    expect([...ownBooks(postings, 'item_receipt', 'own_receipt@1')]).toEqual([['7101', { entryNo: 23, date: '2026-10-19', from: 'fleetsuite' }]]);
+    // Another kind's rule is never this kind's own.
+    expect(ownBooks(postings, 'item_receipt', 'own_fulfillment@1').get('7101')?.from).toBe('netsuite');
+  });
+
+  it('reads them company by company, each answer in its list, and says why when it can\'t', async () => {
+    const read = { fn: 'gl_stock_postings', list: 'documents', sourceType: 'item_receipt', ownRule: 'own_receipt@1' };
+    const calls: unknown[] = [];
+    const answers: Record<string, unknown> = {
+      BMG: { documents: [{ source_type: 'item_receipt', source_id: '7101', current: { entry_no: 23, entry_date: '2026-10-22', posting_rule: 'own_receipt@1' } }] },
+      1084: { documents: [{ source_type: 'item_receipt', source_id: '7103', current: { entry_no: 4, entry_date: '2026-10-28', posting_rule: 'stock@1' } }] },
+    };
+    const service = {
+      rpc: async (fn: string, args: { p_company: string }) => {
+        calls.push([fn, args]);
+        return { data: answers[args.p_company] ?? null, error: null };
+      },
+    } as unknown as SupabaseClient;
+    const books = await readOwnBooks(service, read, [
+      { company: 'BMG', netsuiteId: '7101' }, { company: '1084', netsuiteId: '7103' }, { company: 'BMG', netsuiteId: '7102' },
+    ]);
+    expect(calls).toEqual([
+      ['gl_stock_postings', { p_company: 'BMG', p_source_ids: ['7101', '7102'], p_lines: false }],
+      ['gl_stock_postings', { p_company: '1084', p_source_ids: ['7103'], p_lines: false }],
+    ]);
+    expect([...books].sort()).toEqual([
+      ['7101', { entryNo: 23, date: '2026-10-22', from: 'fleetsuite' }],
+      ['7103', { entryNo: 4, date: '2026-10-28', from: 'netsuite' }],
+    ]);
+    // Nothing to read, an answer without the list, and one that fails.
+    const none: unknown[] = [];
+    expect((await readOwnBooks({ rpc: async (...a: unknown[]) => { none.push(a); return { data: null, error: null }; } } as unknown as SupabaseClient, read, [])).size).toBe(0);
+    expect(none).toEqual([]);
+    expect((await readOwnBooks({ rpc: async () => ({ data: { bills: [] }, error: null }) } as unknown as SupabaseClient, read, [{ company: 'BMG', netsuiteId: '7101' }])).size).toBe(0);
+    await expect(readOwnBooks({ rpc: async () => ({ data: null, error: { message: 'statement timeout' } }) } as unknown as SupabaseClient, read, [{ company: 'BMG', netsuiteId: '7101' }]))
+      .rejects.toThrow('statement timeout');
   });
 });
 

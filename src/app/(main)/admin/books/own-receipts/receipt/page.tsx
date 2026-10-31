@@ -7,6 +7,8 @@ import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { OwnReceiptCheck, ReceiptItemPair, ReceiptStatus } from '@/lib/books/own-receipt-check';
+import type { OwnPostingView } from '@/lib/books/own-posting-view';
+import { OwnBooksLine, OwnEntry } from '@/components/BooksOwnPosting';
 
 /**
  * Books → Own receipts → one of Books' own receipts, next to NetSuite's item
@@ -16,9 +18,12 @@ import type { OwnReceiptCheck, ReceiptItemPair, ReceiptStatus } from '@/lib/book
  * What's compared, each with Books' and NetSuite's side and why they differ;
  * each item received paired with NetSuite's (each opens its moves on Stock
  * by item); where Receiving's rows for it stand and what NetSuite said when
- * it didn't take it; what FleetSuite couldn't work out; and how Books worked
- * its copy out. Super admins only, as the books are; opened from Own
- * receipts or the daily check's notification (?key=, the receipt's key).
+ * it didn't take it; what the books hold for NetSuite's receipt, and the
+ * entry this copy makes next to NetSuite's (migration 456,
+ * src/lib/books/own-posting-view.ts); what FleetSuite couldn't work out; and
+ * how Books worked its copy out. Super admins only, as the books are; opened
+ * from Own receipts or the daily check's notification (?key=, the receipt's
+ * key).
  */
 
 type Receipt = OwnReceiptCheck & { netsuiteUrl: string | null; poUrl: string | null };
@@ -120,6 +125,7 @@ export default function BooksOwnReceiptPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [posting, setPosting] = useState<OwnPostingView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -130,6 +136,7 @@ export default function BooksOwnReceiptPage() {
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
       setReceipt(json.receipt);
+      setPosting(json.posting ?? null);
       setError('');
     } catch (e: any) {
       setError(e?.message || 'Could not load the receipt');
@@ -173,8 +180,9 @@ export default function BooksOwnReceiptPage() {
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
               Books&apos; own copy of a Receive on the <Link href={deepLinks.receiving()} style={link}>Receiving page</Link>: {r.what}
-              {r.location ? ` at ${r.location}` : ''}, for {r.company}. Nothing is posted from it yet.
+              {r.location ? ` at ${r.location}` : ''}, for {r.company}.
             </div>
+            <OwnBooksLine posting={posting} status={r.status} theirs="receipt" company={r.company} kind="stock" netsuiteId={r.netsuiteId} date={r.date} />
             {(r.netsuiteUrl || r.poUrl) && (
               <div style={{ fontSize: '12px', marginTop: '2px' }}>
                 {r.netsuiteUrl && <a href={r.netsuiteUrl} target="_blank" rel="noreferrer" style={link}>{r.number ?? 'Receipt'} in NetSuite ↗</a>}
@@ -216,6 +224,8 @@ export default function BooksOwnReceiptPage() {
               </tbody>
             </table>
           </div>
+
+          <OwnEntry posting={posting} />
 
           {r.items.length > 0 && (
             <>

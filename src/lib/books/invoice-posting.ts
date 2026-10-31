@@ -8,7 +8,7 @@ import {
   BooksError, centsToAmount, postEntry, repostEntry, reverseEntry,
   type BooksCompany, type JournalEntryInput,
 } from './journal';
-import { COPY_FROM, monthOfDate, monthsBetween } from './netsuite-gl';
+import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate, monthsBetween } from './netsuite-gl';
 import { BOOKS_LISTS_SYNC } from './netsuite-lists';
 import { MAIN_LINE, RULES, type RuleLine, type SalesDocKind } from './invoice-rule';
 import {
@@ -28,7 +28,7 @@ import { workOutBillPaymentMonth, type BillPaymentMonthData, type WorkedBillPaym
 import { REFUND_TYPES, SPENDING_RULE, SPENDING_SOURCE_TYPE, type SpendingSourceType } from './spending-rule';
 import { workOutSpendingMonth, type WorkedSpending } from './spending-check';
 import { readSpendingMonth } from './netsuite-spending';
-import { JOURNAL_ENTRY_RULE, JOURNAL_ENTRY_SOURCE_TYPE } from './journal-entry-rule';
+import { JOURNAL_ENTRY_RULE, JOURNAL_ENTRY_SOURCE_TYPE, type JournalRuleLine } from './journal-entry-rule';
 import { workOutJournalMonth, type JournalMonthData, type WorkedJournalEntry, type WorkedLedgerCopy } from './journal-entry-check';
 import { BANK_RULE, BANK_SOURCE_TYPE, type BankSourceType } from './bank-rule';
 import { workOutBankMonth, type BankMonthData, type WorkedBankDocument } from './bank-check';
@@ -36,6 +36,12 @@ import { STOCK_RULE, STOCK_SOURCE_TYPE, type StockSourceType } from './stock-rul
 import { workOutStockMonth, type StockMonthData, type WorkedStockDocument } from './stock-check';
 import { OWN_COMPANY } from './own-invoices';
 import { OWN_INVOICE_RULE, ownCopyDays, ownPick, readOwnCopies, salesTaxAccount, type OwnCopies, type OwnPick } from './own-invoice-posting';
+import { chartNames, ownStockPick, ownStockRule, readOwnStockCopies, readOwnStockSince, type OwnStockEntry, type OwnStockPick } from './own-stock-posting';
+import type { CopiesThrough } from './own-fulfillment-check';
+import type { BillCopiesThrough } from './own-bill-check';
+import { OWN_BILL_RULE, ownBillPick, readOwnBillCopies, readOwnBillSince, type OwnBillCopies, type OwnBillEntry, type OwnBillPick } from './own-bill-posting';
+import { BOOKS_STOCK_SYNC } from './netsuite-stock';
+import { BOOKS_BILLS_SYNC } from './netsuite-bills';
 
 /**
  * NetSuite's invoices posted to FleetSuite's own journal with the invoice
@@ -93,7 +99,11 @@ import { OWN_INVOICE_RULE, ownCopyDays, ownPick, readOwnCopies, salesTaxAccount,
  * decision 2026-10-19, "Post own invoices") when the copy matches NetSuite's
  * invoice and makes the same entry: the run reads the copies along with the
  * month's invoices, and an invoice that changes copies has its entry
- * replaced, as when NetSuite changes it.
+ * replaced, as when NetSuite changes it. A fulfillment FleetSuite made, a
+ * Receive NetSuite took and a bill FleetSuite made post from Books' own
+ * copies the same way (own_fulfillment@1, own_receipt@1 and own_bill@1,
+ * src/lib/books/own-stock-posting.ts and own-bill-posting.ts; migration 456;
+ * owner decision 2026-10-30, "Own postings").
  *
  * Until a company's books go live, the journal can be emptied and posted
  * again (gl_reset_journal). Nothing is written to NetSuite.
@@ -161,7 +171,11 @@ export interface InvoicePosting {
   entries: number;
   /** Its entries nothing reversed, newest first: normally just the one that stands. */
   unreversed: string[];
-  /** `posting_rule` is the rule that made it (migration 409): invoice@1 or credit_memo@1 from NetSuite's copy, own_invoice@1 from FleetSuite's. */
+  /**
+   * `posting_rule` is the rule that made it: invoice@1 or credit_memo@1 from NetSuite's copy, own_invoice@1 from FleetSuite's
+   * (migration 409); for a stock document or bill, stock@1 or bill@1 from NetSuite's, own_fulfillment@1, own_receipt@1 or
+   * own_bill@1 from Books' own copy (migration 456).
+   */
   current: { id: string; entry_no: number; entry_date: string; posting_rule?: string; lines?: PostedLine[] | null } | null;
   history: Array<{ entry_no: number; entry_date: string; reversed_by: number | null }>;
   /** What the copy of NetSuite's invoices says of it; null when the copy has none. */
@@ -294,15 +308,34 @@ export function decide(worked: WorkedInvoice, posting: InvoicePosting | undefine
 }
 
 /**
+ * Why a document's entry is replaced, for the memo of the entry reversing it: it changes copies, from NetSuite's
+ * document (`theirs`, in words) to its own copy, which posts with `ownRule`, or back; or NetSuite changed it.
+ */
+function switchedMemo(number: string, current: { posting_rule?: string } | null, toOwn: boolean, ownRule: string, theirs: string): string {
+  if (current?.posting_rule && (current.posting_rule === ownRule) !== toOwn) {
+    return `${number} now posts from ${toOwn ? "FleetSuite's own copy" : theirs}`;
+  }
+  return `${number} changed in NetSuite`;
+}
+
+/**
  * Why an invoice's entry is replaced, for the memo of the entry reversing it: it changes copies (decide), or NetSuite
  * changed it.
  */
 export function replaceMemo(number: string, current: { posting_rule?: string } | null, own?: OwnPick | null): string {
-  const toOwn = !!own?.entry;
-  if (current?.posting_rule && (current.posting_rule === OWN_INVOICE_RULE) !== toOwn) {
-    return `${number} now posts from ${toOwn ? "FleetSuite's own copy" : "NetSuite's invoice"}`;
-  }
-  return `${number} changed in NetSuite`;
+  return switchedMemo(number, current, !!own?.entry, OWN_INVOICE_RULE, "NetSuite's invoice");
+}
+
+/** Why a bill's entry is replaced, as for an invoice's (decideBill). */
+export function replaceBillMemo(worked: WorkedBill, current: { posting_rule?: string } | null, own?: OwnBillPick | null): string {
+  return switchedMemo(worked.number, current, !!own?.entry, OWN_BILL_RULE, "NetSuite's bill");
+}
+
+/** Why a stock document's entry is replaced, as for an invoice's (decideStockDocument): only a fulfillment or receipt changes copies. */
+export function replaceStockMemo(worked: WorkedStockDocument, current: { posting_rule?: string } | null, own?: OwnStockPick | null): string {
+  const rule = ownStockRule(worked.entry.type);
+  if (!rule) return `${worked.number} changed in NetSuite`;
+  return switchedMemo(worked.number, current, !!own?.entry, rule, worked.entry.type === 'ItemShip' ? "NetSuite's fulfillment" : "NetSuite's receipt");
 }
 
 /** What NetSuite wouldn't say about a month's invoice lines that the entries depend on; a run leaves such a month alone. */
@@ -318,12 +351,7 @@ export function unsaidFacts(facts: LineFactsRead): Array<(typeof NEEDED_FACTS)[n
  * own copy of it, when there's one (ownPick).
  */
 export function invoiceBooks(worked: WorkedInvoice, posting: InvoicePosting | undefined, decides = true, own?: OwnPick | null): InvoiceBooks {
-  const rule = posting?.current?.posting_rule;
-  return {
-    ...booksOf(decide(worked, posting, own), posting, decides),
-    ...(rule ? { from: rule === OWN_INVOICE_RULE ? 'fleetsuite' as const : 'netsuite' as const } : {}),
-    ...(own ? { own: { posts: !!own.entry, ...(own.why ? { why: own.why } : {}) } } : {}),
-  };
+  return copyBooks(booksOf(decide(worked, posting, own), posting, decides), posting?.current?.posting_rule, OWN_INVOICE_RULE, own);
 }
 
 /**
@@ -339,6 +367,23 @@ function booksOf(d: Decision, posting: Pick<InvoicePosting, 'current' | 'history
       .filter((h) => h.entry_no !== current?.entry_no)
       .map((h) => ({ entryNo: h.entry_no, reversedBy: h.reversed_by })),
     ...(d.kind === 'keep' && d.why ? { nothingToPost: d.why === 'voided' ? 'voided' as const : 'zero' as const } : {}),
+  };
+}
+
+/**
+ * Which copy the entry that stands for a document was made from, given its rule and the rule of Books' own copies of
+ * its kind, and what the books post for its own copy when there's one, for the invoices page.
+ */
+function copyBooks(
+  books: InvoiceBooks,
+  rule: string | undefined,
+  ownRule: string | null,
+  own: { entry: unknown; why: string | null; receiptKey?: string } | null | undefined,
+): InvoiceBooks {
+  return {
+    ...books,
+    ...(rule ? { from: rule === ownRule ? 'fleetsuite' as const : 'netsuite' as const } : {}),
+    ...(own ? { own: { posts: !!own.entry, ...(own.why ? { why: own.why } : {}), ...(own.receiptKey ? { receiptKey: own.receiptKey } : {}) } } : {}),
   };
 }
 
@@ -616,8 +661,25 @@ const billSignature = (worked: WorkedBill) => signature(
   })),
 );
 
-/** What to do about one bill or bill credit the rule has worked out, given what the journal holds for it. */
-export function decideBill(worked: WorkedBill, posting: BillPosting | undefined): Decision {
+/** The lines of Books' own copy's entry of a bill, as signature compares them: its vendor on payables. */
+const ownBillSignature = (entry: OwnBillEntry) => signature(
+  entry.date,
+  entry.lines.map((l) => ({
+    account: l.account,
+    cents: l.cents,
+    division: null,
+    lineRef: l.lineId,
+    customerId: null,
+    vendorRef: l.lineId === PAYABLES_LINE ? entry.vendorRef : null,
+  })),
+);
+
+/**
+ * What to do about one bill or bill credit the rule has worked out, given what the journal holds for it and, when Books
+ * has its own copy of it, what the books post for that (ownBillPick): the copy's entry when it posts, otherwise
+ * NetSuite's. An entry made by the other copy's rule is replaced, as an invoice's is (decide).
+ */
+export function decideBill(worked: WorkedBill, posting: BillPosting | undefined, own?: OwnBillPick | null): Decision {
   const current = posting?.current ?? null;
   if (worked.bill.voided) return current ? { kind: 'reverse', why: 'voided' } : { kind: 'keep', why: 'voided' };
   const { status, lines } = worked.checked;
@@ -634,39 +696,47 @@ export function decideBill(worked: WorkedBill, posting: BillPosting | undefined)
 
   if (lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep', why: 'nothing' };
   if (!current) return { kind: 'post' };
-  return postedSignature(current) === billSignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
+  const entry = own?.entry ?? null;
+  if (current.posting_rule && current.posting_rule !== (entry ? OWN_BILL_RULE : BILL_RULE)) return { kind: 'replace' };
+  return postedSignature(current) === (entry ? ownBillSignature(entry) : billSignature(worked)) ? { kind: 'keep' } : { kind: 'replace' };
 }
 
-/** What the journal holds for a bill or bill credit and what the next run does about it, for the invoices page. */
-export function billBooks(worked: WorkedBill, posting: BillPosting | undefined): InvoiceBooks {
-  return booksOf(decideBill(worked, posting), posting, true);
+/**
+ * What the journal holds for a bill or bill credit and what the next run does about it, for the invoices page. `own` is
+ * what the books post for Books' own copy of it, when there's one (ownBillPick).
+ */
+export function billBooks(worked: WorkedBill, posting: BillPosting | undefined, own?: OwnBillPick | null): InvoiceBooks {
+  return copyBooks(booksOf(decideBill(worked, posting, own), posting, true), posting?.current?.posting_rule, OWN_BILL_RULE, own);
 }
 
 /**
  * The journal entry for a bill or bill credit, its `generation`th: the
  * rule's lines on the chart's accounts, in the month NetSuite booked it to,
  * the payables line carrying the vendor, keyed `vendor_bill:…` or
- * `vendor_credit:…`. Null with the NetSuite accounts the chart doesn't have
- * when it can't be built.
+ * `vendor_credit:…`. With `own`, the entry of Books' own copy of the bill
+ * instead (own_bill@1), under the same key. Null with the NetSuite accounts
+ * the chart doesn't have when it can't be built.
  */
 export function billJournalEntry(
   worked: WorkedBill,
   company: BooksCompany,
   generation: number,
   accountIds: Map<string, string>,
+  own?: OwnBillEntry | null,
 ): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
-  const { lines } = worked.checked;
+  const lines = own ? own.lines : worked.checked.lines;
   const missing = [...new Set(lines.map((l) => l.account).filter((a) => !accountIds.has(a)))];
   if (missing.length) return { entry: null, missing };
   const b = worked.bill;
   const sourceType = BILL_SOURCE_TYPE[b.type];
+  const vendor = (lineId: string) => (own ? (lineId === PAYABLES_LINE ? own.vendorRef : null) : billVendor(worked, lineId));
   return {
     entry: {
       company,
-      entryDate: entryDate(b),
+      entryDate: own ? own.date : entryDate(b),
       sourceType,
       sourceId: b.netsuite_id,
-      postingRule: BILL_RULE,
+      postingRule: own ? OWN_BILL_RULE : BILL_RULE,
       idempotencyKey: entryKey(company, sourceType, b.netsuite_id, generation),
       memo: b.vendor ? `${worked.number}, ${b.vendor}` : worked.number,
       postedBy: null,
@@ -677,7 +747,7 @@ export function billJournalEntry(
         division: null,
         itemNumber: l.itemNumber,
         sourceLineRef: l.lineId,
-        vendorRef: billVendor(worked, l.lineId),
+        vendorRef: vendor(l.lineId),
       })),
     },
     missing: [],
@@ -982,13 +1052,31 @@ const ledgerCopySignature = (worked: WorkedLedgerCopy) => signature(
   })),
 );
 
-/** What to do about one document of a month posted from the GL copy, given the entry that stands for it. */
-function decideLedgerCopy(worked: WorkedLedgerCopy, current: InvoicePosting['current']): Decision {
+/** The lines of Books' own copy's entry of a fulfillment or receipt, as signature compares them. */
+const ownStockSignature = (entry: OwnStockEntry) => signature(
+  entry.date,
+  entry.lines.map((l) => ({
+    account: l.account, cents: l.cents, division: null, lineRef: l.lineId, customerId: l.customerId, vendorRef: l.vendorRef,
+  })),
+);
+
+/**
+ * What to do about one document of a month posted from the GL copy, given the entry that stands for it. With `expected`,
+ * the rule the entry that stands should have been made with, and when Books' own copy of the document posts its entry
+ * (decideStockDocument): one made by another rule is replaced, as an invoice's is (decide).
+ */
+function decideLedgerCopy(
+  worked: WorkedLedgerCopy,
+  current: InvoicePosting['current'],
+  expected?: { rule: string; own: OwnStockEntry | null },
+): Decision {
   // Its lines for the company don't balance on their own: whatever stands stays, and the run's notes name it.
   if (worked.checked.status === 'unworkable') return { kind: 'leave', why: 'unworkable' };
   if (worked.checked.lines.length === 0) return current ? { kind: 'reverse', why: 'nothing' } : { kind: 'keep', why: 'nothing' };
   if (!current) return { kind: 'post' };
-  return postedSignature(current) === ledgerCopySignature(worked) ? { kind: 'keep' } : { kind: 'replace' };
+  if (expected && current.posting_rule && current.posting_rule !== expected.rule) return { kind: 'replace' };
+  const own = expected?.own ?? null;
+  return postedSignature(current) === (own ? ownStockSignature(own) : ledgerCopySignature(worked)) ? { kind: 'keep' } : { kind: 'replace' };
 }
 
 /** What to do about one journal entry of a month, given what the journal holds for it. */
@@ -1040,46 +1128,66 @@ export function bankJournalEntry(
   return ledgerCopyEntry(worked, company, generation, accountIds, { sourceType: BANK_SOURCE_TYPE[worked.entry.type], rule: BANK_RULE });
 }
 
-/** What to do about one stock document of a month, given what the journal holds for it: as for a journal entry. */
-export function decideStockDocument(worked: WorkedStockDocument, posting: StockPosting | undefined): Decision {
-  return decideLedgerCopy(worked, posting?.current ?? null);
+/**
+ * What to do about one stock document of a month, given what the journal holds for it: as for a journal entry, but for
+ * a fulfillment or item receipt Books has its own copy of, whose entry posts when ownStockPick says so, as an invoice's
+ * own copy's does (decide).
+ */
+export function decideStockDocument(worked: WorkedStockDocument, posting: StockPosting | undefined, own?: OwnStockPick | null): Decision {
+  const entry = own?.entry ?? null;
+  const ownRule = ownStockRule(worked.entry.type);
+  return decideLedgerCopy(worked, posting?.current ?? null, { rule: entry && ownRule ? ownRule : STOCK_RULE, own: ownRule ? entry : null });
 }
 
-/** What the journal holds for a stock document and what the next run does about it, for the invoices page. */
-export function stockDocumentBooks(worked: WorkedStockDocument, posting: StockPosting | undefined): InvoiceBooks {
-  return booksOf(decideStockDocument(worked, posting), posting, true);
+/**
+ * What the journal holds for a stock document and what the next run does about it, for the invoices page. `own` is what
+ * the books post for Books' own copy of it, when there's one (ownStockPick).
+ */
+export function stockDocumentBooks(worked: WorkedStockDocument, posting: StockPosting | undefined, own?: OwnStockPick | null): InvoiceBooks {
+  return copyBooks(booksOf(decideStockDocument(worked, posting, own), posting, true), posting?.current?.posting_rule, ownStockRule(worked.entry.type), own);
 }
 
 /**
  * FleetSuite's entry for a NetSuite stock document, its `generation`th, made
  * as a journal entry's is, keyed by its STOCK_SOURCE_TYPE: `item_fulfillment:…`
  * and so on, `invoice_cost:…` for an invoice's or credit memo's cost lines.
+ * With `own`, the entry of Books' own copy of a fulfillment or receipt
+ * instead (own_fulfillment@1 or own_receipt@1), under the same key.
  */
 export function stockJournalEntry(
   worked: WorkedStockDocument,
   company: BooksCompany,
   generation: number,
   accountIds: Map<string, string>,
+  own?: OwnStockEntry | null,
 ): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
-  return ledgerCopyEntry(worked, company, generation, accountIds, { sourceType: STOCK_SOURCE_TYPE[worked.entry.type], rule: STOCK_RULE });
+  const ownRule = own ? ownStockRule(worked.entry.type) : null;
+  return ledgerCopyEntry(worked, company, generation, accountIds, {
+    sourceType: STOCK_SOURCE_TYPE[worked.entry.type],
+    rule: ownRule ?? STOCK_RULE,
+    ...(own && ownRule ? { own } : {}),
+  });
 }
 
-/** The entry for a document posted from the GL copy, filed under `filed`'s source type and rule; its number is its memo. */
+/**
+ * The entry for a document posted from the GL copy, filed under `filed`'s source type and rule; its number is its memo.
+ * With `filed.own`, made of Books' own copy's lines, on its date, each naming its item.
+ */
 function ledgerCopyEntry(
   worked: WorkedLedgerCopy,
   company: BooksCompany,
   generation: number,
   accountIds: Map<string, string>,
-  filed: { sourceType: string; rule: string },
+  filed: { sourceType: string; rule: string; own?: OwnStockEntry },
 ): { entry: JournalEntryInput; missing: [] } | { entry: null; missing: string[] } {
-  const { lines } = worked.checked;
+  const lines: ReadonlyArray<JournalRuleLine & { itemNumber?: string | null }> = filed.own ? filed.own.lines : worked.checked.lines;
   const missing = [...new Set(lines.map((l) => l.account).filter((a) => !accountIds.has(a)))];
   if (missing.length) return { entry: null, missing };
   const e = worked.entry;
   return {
     entry: {
       company,
-      entryDate: entryDate(e),
+      entryDate: filed.own ? filed.own.date : entryDate(e),
       sourceType: filed.sourceType,
       sourceId: e.netsuite_id,
       postingRule: filed.rule,
@@ -1092,7 +1200,7 @@ function ledgerCopyEntry(
         credit: l.cents < 0 ? centsToAmount(-l.cents) : null,
         memo: l.memo,
         division: null,
-        itemNumber: null,
+        itemNumber: l.itemNumber ?? null,
         sourceLineRef: l.lineId,
         customerId: l.customerId,
         vendorRef: l.vendorRef,
@@ -1285,6 +1393,22 @@ export async function postInvoices(
       ownSince = ((made.data ?? []) as Array<{ month: string }>).map((m) => m.month).sort()[0] ?? null;
     }
     const salesTax = salesTaxAccount(taxAccounts, chartAccounts, OWN_COMPANY);
+
+    // Books' own copies of the fulfillments, receipts and bills FleetSuite made post in place of NetSuite's documents when
+    // they match, as its own invoices do: from the first month it made any, checked against the copies of NetSuite's stock
+    // moves, bills and GL as far as each had come.
+    const [stockSince, billSince, stockCopied, billsCopied, ledgerCopied] = await Promise.all([
+      readOwnStockSince(service).catch((err) => { throw readFailed("the months of Books' own fulfillments and receipts", err); }),
+      readOwnBillSince(service).catch((err) => { throw readFailed("the months of Books' own bills", err); }),
+      service.from('sync_state').select('last_synced_at').eq('sync_type', BOOKS_STOCK_SYNC).maybeSingle(),
+      service.from('sync_state').select('last_synced_at').eq('sync_type', BOOKS_BILLS_SYNC).maybeSingle(),
+      service.from('sync_state').select('last_synced_at').eq('sync_type', BOOKS_GL_SYNC).maybeSingle(),
+    ]);
+    for (const r of [stockCopied, billsCopied, ledgerCopied]) if (r.error) throw readFailed('how far the copies of NetSuite had come', r.error);
+    const copiedAt = (r: { data: { last_synced_at?: string | null } | null }) => r.data?.last_synced_at ?? null;
+    const stockThrough: CopiesThrough = { stock: copiedAt(stockCopied), ledger: copiedAt(ledgerCopied) };
+    const billsThrough: BillCopiesThrough = { bills: copiedAt(billsCopied), ledger: copiedAt(ledgerCopied) };
+    const names = chartNames(chartAccounts);
 
     /** Reverses an entry; should that fail, `shown` is how the run's record names its document. */
     const reverse = async (shown: string, entryId: string, memo: string) => {
@@ -1552,13 +1676,24 @@ export async function postInvoices(
         });
         if (held.error) throw readFailed(entriesOf('bill'), held.error);
         const postings = new Map((((held.data as any)?.bills ?? []) as BillPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
+
+        // Books' own copies of the month's bills, made on the days they're dated.
+        const billDays = billSince ? ownCopyDays(bills.map((w) => w.bill), billSince) : null;
+        const ownBills: OwnBillCopies = billDays
+          ? await readOwnBillCopies(service, billDays.from, billDays.to, billsThrough)
+            .catch((err) => { throw readFailed(`Books' own copies of ${company}'s bills for ${monthLabel(month)}`, err); })
+          : new Map();
+
         const tasks: Array<() => Promise<void>> = [];
         for (const w of bills) {
           const posting = billPostingFor(postings, w);
           if (!w.bill.companies.length && !posting?.current) continue;
-          const d = decideBill(w, posting);
+          const own = ownBillPick(w, ownBills.get(w.bill.netsuite_id), { company, names });
+          const d = decideBill(w, posting, own);
           if (d.kind === 'leave' && d.why === 'total') leftTotal.push({ number: named(company, w.number), kind: BILL_SOURCE_TYPE[w.bill.type] });
-          enqueue(tasks, company, w.number, d, posting?.current ?? null, () => billJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+          enqueue(tasks, company, w.number, d, posting?.current ?? null,
+            () => billJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds, own?.entry),
+            replaceBillMemo(w, posting?.current ?? null, own));
         }
         await runLimited(tasks, WRITERS);
         if (result.partial) break;
@@ -1678,12 +1813,20 @@ export async function postInvoices(
         });
         if (held.error) throw readFailed(entriesOf('stock'), held.error);
         const postings = new Map((((held.data as any)?.documents ?? []) as StockPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
+
+        // Books' own copies of the month's fulfillments and receipts, made on the days they're dated.
+        const ownStock = await readOwnStockCopies(service, company, stockDocuments.map((w) => w.entry), stockSince, stockThrough)
+          .catch((err) => { throw readFailed(`Books' own copies of ${company}'s fulfillments and receipts for ${monthLabel(month)}`, err); });
+
         const tasks: Array<() => Promise<void>> = [];
         for (const w of stockDocuments) {
           const posting = stockPostingFor(postings, w);
-          const d = decideStockDocument(w, posting);
+          const own = ownStockPick(w, ownStock, { company, names });
+          const d = decideStockDocument(w, posting, own);
           if (d.kind === 'leave' && w.checked.problems.some((x) => x.kind === 'unbalanced')) unbalancedStock.push(named(company, w.number));
-          enqueue(tasks, company, w.number, d, posting?.current ?? null, () => stockJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds));
+          enqueue(tasks, company, w.number, d, posting?.current ?? null,
+            () => stockJournalEntry(w, company, (posting?.entries ?? 0) + 1, accountIds, own?.entry),
+            replaceStockMemo(w, posting?.current ?? null, own));
         }
         await runLimited(tasks, WRITERS);
         if (result.partial) break;

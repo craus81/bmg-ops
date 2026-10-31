@@ -9,6 +9,8 @@ import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
 import type { OwnCheckStatus } from '@/lib/books/own-invoice-check';
 import type { OwnFulfillmentCheck } from '@/lib/books/own-fulfillment-check';
+import type { OwnBooks } from '@/lib/books/own-invoice-posting';
+import { ownBooksChip, ownBooksCount } from '@/lib/books/own-posting-text';
 
 /**
  * Books → Own fulfillments (migration 416, src/lib/books/own-fulfillments.ts
@@ -20,10 +22,12 @@ import type { OwnFulfillmentCheck } from '@/lib/books/own-fulfillment-check';
  * next to NetSuite's fulfillment, a month at a time: the ones that differ
  * first, with why in a sentence. Tap one for its item by item check. The
  * daily check tells the super admins when one differs and links here
- * (?only=differs) or to the fulfillment. Super admins only, as the books are.
+ * (?only=differs) or to the fulfillment. Each says what the books hold for
+ * NetSuite's fulfillment and which copy made it (migration 456,
+ * src/lib/books/own-stock-posting.ts). Super admins only, as the books are.
  */
 
-type Row = Omit<OwnFulfillmentCheck, 'fields' | 'items' | 'entry' | 'workedOut'>;
+type Row = Omit<OwnFulfillmentCheck, 'fields' | 'items' | 'entry' | 'workedOut'> & { books: OwnBooks | null };
 
 interface SyncState { at: string; error: string | null }
 
@@ -111,9 +115,10 @@ function TableRow({ label, style, children }: { label: React.ReactNode; style?: 
   );
 }
 
-/** A fulfillment: its number (opening its check), status, customer, the order it fulfilled and the sentence saying how it compares. */
+/** A fulfillment: its number (opening its check), status, customer, what the books hold, the order it fulfilled and the sentence saying how it compares. */
 function FulfillmentLabel({ r }: { r: Row }) {
   const s = STATUS[r.status];
+  const books = ownBooksChip(r.books, r.status);
   return (
     <div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px' }}>
@@ -121,6 +126,7 @@ function FulfillmentLabel({ r }: { r: Row }) {
         <Link href={deepLinks.booksOwnFulfillment(r.netsuiteId)} className="rep-link" style={{ fontWeight: 700 }}>{r.number}</Link>
         {r.customer && <span>· {r.customer}</span>}
         <span style={chip(s.color)}>{s.chip}</span>
+        {books && <span style={chip(books.color)}>{books.label}</span>}
       </div>
       <div style={{ fontSize: '11px', color: r.status === 'differs' ? RED : 'var(--text-muted)', overflowWrap: 'anywhere' }}>
         {r.summary}
@@ -186,6 +192,7 @@ export default function BooksOwnFulfillmentsPage() {
 
   const counts = data?.counts;
   const total = data?.fulfillments.length ?? 0;
+  const booksCount = ownBooksCount(data?.fulfillments ?? []);
 
   return (
     <div>
@@ -195,8 +202,9 @@ export default function BooksOwnFulfillmentsPage() {
           FleetSuite&apos;s own copy of each fulfillment it makes before invoicing a sales order: what it took from stock, from
           where and on what day, worked out from its copy of the order and its location rules. FleetSuite works out what that
           cost itself, from Stock by item: each item at its average cost at that location just before. Each is put next to
-          NetSuite&apos;s fulfillment; tap one for its item by item check. Nothing is posted from them yet. Each morning the daily
-          check tells super admins when one differs. Visible only to super admins.{' '}
+          NetSuite&apos;s fulfillment; tap one for its item by item check. The books post each one from this copy when it matches
+          NetSuite&apos;s and its entry comes out the same, and from NetSuite&apos;s otherwise. Each morning the daily check tells
+          super admins when one differs. Visible only to super admins.{' '}
           <Link href="/admin/books/stock" style={{ color: 'var(--text-secondary)' }}>Stock by item</Link>
           {' · '}
           <Link href="/admin/books/own-invoices" style={{ color: 'var(--text-secondary)' }}>Own invoices</Link>
@@ -259,6 +267,8 @@ export default function BooksOwnFulfillmentsPage() {
               />
             </div>
           )}
+
+          {booksCount && <div style={{ ...note, color: 'var(--text-secondary)' }}>{booksCount}</div>}
 
           {data.month && (
             <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px' }}>

@@ -7,6 +7,9 @@ import { BOOKS_GL_SYNC } from '@/lib/books/netsuite-gl';
 import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
 import { BOOKS_DAILY_CHECK } from '@/lib/books/daily-check';
 import { checkOwnBills, type BillPairsData, type OwnBillCheck } from '@/lib/books/own-bill-check';
+import { readOwnBooks } from '@/lib/books/own-invoice-posting';
+import { BILL_BOOKS } from '@/lib/books/own-bill-posting';
+import { readOwnBillView } from '@/lib/books/own-posting-view';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,7 +55,10 @@ async function namesOf(service: ReturnType<typeof createServiceClient>, bills: O
  * src/lib/books/own-bill-check.ts), with every month that has any and how
  * the copies the check reads from last went.
  * GET /api/admin/books/own-bills?id=<NetSuite id> — one of them, line by
- * line. Amounts are whole cents.
+ * line. Amounts are whole cents. Each says what the books hold for
+ * NetSuite's bill and which copy made it, and one on its own how this copy
+ * posts: its entry next to NetSuite's, and why NetSuite's posts when it does
+ * (migration 456, src/lib/books/own-posting-view.ts).
  *
  * Super admin only, as the rest of the books (docs/books.md "FleetSuite's
  * own bills and receipts").
@@ -80,10 +86,13 @@ export async function GET(req: NextRequest) {
     if (!/^\d+$/.test(id)) return NextResponse.json({ error: "That isn't a NetSuite bill id" }, { status: 400 });
     const res = await service.rpc('gl_own_bill_pairs', { p_from: null, p_to: null, p_netsuite_id: id });
     if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
-    const [bill] = checkOwnBills(res.data as BillPairsData, copies).bills;
-    if (!bill) return NextResponse.json({ error: 'Books has no copy of that bill' }, { status: 404 });
+    const data = res.data as BillPairsData;
+    const [bill] = checkOwnBills(data, copies).bills;
+    const own = (data.bills ?? []).find((pair) => pair.own.netsuite_id === bill?.netsuiteId)?.own;
+    if (!bill || !own) return NextResponse.json({ error: 'Books has no copy of that bill' }, { status: 404 });
     try {
-      return NextResponse.json({ bill: withLinks(bill, await namesOf(service, [bill])) });
+      const [names, posting] = await Promise.all([namesOf(service, [bill]), readOwnBillView(service, { own, check: bill })]);
+      return NextResponse.json({ bill: { ...withLinks(bill, names), books: posting.books }, posting });
     } catch (e) {
       return NextResponse.json({ error: (e as Error).message }, { status: 500 });
     }
@@ -106,9 +115,14 @@ export async function GET(req: NextRequest) {
     checked = checkOwnBills(res.data as BillPairsData, copies);
   }
 
+  const ownBills = checked?.bills ?? [];
   let names: Map<string, string>;
+  let books: Awaited<ReturnType<typeof readOwnBooks>>;
   try {
-    names = await namesOf(service, checked?.bills ?? []);
+    [names, books] = await Promise.all([
+      namesOf(service, ownBills),
+      readOwnBooks(service, BILL_BOOKS, ownBills.map((b) => ({ company: b.company, netsuiteId: b.netsuiteId }))),
+    ]);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
@@ -120,7 +134,8 @@ export async function GET(req: NextRequest) {
     months: monthList,
     month: month ? `${month}-01` : null,
     // The list leaves the line by line check to the bill's own page.
-    bills: (checked?.bills ?? []).map(({ fields: _fields, lines: _lines, workedOut: _workedOut, ...row }) => withLinks(row as OwnBillCheck, names)),
+    bills: ownBills.map(({ fields: _fields, lines: _lines, workedOut: _workedOut, ...row }) => (
+      { ...withLinks(row as OwnBillCheck, names), books: books.get(row.netsuiteId) ?? null })),
     counts: checked?.counts ?? null,
     lastBills: state(bills),
     lastLedger: state(ledger),
