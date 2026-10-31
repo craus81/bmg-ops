@@ -654,6 +654,25 @@ export default function UpfitProjectsPage() {
     setRequesting(false);
   };
 
+  // "Got it" on a generic part's line (Misc): it's here, no PO needed
+  // (Craig, 2026-10-31). Undo puts the line back.
+  const markGotIt = async (p: any, undo = false) => {
+    if (!selected || requesting) return;
+    setRequesting(true);
+    try {
+      const res = await fetch('/api/purchase-requests/got-it', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: selected.id, lineKey: p.line_key, undo }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+      setReadiness(body);
+    } catch (e: any) {
+      await dialog.alert(`Could not mark ${p.description || p.item_number} ${undo ? 'not received' : 'received'}: ${e?.message || 'unknown error'}`, { error: true });
+    }
+    setRequesting(false);
+  };
+
   const editAllocation = async (p: any) => {
     const answer = await dialog.prompt(
       `Reserve how many ${p.item_number} for this job? (0 releases; ${p.allocated + p.free} max)`,
@@ -1265,7 +1284,13 @@ export default function UpfitProjectsPage() {
                     </thead>
                     <tbody>
                       {readiness.parts.map((p: any) => {
-                        const state = p.state === 'reserved'
+                        const state = p.generic
+                          ? (p.state === 'reserved'
+                            ? { label: 'Received', color: '#22c55e' }
+                            : p.state === 'waiting'
+                              ? { label: `Ordered ${p.on_order}`, color: '#60a5fa' }
+                              : { label: `Short ${p.short}`, color: '#ef4444' })
+                          : p.state === 'reserved'
                           ? { label: 'Reserved', color: '#22c55e' }
                           : p.state === 'available'
                             ? { label: 'Available', color: '#4ade80' }
@@ -1275,10 +1300,15 @@ export default function UpfitProjectsPage() {
                                 ? { label: `Short ${p.short}`, color: '#ef4444' }
                                 : { label: 'Covered', color: '#22c55e' };
                         return (
-                          <tr key={p.item_number} style={{ borderTop: `1px solid ${theme.border}` }}>
+                          <tr key={p.line_key || p.item_number} style={{ borderTop: `1px solid ${theme.border}` }}>
                             <td style={{ padding: '5px 6px' }}>
-                              <div style={{ fontWeight: 700, color: theme.textPrimary }}>{p.item_number}</div>
-                              {p.description && <div style={{ color: theme.textMuted, fontSize: '10px' }}>{p.description}</div>}
+                              <div style={{ fontWeight: 700, color: theme.textPrimary }}>
+                                {p.item_number}
+                                {p.generic && (
+                                  <span title="A generic part: each line is ordered and received on its own, never reserved" style={{ marginLeft: '6px', fontSize: '9px', fontWeight: 800, color: '#a78bfa', border: '1px solid rgba(167,139,250,0.35)', borderRadius: '4px', padding: '0 4px' }}>Generic</span>
+                                )}
+                              </div>
+                              {p.description && <div style={{ color: p.generic ? theme.textPrimary : theme.textMuted, fontSize: '10px' }}>{p.description}</div>}
                               {p.pos.length > 0 && (
                                 <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginTop: '3px' }}>
                                   {p.pos.map((po: any, i: number) => (
@@ -1291,6 +1321,7 @@ export default function UpfitProjectsPage() {
                             </td>
                             <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textPrimary, fontWeight: 700 }}>{p.needed}</td>
                             <td style={{ padding: '5px 6px', textAlign: 'right' }}>
+                              {p.generic ? <span style={{ color: theme.textMuted }}>—</span> : (
                               <button
                                 onClick={() => editAllocation(p)}
                                 title="Change how many are reserved for this job"
@@ -1298,8 +1329,9 @@ export default function UpfitProjectsPage() {
                               >
                                 {p.allocated ?? 0}
                               </button>
+                              )}
                             </td>
-                            <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.free ?? p.on_hand}</td>
+                            <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.generic ? '—' : (p.free ?? p.on_hand)}</td>
                             <td style={{ padding: '5px 6px', textAlign: 'right', color: theme.textSecondary }}>{p.on_order}</td>
                             <td style={{ padding: '5px 6px', whiteSpace: 'nowrap' }}>
                               <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '6px', background: `${state.color}20`, color: state.color, whiteSpace: 'nowrap' }}>{state.label}</span>
@@ -1315,6 +1347,16 @@ export default function UpfitProjectsPage() {
                                   Order
                                 </button>
                               ))}
+                              {p.generic && (
+                                <button
+                                  disabled={requesting}
+                                  onClick={() => markGotIt(p, p.state === 'reserved')}
+                                  title={p.state === 'reserved' ? 'Mark this line not received after all' : 'It’s here: bought at the counter, on a card, or received some other way'}
+                                  style={{ marginLeft: '4px', fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '6px', background: p.state === 'reserved' ? 'var(--card)' : 'rgba(34,197,94,0.12)', border: `1px solid ${p.state === 'reserved' ? theme.border : 'rgba(34,197,94,0.4)'}`, color: p.state === 'reserved' ? theme.textMuted : '#22c55e', cursor: requesting ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+                                >
+                                  {p.state === 'reserved' ? 'Undo' : 'Got it'}
+                                </button>
+                              )}
                             </td>
                           </tr>
                         );

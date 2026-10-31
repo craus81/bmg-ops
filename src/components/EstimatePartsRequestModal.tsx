@@ -17,6 +17,10 @@
  * number exactly as typed on the estimate; purchasing works out what it is
  * (Craig, 2026-10-01).
  *
+ * A generic part (Miscellaneous, or anything ticked Generic on the Parts
+ * page) comes one row per estimate line, named by that line's description,
+ * and each goes to Purchasing as its own request (Craig, 2026-10-31).
+ *
  * Print stock check turns the same list into a sheet for counting the
  * shelves against on hand (Craig, 2026-10-26; see stock-check-pdf.ts).
  */
@@ -28,9 +32,13 @@ import { startingRequestQty } from '@/lib/estimate-request-qty';
 import { openStockCheckPdf, type StockCheckData } from '@/lib/stock-check-pdf';
 
 const qtyText = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
+const keyOf = (p: { line_key?: string; item_number: string }) => p.line_key || p.item_number;
 
 export interface RequestablePart {
   item_number: string;
+  /** Unique per row — one per line for a generic part. */
+  line_key?: string;
+  generic?: boolean;
   description: string | null;
   needed: number;
   short: number;
@@ -64,27 +72,27 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
   const due = useMemo(() => parts.filter(p => p.to_request > 0), [parts]);
   const covered = useMemo(() => parts.filter(p => p.to_request <= 0), [parts]);
   const lines = useMemo(() => [...due, ...covered], [due, covered]);
-  const [skipped, setSkipped] = useState<Set<string>>(() => new Set(covered.map(p => p.item_number)));
+  const [skipped, setSkipped] = useState<Set<string>>(() => new Set(covered.map(keyOf)));
   const [edited, setEdited] = useState<Record<string, string>>({});
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const qtyFor = (p: RequestablePart): number => {
-    const raw = edited[p.item_number];
+    const raw = edited[keyOf(p)];
     if (raw === undefined) return startingRequestQty(p);
     const n = parseFloat(raw);
     return Number.isFinite(n) && n > 0 ? n : 0;
   };
 
   const selected = lines
-    .filter(p => !skipped.has(p.item_number))
+    .filter(p => !skipped.has(keyOf(p)))
     .map(p => ({ part: p, quantity: qtyFor(p) }))
     .filter(s => s.quantity > 0);
 
   const allTicked = lines.length > 0 && skipped.size === 0;
-  const selectAll = () => setSkipped(allTicked ? new Set(lines.map(p => p.item_number)) : new Set());
-  const shortOnly = () => setSkipped(new Set(covered.map(p => p.item_number)));
+  const selectAll = () => setSkipped(allTicked ? new Set(lines.map(keyOf)) : new Set());
+  const shortOnly = () => setSkipped(new Set(covered.map(keyOf)));
 
   const toggle = (item: string) => setSkipped(prev => {
     const next = new Set(prev);
@@ -94,7 +102,7 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
 
   const printSheet = () => {
     setError(null);
-    const ticked = new Map(selected.map(s => [s.part.item_number, s.quantity]));
+    const ticked = new Map(selected.map(s => [keyOf(s.part), s.quantity]));
     const result = openStockCheckPdf({
       estimateNumber: printInfo?.estimateNumber || estimateLabel,
       customer: printInfo?.customer ?? null,
@@ -108,7 +116,7 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
         needed: p.needed,
         onHand: p.on_hand,
         onOrder: p.on_order,
-        requesting: ticked.get(p.item_number) || 0,
+        requesting: ticked.get(keyOf(p)) || 0,
         short: !p.uncatalogued && p.short > 0,
         uncatalogued: p.uncatalogued,
       })),
@@ -200,12 +208,12 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
             </div>
           )}
           {lines.map((p, i) => {
-            const off = skipped.has(p.item_number);
+            const off = skipped.has(keyOf(p));
             const heading = i === 0 && due.length > 0 ? 'Needs ordering'
               : i === due.length && covered.length > 0 ? 'In stock or on order'
                 : null;
             return (
-              <div key={p.item_number}>
+              <div key={keyOf(p)}>
               {heading && (
                 <div style={{
                   fontSize: '10.5px', fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase',
@@ -224,12 +232,17 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
               >
                 <input
                   type="checkbox" checked={!off} disabled={busy}
-                  onChange={() => toggle(p.item_number)}
+                  onChange={() => toggle(keyOf(p))}
                   style={{ width: '16px', height: '16px', flexShrink: 0, cursor: 'pointer' }}
                 />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '12.5px', fontWeight: 700, color: theme.textPrimary }}>
                     {p.item_number}
+                    {p.generic && (
+                      <span title="A generic part: each line is ordered on its own, by its description" style={{ marginLeft: '6px', fontSize: '10px', fontWeight: 800, color: '#a78bfa', border: '1px solid rgba(167,139,250,0.35)', borderRadius: '4px', padding: '0 4px' }}>
+                        Generic
+                      </span>
+                    )}
                     {p.uncatalogued && (
                       <span title="Not in the parts catalog. It goes in with this part number as typed, and purchasing works out the rest." style={{ marginLeft: '6px', fontSize: '10px', color: '#f59e0b' }}>
                         not in catalog
@@ -237,14 +250,14 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
                     )}
                   </div>
                   {p.description && (
-                    <div style={{ fontSize: '11px', color: theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ fontSize: '11px', color: p.generic ? theme.textPrimary : theme.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {p.description}
                     </div>
                   )}
                   <div style={{ fontSize: '10.5px', color: theme.textMuted, marginTop: '2px' }}>
                     Needed {qtyText(p.needed)}
-                    {!p.uncatalogued && p.on_hand !== undefined && ` · on hand ${qtyText(p.on_hand)}`}
-                    {!p.uncatalogued && p.short > 0 && ` · short ${qtyText(p.short)}`}
+                    {!p.uncatalogued && !p.generic && p.on_hand !== undefined && ` · on hand ${qtyText(p.on_hand)}`}
+                    {!p.uncatalogued && !p.generic && p.short > 0 && ` · short ${qtyText(p.short)}`}
                     {p.on_order > 0 && ` · on order ${qtyText(p.on_order)}`}
                     {p.requested > 0 && ` · already requested ${qtyText(p.requested)}`}
                   </div>
@@ -252,8 +265,8 @@ export default function EstimatePartsRequestModal({ estimateId, estimateLabel, a
                 <input
                   type="number" min="0" step="any" disabled={busy || off}
                   aria-label={`Quantity of ${p.item_number}`}
-                  value={edited[p.item_number] ?? qtyText(startingRequestQty(p))}
-                  onChange={e => setEdited(prev => ({ ...prev, [p.item_number]: e.target.value }))}
+                  value={edited[keyOf(p)] ?? qtyText(startingRequestQty(p))}
+                  onChange={e => setEdited(prev => ({ ...prev, [keyOf(p)]: e.target.value }))}
                   style={{
                     width: '72px', flexShrink: 0, textAlign: 'right',
                     padding: '5px 7px', fontSize: '16px', fontWeight: 700,
