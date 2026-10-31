@@ -3569,8 +3569,9 @@ shelf at O'Fallon.
   bills (that NetSuite's apply list took each amount as sent), one with a
   part going back (that the line kept the amount sent with its quantity and
   rate, and the part left O'Fallon's stock), and one left unapplied.
-- A vendor credit can't yet be made from a bill, or from a return of parts
-  received on a PO; it's entered on its own.
+- A vendor credit is filled in from a bill only to undo all of it (Credit
+  all of it, "Bills fixed in FleetSuite"); one for a return of parts
+  received on a PO is entered on its own.
 
 ## Card charges coded in FleetSuite
 
@@ -3866,7 +3867,9 @@ change (`fixAllows`):
   the month) leave NetSuite's due date, and the screen says so. A line's
   quantity, price each and description, a discount's or markup's amount, a
   line taken off, and a line added of any item a new invoice can bill,
-  found with the same search as New invoice. A line that takes money off
+  found with the same search as New invoice. A new quantity on a line
+  NetSuite gave no price each for needs its price each too, or the line
+  couldn't say what it comes to. A line that takes money off
   without being a discount (a trade-in, say), or names no item, can only be
   taken off. Subtotals, descriptions and item groups stay as they are.
 - **Once money is on it**, part paid, paid, or credited by a credit memo
@@ -3932,7 +3935,7 @@ invoice and Books' copy both change, and the copy keeps its first version.
 
 - Its customer, location, terms or sales rep can't be changed: credit it
   all and invoice it again.
-- Fixing a bill comes next (part 40).
+- Fixing a bill is part 40 ("Bills fixed in FleetSuite").
 - Before switching on, try fixes on a test invoice of each kind, typed and
   billed off a sales order, and check in NetSuite: that it works the tax
   out again; that the sales order's billed quantities follow a line billed
@@ -3941,10 +3944,139 @@ invoice and Books' copy both change, and the copy keeps its first version.
   its answer has `lastModifiedDate`, `dueDate` and each line's `orderLine`
   as the screen reads them.
 
+## Bills fixed in FleetSuite
+
+From January 1, 2027 admins fix a bill after it's made in FleetSuite, and
+FleetSuite makes the change in NetSuite and in Books' own copy of the bill
+(the NetSuite Exit Checklist's January pieces, owner decisions 2026-10-31).
+It's built switched off ("Switches"): until a super admin turns it on, only
+super admins can open the screen, to see what a fix would send, and nothing
+goes to NetSuite. Once it's on, admins with Parts Ordering who can see
+prices can, and More → Purchasing shows Fix a Bill to them.
+
+The screen is `/admin/purchasing/bill-fix` (`deepLinks.billFix`). It finds
+a bill in the copy of NetSuite's bills by its number or vendor, the newest
+first, or opens on one: Books → Own bills has Fix this bill on each bill's
+page. It reads the bill from NetSuite as it is now (`getVendorBillRecord`,
+every line of both its lists, expenses and items, the ones that only lay
+it out too) and what SuiteQL says of its money (`getVendorBillAmounts`: its
+total and what's still owed, which the record doesn't say), in
+`parseFixBill` in `src/lib/bill-fix.ts`. What a fix can change
+(`billFixAllows`):
+
+- **Its number, memo and due date**, whatever has been paid on it. The
+  number is the vendor's own (NetSuite's Reference No.), 40 characters at
+  most, and the memo 999. A number another of the vendor's bills has in
+  NetSuite is refused (`findVendorBill`), as Snap a bill refuses one, and
+  when NetSuite can't be asked nothing is sent.
+- **While nothing on it is paid or credited, its date and its lines.** Its
+  due date moves with its date by its terms: 30 days after on Net 30, the
+  same day with no terms. Terms FleetSuite can't work out (due on a day of
+  the month) leave NetSuite's due date, and the screen says so. An expense
+  line's account (one the bill's company can put a bill's line on, Snap a
+  bill's list), amount and memo; a part's quantity, rate and description; a
+  line taken off; and an expense line added. A part's line comes to its
+  quantity times its rate, rounded half to even to the cent, and NetSuite is
+  sent that amount with them. A new quantity on a part NetSuite gave no rate
+  for needs its rate too. A line that takes money off (a discount), or names
+  no account or item, can only be taken off. Subtotals, descriptions and
+  item groups stay as they are. A part isn't added by a fix: it's billed off
+  its purchase order.
+- **Once money is on it**, part paid, paid, or credited by a vendor credit
+  FleetSuite made, only its number, memo and due date: a vendor credit takes
+  money off instead. The same when NetSuite can't say what's still owed on
+  it, or its lines don't come to its total. A voided bill can't be fixed.
+- **Undoing a whole bill** isn't a fix: that's a vendor credit for all of
+  it, Credit all of it on the screen (below). NetSuite's Void isn't used,
+  so the books keep what was billed and what was taken back.
+
+Each line is changed by NetSuite's own key for it on its list, as an
+invoice's are, so a part billed off a purchase order stays billed off it,
+and NetSuite moves the order's billed quantity with it. Only what changed
+is sent (`planBillFix`). Taking a line off sends every line its list keeps,
+each by its key, with `?replace=item` (or `expense`, or both), so NetSuite's
+lines on that list become exactly those. Bills carry no sales tax.
+
+Fix bill sends it once (`/api/purchasing/bill-fix`), as Fix invoice does.
+The page sends back what it read the bill as (`billFacts`, as a short
+signature): when NetSuite's bill has changed since, nothing is sent and the
+page says to reload. The route works the fix out again from the bill as
+NetSuite has it now, never from what the page worked out, and takes a claim
+on the press (`bill_fixes`, `bill_fix_claim`, migration 472): pressing again
+says the first press is being sent or went in, and only one fix of a bill
+is sent at a time. Then it sends NetSuite the change (`patchVendorBill`). A
+refusal, in NetSuite's own words (a closed month, say), is kept as refused:
+nothing changed, and the same form can try again. When NetSuite doesn't
+answer or faults, it's kept as unsure and the page says to reload and look.
+A send that never finished holds the bill five minutes at most, then counts
+as unsure. Each fix keeps who made it, why, what changed in words, what
+NetSuite was sent, and NetSuite's total after, listed under Fixed before on
+the screen and in the audit log (`bill_fixes`, `fix`). Nothing is emailed
+to the vendor.
+
+Books' own copy follows (`saveFixedOwnBill` in `src/lib/books/own-bills.ts`,
+`gl_own_bill_fix`). When Books has its own copy of the bill (one FleetSuite
+made: Parts Mail, CNI vendor invoices, installer payouts and Snap a bill),
+the fix makes the copy's next version (`gl_own_bills.version`): its number,
+date and lines as fixed, each part with the purchase order line it bills
+(NetSuite's id for it, read with `getOrderLineIds`, five orders at most; a
+line whose order can't be read goes without). The version before is kept
+in `gl_own_bill_versions`, and a copy changed since the fix read it isn't
+overwritten. Until the copy of NetSuite's bills (every two hours) has the
+bill as fixed, Own bills shows a copy that differs from it as waiting, and
+the books post NetSuite's bill; then the check compares them again, its notes saying when
+FleetSuite fixed the copy and how often (`gl_own_bill_pairs` gives each
+copy's version and when it was last fixed), and the books post from the
+copy again once its entry is NetSuite's. Saving it never stops a fix; one
+that can't be saved is said on the screen in red, and the check shows the
+copy differing until it's put right. A bill made in NetSuite has no copy of
+FleetSuite's own, so only NetSuite's changes.
+
+Credit all of it opens the vendor credit screen filled in to undo the bill
+(`deepLinks.vendorCreditForBill`, GET `/api/purchasing/vendor-credit?bill=`):
+its vendor, company and location, the number VOID- and the bill's number,
+"Undoes bill B-100" as why, and a line for each account the bill posted
+to, for what it posted there (`getBillPostings`, `creditAllOfBill` in
+`src/lib/vendor-credit.ts`), so a part billed off a purchase order comes
+back off the account received stock is held against, and no stock moves.
+Once the vendor's open bills are read it's applied to the bill, for what's
+open on it. The person checks it and makes it as any other vendor credit,
+which needs vendor credits switched on. Its lines are entered by hand, and
+the screen says why, when NetSuite hasn't posted the bill (it may be
+waiting for approval), the bill takes money off an account (a discount),
+what it posted doesn't come to its total, or it posted to more than 50
+accounts.
+
+Made-up example: bill B-100 from a parts vendor, nothing paid on it, has
+shop supplies at $200.05, freight at $45.05, and two shelf units at $125.00
+and a light at $50.00 billed off its purchase order: $545.10. The vendor's
+invoice is B-100A, and its freight is $54.05. Fix: the number B-100 →
+B-100A, the freight $45.05 → $54.05, why "Typed from the wrong invoice".
+The screen shows the total going to $554.10, NetSuite's bill and Books'
+copy both change, the parts stay billed off the purchase order, and the
+copy keeps its first version.
+
+### What isn't done yet
+
+- Its vendor, company, location or terms can't be changed: credit it all
+  and bill it again.
+- After Credit all of it, the purchase order still counts the bill's parts
+  billed: a vendor credit doesn't take them off the order.
+- Before switching on, try fixes on a test bill of each kind, typed and
+  billed off a purchase order, and check in NetSuite: that its answer names
+  the total (`userTotal`) and each part's order and line (`orderDoc`,
+  `orderLine`) as the screen reads them; that a line taken off keeps the
+  other lines, each part still billed off its order (`?replace=`); that the
+  order's billed quantities follow a part that changes or comes off; that a
+  closed month refuses a fix; that NetSuite takes a vendor credit's line to
+  the account received stock is held against (Credit all of it); and that a
+  bill waiting for approval has posted nothing yet, so Credit all of it says
+  so.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 471, `src/lib/books/switches.ts`),
+row each in `books_switches` (migrations 466 to 472, `src/lib/books/switches.ts`),
 and stays off until a super admin turns it on in Books → Switches
 (`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
 on on January 1, 2027, asking the owner once in late December.
@@ -3963,6 +4095,7 @@ in the audit log (`switch_on`, `switch_off`).
 | `journal_entries` | Anyone with Payments types a journal entry and asks for approval, a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite ("Journal entries typed in FleetSuite") | More → Money & Books → Journal Entries |
 | `inventory_transfers` | Admins move stock from one of a company's locations to another in FleetSuite, and FleetSuite makes the transfer in NetSuite ("Inventory transfers made in FleetSuite") | More → Parts & Inventory → Inventory Transfers |
 | `invoice_fixes` | Anyone with Invoicing fixes an invoice after it's made, its PO number, memo and VIN, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy ("Invoices fixed in FleetSuite") | Invoicing → Invoiced → Fix on an invoice |
+| `bill_fixes` | Admins with Parts Ordering fix a bill after it's made, its number, memo and due date, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy ("Bills fixed in FleetSuite") | More → Purchasing → Fix a Bill, or Fix on Books → Own bills |
 
 ## Posting
 

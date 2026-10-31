@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { chicagoDate, type SaveResult } from './own-invoices';
+import { chicagoDate, type FixedSaveResult, type SaveResult } from './own-invoices';
 
 /**
  * Books' own copy of each bill FleetSuite puts into NetSuite (migration 435;
@@ -290,6 +290,89 @@ export async function saveOwnBill(service: SupabaseClient, made: MadeBill, at: D
   } catch (err) {
     const reason = String((err as any)?.message || err).slice(0, 300);
     console.error(`[books] own copy of NetSuite bill ${netsuiteId} not saved: ${reason}`);
+    return { saved: false, reason };
+  }
+}
+
+// ── A fix's next version ───────────────────────────────────────────────────
+
+/** A line of a bill as a fix leaves it (src/lib/bill-fix.ts ownCopyLines, the order's line named by its id). */
+export interface FixedBillCopyLine {
+  accountId: string | null;
+  itemId: string | null;
+  itemNumber: string | null;
+  description: string | null;
+  quantity: number | null;
+  rate: number | null;
+  cents: number;
+  /** NetSuite's id for the purchase order line it bills, when FleetSuite could read it. */
+  poLineId: string | null;
+}
+
+export interface FixedBillCopy {
+  /** The vendor's number for the bill. */
+  number: string;
+  /** 'YYYY-MM-DD'. */
+  date: string;
+  lines: FixedBillCopyLine[];
+}
+
+/**
+ * The next version of FleetSuite's own copy of a bill it fixed (migration 472), as gl_own_bill_fix takes it: the
+ * bill's number, date and lines as fixed. FleetSuite now knows every line and what each comes to, so nothing stays
+ * unknown. Pure.
+ */
+export function fixedOwnBillPayload(
+  netsuiteId: string,
+  version: number,
+  fixed: FixedBillCopy,
+  opts: { fixId: string; by: string | null },
+): Record<string, unknown> {
+  const totalCents = fixed.lines.reduce((sum, l) => sum + l.cents, 0);
+  return {
+    netsuite_id: netsuiteId,
+    version,
+    fix_id: opts.fixId,
+    fixed_by: opts.by,
+    number: fixed.number,
+    bill_date: fixed.date,
+    total: (totalCents / 100).toFixed(2),
+    lines: fixed.lines.map((l, i) => ({
+      line_no: i + 1,
+      account_netsuite_id: l.accountId,
+      item_netsuite_id: l.itemId,
+      item_number: l.itemNumber,
+      description: l.description,
+      quantity: l.quantity,
+      rate: l.rate,
+      amount: (l.cents / 100).toFixed(2),
+      po_line_id: l.poLineId,
+    })),
+  };
+}
+
+/**
+ * Makes the next version of FleetSuite's own copy of a bill it just fixed in NetSuite, keeping the one before. Never
+ * throws: the fix is in NetSuite whatever happens here, so a copy that can't follow is logged, and Own bills says it
+ * differs until it's put right.
+ */
+export async function saveFixedOwnBill(
+  service: SupabaseClient,
+  p: { netsuiteId: string; fixed: FixedBillCopy; fixId: string; by: string | null },
+): Promise<FixedSaveResult> {
+  try {
+    const { data, error } = await service.from('gl_own_bills').select('netsuite_id, version').eq('netsuite_id', p.netsuiteId).maybeSingle();
+    if (error) throw new Error(error.message);
+    const saved = data as { netsuite_id: string; version: number } | null;
+    if (!saved) return { saved: false, none: true, reason: 'no copy' };
+    const res = await service.rpc('gl_own_bill_fix', { p: fixedOwnBillPayload(p.netsuiteId, saved.version, p.fixed, { fixId: p.fixId, by: p.by }) });
+    if (res.error) throw new Error(res.error.message);
+    const out = res.data as { saved?: boolean; version?: number; reason?: string } | null;
+    if (out?.saved) return { saved: true, version: out.version };
+    return { saved: false, reason: out?.reason === 'changed' ? 'the copy changed while the fix was being made' : 'the copy is gone' };
+  } catch (err) {
+    const reason = String((err as any)?.message || err).slice(0, 300);
+    console.error(`[books] own copy of fixed NetSuite bill ${p.netsuiteId} not saved: ${reason}`);
     return { saved: false, reason };
   }
 }

@@ -14,10 +14,15 @@
  * /api/purchasing/vendor-credit works the credit out by before it makes it.
  * Built switched off (Books → Switches): until it's on, super admins see
  * what it would send and nothing goes to NetSuite.
+ *
+ * Opened with ?bill=<NetSuite id> (Credit all of it, on a bill's Fix
+ * screen), it starts filled in to undo that bill: its vendor and company,
+ * what it posted the other way round, account by account, and applied to it
+ * for what's open on it (src/lib/vendor-credit.ts creditAllOfBill).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import TopSaveBar from '@/components/TopSaveBar';
@@ -66,6 +71,20 @@ interface VendorOpen {
 type Line =
   | { key: number; kind: 'account'; accountId: string; amountText: string; memo: string }
   | { key: number; kind: 'part'; itemId: string | null; query: string; quantityText: string; rateText: string; rateFromCost: boolean };
+
+/** Credit all of it: the vendor credit that undoes a bill, as GET ?bill= fills it in. */
+interface CreditAllPrefill {
+  billId: string;
+  billNumber: string | null;
+  vendor: { id: string; name: string } | null;
+  company: string;
+  locationId: string | null;
+  number: string;
+  reason: string;
+  lines: Array<{ accountId: string; amount: number; memo: string | null }>;
+  applyCents: number;
+  why: string | null;
+}
 
 interface Done {
   vendorCreditId: string;
@@ -131,8 +150,10 @@ const hit: React.CSSProperties = {
 
 export default function VendorCreditPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const dialog = useDialog();
   const { hasFeature, canSeeMoney, loading: authLoading } = useAuth();
+  const billParam = (searchParams.get('bill') || '').trim();
 
   const [requestId, setRequestId] = useState(newRequestId);
   const [data, setData] = useState<Loaded | null>(null);
@@ -163,6 +184,10 @@ export default function VendorCreditPage() {
 
   const vendorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const partTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Credit all of it: the bill it undoes, as filled in, and what to apply to it once the vendor's open bills are read. */
+  const [fromBill, setFromBill] = useState<{ id: string; number: string | null; why: string | null; error?: string } | null>(null);
+  const filledFrom = useRef<string | null>(null);
+  const pendingApply = useRef<{ billId: string; cents: number } | null>(null);
 
   const allowed = !authLoading && hasFeature('parts_ordering') && canSeeMoney;
 
@@ -187,6 +212,32 @@ export default function VendorCreditPage() {
   }, []);
 
   useEffect(() => { if (allowed) load(); }, [allowed, load]);
+
+  // Credit all of it: once the screen is open, fill it in from the bill, once.
+  useEffect(() => {
+    if (!data || !/^\d+$/.test(billParam) || filledFrom.current === billParam) return;
+    filledFrom.current = billParam;
+    (async () => {
+      try {
+        const res = await apiFetch(`${API}?${new URLSearchParams({ bill: billParam })}`);
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.prefill) throw new Error(body.error || `Couldn't read the bill (${res.status}).`);
+        const p = body.prefill as CreditAllPrefill;
+        setCompany(p.company);
+        setVendorId(p.vendor?.id ?? null);
+        setVendorName(p.vendor?.name ?? '');
+        setNumber(p.number);
+        setLocationId(p.locationId);
+        setReason(p.reason);
+        setLines(p.lines.map((l, i) => ({ key: i + 1, kind: 'account', accountId: l.accountId, amountText: l.amount.toFixed(2), memo: l.memo ?? '' })));
+        setNextKey(p.lines.length + 1);
+        pendingApply.current = p.applyCents > 0 ? { billId: p.billId, cents: p.applyCents } : null;
+        setFromBill({ id: p.billId, number: p.billNumber, why: p.why });
+      } catch (e: any) {
+        setFromBill({ id: billParam, number: null, why: null, error: e?.message || "Couldn't read the bill." });
+      }
+    })();
+  }, [data, billParam]);
 
   // The vendor's open bills and credits in NetSuite, read again whenever the vendor or the company changes.
   useEffect(() => {
@@ -216,6 +267,15 @@ export default function VendorCreditPage() {
     })();
     return () => { cancelled = true; };
   }, [vendorId, company]);
+
+  // Credit all of it applies to the bill it undoes once the vendor's open bills are read, for what's open on it.
+  useEffect(() => {
+    const want = pendingApply.current;
+    if (!want || !open || open.vendorId !== vendorId || open.company !== company || !open.openBills) return;
+    pendingApply.current = null;
+    const bill = open.openBills.find((b) => b.id === want.billId);
+    if (bill) setApplied({ [bill.id]: moneyBox(Math.min(want.cents, bill.openCents)) });
+  }, [open, vendorId, company]);
 
   const companyRow = data?.companies.find((c) => c.code === company);
   const accounts = useMemo(() => new Map((data?.accounts ?? []).map((a) => [a.id, a])), [data]);
@@ -334,6 +394,8 @@ export default function VendorCreditPage() {
     setApplied({});
     setError(null);
     setDone(null);
+    setFromBill(null);
+    pendingApply.current = null;
     load();
   };
 
@@ -398,6 +460,22 @@ export default function VendorCreditPage() {
         <h1 style={{ margin: '4px 0 0', fontSize: '22px', fontWeight: 800, color: theme.textPrimary }}>Vendor credit</h1>
         <div style={{ fontSize: '13px', color: theme.textMuted }}>A vendor&apos;s credit, made in NetSuite and applied to their open bills.</div>
       </div>
+
+      {fromBill && !done && (
+        <div style={{ ...card, display: 'grid', gap: '4px', fontSize: '14px', color: theme.textPrimary }}>
+          {fromBill.error ? (
+            <div style={{ color: theme.error, fontWeight: 700 }}>Couldn&apos;t fill this in from the bill: {fromBill.error}</div>
+          ) : (
+            <>
+              <div style={{ fontWeight: 800 }}>Undoing bill {fromBill.number || fromBill.id}</div>
+              <div style={muted}>
+                Filled in from the bill: what it posted, the other way round, applied to it. Check it, then make it. No stock moves.
+              </div>
+              {fromBill.why && <div style={{ color: theme.error, fontWeight: 700 }}>{fromBill.why}</div>}
+            </>
+          )}
+        </div>
+      )}
 
       {data?.offText && !done && (
         <div style={{ ...card, borderColor: theme.warningBorder, background: theme.warningBg, color: theme.warning, fontSize: '14px', fontWeight: 700 }}>

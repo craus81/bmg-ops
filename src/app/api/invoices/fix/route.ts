@@ -11,7 +11,7 @@ import { KNOWN_LOCATION_IDS } from '@/lib/invoice-location';
 import { formatCents } from '@/lib/credit-memo';
 import { logAudit } from '@/lib/audit';
 import {
-  MAX_ADDED, fixAllows, invoiceFacts, ownCopyLines, parseFixInvoice, planInvoiceFix,
+  MAX_ADDED, fixAllows, invoiceFacts, ownCopyLines, parseFixInvoice, planInvoiceFix, termDays,
   type FixFacts, type FixInvoice, type FixItem,
 } from '@/lib/invoice-fix';
 
@@ -74,11 +74,7 @@ async function readFacts(invoice: FixInvoice): Promise<Omit<FixFacts, 'items'>> 
   const creditedHere = ((credits.data ?? []) as Array<{ netsuite_credit_memo_id: string | null; claimed_at: string | null }>)
     .some((c) => c.netsuite_credit_memo_id || c.claimed_at);
   // No terms is due the day it's billed, as in NetSuite; terms due on a day of the month FleetSuite can't work out.
-  let termsDays: number | null = 0;
-  if (invoice.termsId) {
-    const days = Number((terms.data as { details?: Record<string, unknown> } | null)?.details?.days_until_net_due);
-    termsDays = terms.data && Number.isInteger(days) && days >= 0 ? days : null;
-  }
+  const termsDays = invoice.termsId ? termDays((terms.data as { details?: Record<string, unknown> | null } | null)?.details) : 0;
   const matched = (customers.data ?? []) as Array<{ tax_exempt: boolean | null }>;
   const untaxed: FixFacts['untaxed'] = invoice.locationId === KNOWN_LOCATION_IDS.socialcircle ? 'georgia'
     : matched.length > 0 && matched.every((c) => c.tax_exempt === true) ? 'exempt_customer'

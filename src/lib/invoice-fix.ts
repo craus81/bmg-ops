@@ -319,6 +319,16 @@ const realDate = (s: string) => {
   return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === s;
 };
 
+/**
+ * The days a NetSuite term gives before it's due, from its gl_netsuite_lists details; null when FleetSuite can't tell
+ * them, as for a term due on a day of the month, which gives none.
+ */
+export function termDays(details: Record<string, unknown> | null | undefined): number | null {
+  const v = details?.days_until_net_due;
+  const days = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN;
+  return Number.isInteger(days) && days >= 0 ? days : null;
+}
+
 /** 'YYYY-MM-DD' plus whole days. */
 export function addDays(date: string, days: number): string {
   return new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
@@ -481,7 +491,11 @@ export function planInvoiceFix(inv: FixInvoice, edit: InvoiceFixEdit, facts: Fix
         changes.push(`${name} price ${l.rate === null ? '(none)' : priceText(l.rate)} → ${priceText(rate)}`);
       }
     }
-    if ('quantity' in patch || 'rate' in patch) cents = centsOf(quantity * (rate ?? 0));
+    if ('quantity' in patch || 'rate' in patch) {
+      // With no price each, the quantity alone can't say what the line comes to.
+      if (rate === null) problems.push(`${name}: NetSuite gave no price each for it, so enter the price each too.`);
+      else cents = centsOf(quantity * rate);
+    }
     if (amountChanges) {
       const a = e.amount!;
       if (!(Number.isFinite(a) && a > 0)) problems.push(`${name}: enter an amount above $0. To drop it, take it off.`);

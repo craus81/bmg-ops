@@ -284,6 +284,15 @@ export const deepLinks = {
    *  Ordering once vendor credits are switched on in Books → Switches; until
    *  then super admins only. */
   vendorCredit: () => '/admin/purchasing/vendor-credit',
+  /** Credit all of it: a vendor credit that undoes one NetSuite bill, filled
+   *  in from what it posted and applied to it (src/lib/vendor-credit.ts
+   *  creditAllOfBill), from the bill's Fix screen. */
+  vendorCreditForBill: (billNetsuiteId: string) => `/admin/purchasing/vendor-credit?${new URLSearchParams({ bill: billNetsuiteId })}`,
+  /** Fixing a NetSuite bill after it's made (src/lib/bill-fix.ts), from More
+   *  → Purchasing or Fix on Books → Own bills; with an id, that bill open.
+   *  Admins with Parts Ordering once fixing bills is switched on in Books →
+   *  Switches; until then super admins only. */
+  billFix: (billNetsuiteId?: string | null) => `/admin/purchasing/bill-fix${billNetsuiteId ? `?${new URLSearchParams({ bill: billNetsuiteId })}` : ''}`,
   /** The Chase card's charges, coded and sent to NetSuite as a journal entry
    *  each month (src/lib/card-charges.ts), from More → Money & Books. Anyone
    *  with Payments once card charges are switched on in Books → Switches;

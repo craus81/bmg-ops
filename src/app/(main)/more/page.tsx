@@ -52,20 +52,28 @@ export default function MorePage() {
     return () => { cancelled = true; };
   }, [profile]);
 
-  // Vendor Credits: admins with Parts Ordering once vendor credits are
+  // Vendor Credits and Fix a Bill: admins with Parts Ordering once each is
   // switched on in Books → Switches; until then super admins only.
   const canOrderParts = hasFeature('parts_ordering');
   const [canVendorCredit, setCanVendorCredit] = useState(false);
+  const [canBillFix, setCanBillFix] = useState(false);
   useEffect(() => {
     if (!canOrderParts) return;
     let cancelled = false;
-    (async () => {
+    const canUse = async (url: string) => {
       try {
-        const res = await apiFetch('/api/purchasing/vendor-credit?status=1');
+        const res = await apiFetch(url);
         const body = await res.json().catch(() => ({}));
-        if (!cancelled) setCanVendorCredit(res.ok && !!body.canUse);
+        return res.ok && !!body.canUse;
       } catch {
-        if (!cancelled) setCanVendorCredit(false);
+        return false;
+      }
+    };
+    (async () => {
+      const [credits, fixes] = await Promise.all([canUse('/api/purchasing/vendor-credit?status=1'), canUse('/api/purchasing/bill-fix?status=1')]);
+      if (!cancelled) {
+        setCanVendorCredit(credits);
+        setCanBillFix(fixes);
       }
     })();
     return () => { cancelled = true; };
@@ -149,6 +157,7 @@ export default function MorePage() {
     { group: 'purchasing', title: 'Purchase Orders', sub: 'Every vendor PO · + New PO, open, undo', path: '/admin/purchasing?tab=vendor-pos', show: F('parts_ordering'), list: true, newPath: isAdmin ? '/admin/purchasing?tab=vendor-pos&new=1' : undefined },
     { group: 'purchasing', title: 'Receiving', sub: 'Check arriving parts in against vendor POs · the badge counts receipts still to enter in NetSuite by hand', path: '/admin/receiving', show: F('parts_ordering'), badge: badgeFor('manual_receipts'), list: true },
     { group: 'purchasing', title: 'Vendor Credits', sub: 'Enter a vendor’s credit · made in NetSuite and applied to their open bills', path: deepLinks.vendorCredit(), show: canVendorCredit },
+    { group: 'purchasing', title: 'Fix a Bill', sub: 'Fix a vendor bill’s number, memo or due date, and while nothing is paid its date and lines · changed in NetSuite', path: deepLinks.billFix(), show: canBillFix },
     { group: 'purchasing', title: 'Parts Mail', sub: 'Incoming parts & ETAs vs. stock and job allocations', path: '/admin/parts-mail', show: F('upfit_projects') },
     { group: 'purchasing', title: 'Scan Log', sub: 'Review scans, match POs, export & invoice', path: '/admin/scans', show: F('reports') },
 

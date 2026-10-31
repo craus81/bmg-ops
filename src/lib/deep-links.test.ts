@@ -218,8 +218,18 @@ describe('Invoice fix links', () => {
 });
 
 describe('Vendor credit links', () => {
-  it('opens the vendor credit screen in Purchasing', () => {
+  it('opens the vendor credit screen in Purchasing, or filled in to undo one NetSuite bill', () => {
     expect(deepLinks.vendorCredit()).toBe('/admin/purchasing/vendor-credit');
+    expect(deepLinks.vendorCreditForBill('3001')).toBe('/admin/purchasing/vendor-credit?bill=3001');
+  });
+});
+
+describe('Bill fix links', () => {
+  it('opens the Fix a Bill screen, on one NetSuite bill when given one', () => {
+    expect(deepLinks.billFix()).toBe('/admin/purchasing/bill-fix');
+    expect(deepLinks.billFix(null)).toBe('/admin/purchasing/bill-fix');
+    expect(deepLinks.billFix('')).toBe('/admin/purchasing/bill-fix');
+    expect(deepLinks.billFix('3001')).toBe('/admin/purchasing/bill-fix?bill=3001');
   });
 });
 

@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   CREDIT_NUMBER_MAX, MAX_APPLIED_BILLS, MAX_VENDOR_CREDIT_LINES, VENDOR_CREDIT_RULE, accountName, applyOldestFirst,
-  keptApplied, keptVendorCreditLines, netsuiteVendorCredit, workOutVendorCredit,
-  type CreditAccount, type CreditCompany, type CreditPart, type OpenBill, type VendorCreditDraft, type VendorCreditFacts,
+  creditAllNumber, creditAllOfBill, keptApplied, keptVendorCreditLines, netsuiteVendorCredit, workOutVendorCredit,
+  type BillPosting, type CreditAccount, type CreditCompany, type CreditPart, type OpenBill, type VendorCreditDraft,
+  type VendorCreditFacts,
 } from './vendor-credit';
 
 // Made-up companies, accounts, parts and a vendor's open bills.
@@ -267,5 +268,65 @@ describe('accountName', () => {
   it('names an account by its number and name', () => {
     expect(accountName({ number: '5100', name: 'Shop supplies' })).toBe('5100 Shop supplies');
     expect(accountName({ number: null, name: 'Freight in' })).toBe('Freight in');
+  });
+});
+
+describe('Credit all of it', () => {
+  const posted = (accountId: string, debitCents: number, creditCents = 0, over: Partial<BillPosting> = {}): BillPosting => ({
+    accountId, debitCents, creditCents, payables: false, memo: null, ...over,
+  });
+  /** Bill B-100's payables line: what it owes the vendor. */
+  const PAYABLES = posted('200', 0, 54510, { payables: true, memo: 'Bill B-100' });
+
+  it('takes back what the bill posted, account by account, the other way round', () => {
+    // Two expense lines, and two parts billed off a purchase order to the account received stock is held against.
+    expect(creditAllOfBill([
+      PAYABLES,
+      posted('610', 20005, 0, { memo: ' Gloves ' }),
+      posted('620', 4505, 0, { memo: '  ' }),
+      posted('140', 25000, 0, { memo: 'Shelf unit' }),
+      posted('620', 0, 0, { memo: 'Freight' }),
+      posted('140', 5000, 0, { memo: 'Light' }),
+    ], 54510, 'bill B-100')).toEqual({
+      lines: [
+        { accountId: '610', cents: 20005, memo: 'Gloves' },
+        { accountId: '620', cents: 4505, memo: 'Freight' },
+        { accountId: '140', cents: 30000, memo: 'Shelf unit' },
+      ],
+      why: null,
+    });
+    // An account the bill posted to and took back nets to nothing, and isn't a line; a long memo is cut to fit.
+    const long = 'M'.repeat(400);
+    expect(creditAllOfBill([posted('610', 1000, 0, { memo: long }), posted('650', 700), posted('650', 0, 700)], null, 'bill B-100')).toEqual({
+      lines: [{ accountId: '610', cents: 1000, memo: 'M'.repeat(300) }],
+      why: null,
+    });
+  });
+
+  it("says why its lines are entered by hand when they can't be filled in", () => {
+    expect(creditAllOfBill([PAYABLES], 54510, 'bill B-100')).toEqual({
+      lines: [], why: "NetSuite hasn't posted bill B-100 (it may be waiting for approval), so there's nothing to take back yet.",
+    });
+    expect(creditAllOfBill([], 54510, 'NetSuite bill 3001').why).toBe("NetSuite hasn't posted NetSuite bill 3001 (it may be waiting for approval), so there's nothing to take back yet.");
+    // A discount on the bill posts against the money, which a vendor credit's lines can't take back.
+    expect(creditAllOfBill([posted('200', 0, 9500, { payables: true }), posted('610', 10000), posted('660', 0, 500)], 9500, 'bill B-100')).toEqual({
+      lines: [],
+      why: "Bill B-100 takes money off an account (a discount, say), which a vendor credit's lines can't do, so enter this one by hand.",
+    });
+    expect(creditAllOfBill([posted('610', 54510)], 54000, 'bill B-100').why)
+      .toBe('What bill B-100 posted comes to $545.10, not its total of $540.00, so enter this one by hand.');
+    expect(creditAllOfBill([posted('610', 54510)], 54510, 'bill B-100').why).toBeNull();
+    const accounts = (n: number) => Array.from({ length: n }, (_, i) => posted(String(700 + i), 100));
+    expect(creditAllOfBill(accounts(MAX_VENDOR_CREDIT_LINES), MAX_VENDOR_CREDIT_LINES * 100, 'bill B-100').lines).toHaveLength(MAX_VENDOR_CREDIT_LINES);
+    expect(creditAllOfBill(accounts(MAX_VENDOR_CREDIT_LINES + 1), null, 'bill B-100')).toEqual({
+      lines: [], why: `Bill B-100 posted to more than ${MAX_VENDOR_CREDIT_LINES} accounts, so enter this one by hand.`,
+    });
+  });
+
+  it("numbers the vendor credit for the bill it undoes, as long as a credit's number can be", () => {
+    expect(creditAllNumber('B-100', '3001')).toBe('VOID-B-100');
+    expect(creditAllNumber(' B-100 ', '3001')).toBe('VOID-B-100');
+    expect(creditAllNumber(' ', '3001')).toBe('VOID-3001');
+    expect(creditAllNumber('X'.repeat(50), '3001')).toBe(`VOID-${'X'.repeat(CREDIT_NUMBER_MAX - 5)}`);
   });
 });

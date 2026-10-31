@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   MAX_ADDED, addDays, dayText, fixAllows, invoiceFacts, ownCopyLines, parseFixInvoice, planInvoiceFix, priceText,
-  quantityText, type FixFacts, type FixInvoice, type FixItem, type InvoiceFixEdit,
+  quantityText, termDays, type FixFacts, type FixInvoice, type FixItem, type InvoiceFixEdit,
 } from './invoice-fix';
 
 // A made-up NetSuite invoice as GET invoice/{id}?expandSubResources=true answers it, billed off sales order 6001: a
@@ -341,6 +341,15 @@ describe('planInvoiceFix: its lines', () => {
     expect(plan({ lines: [{ line: 1, price: 10 }] }, noRate).changes).toEqual(['SHELF-1 price (none) → $10.00']);
   });
 
+  it("won't change the quantity of a line NetSuite gave no price each for without one", () => {
+    const noRate = parse({ item: { items: [{ line: 1, item: { id: '55', refName: 'SHELF-1' }, itemType: 'InvtPart', quantity: 2, amount: 251, isTaxable: true }] }, subtotal: 251, taxTotal: 0, total: 251, amountRemaining: 251 });
+    expect(noRate.lines[0]).toMatchObject({ kind: 'quantity', rate: null, cents: 25100 });
+    expect(plan({ lines: [{ line: 1, quantity: 3 }] }, noRate).problems).toEqual(['SHELF-1: NetSuite gave no price each for it, so enter the price each too.']);
+    const priced = plan({ lines: [{ line: 1, quantity: 3, price: 125.5 }] }, noRate);
+    expect(priced.problems).toEqual([]);
+    expect(priced.fixed.lines[0]).toMatchObject({ quantity: 3, rate: 125.5, cents: 37650 });
+  });
+
   it('takes a line off by sending NetSuite every line it keeps, by key', () => {
     const p = plan({ lines: [{ line: 2, remove: true }, { line: 1, quantity: 3 }] });
     expect(p.problems).toEqual([]);
@@ -555,5 +564,16 @@ describe('the words', () => {
     expect(priceText(95)).toBe('$95.00');
     expect(priceText(1250.5)).toBe('$1,250.50');
     expect(priceText(0.125)).toBe('$0.125');
+  });
+
+  it("reads a term's days as NetSuite's lists copy keeps them, and none it can't tell", () => {
+    expect(termDays({ days_until_net_due: 30 })).toBe(30);
+    expect(termDays({ days_until_net_due: '45' })).toBe(45);
+    expect(termDays({ days_until_net_due: 0 })).toBe(0);
+    // A term due on a day of the month gives no days; nor does one that's blank, partial, below nothing or not a number.
+    for (const v of [undefined, null, '', ' ', 30.5, -5, '-5', 'soon', true]) expect(termDays({ days_until_net_due: v })).toBeNull();
+    expect(termDays({})).toBeNull();
+    expect(termDays(null)).toBeNull();
+    expect(termDays(undefined)).toBeNull();
   });
 });

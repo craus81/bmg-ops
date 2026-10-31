@@ -4,16 +4,17 @@ import { getProfileRoles, requireFeature } from '@/lib/api-auth';
 import { isAdminRole } from '@/lib/features';
 import { validateBody, z } from '@/lib/validate';
 import { partNumberRegex } from '@/lib/loose-search';
-import { createVendorCredit, findVendorCredit, getVendorOpenBills } from '@/lib/netsuite';
+import { createVendorCredit, findVendorCredit, getBillPostings, getVendorBillAmounts, getVendorBillRecord, getVendorOpenBills } from '@/lib/netsuite';
 import { SWITCH_ON_DATE_TEXT, switchIsOn } from '@/lib/books/switches';
 import { readAccounts, readCompanies, readVendor, searchVendors, snapToday } from '@/lib/books/snap-a-bill';
 import { saveOwnVendorCredit } from '@/lib/books/own-vendor-credits';
 import { logAudit } from '@/lib/audit';
 import {
-  MAX_APPLIED_BILLS, MAX_VENDOR_CREDIT_LINES, STOCK_LOCATION_ID, formatCents, keptApplied, keptVendorCreditLines,
-  netsuiteVendorCredit, workOutVendorCredit,
+  MAX_APPLIED_BILLS, MAX_VENDOR_CREDIT_LINES, STOCK_LOCATION_ID, creditAllNumber, creditAllOfBill, formatCents, keptApplied,
+  keptVendorCreditLines, netsuiteVendorCredit, workOutVendorCredit,
   type CreditAccount, type CreditCompany, type CreditPart, type OpenBill, type VendorCreditDraft,
 } from '@/lib/vendor-credit';
+import { billName, parseFixBill } from '@/lib/bill-fix';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -114,6 +115,44 @@ async function readOpenBills(vendorId: string, company: CreditCompany | undefine
   return { bills: res.bills as OpenBill[], credits: res.credits as OpenBill[], error: null as string | null };
 }
 
+/**
+ * Credit all of it, from a bill's Fix screen (src/lib/bill-fix.ts): a vendor credit that undoes the bill, filled in
+ * from the bill as NetSuite has it now and what it posted, the other way round (creditAllOfBill), applied to it for
+ * what's open on it. The person checks it and makes it as any other.
+ */
+async function readCreditAll(id: string) {
+  const [rec, amounts, postings, companyRows] = await Promise.all([
+    getVendorBillRecord(id), getVendorBillAmounts(id), getBillPostings(id), readCompanies(service),
+  ]);
+  if (!rec.success) return { error: rec.notFound ? `NetSuite has no bill with id ${id}.` : rec.error, status: rec.notFound ? 404 : 502 };
+  const bill = parseFixBill(rec.record, amounts.success
+    ? { totalCents: amounts.totalCents, owedCents: amounts.owedCents, status: amounts.status, voided: amounts.voided }
+    : null);
+  const name = billName(bill);
+  const Name = name.charAt(0).toUpperCase() + name.slice(1);
+  if (bill.voided) return { error: `${Name} is voided in NetSuite, so there's nothing to credit.`, status: 409 };
+  const company = companiesOf(companyRows).find((c) => c.subsidiaryId && c.subsidiaryId === bill.subsidiaryId);
+  if (!company) return { error: `${Name} is for a company FleetSuite doesn't keep books for.`, status: 409 };
+  const all = postings.success
+    ? creditAllOfBill(postings.rows, bill.totalCents, name)
+    : { lines: [], why: `Couldn't read what ${name} posted from NetSuite (${postings.error}), so enter its lines by hand.` };
+  return {
+    prefill: {
+      billId: bill.id,
+      billNumber: bill.number || null,
+      vendor: bill.vendorId ? { id: bill.vendorId, name: bill.vendorName } : null,
+      company: company.code,
+      locationId: bill.locationId && company.locations.some((l) => l.id === bill.locationId) ? bill.locationId : null,
+      number: creditAllNumber(bill.number, bill.id),
+      reason: `Undoes ${name}`,
+      lines: all.lines.map((l) => ({ accountId: l.accountId, amount: l.cents / 100, memo: l.memo })),
+      // What's open on it; nothing when NetSuite couldn't say, and the bill is picked by hand.
+      applyCents: bill.owedCents ?? 0,
+      why: all.why,
+    },
+  };
+}
+
 interface RecentRow {
   id: string;
   vendor_name: string | null;
@@ -131,6 +170,7 @@ interface RecentRow {
  * GET /api/purchasing/vendor-credit — the companies, their locations and accounts, and the vendor credits made lately.
  * GET ?vendors=<typed> — vendors from the copy of NetSuite's list. GET ?parts=<typed> — parts to send back.
  * GET ?vendor=<NetSuite id>&company=<code> — the vendor, and its bills and credits NetSuite has open now.
+ * GET ?bill=<NetSuite id> — Credit all of it: the vendor credit that undoes the bill, to check and make.
  */
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
@@ -152,6 +192,13 @@ export async function GET(req: NextRequest) {
     }
     if (params.has('parts')) {
       return NextResponse.json({ parts: await searchParts(params.get('parts') || '') });
+    }
+    if (params.has('bill')) {
+      const billId = (params.get('bill') || '').trim();
+      if (!/^\d+$/.test(billId)) return NextResponse.json({ error: 'Bad bill id' }, { status: 400 });
+      const all = await readCreditAll(billId);
+      if ('error' in all) return NextResponse.json({ error: all.error }, { status: all.status });
+      return NextResponse.json(all);
     }
     const vendorId = (params.get('vendor') || '').trim();
     if (vendorId) {

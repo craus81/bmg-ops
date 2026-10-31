@@ -279,6 +279,64 @@ describe("checking Books' own bill", () => {
     expect(checkOwnBill(pair(expenseBill(), null), lists, BEFORE).madeBy).toBeNull();
   });
 
+  it('says a fixed copy is the bill as FleetSuite fixed it, and waits for the copy of NetSuite\'s bills to read the fix', () => {
+    const FIXED_AT = '2026-10-23T16:00:00.000Z';
+    // Ten racks where twelve were billed, dated the 22nd and renumbered.
+    const fixed = partsMailBill({
+      version: 2, fixed_at: FIXED_AT, number: 'INV-5521A', reference_no: 'INV-5521A', date: '2026-10-22',
+      lines: [{ line_no: 1, account_id: null, item_id: RACK, item_number: 'RACK-48', description: 'Ladder rack', quantity: '10.0000', rate: '178.3333', amount: '1783.33', po_line_id: '2' }],
+    });
+    const asFixed = partsMailNetsuite({
+      number: 'INV-5521A', date: '2026-10-22', total: '1783.33',
+      lines: [{ line_id: '1', item: RACK, account: '210', amount: '1783.33', own_amount: '1783.33', quantity: '10', tax: false }],
+    });
+    const read = { bills: '2026-10-23T18:00:00.000Z', ledger: LATER };
+    const check = checkOwnBill(pair(fixed, asFixed), lists, read);
+    expect(check).toMatchObject({ status: 'matches', number: 'INV-5521A', date: '2026-10-22', fleetsuiteCents: 178333 });
+    expect(check.workedOut).toEqual([
+      'Made by Create bill on a Parts Mail invoice on Oct 21, 2026, from PO453-ACME.',
+      "The vendor's invoice says $2,199.97.",
+      "Fixed in FleetSuite on Oct 23, 2026: its number, date and lines are the bill's as FleetSuite fixed it, the lines it kept as NetSuite had them and the ones it changed or added as FleetSuite sent them.",
+    ]);
+
+    // NetSuite's copy read before the fix: still twelve racks, so it waits.
+    const stale = checkOwnBill(pair(fixed, partsMailNetsuite()), lists, { bills: '2026-10-23T15:00:00.000Z', ledger: LATER });
+    expect(stale).toMatchObject({
+      status: 'waiting', summary: "Waiting for the copy of NetSuite's bills to read the bill as FleetSuite fixed it: it runs every two hours.",
+    });
+    expect(checkOwnBill(pair(fixed, partsMailNetsuite()), lists, { bills: null, ledger: LATER }).status).toBe('waiting');
+    // Read since, it differs, in words that say it was fixed.
+    const differs = checkOwnBill(pair(fixed, partsMailNetsuite({ total: '1783.33', lines: asFixed.lines })), lists, read);
+    expect(differs.status).toBe('differs');
+    expect(field(differs, 'number').why).toBe("NetSuite's bill is numbered INV-5521 now. It was INV-5521A when FleetSuite fixed it.");
+    expect(field(differs, 'date').why).toBe("FleetSuite fixed it to Oct 22, 2026, and NetSuite's bill is dated 1 day earlier.");
+    // A copy that matches waits for nothing, read or not.
+    expect(checkOwnBill(pair(fixed, asFixed), lists, { bills: '2026-10-23T15:00:00.000Z', ledger: LATER }).status).toBe('matches');
+  });
+
+  it('says how many times a copy was fixed, and keeps what a copy made one way says once fixed', () => {
+    const at = '2026-10-24T16:00:00.000Z';
+    const ap = checkOwnBill(pair(expenseBill({ version: 3, fixed_at: at, date: '2026-10-20' }), netsuite({ date: '2026-10-20' })), lists, { bills: '2026-10-25T00:00:00Z', ledger: LATER });
+    expect(ap.status).toBe('matches');
+    expect(ap.workedOut).toEqual([
+      'Made by Create Bill in NetSuite on a CNI vendor invoice on Oct 21, 2026.',
+      "Fixed in FleetSuite 2 times, last on Oct 24, 2026: its number, date and lines are the bill's as FleetSuite fixed it, the lines it kept as NetSuite had them and the ones it changed or added as FleetSuite sent them.",
+    ]);
+    const snapped = checkOwnBill(pair(expenseBill({ made_from: 'snapped', version: 2, fixed_at: null }), netsuite()), lists, SINCE);
+    expect(snapped.workedOut).toEqual([
+      "Made with Snap a bill on Oct 21, 2026: FleetSuite read a picture of the vendor's bill, and it was checked before Send to NetSuite.",
+      "Fixed in FleetSuite: its number, date and lines are the bill's as FleetSuite fixed it, the lines it kept as NetSuite had them and the ones it changed or added as FleetSuite sent them.",
+    ]);
+    // With no time it was fixed, it doesn't wait.
+    expect(checkOwnBill(pair(expenseBill({ version: 2, fixed_at: null }), netsuite({ total: '1.00' })), lists, BEFORE).status).toBe('differs');
+    // A copy at its first version says what it always did.
+    expect(checkOwnBill(pair(expenseBill({ version: 1, fixed_at: at }), netsuite()), lists, SINCE).workedOut).toEqual([
+      'Made by Create Bill in NetSuite on a CNI vendor invoice on Oct 21, 2026.',
+      'One line: $1,250.00 to 61100 Subcontractors, as FleetSuite sent it.',
+      'Dated the day FleetSuite made it, in Central time: FleetSuite sends NetSuite no date for a bill, so NetSuite dates it that day.',
+    ]);
+  });
+
   it("names a payout's bill and one with no number", () => {
     const payout = checkOwnBill(pair(expenseBill({ made_from: 'payout', number: null, reference_no: 'PP-3F2A91C0' }), null), lists, BEFORE);
     expect(payout).toMatchObject({ number: 'PP-3F2A91C0', madeFromText: 'an installer payout' });

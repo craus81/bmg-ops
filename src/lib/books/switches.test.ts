@@ -34,19 +34,25 @@ const ON: Row = { piece: 'credit_memos', is_on: true, changed_by: 'p1', changed_
 
 describe('switches', () => {
   it('names each piece, where people find it, and only those', () => {
-    expect(SWITCH_PIECES).toEqual(['credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes']);
+    expect(SWITCH_PIECES).toEqual(['credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes', 'bill_fixes']);
     expect(SWITCHES.credit_memos.where).toBe('Invoicing → Invoiced → Credit on an invoice');
     expect(SWITCHES.vendor_credits.where).toBe('More → Purchasing → Vendor Credits');
     expect(SWITCHES.card_charges.where).toBe('More → Money & Books → Card Charges');
     expect(SWITCHES.journal_entries.where).toBe('More → Money & Books → Journal Entries');
     expect(SWITCHES.inventory_transfers.where).toBe('More → Parts & Inventory → Inventory Transfers');
     expect(SWITCHES.invoice_fixes.where).toBe('Invoicing → Invoiced → Fix on an invoice');
+    expect(SWITCHES.bill_fixes).toEqual({
+      name: 'Fixing bills',
+      what: "Admins with Parts Ordering fix a bill after it's made, its number, memo and due date, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy for the books.",
+      where: 'More → Purchasing → Fix a Bill, or Fix on Books → Own bills',
+    });
     expect(isSwitchPiece('credit_memos')).toBe(true);
     expect(isSwitchPiece('vendor_credits')).toBe(true);
     expect(isSwitchPiece('card_charges')).toBe(true);
     expect(isSwitchPiece('journal_entries')).toBe(true);
     expect(isSwitchPiece('inventory_transfers')).toBe(true);
     expect(isSwitchPiece('invoice_fixes')).toBe(true);
+    expect(isSwitchPiece('bill_fixes')).toBe(true);
     expect(isSwitchPiece('payroll')).toBe(false);
     expect(isSwitchPiece('toString')).toBe(false);
     expect(isSwitchPiece(null)).toBe(false);
@@ -60,6 +66,7 @@ describe('switches', () => {
       { piece: 'journal_entries', on: false, changedBy: null, changedAt: null },
       { piece: 'inventory_transfers', on: false, changedBy: null, changedAt: null },
       { piece: 'invoice_fixes', on: false, changedBy: null, changedAt: null },
+      { piece: 'bill_fixes', on: false, changedBy: null, changedAt: null },
     ]);
     expect(await readSwitches(fakeService().service)).toEqual([
       { piece: 'credit_memos', on: false, changedBy: null, changedAt: null },
@@ -68,6 +75,7 @@ describe('switches', () => {
       { piece: 'journal_entries', on: false, changedBy: null, changedAt: null },
       { piece: 'inventory_transfers', on: false, changedBy: null, changedAt: null },
       { piece: 'invoice_fixes', on: false, changedBy: null, changedAt: null },
+      { piece: 'bill_fixes', on: false, changedBy: null, changedAt: null },
     ]);
     await expect(readSwitches(fakeService({ error: 'denied' }).service)).rejects.toThrow('denied');
   });
