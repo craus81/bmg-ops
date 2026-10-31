@@ -194,6 +194,8 @@ export default function BooksAccountsPage() {
             {' · '}
             <Link href="/admin/books/balances" style={{ color: 'var(--text-secondary)' }}>Customer and vendor balances</Link>
             {' · '}
+            <Link href="/admin/books/agings" style={{ color: 'var(--text-secondary)' }}>AR and AP agings</Link>
+            {' · '}
             <Link href="/admin/books/own-invoices" style={{ color: 'var(--text-secondary)' }}>Own invoices</Link>
             {' · '}
             <Link href="/admin/books/own-fulfillments" style={{ color: 'var(--text-secondary)' }}>Own fulfillments</Link>

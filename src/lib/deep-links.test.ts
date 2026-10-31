@@ -190,3 +190,16 @@ describe('PO PDF file names', () => {
     expect(deepLinks.netsuitePdf('estimate', 12)).toBe('/api/netsuite/pdf?type=estimate&id=12&format=pdf');
   });
 });
+
+describe('Books agings links', () => {
+  it("opens a company's customer or vendor agings, only those that differ when asked", () => {
+    expect(deepLinks.booksAgings('BMG', 'customer')).toBe('/admin/books/agings?company=BMG&kind=customer');
+    expect(deepLinks.booksAgings('1084', 'vendor', true)).toBe('/admin/books/agings?company=1084&kind=vendor&only=differs');
+  });
+
+  it("opens one customer's or vendor's open documents, 'none' for the lines FleetSuite can't name", () => {
+    expect(deepLinks.booksAging('BMG', 'customer', 'c0000000-0000-4000-8000-00000000000a'))
+      .toBe('/admin/books/agings/party?company=BMG&kind=customer&party=c0000000-0000-4000-8000-00000000000a');
+    expect(deepLinks.booksAging('BMG', 'vendor', '')).toBe('/admin/books/agings/party?company=BMG&kind=vendor&party=none');
+  });
+});
