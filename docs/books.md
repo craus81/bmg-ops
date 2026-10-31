@@ -4306,10 +4306,53 @@ Stock by item's list of items set up wrong at once.
   sold account, which SuiteQL answers 500 for; and that NetSuite takes a
   changed inventory asset account on an item with stock on hand.
 
+## Estimates in FleetSuite only
+
+In January 2027 estimates stop going to NetSuite (the NetSuite Exit
+Checklist's "Estimates in FleetSuite only"; owner decisions 2026-10-31).
+It's built switched off ("Switches"), the other way round from the other
+pieces: while it's off, estimates push to NetSuite as they do now, and
+once a super admin turns it on, nobody pushes or syncs one
+(`src/lib/estimates-in-fleetsuite.ts`, migration 479).
+
+Once it's on:
+
+- The estimate's Push to NetSuite as Estimate button goes, and a grey line
+  says estimates stay in FleetSuite and NetSuite gets the sales order. The
+  page asks `GET /api/estimates/push` whether it's on.
+- `POST /api/estimates/push` refuses a first push and a sync alike (409,
+  `estimatesStayInFleetsuite: true`) before reading anything, so a page
+  opened before the switch can't push either.
+- `POST /api/wrap-quote/netsuite`, the wrap quote's old NetSuite quote,
+  refuses too. The wrap quote page already makes a FleetSuite estimate
+  first (`/api/wrap-quote/open-estimate`) and doesn't call it.
+- FleetSuite AI is told not to send anyone to push an estimate.
+
+What stays: Convert to Sales Order makes the sales order in NetSuite from
+FleetSuite's own lines, as it always has, and it never needed a NetSuite
+estimate. An estimate pushed before keeps its NetSuite copy and its
+"Pushed to NetSuite" banner and View PDF; its banner says NetSuite's copy
+closes with the sales order, because converting it still closes that
+copy (`closeNetSuiteEstimate`), and deleting the estimate still deletes it
+in NetSuite first. Every NetSuite estimate is still copied into FleetSuite
+every two hours (`src/lib/netsuite-estimate-sync.ts`), so one made in
+NetSuite still shows in search.
+
+Made-up example: on January 4, 2027 Sam opens EST-2701-004 for a new
+upfit. The estimate has no Push button, so Sam sends it to the customer
+from FleetSuite, the customer approves, and Convert to Sales Order makes
+SO2201 in NetSuite with the estimate's lines. NetSuite never sees an
+estimate for the job.
+
+### What isn't done yet
+
+- An estimate pushed before the switch and changed after it keeps the
+  NetSuite copy as it was pushed, until the sales order closes it.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 473 and 478, `src/lib/books/switches.ts`),
+row each in `books_switches` (migrations 466 to 473, 478 and 479, `src/lib/books/switches.ts`),
 and stays off until a super admin turns it on in Books → Switches
 (`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
 on on January 1, 2027, asking the owner once in late December.
@@ -4318,7 +4361,10 @@ While a piece is off, the people who'd use it don't see it at all; super
 admins can open its screen and see what it would send, and its route
 refuses to send anything to NetSuite, for everyone. A switch that can't be
 read counts as off. Every change says who made it and when, on the page and
-in the audit log (`switch_on`, `switch_off`).
+in the audit log (`switch_on`, `switch_off`). `estimates_in_fleetsuite` is
+the other way round: on, it stops estimates going to NetSuite, so off
+leaves them pushing as now, and the page asks with its own words
+(`turnOn`, `turnOff`).
 
 | Piece | What it does once it's on | Where |
 | --- | --- | --- |
@@ -4331,6 +4377,7 @@ in the audit log (`switch_on`, `switch_off`).
 | `bill_fixes` | Admins with Parts Ordering fix a bill after it's made, its number, memo and due date, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy ("Bills fixed in FleetSuite") | More → Purchasing → Fix a Bill, or Fix on Books → Own bills |
 | `customer_vendor_details` | Anyone with Credit Applications changes a customer's terms and credit limit, and anyone with Payments a vendor's email, phone, terms, addresses and 1099 details, and FleetSuite makes the change in NetSuite ("Customer and vendor details changed in FleetSuite") | More → Sales → Customer Terms, or Change on a customer; More → Money & Books → Vendor Details |
 | `item_accounts` | Anyone with Payments changes an item's income account, an inventory item's cost of goods sold and inventory asset accounts, and the expense account of one that's bought, and FleetSuite makes the change in NetSuite ("Item accounts changed in FleetSuite") | More → Money & Books → Item Accounts, or Change accounts on Books → Stock by item |
+| `estimates_in_fleetsuite` | Estimates stay in FleetSuite: nobody pushes or syncs one to NetSuite, and NetSuite gets each job's sales order when it's made ("Estimates in FleetSuite only") | An estimate's buttons, where Push to NetSuite as Estimate goes |
 
 ## Posting
 

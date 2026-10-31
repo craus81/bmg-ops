@@ -36,7 +36,7 @@ describe('switches', () => {
   it('names each piece, where people find it, and only those', () => {
     expect(SWITCH_PIECES).toEqual([
       'credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes', 'bill_fixes',
-      'customer_vendor_details', 'item_accounts',
+      'customer_vendor_details', 'item_accounts', 'estimates_in_fleetsuite',
     ]);
     expect(SWITCHES.credit_memos.where).toBe('Invoicing → Invoiced → Credit on an invoice');
     expect(SWITCHES.vendor_credits.where).toBe('More → Purchasing → Vendor Credits');
@@ -59,6 +59,15 @@ describe('switches', () => {
       what: "Anyone with Payments changes an item's income account, an inventory item's cost of goods sold and inventory asset accounts, and the expense account of one that's bought, in FleetSuite, and FleetSuite makes the change in NetSuite.",
       where: 'More → Money & Books → Item Accounts, or Change accounts on Books → Stock by item',
     });
+    expect(SWITCHES.estimates_in_fleetsuite).toEqual({
+      name: 'Estimates in FleetSuite only',
+      what: "Estimates stay in FleetSuite: nobody pushes one to NetSuite any more, and NetSuite gets each job's sales order when it's made, as now. Until it's on, estimates push as they do today.",
+      where: "An estimate's buttons, where Push to NetSuite as Estimate goes",
+      turnOn: "Switch on Estimates in FleetSuite only? From now on nobody can push an estimate to NetSuite, and NetSuite gets each job's sales order when it's made.",
+      turnOff: 'Switch off Estimates in FleetSuite only? Estimates can be pushed to NetSuite again, as before.',
+    });
+    // Only the piece that's the other way round asks in its own words.
+    expect(SWITCH_PIECES.filter((p) => SWITCHES[p].turnOn !== undefined || SWITCHES[p].turnOff !== undefined)).toEqual(['estimates_in_fleetsuite']);
     expect(isSwitchPiece('credit_memos')).toBe(true);
     expect(isSwitchPiece('vendor_credits')).toBe(true);
     expect(isSwitchPiece('card_charges')).toBe(true);
@@ -68,6 +77,7 @@ describe('switches', () => {
     expect(isSwitchPiece('bill_fixes')).toBe(true);
     expect(isSwitchPiece('customer_vendor_details')).toBe(true);
     expect(isSwitchPiece('item_accounts')).toBe(true);
+    expect(isSwitchPiece('estimates_in_fleetsuite')).toBe(true);
     expect(isSwitchPiece('payroll')).toBe(false);
     expect(isSwitchPiece('toString')).toBe(false);
     expect(isSwitchPiece(null)).toBe(false);
@@ -84,6 +94,7 @@ describe('switches', () => {
       { piece: 'bill_fixes', on: false, changedBy: null, changedAt: null },
       { piece: 'customer_vendor_details', on: false, changedBy: null, changedAt: null },
       { piece: 'item_accounts', on: false, changedBy: null, changedAt: null },
+      { piece: 'estimates_in_fleetsuite', on: false, changedBy: null, changedAt: null },
     ]);
     expect(await readSwitches(fakeService().service)).toEqual([
       { piece: 'credit_memos', on: false, changedBy: null, changedAt: null },
@@ -95,6 +106,7 @@ describe('switches', () => {
       { piece: 'bill_fixes', on: false, changedBy: null, changedAt: null },
       { piece: 'customer_vendor_details', on: false, changedBy: null, changedAt: null },
       { piece: 'item_accounts', on: false, changedBy: null, changedAt: null },
+      { piece: 'estimates_in_fleetsuite', on: false, changedBy: null, changedAt: null },
     ]);
     await expect(readSwitches(fakeService({ error: 'denied' }).service)).rejects.toThrow('denied');
   });

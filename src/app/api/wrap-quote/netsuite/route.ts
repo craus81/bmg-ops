@@ -4,6 +4,8 @@ import { requireStaff } from '@/lib/api-auth';
 import { createEstimate, findItems } from '@/lib/netsuite';
 import { WRAP_VINYL_ITEM as VINYL_ITEM, WRAP_LABOR_ITEM as LABOR_ITEM, kitLineSplit } from '@/lib/graphics-invoice';
 import { validateBody, z } from '@/lib/validate';
+import { switchIsOn } from '@/lib/books/switches';
+import { WRAP_QUOTE_STAYS_REFUSAL } from '@/lib/estimates-in-fleetsuite';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +38,13 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
   const { quoteId } = parsed.data;
+
+  // Estimates in FleetSuite only (src/lib/estimates-in-fleetsuite.ts): once
+  // it's on, a wrap quote is priced on its FleetSuite estimate and never made
+  // in NetSuite as a quote of its own.
+  if (await switchIsOn(supabase, 'estimates_in_fleetsuite')) {
+    return NextResponse.json({ error: WRAP_QUOTE_STAYS_REFUSAL, estimatesStayInFleetsuite: true }, { status: 409 });
+  }
 
   const { data: quote } = await supabase.from('wrap_quotes').select('*').eq('id', quoteId).single();
   if (!quote) {

@@ -13,6 +13,8 @@ import { netsuiteFetch } from '@/lib/netsuite-sends';
 import { buildDiscountLines, buildLineDiscountLine, estimateNeedsDiscountItem, resolveDiscountItem, type DiscountItem } from '@/lib/discount-item';
 import { untaxedFlag } from '@/lib/so-sync';
 import { normalizeVehicleCount } from '@/lib/estimate-totals';
+import { switchIsOn } from '@/lib/books/switches';
+import { ESTIMATES_STAY_REFUSAL } from '@/lib/estimates-in-fleetsuite';
 
 export const dynamic = 'force-dynamic';
 
@@ -261,6 +263,14 @@ async function deleteNetSuiteEstimate(config: ReturnType<typeof getNetSuiteConfi
   return { success: true };
 }
 
+// GET — whether estimates stay in FleetSuite (Books → Switches, migration
+// 479), so the estimate's Push button goes once they do.
+export async function GET(req: NextRequest) {
+  const auth = await requireFeature(req, 'estimates');
+  if (auth.error) return auth.error;
+  return NextResponse.json({ estimatesStayInFleetsuite: await switchIsOn(getSupabase(), 'estimates_in_fleetsuite') });
+}
+
 // POST — push estimate to NetSuite
 export async function POST(req: NextRequest) {
   const auth = await requireFeature(req, 'estimates');
@@ -269,6 +279,12 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, PushEstimateSchema);
   if (parsed.error) return parsed.error;
   const { estimateId, userId } = parsed.data;
+
+  // Estimates in FleetSuite only (src/lib/estimates-in-fleetsuite.ts): once
+  // it's on, nothing is pushed or synced, a first push or a pushed one alike.
+  if (await switchIsOn(getSupabase(), 'estimates_in_fleetsuite')) {
+    return NextResponse.json({ error: ESTIMATES_STAY_REFUSAL, estimatesStayInFleetsuite: true }, { status: 409 });
+  }
 
   // Pushing/syncing records NetSuite state, not sales state — an estimate
   // that is 'sent' (in the follow-up queue) or 'accepted' must keep that

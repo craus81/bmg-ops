@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAuth } from '@/lib/api-auth';
+import { estimatesPromptNote } from '@/lib/estimates-in-fleetsuite';
 import { logAudit } from '@/lib/audit';
 import {
   rolesOf, canQueryNetSuite as canQueryNetSuiteFor, canSeeFinancials as canSeeFinancialsFor,
@@ -1157,6 +1158,10 @@ export async function POST(req: NextRequest) {
     } else if (roles.includes('installer')) {
       systemPrompt += '\n\nIMPORTANT: This user has an "installer" role. They are a vehicle graphics installer.\n\nACCESS RESTRICTIONS:\n- You MUST NOT query NetSuite at all — no sales orders, invoices, customer financials, or pricing data. If they ask about financials, politely say you cannot access that data with their role.\n- You CAN query the BMG Fleet app database (supabase) for: fleet_checkins (vehicle tracking), vehicle_notes, vehicle_photos, job_assignments, graphics_jobs, vehicle_templates (wrap dimensions and panel data), profiles, and schedule_entries.\n- You CAN search the knowledge base for: installation SOPs, vehicle specs, wrap dimensions, techniques, and product information.\n- You CANNOT create estimates, view customer financial data, or access admin settings.\n\nFOCUS AREAS — help installers with:\n- Vehicle wrap dimensions and panel sizes (search vehicle_templates)\n- Installation techniques and best practices (search knowledge base)\n- Their assigned vehicles and current status\n- Vehicles currently in the shop (fleet_checkins)\n- Installation notes and photos for vehicles\n- Graphics job details (what graphics are needed for a vehicle)\n- Product specs from the knowledge base (SOPs, specs, pricing guides for materials)';
     }
+
+    // Estimates in FleetSuite only (Books → Switches): the prompt above sends
+    // people to push a new estimate, which the push route refuses once it's on.
+    systemPrompt += await estimatesPromptNote(supabase);
 
     // Hard restrictions, independent of the focus notes above. The executor
     // enforces these regardless; stating them keeps the model from proposing

@@ -53,6 +53,15 @@ appears (in the builder's NetSuite status banner, and next to each
 pushed estimate in the list) — opens the NetSuite-generated PDF in a
 new tab.
 
+## Estimates stay in FleetSuite (from January 2027)
+
+Once an owner turns on **Estimates in FleetSuite only** (Books →
+Switches), the **Push to NetSuite as Estimate** button goes: estimates
+stay in FleetSuite, and NetSuite gets the job's sales order when you
+**Convert to Sales Order**, as before. An estimate pushed earlier keeps
+its NetSuite copy and **View PDF**; that copy closes when its sales
+order is made.
+
 ---
 
 ## NetSuite owns the money side
