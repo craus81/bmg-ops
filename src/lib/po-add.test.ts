@@ -71,6 +71,18 @@ describe('planPoLineAdds', () => {
     expect(plan.lines).toEqual([{ item: { id: '100' }, quantity: 1 }, { item: { id: '200' }, quantity: 1 }]);
     expect(plan.raised.size).toBe(0);
   });
+
+  it('never adds a generic part (Misc) onto another of its lines', () => {
+    const plan = planPoLineAdds([line({ line: 1, itemId: '900', quantity: 2 })], [
+      { itemId: '900', quantity: 3, rate: 18.5, description: 'Rivets', separate: true },
+      { itemId: '900', quantity: 1, rate: null, description: 'Bracket', separate: true },
+    ]);
+    expect(plan.lines).toEqual([
+      { item: { id: '900' }, quantity: 3, rate: 18.5, description: 'Rivets' },
+      { item: { id: '900' }, quantity: 1, description: 'Bracket' },
+    ]);
+    expect(plan.raised.size).toBe(0);
+  });
 });
 
 describe('memoWithSos', () => {

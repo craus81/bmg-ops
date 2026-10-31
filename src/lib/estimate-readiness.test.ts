@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { summarizeEstimateReadiness, stockCheckKey, toRequestQty, type EstimatePartRow } from './estimate-readiness';
 
 const row = (over: Partial<EstimatePartRow>): EstimatePartRow => ({
-  item_number: 'PART', description: null, needed: 1, allocated: 0, free: 0,
+  item_number: 'PART', line_key: 'PART', description: null, needed: 1, allocated: 0, free: 0,
   usable: 0, on_hand: 0, on_order: 0, short: 0, state: 'available',
   allocatable: 0, pos: [], netsuite_item_id: null, uncatalogued: false,
   requested: 0, to_request: 0,

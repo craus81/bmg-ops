@@ -8,6 +8,8 @@ import { addPurchaseOrderItemLines, createPurchaseOrder, getPurchaseOrderItemLin
 import { canAddToPo, memoWithSos, planPoLineAdds, type PoAddPlan } from '@/lib/po-add';
 import { cleanPoSuffix, withPoSuffix } from '@/lib/po-number';
 import { locationIdForName } from '@/lib/invoice-location';
+import { normalizeItemNumber } from '@/lib/vendor-po-sync';
+import { loadGenericItems } from '@/lib/generic-lines-server';
 
 const supabase = createServiceClient();
 
@@ -150,21 +152,31 @@ export async function POST(req: NextRequest) {
   const priceByItem = new Map((priceRows || []).map((p: any) => [p.item_number as string, Number(p.purchase_price) || 0]));
 
   // One PO line per NetSuite item — the same part asked for by two
-  // projects merges into a single line.
-  const byItem = new Map<string, { itemId: string; item_number: string; description: string | null; quantity: number; rate: number | null }>();
+  // projects merges into a single line. Except a generic part (Misc): each
+  // request is a different thing, so each is its own line with its own
+  // description, and is received on its own (Craig, 2026-10-31).
+  let genericItems = new Set<string>();
+  try {
+    genericItems = await loadGenericItems(supabase, itemNumbers);
+  } catch (e) {
+    console.error('create-po: generic parts lookup failed', e);
+  }
+  const byItem = new Map<string, { itemId: string; item_number: string; description: string | null; quantity: number; rate: number | null; separate: boolean }>();
   for (const r of requests as any[]) {
     const price = priceByItem.get(r.item_number) || 0;
-    const line = byItem.get(r.netsuite_item_id) || {
+    const separate = genericItems.has(normalizeItemNumber(r.item_number));
+    const lineKey = separate ? `req:${r.id}` : r.netsuite_item_id;
+    const line = byItem.get(lineKey) || {
       itemId: r.netsuite_item_id, item_number: r.item_number,
       description: r.description || null, quantity: 0,
-      rate: price > 0 ? price : null,
+      rate: price > 0 ? price : null, separate,
     };
     // A reviewed line's price wins, and a blank one means "NetSuite's own".
     const edit = edits.get(r.id);
     if (edit && edit.rate !== undefined) line.rate = edit.rate != null && edit.rate > 0 ? edit.rate : null;
     line.quantity += orderQty.get(r.id) || 0;
     if (!line.description && r.description) line.description = r.description;
-    byItem.set(r.netsuite_item_id, line);
+    byItem.set(lineKey, line);
   }
   const lines = [...byItem.values()].sort((a, b) => a.item_number.localeCompare(b.item_number));
 
@@ -213,7 +225,7 @@ export async function POST(req: NextRequest) {
       const live = await getPurchaseOrderItemLines(target.netsuite_id);
       if (!live.success) return await refuse(502, `Couldn’t read PO ${label} from NetSuite: ${live.error}. Nothing was ordered.`);
       const plan = planPoLineAdds(live.lines, lines.map(l => ({
-        itemId: l.itemId, quantity: l.quantity, rate: l.rate, description: l.description,
+        itemId: l.itemId, quantity: l.quantity, rate: l.rate, description: l.description, separate: l.separate,
       })));
       const newMemo = memoWithSos(target.memo, projects.map(p => p.netsuite_so_number).filter(Boolean).map(String));
       const res = await addPurchaseOrderItemLines(target.netsuite_id, plan.lines, newMemo);
@@ -272,8 +284,8 @@ export async function POST(req: NextRequest) {
     // the next sync rewrites this PO's lines from NetSuite anyway.
     try {
       mirrorRowId = existing.id;
-      for (const l of lines) {
-        const raise = existing.plan.raised.get(l.itemId);
+      for (const [i, l] of lines.entries()) {
+        const raise = l.separate ? undefined : existing.plan.raised.get(l.itemId);
         if (raise) {
           const { data: mLines } = await supabase.from('netsuite_vendor_po_lines')
             .select('id').eq('po_id', existing.id).eq('item_netsuite_id', l.itemId).eq('quantity_received', 0)
@@ -287,7 +299,7 @@ export async function POST(req: NextRequest) {
         }
         await supabase.from('netsuite_vendor_po_lines').insert({
           po_id: existing.id,
-          line_id: `prov-add-${Date.now()}-${l.itemId}`,
+          line_id: `prov-add-${Date.now()}-${i}-${l.itemId}`,
           item_netsuite_id: l.itemId,
           item_number: l.item_number,
           description: l.description,

@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { genericLineStatus, groupGenericLines, type GenericLineInput, type GenericPoLine } from '@/lib/generic-lines';
+import { loadGenericItems, loadGenericRequests } from '@/lib/generic-lines-server';
 
 /**
  * The part-level math the shop runs on: for an upfit project's sales order,
@@ -27,6 +29,15 @@ export type PartState = 'reserved' | 'available' | 'waiting' | 'short';
 
 export interface PartRow {
   item_number: string;
+  /** Unique per row: the part number, or for a generic part (Misc) one
+   *  key per line description — see generic-lines.ts. */
+  line_key: string;
+  /** A generic part's line: never reserved, tracked by its own requests. */
+  generic?: boolean;
+  /** Generic lines only: how many have arrived (Receiving or "Got it"). */
+  received?: number;
+  /** Generic lines only: the requests behind the row, for "Got it". */
+  request_ids?: string[];
   description: string | null;
   needed: number;
   /** Reserved for THIS project. */
@@ -92,7 +103,7 @@ export function allocationMath(input: {
 export async function computePartsReadiness(service: SupabaseClient, projectId: string): Promise<Readiness> {
   const { data: project } = await service
     .from('upfit_projects')
-    .select('id, netsuite_so_id, netsuite_so_number')
+    .select('id, netsuite_so_id, netsuite_so_number, estimate_id')
     .eq('id', projectId)
     .maybeSingle();
   if (!project) return { available: false, reason: 'not_found' };
@@ -129,9 +140,13 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
     on_order: number; pos: PoRef[]; itemIds: Set<string>;
   }
   const parts = new Map<string, Working>();
+  const linesByKey = new Map<string, GenericLineInput[]>();
   for (const line of soLines) {
     const key = normalizeItemNumber(line.item_number);
     if (!key) continue;
+    const own = linesByKey.get(key) || [];
+    own.push({ description: line.description, quantity: Math.abs(parseFloat(line.quantity || '0')) || 0 });
+    linesByKey.set(key, own);
     const row = parts.get(key) || {
       item_number: key, description: null, needed: 0,
       availPool: 0, allocatedHere: 0, allocatedOthers: 0,
@@ -143,7 +158,44 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
     parts.set(key, row);
   }
 
-  if (parts.size === 0) {
+  // ── Generic parts (Misc): one row per SO line, never reserved ──
+  // Out of the per-part math, so nothing is summed across their lines;
+  // their state comes from their own requests (generic-lines.ts).
+  const genericRows: PartRow[] = [];
+  let genericItems = new Set<string>();
+  try {
+    genericItems = await loadGenericItems(service, [...parts.keys(), ...soLines.map(l => String(l.item_number || '').trim())]);
+  } catch (e) {
+    console.error('parts-readiness: generic parts lookup failed', e);
+  }
+  const genericKeys = [...parts.keys()].filter(k => genericItems.has(k));
+  if (genericKeys.length > 0) {
+    let scoped: Awaited<ReturnType<typeof loadGenericRequests>> = { requests: [], poLines: [] };
+    try {
+      scoped = await loadGenericRequests(service, { projectId, estimateId: project.estimate_id || null }, genericKeys);
+    } catch (e) {
+      console.error('parts-readiness: generic requests lookup failed', e);
+    }
+    for (const key of genericKeys) {
+      const w = parts.get(key)!;
+      parts.delete(key);
+      const mine = scoped.requests.filter(r => r.item_number === key);
+      for (const g of groupGenericLines(key, linesByKey.get(key) || [])) {
+        const st = genericLineStatus(g, mine, scoped.poLines);
+        genericRows.push({
+          item_number: key, line_key: g.key, generic: true,
+          received: st.received, request_ids: st.requestIds,
+          description: g.description, needed: g.needed,
+          allocated: 0, free: 0, usable: 0, on_hand: 0, on_order: st.ordered,
+          short: st.short, state: st.state, allocatable: 0, pos: [],
+          netsuite_item_id: [...w.itemIds][0] || null,
+          requested: st.requested,
+        });
+      }
+    }
+  }
+
+  if (parts.size === 0 && genericRows.length === 0) {
     return {
       available: true, soNumber: project.netsuite_so_number, parts: [],
       summary: { covered: 0, onOrder: 0, short: 0, verdict: 'ready', lastEta: null },
@@ -152,7 +204,7 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
 
   // ── On hand (live — prefer "available", on hand minus NetSuite-side commitments) ──
   const allItemIds = [...new Set([...parts.values()].flatMap(p => [...p.itemIds]))];
-  try {
+  if (allItemIds.length > 0) try {
     let invRows: any[];
     try {
       invRows = await suiteqlQueryAll(`
@@ -248,7 +300,7 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
       onOrder: w.on_order,
     });
     return {
-      item_number: w.item_number, description: w.description, needed: w.needed,
+      item_number: w.item_number, line_key: w.item_number, description: w.description, needed: w.needed,
       allocated: w.allocatedHere, free: m.free, usable: m.usable,
       on_hand: w.availPool, on_order: w.on_order,
       short: m.short, state: m.state, allocatable: m.allocatable, pos: w.pos,
@@ -256,6 +308,7 @@ export async function computePartsReadiness(service: SupabaseClient, projectId: 
       requested: requestedByItem.get(w.item_number) || 0,
     };
   });
+  rows.push(...genericRows);
   const stateRank: Record<PartState, number> = { short: 0, waiting: 1, available: 2, reserved: 3 };
   rows.sort((a, b) => (stateRank[a.state] - stateRank[b.state]) || a.item_number.localeCompare(b.item_number));
 
@@ -323,18 +376,22 @@ export async function computePartsReadinessBoard(
 
   const { data: lines } = await fetchAllRows<any>((from, to) => service
     .from('netsuite_sales_order_lines')
-    .select('so_id, item_number, quantity')
+    .select('so_id, item_number, description, quantity')
     .in('so_id', mirrorIds)
     .order('id')
     .range(from, to));
 
   // needed per (mirror SO row, item)
   const neededBySo = new Map<string, Map<string, number>>();
+  const genericLinesBySo = new Map<string, Map<string, GenericLineInput[]>>();
   const itemSet = new Set<string>();
   for (const l of lines || []) {
     const key = normalizeItemNumber(l.item_number);
     if (!key || key === 'FS-CUSTOM') continue;
     itemSet.add(key);
+    const g = genericLinesBySo.get(l.so_id) || new Map<string, GenericLineInput[]>();
+    g.set(key, [...(g.get(key) || []), { description: l.description, quantity: Math.abs(Number(l.quantity)) || 0 }]);
+    genericLinesBySo.set(l.so_id, g);
     const m = neededBySo.get(l.so_id) || new Map<string, number>();
     m.set(key, (m.get(key) || 0) + (Math.abs(Number(l.quantity)) || 0));
     neededBySo.set(l.so_id, m);
@@ -354,6 +411,34 @@ export async function computePartsReadinessBoard(
       if (!PHYSICAL.has(String(c.item_type || ''))) continue;
       const key = normalizeItemNumber(c.item_number);
       availByItem.set(key, Math.max(availByItem.get(key) || 0, Math.max(0, Number(c.quantity_available) || 0)));
+    }
+  }
+
+  // Generic parts (Misc) are judged per line from each job's own requests,
+  // the same as the live card — never from stock.
+  let genericItems = new Set<string>();
+  try {
+    genericItems = await loadGenericItems(service, items);
+  } catch (e) {
+    console.error('parts-readiness board: generic parts lookup failed', e);
+  }
+  const genericReqs: any[] = [];
+  const genericPoLines: GenericPoLine[] = [];
+  if (genericItems.size > 0) {
+    const { data: reqs } = await service
+      .from('purchase_requests')
+      .select('id, item_number, description, quantity, status, received_at, ordered_po_id, source_project_id')
+      .neq('status', 'cancelled')
+      .in('source_project_id', withSo.map(p => p.id))
+      .in('item_number', [...genericItems]);
+    for (const r of reqs || []) genericReqs.push({ ...r, item_number: normalizeItemNumber(r.item_number) });
+    const poIds = [...new Set(genericReqs.map(r => r.ordered_po_id).filter(Boolean))];
+    if (poIds.length > 0) {
+      const { data: pl } = await service
+        .from('netsuite_vendor_po_lines')
+        .select('po_id, item_number, description, quantity_received')
+        .in('po_id', poIds);
+      for (const l of pl || []) genericPoLines.push({ ...l, item_number: normalizeItemNumber(l.item_number) });
     }
   }
 
@@ -409,6 +494,13 @@ export async function computePartsReadinessBoard(
     const states: PartState[] = [];
     let lastEta: string | null = null;
     for (const [item, qty] of needed) {
+      if (genericItems.has(item)) {
+        const mine = genericReqs.filter(r => r.source_project_id === proj.id && r.item_number === item);
+        for (const g of groupGenericLines(item, genericLinesBySo.get(mirrorId!)?.get(item) || [])) {
+          states.push(genericLineStatus(g, mine, genericPoLines).state);
+        }
+        continue;
+      }
       if (!availByItem.has(item) && !myAlloc.has(item) && !onOrderByItem.has(item)) {
         // Not a catalog physical item and nothing tracked for it — skip
         // (labor/service lines, or an unsynced item we can't judge).
