@@ -292,6 +292,22 @@ describe('alertsFor', () => {
       + 'The last posting run failed, so FleetSuite may be behind.');
   });
 
+  it("says NetSuite's change waits of a month closed in FleetSuite's books, before why", () => {
+    const closed = new Set([SEP]);
+    const [alert] = alertsFor('BMG', [{ month: SEP, documents: 1, before: null }], facts(SEP, [doc('INV2400', 'Acme Fleet')]), '', closed);
+    expect(alert.body).toBe("INV2400 (Acme Fleet) differs from what NetSuite posted. September 2026 is closed in FleetSuite's books, "
+      + "so NetSuite's change waits until it's reopened on Books → Months. Differences vs NetSuite shows why.");
+    expect(alertsFor('BMG', [{ month: OCT, documents: 1, before: null }], facts(OCT, [doc('INV2401', 'Acme Fleet')]), '', closed)[0].body)
+      .toBe('INV2401 (Acme Fleet) differs from what NetSuite posted. Differences vs NetSuite shows why.');
+    // In one notification for them all, how many of them are closed.
+    const five = ['2025-01-01', '2025-02-01', '2025-03-01', DEC, SEP].map((month): MonthNews => ({ month, documents: 1, before: null }));
+    expect(alertsFor('BMG', five, new Map(), '', closed)[0].body).toBe('January 2025, February 2025, March 2025 and 2 more. '
+      + "1 of them is closed in FleetSuite's books, so what NetSuite changed there waits until it's reopened on Books → Months. "
+      + 'Differences vs NetSuite shows why.');
+    expect(alertsFor('BMG', five, new Map(), '', new Set([SEP, DEC]))[0].body).toContain(
+      "2 of them are closed in FleetSuite's books, so what NetSuite changed there waits until they're reopened on Books → Months.");
+  });
+
   it('tells nothing when nothing changed', () => {
     expect(alertsFor('BMG', [], new Map())).toEqual([]);
   });

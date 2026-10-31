@@ -30,6 +30,8 @@ interface Payload {
   month: string;
   months: DiffMonth[];
   status: MonthStatus;
+  /** Closed in FleetSuite's books (Books → Months): what NetSuite changes in it waits until it's reopened. */
+  closed: boolean;
   differing: number;
   covered: number | null;
   posts: boolean;
@@ -224,6 +226,12 @@ export default function BooksDifferencesPage() {
               The copy of NetSuite&apos;s ledger doesn&apos;t hold all of {monthName(data.month)} yet, so NetSuite&apos;s side may be
               short. <Link href="/admin/books/trial-balance" style={{ color: 'inherit' }}>Trial balance vs NetSuite</Link> shows the
               accounts; the next copy catches up.
+            </div>
+          )}
+          {data.closed && (
+            <div style={banner(GREY)}>
+              {monthName(data.month)} is closed in FleetSuite&apos;s books, so what NetSuite changes in it waits until it&apos;s
+              reopened on <Link href={`/admin/books/months?company=${data.company}`} style={{ color: 'inherit' }}>Months</Link>.
             </div>
           )}
           {data.lastCopy && !data.lastCopy.error && (

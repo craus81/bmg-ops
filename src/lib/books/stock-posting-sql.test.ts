@@ -529,6 +529,14 @@ describe('the posting job, for stock documents', () => {
       if (table === 'gl_companies') {
         return { select: async (cols: string) => ({ data: (await pg.query(`SELECT ${cols} FROM gl_companies ORDER BY code`)).rows, error: null }) };
       }
+      if (table === 'gl_periods') {
+        // The months closed in FleetSuite's books, read as src/lib/books/months.ts reads them.
+        return { select: () => ({ eq: (col: string, value: string) => ({ order: () => ({ range: async (from: number, to: number) => ({
+          data: (await pg.query(`SELECT id, company_id, to_char(period_start, 'YYYY-MM-DD') AS period_start FROM gl_periods
+            WHERE ${col} = $1 ORDER BY id LIMIT ${to - from + 1} OFFSET ${from}`, [value])).rows,
+          error: null,
+        }) }) }) }) };
+      }
       throw new Error(`unexpected table ${table}`);
     },
     rpc: async (fn: string, args: Record<string, unknown> = {}) => {

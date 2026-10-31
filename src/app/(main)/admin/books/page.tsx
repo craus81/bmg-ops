@@ -213,6 +213,8 @@ export default function BooksAccountsPage() {
             <Link href="/admin/books/switches" style={{ color: 'var(--text-secondary)' }}>Switches</Link>
             {' · '}
             <Link href="/admin/books/going-live" style={{ color: 'var(--text-secondary)' }}>Going live</Link>
+            {' · '}
+            <Link href="/admin/books/months" style={{ color: 'var(--text-secondary)' }}>Months</Link>
           </div>
         </div>
         <button
