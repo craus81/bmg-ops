@@ -547,7 +547,7 @@ export default function PurchasingQueuePage() {
 
       {tab === 'jobs' && <PurchasingJobsTab />}
 
-      {tab === 'vendor_pos' && <VendorPosTab isAdmin={isAdmin} onChanged={load} startNew={searchParams.get('new') === '1'} />}
+      {tab === 'vendor_pos' && <VendorPosTab isAdmin={isAdmin} onChanged={load} startNew={searchParams.get('new') === '1'} initialQuery={searchParams.get('q') || ''} />}
 
       {tab === 'demand' && (
         <>

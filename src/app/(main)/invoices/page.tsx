@@ -38,6 +38,8 @@ import QuickBooksRecordModal from '@/components/QuickBooksRecordModal';
 import { deepLinks } from '@/lib/deep-links';
 import { HISTORY_MIN_QUERY, historySearchTerms, type HistoryRow } from '@/lib/ledger/history';
 import { looseMatcher } from '@/lib/loose-search';
+import { MarkSentModal } from '@/components/SentBox';
+import { docRef } from '@/lib/document-sends';
 
 type HubTab = 'graphics' | 'scans' | 'sent';
 
@@ -119,6 +121,9 @@ export default function InvoicingHubPage() {
   const [search, setSearch] = useState('');
   // Invoiced-tab date window.
   const [sentRange, setSentRange] = useState<'30' | 'month' | 'lastmonth' | '90' | 'all'>('30');
+  // Not sent filter + Mark as sent (Craig, 2026-10-31).
+  const [notSentOnly, setNotSentOnly] = useState(false);
+  const [markingInvoice, setMarkingInvoice] = useState<string | null>(null);
   // ALL NetSuite invoices for the window — so the Invoiced tab shows the same
   // universe the dashboard's "Invoiced" KPI counts, not just FleetSuite-created
   // ones. Null = not loaded (fall back to FleetSuite-only rows).
@@ -532,13 +537,14 @@ export default function InvoicingHubPage() {
         if (dt < rangeStart) return false;
         if (rangeEnd && dt >= rangeEnd) return false;
       }
+      if (notSentOnly && emailedByNumber[r.invoiceNumber]) return false;
       if (!search) return true;
       return match(r.customer, r.invoiceNumber, r.po);
     });
     // QuickBooks matches skip the window and the text filter: they are all
     // older than any window, and the server already matched them, often on
     // a line's words that this client-side filter can't see.
-    for (const h of qbMatches?.rows || []) {
+    for (const h of notSentOnly ? [] : qbMatches?.rows || []) {
       filtered.push({
         source: 'QuickBooks',
         customer: h.customerName,
@@ -558,7 +564,7 @@ export default function InvoicingHubPage() {
     }
     return Object.entries(byCustomer).sort(([, a], [, b]) =>
       (b[0].date || '').localeCompare(a[0].date || ''));
-  }, [sentInvoices, search, sentRange, qbMatches]);
+  }, [sentInvoices, search, sentRange, qbMatches, notSentOnly, emailedByNumber]);
 
   // ── Actions ──
   const toggleGroup = (key: string) => {
@@ -895,6 +901,12 @@ export default function InvoicingHubPage() {
                 color: sentRange === r.id ? '#60a5fa' : 'var(--text-muted)',
               }}>{r.label}</button>
             ))}
+            <button onClick={() => setNotSentOnly(v => !v)} title="Only invoices with no email on record" style={{
+              padding: '5px 12px', borderRadius: '8px', fontSize: '10px', fontWeight: 700, cursor: 'pointer',
+              background: notSentOnly ? 'rgba(245,158,11,0.12)' : 'transparent',
+              border: `1px solid ${notSentOnly ? 'rgba(245,158,11,0.5)' : 'var(--border)'}`,
+              color: notSentOnly ? '#f59e0b' : 'var(--text-muted)',
+            }}>{notSentOnly ? '✕ ' : ''}Not sent</button>
             {nsLoading && <span style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: 'center' }}>Loading NetSuite invoices…</span>}
             {qbSearching && <span style={{ fontSize: '10px', color: 'var(--text-muted)', alignSelf: 'center' }}>Searching QuickBooks history…</span>}
             <span style={{ flex: 1 }} />
@@ -966,7 +978,13 @@ export default function InvoicingHubPage() {
                         ) : (
                           <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{r.invoiceNumber}</span>
                         )}
-                        {!r.qbo && <InvoiceEmailedBadge info={emailedByNumber[r.invoiceNumber]} />}
+                        {!r.qbo && <InvoiceEmailedBadge info={emailedByNumber[r.invoiceNumber]} showUnsent />}
+                        {!r.qbo && !emailedByNumber[r.invoiceNumber] && (
+                          <button onClick={() => setMarkingInvoice(r.invoiceNumber)} title="Sent from NetSuite or someone's own email? Record it here. Nothing is emailed."
+                            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#60a5fa', fontSize: '10px', fontWeight: 700 }}>
+                            Mark sent…
+                          </button>
+                        )}
                         {r.qbo && (
                           <span style={{ fontSize: '9px', fontWeight: 800, padding: '2px 6px', borderRadius: '5px', background: r.qbo.statusWord === 'Paid' ? 'var(--success-bg)' : 'var(--subtle-bg)', color: r.qbo.statusWord === 'Paid' ? 'var(--success)' : 'var(--text-muted)' }}>
                             {r.qbo.statusWord.toUpperCase()}
@@ -1113,6 +1131,18 @@ export default function InvoicingHubPage() {
       )}
 
       {/* Shared email modal */}
+      {markingInvoice && (
+        <MarkSentModal
+          docRef={docRef('invoice', markingInvoice)}
+          docLabel={markingInvoice}
+          onClose={() => setMarkingInvoice(null)}
+          onSaved={() => {
+            setMarkingInvoice(null);
+            const numbers = sentInvoices.filter(r => !r.qbo).map(r => r.invoiceNumber);
+            if (numbers.length > 0) loadEmailedInvoices(numbers);
+          }}
+        />
+      )}
       {emailTarget && (
         <EmailInvoicesModal
           customerName={emailTarget.customerName}

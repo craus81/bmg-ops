@@ -16,6 +16,9 @@ import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { trackingUrl } from '@/lib/tracking-url';
 import NewVendorPoModal from '@/components/NewVendorPoModal';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
+import { useDocumentSends, MarkSentModal } from '@/components/SentBox';
+import { docRef, sendLine, sendTone } from '@/lib/document-sends';
 
 interface LineRequest {
   id: string;
@@ -107,20 +110,27 @@ function shortDate(d: string | null): string {
   return new Date(`${d.slice(0, 10)}T12:00:00`).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
-export default function VendorPosTab({ isAdmin, onChanged, startNew = false }: { isAdmin: boolean; onChanged: () => void; startNew?: boolean }) {
+export default function VendorPosTab({ isAdmin, onChanged, startNew = false, initialQuery = '' }: { isAdmin: boolean; onChanged: () => void; startNew?: boolean; initialQuery?: string }) {
   const router = useRouter();
   const dialog = useDialog();
   const { canSeeMoney } = useAuth();
   const [status, setStatus] = useState<(typeof FILTERS)[number][0]>('open');
   const [onlyFleetsuite, setOnlyFleetsuite] = useState(false);
-  const [q, setQ] = useState('');
-  const [query, setQuery] = useState('');
+  const [q, setQ] = useState(initialQuery);
+  const [query, setQuery] = useState(initialQuery.trim());
   const [pos, setPos] = useState<VendorPo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyLine, setBusyLine] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // ✉ Email vendor and Mark as sent (Craig, 2026-10-31).
+  const [emailingPo, setEmailingPo] = useState<VendorPo | null>(null);
+  const [markingPo, setMarkingPo] = useState<VendorPo | null>(null);
+  const { sends, refresh: refreshSends } = useDocumentSends(pos.filter(p => p.tranid).map(p => docRef('vendor_po', p.tranid!)));
+  const poEmailBody = (fields: EmailComposeFields, preview: boolean) => JSON.stringify({
+    emails: fields.emails, bccSelf: fields.bccSelf, cc: fields.cc, message: fields.message, preview,
+  });
   // startNew: More → Purchase Orders → New opens the form straight away (admins, like the button).
   useEffect(() => { if (startNew && isAdmin) setCreating(true); }, [startNew, isAdmin]);
 
@@ -260,6 +270,30 @@ export default function VendorPosTab({ isAdmin, onChanged, startNew = false }: {
                     {po.status_label || po.status || 'syncing'}
                   </span>
                 </div>
+                {po.tranid && (() => {
+                  const latest = sends[docRef('vendor_po', po.tranid)]?.latest || null;
+                  const tone = sendTone(latest);
+                  const color = tone === 'ok' ? theme.success : tone === 'bad' ? theme.error : tone === 'wait' ? '#fbbf24' : theme.textMuted;
+                  return (
+                    <div style={{ flex: '1 1 100%', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 220px', minWidth: 0, fontSize: '11px', color, fontWeight: tone === 'bad' ? 700 : 400, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                        {latest ? sendLine(latest) : 'Not emailed yet'}
+                      </div>
+                      {isAdmin && po.netsuite_id && (
+                        <button onClick={() => setEmailingPo(po)}
+                          style={{ padding: '4px 10px', borderRadius: '6px', background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-primary)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                          ✉ Email vendor
+                        </button>
+                      )}
+                      {isAdmin && (
+                        <button onClick={() => setMarkingPo(po)}
+                          style={{ background: 'none', border: 'none', padding: 0, color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                          Mark as sent…
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
               {po.lines.length === 0 && (
                 <div style={{ padding: '10px 14px', fontSize: '12px', color: theme.textMuted }}>No lines synced yet.</div>
@@ -308,6 +342,37 @@ export default function VendorPosTab({ isAdmin, onChanged, startNew = false }: {
           );
         })}
       </div>
+      {emailingPo && (
+        <EmailComposeModal
+          title={`Email ${emailingPo.vendor_name || 'vendor'} · PO ${emailingPo.tranid || ''}`}
+          stateKey={`vendor-po-email:${emailingPo.id}`}
+          intro={<div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>The PO PDF from NetSuite is attached.</div>}
+          messagePlaceholder="Optional note to the vendor"
+          sendLabel="Send to vendor"
+          fetchPreview={async fields => {
+            const res = await fetch(`/api/purchase-requests/vendor-pos/${emailingPo.id}/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: poEmailBody(fields, true) });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) return { error: json.error || 'Could not build the preview' };
+            return { preview: { to: json.to, subject: json.subject, html: json.html } };
+          }}
+          onSend={async fields => {
+            const res = await fetch(`/api/purchase-requests/vendor-pos/${emailingPo.id}/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: poEmailBody(fields, false) });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) { await dialog.alert(json.error || 'Could not send the email', { error: true }); return { ok: false }; }
+            refreshSends();
+            return { ok: true };
+          }}
+          onClose={() => setEmailingPo(null)}
+        />
+      )}
+      {markingPo?.tranid && (
+        <MarkSentModal
+          docRef={docRef('vendor_po', markingPo.tranid)}
+          docLabel={`PO ${markingPo.tranid}`}
+          onClose={() => setMarkingPo(null)}
+          onSaved={() => { setMarkingPo(null); refreshSends(); }}
+        />
+      )}
       {pos.length === 100 && (
         <div style={{ fontSize: '11px', color: theme.textMuted, marginTop: '10px' }}>Showing the newest 100. Search to find an older one.</div>
       )}

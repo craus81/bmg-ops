@@ -24,6 +24,9 @@ import { openJobOrder } from '@/lib/job-order-pdf';
 import TopSaveBar from '@/components/TopSaveBar';
 import FulfillInvoiceModal from '@/components/FulfillInvoiceModal';
 import EmailInvoicesModal from '@/components/EmailInvoicesModal';
+import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
+import SentBox from '@/components/SentBox';
+import { docRef } from '@/lib/document-sends';
 import { isBadDelivery } from '@/lib/invoice-emails';
 import { lineAllows, isFullyBilled, type SoLine, type SoHeader, type SoLineEdit, type SoNewLine } from '@/lib/sales-order-edit';
 
@@ -109,6 +112,8 @@ export default function SalesOrderPage() {
   const [busy, setBusy] = useState<'pdf' | 'job' | null>(null);
   const [fulfilling, setFulfilling] = useState(false);
   const [emailing, setEmailing] = useState<{ id: string; tranid: string } | null>(null);
+  const [emailingSo, setEmailingSo] = useState(false);
+  const [sentBump, setSentBump] = useState(0);
 
   const [hdr, setHdr] = useState({ poNumber: '', memo: '', vin: '', shipDate: '' });
   const [drafts, setDrafts] = useState<Record<number, LineDraft>>({});
@@ -267,6 +272,10 @@ export default function SalesOrderPage() {
     setAdding(false);
   };
 
+  const soEmailBody = (fields: EmailComposeFields, preview: boolean) => JSON.stringify({
+    emails: fields.emails, bccSelf: fields.bccSelf, cc: fields.cc, message: fields.message, preview,
+  });
+
   const openPdf = async () => {
     setBusy('pdf');
     const r = await openNetSuitePdf('salesOrder', id);
@@ -354,6 +363,7 @@ export default function SalesOrderPage() {
           {!editing && (
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <button onClick={openPdf} disabled={busy !== null} style={btn}>{busy === 'pdf' ? 'Opening…' : 'Sales Order PDF'}</button>
+              {data.canEdit && <button onClick={() => setEmailingSo(true)} style={btn}>✉ Email</button>}
               <button onClick={openJobOrderPdf} disabled={busy !== null} style={btn}>{busy === 'job' ? 'Opening…' : 'Job Order'}</button>
               {data.canEdit && !/^(billed|closed|cancell?ed)$/i.test(h.status.trim()) && (
                 <button onClick={() => setFulfilling(true)} title="Ship this sales order's parts from O'Fallon and invoice them in NetSuite (part of the order is fine)"
@@ -395,6 +405,16 @@ export default function SalesOrderPage() {
               : <div style={{ whiteSpace: 'pre-wrap' }}>{h.memo || '—'}</div>}
           </div>
         </div>
+        {!editing && h.tranId && (
+          <SentBox
+            refs={[docRef('sales_order', h.tranId)]}
+            docLabel={`SO ${h.tranId}`}
+            canMark={data.canEdit}
+            emptyText="Not emailed yet"
+            refreshKey={sentBump}
+            style={{ marginTop: '14px' }}
+          />
+        )}
       </div>
 
       {saved && (
@@ -614,6 +634,28 @@ export default function SalesOrderPage() {
 
       {fulfilling && (
         <FulfillInvoiceModal salesOrderId={id} soLabel={`SO ${h.tranId}`} onClose={() => { setFulfilling(false); load(); }} onInvoiced={load} />
+      )}
+      {emailingSo && (
+        <EmailComposeModal
+          title={`Email sales order ${h.tranId}`}
+          stateKey={`sales-order-email:${id}`}
+          intro={<div style={{ fontSize: 12, color: theme.textSecondary, marginBottom: 8 }}>The sales order PDF from NetSuite is attached.</div>}
+          messagePlaceholder="Optional note to the customer"
+          fetchPreview={async fields => {
+            const res = await apiFetch(`/api/sales-orders/${encodeURIComponent(id)}/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: soEmailBody(fields, true) });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) return { error: json.error || 'Could not build the preview' };
+            return { preview: { to: json.to, subject: json.subject, html: json.html } };
+          }}
+          onSend={async fields => {
+            const res = await apiFetch(`/api/sales-orders/${encodeURIComponent(id)}/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: soEmailBody(fields, false) });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) { await dialog.alert(json.error || 'Could not send the email', { error: true }); return { ok: false }; }
+            setSentBump(n => n + 1);
+            return { ok: true };
+          }}
+          onClose={() => setEmailingSo(false)}
+        />
       )}
       {emailing && (
         <EmailInvoicesModal

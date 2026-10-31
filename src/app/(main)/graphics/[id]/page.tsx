@@ -48,6 +48,8 @@ import GraphicsJobSources from '@/components/GraphicsJobSources';
 import GraphicsJobKits from '@/components/GraphicsJobKits';
 import type { JobKit } from '@/lib/graphics-fleet';
 import GraphicsApprovalHistory from '@/components/GraphicsApprovalHistory';
+import SentBox from '@/components/SentBox';
+import { docRef } from '@/lib/document-sends';
 import GraphicsInstallCard from '@/components/GraphicsInstallCard';
 import PrintRoomTimer from '@/components/PrintRoomTimer';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
@@ -1912,6 +1914,16 @@ export default function GraphicsJobRecordPage() {
             )}
           </div>
         )}
+
+        {/* Latest proof email at a glance (migration 464); the full
+            conversation is the history below. */}
+        <SentBox
+          refs={[docRef('graphics_job', job.id)]}
+          docLabel={job.title || job.job_number || 'this proof'}
+          emptyText="No proof emailed from FleetSuite yet"
+          refreshKey={ja.sent_for_approval_at || ''}
+          style={{ marginBottom: '8px' }}
+        />
 
         {/* Every proof round with its emails, texts and customer replies. */}
         <GraphicsApprovalHistory

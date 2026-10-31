@@ -83,6 +83,8 @@ import { EMPTY_DELIVERY, deliveryColumns, deliveryFromRow, deliveryText, sameDel
 import VehicleTemplatePicker from '@/components/VehicleTemplatePicker';
 import { remapWorksheetIds } from '@/lib/estimate-copy-worksheets';
 import TopSaveBar from '@/components/TopSaveBar';
+import SentBox, { SentChip, useDocumentSends } from '@/components/SentBox';
+import { docRef, sendTone } from '@/lib/document-sends';
 import { estimateCopiedFrom, oldRecordCopiedFrom } from '@/lib/estimate-copied-from';
 import { sanitizeCopiedProofs } from '@/lib/estimate-copied-proofs';
 import { genericDescKey, sameGenericLine } from '@/lib/generic-lines';
@@ -571,6 +573,8 @@ export default function EstimatesPage() {
   // list unsaved is an abandon; the localStorage draft mechanism is separate.
   const formTel = useFormTelemetry('estimate_builder', { active: view === 'builder' });
   const [estimates, setEstimates] = useState<Estimate[]>([]);
+  // Re-reads the Sent box after a send made on this screen.
+  const [sentBoxBump, setSentBoxBump] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   /** One of LIST_FILTERS' keys — matched against estimateDisplayStatus —
@@ -581,6 +585,13 @@ export default function EstimatesPage() {
     return st && (st === 'wrap' || LIST_FILTERS.some(f => f.key === st)) ? st : 'all';
   });
   const [mineOnly, setMineOnly] = useState(false);
+  // Sent column (Craig, 2026-10-31): every estimate's latest send, and a
+  // Not sent / Bounced filter on top of the pipeline chips.
+  const [sentFilter, setSentFilter] = useState<'all' | 'none' | 'bad'>('all');
+  const estimateSends = useDocumentSends(
+    estimates.map(e => docRef('estimate', e.id)),
+    `${sentBoxBump}|${estimates.reduce((m, e) => [m, e.approval_email_updated_at || '', e.sent_for_approval_at || ''].sort().pop() || '', '')}`,
+  );
   // Several estimates emailed at once (Craig, 2026-10-28): Select mode on
   // the list, then Send for approval or Email PDFs, one compose screen per
   // customer (EstimateBatchSend).
@@ -3033,6 +3044,7 @@ export default function EstimatesPage() {
       }
       const em = data.dispatch?.email;
       await dialog.alert(`${pdfEmailProForma ? 'Pro forma invoice' : 'Estimate PDF'} sent to ${em?.target || 'recipient'}${em?.bcc ? ` (bcc ${em.bcc})` : ''}.`);
+      setSentBoxBump(n => n + 1);
       return { ok: true };
     } catch {
       await dialog.alert('Network error — please try again.');
@@ -4429,9 +4441,14 @@ export default function EstimatesPage() {
       acc[key] = (acc[key] || 0) + 1;
       return acc;
     }, {});
-    const filteredEstimates = statusFilter === 'all'
+    const sentToneOf = (e: Estimate) => sendTone(estimateSends.sends[docRef('estimate', e.id)]?.latest || null);
+    const sentCounts = estimateSends.loaded
+      ? { none: searchedEstimates.filter(e => sentToneOf(e) === 'none').length, bad: searchedEstimates.filter(e => sentToneOf(e) === 'bad').length }
+      : { none: 0, bad: 0 };
+    const filteredEstimates = (statusFilter === 'all'
       ? searchedEstimates
-      : searchedEstimates.filter(e => estimateDisplayStatus(e).key === statusFilter);
+      : searchedEstimates.filter(e => estimateDisplayStatus(e).key === statusFilter))
+      .filter(e => sentFilter === 'all' || sentToneOf(e) === sentFilter);
     // Waiting on the customer: quietest first, the order to chase them in.
     if (statusFilter === 'sent') filteredEstimates.sort((a, b) => (quietDays(b) ?? 0) - (quietDays(a) ?? 0));
     const waitingTotal = statusFilter === 'sent' ? filteredEstimates.reduce((sum, e) => sum + (Number(e.grand_total) || 0), 0) : 0;
@@ -4511,6 +4528,27 @@ export default function EstimatesPage() {
               Older wrap quotes {wrapsShown.length}
             </button>
           )}
+          {/* Sent filter: the ones nobody has sent, and the ones that bounced. */}
+          {([['none', 'Not sent', sentCounts.none], ['bad', 'Bounced', sentCounts.bad]] as const).map(([key, text, count]) => {
+            const active = sentFilter === key;
+            if (count === 0 && !active) return null;
+            return (
+              <button
+                key={key}
+                onClick={() => setSentFilter(active ? 'all' : key)}
+                title={active ? 'Show sent and unsent' : undefined}
+                style={{
+                  padding: '5px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 700,
+                  cursor: 'pointer', whiteSpace: 'nowrap',
+                  background: active ? (key === 'bad' ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.12)') : 'var(--subtle-bg)',
+                  border: `1px solid ${active ? (key === 'bad' ? 'rgba(239,68,68,0.45)' : 'rgba(245,158,11,0.5)') : 'var(--border)'}`,
+                  color: active ? (key === 'bad' ? theme.error : '#f59e0b') : 'var(--text-label)',
+                }}
+              >
+                {active ? '✕ ' : ''}{text} {count}
+              </button>
+            );
+          })}
         </div>
 
         {statusFilter === 'sent' && filteredEstimates.length > 0 && (
@@ -4577,6 +4615,7 @@ export default function EstimatesPage() {
                         {est.customer_name && <span>{est.customer_name}</span>}
                         <span style={{ color: 'var(--text-body)', fontWeight: 700 }}>{fmt(est.grand_total)}</span>
                         <span>{new Date(est.created_at).toLocaleDateString()}</span>
+                        {estimateSends.loaded && <SentChip summary={estimateSends.sends[docRef('estimate', est.id)]} />}
                         <CreatedBy compact userId={est.created_by} at={est.created_at} style={{ fontSize: '10px', color: 'var(--text-label)' }} />
                         {estimateAltNumber(est) && <span style={{ color: '#a78bfa' }} title="FleetSuite's own estimate number — NetSuite's is the one shown first">FS: {estimateAltNumber(est)}</span>}
                         {/* The SO number moved to the status pill — showing it
@@ -7191,6 +7230,22 @@ export default function EstimatesPage() {
             }}>
               {meta.text}{when ? <span style={{ fontWeight: 400 }}> · {when}</span> : null}
             </div>
+          );
+        })()}
+
+        {/* Every send of this estimate and its pro forma: who, when, to
+            whom, delivered or not, and customer opens (migration 464). */}
+        {editingId && (() => {
+          const est = estimates.find(e => e.id === editingId);
+          if (!est) return null;
+          return (
+            <SentBox
+              refs={[docRef('estimate', est.id), docRef('pro_forma', est.id)]}
+              docLabel={est.estimate_number}
+              refreshKey={`${est.approval_email_updated_at || ''}|${est.sent_for_approval_at || ''}|${sentBoxBump}`}
+              emptyText="Not sent yet"
+              style={{ width: '100%', boxSizing: 'border-box' }}
+            />
           );
         })()}
 
