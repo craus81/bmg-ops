@@ -122,6 +122,8 @@ interface StockPartRow {
   free: number;
   usable: number;
   on_hand: number;
+  /** NetSuite's real on-hand; on_hand above is "available". */
+  shelf?: number;
   on_order: number;
   short: number;
   state: StockState;
@@ -138,6 +140,7 @@ interface StockPartRow {
 interface StockReadiness {
   vehicleCount: number;
   stockSource: 'live' | 'mirror';
+  stockSyncedAt?: string | null;
   parts: StockPartRow[];
   skippedNonStock: number;
   summary: {
@@ -662,7 +665,7 @@ export default function EstimatesPage() {
   // Request parts (Craig, 2026-10-01): parts into the Purchasing queue. Lists
   // every part since 2026-10-26, short ones ticked. `title` set = the prompt
   // offered right after Convert to SO.
-  const [partsRequest, setPartsRequest] = useState<{ parts: StockReadiness['parts']; title?: string } | null>(null);
+  const [partsRequest, setPartsRequest] = useState<{ parts: StockReadiness['parts']; title?: string; stockSource?: StockReadiness['stockSource']; stockSyncedAt?: string | null } | null>(null);
   const canRequestParts = hasFeature('parts_ordering');
   // Counter-offer workbench (R6-9): what this revision changed against the
   // document it supersedes. Derived server-side on open, never stored.
@@ -3549,6 +3552,8 @@ export default function EstimatesPage() {
           if (fresh && fresh.parts.length > 0) {
             setPartsRequest({
               parts: fresh.parts,
+              stockSource: fresh.stockSource,
+              stockSyncedAt: fresh.stockSyncedAt,
               title: due > 0
                 ? `Request the ${due} part${due === 1 ? '' : 's'} that still need ordering?`
                 : 'Request any parts for this job?',
@@ -5457,7 +5462,7 @@ export default function EstimatesPage() {
               {stock && !stockStale && editingId && canRequestParts && stock.parts.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => setPartsRequest({ parts: stock.parts })}
+                  onClick={() => setPartsRequest({ parts: stock.parts, stockSource: stock.stockSource, stockSyncedAt: stock.stockSyncedAt })}
                   disabled={stockLoading}
                   title="Send any of this estimate's parts to the Purchasing queue, tagged with this estimate"
                   style={stock.summary.toRequest > 0 ? {
@@ -8245,6 +8250,8 @@ export default function EstimatesPage() {
           accepted={estAccepted}
           parts={partsRequest.parts}
           title={partsRequest.title}
+          stockSource={partsRequest.stockSource}
+          stockSyncedAt={partsRequest.stockSyncedAt}
           printInfo={{
             estimateNumber: editingNumber,
             customer: editingEst?.customer_name || null,

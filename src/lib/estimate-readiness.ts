@@ -7,6 +7,7 @@ import { allocationMath, type PartState, type PoRef } from '@/lib/parts-readines
 import { fetchAllRows } from '@/lib/fetch-all';
 import { genericLineStatus, groupGenericLines, type GenericLineInput } from '@/lib/generic-lines';
 import { loadGenericItems, loadGenericRequests } from '@/lib/generic-lines-server';
+import { loadInventorySyncedAt } from '@/lib/stock-snapshot';
 
 /**
  * "Do we actually have the parts for this quote?" — the readiness math an
@@ -53,6 +54,8 @@ export interface EstimatePartRow {
   usable: number;
   /** The pool the math ran against — NetSuite "available". */
   on_hand: number;
+  /** NetSuite's real on-hand (the shelf), shown beside available. */
+  shelf: number;
   on_order: number;
   short: number;
   state: EstimatePartState;
@@ -73,6 +76,8 @@ export interface EstimateReadiness {
   vehicleCount: number;
   /** 'live' = asked NetSuite just now · 'mirror' = the 2-hourly sync's copy. */
   stockSource: 'live' | 'mirror';
+  /** When the inventory sweep last refreshed the mirrored figures; null if unknown. */
+  stockSyncedAt: string | null;
   parts: EstimatePartRow[];
   /** Labor/service lines dropped — they have no inventory to check. */
   skippedNonStock: number;
@@ -134,6 +139,7 @@ export async function computeEstimateReadiness(
     description: string | null;
     needed: number;
     availPool: number;
+    shelf: number;
     allocatedHere: number;
     allocatedOthers: number;
     on_order: number;
@@ -166,7 +172,7 @@ export async function computeEstimateReadiness(
     lookupNames.add(segs[segs.length - 1].trim());
     const row = parts.get(key) || {
       item_number: key, description: null, needed: 0,
-      availPool: 0, allocatedHere: 0, allocatedOthers: 0,
+      availPool: 0, shelf: 0, allocatedHere: 0, allocatedOthers: 0,
       on_order: 0, pos: [], netsuite_item_id: null, uncatalogued: true,
     };
     row.needed += qty;
@@ -177,7 +183,7 @@ export async function computeEstimateReadiness(
   }
 
   const empty: EstimateReadiness = {
-    vehicleCount: units, stockSource: 'mirror', parts: [], skippedNonStock,
+    vehicleCount: units, stockSource: 'mirror', stockSyncedAt: null, parts: [], skippedNonStock,
     summary: { covered: 0, onOrder: 0, short: 0, unknown: 0, toRequest: 0, verdict: 'ready', lastEta: null },
   };
   if (parts.size === 0) return empty;
@@ -212,6 +218,8 @@ export async function computeEstimateReadiness(
       // back to on hand, the same preference inventory-sync writes with.
       const avail = c.quantity_available != null ? Number(c.quantity_available) : Number(c.quantity_on_hand);
       row.availPool = Math.max(0, Number.isFinite(avail) ? avail : 0);
+      const shelf = Number(c.quantity_on_hand);
+      row.shelf = Math.max(0, Number.isFinite(shelf) ? shelf : 0);
     }
   }
 
@@ -251,7 +259,7 @@ export async function computeEstimateReadiness(
         genericRows.push({
           item_number: key, line_key: g.key, generic: true, received: st.received,
           description: g.description, needed: g.needed,
-          allocated: 0, free: 0, usable: 0, on_hand: 0,
+          allocated: 0, free: 0, usable: 0, on_hand: 0, shelf: 0,
           on_order: st.ordered, short: st.short, state: st.state,
           allocatable: 0, pos: [], netsuite_item_id: w.netsuite_item_id,
           uncatalogued: false, requested: st.requested,
@@ -290,10 +298,12 @@ export async function computeEstimateReadiness(
         if (!row) continue;
         const onHand = Math.max(0, parseFloat(inv.qty || '0') || 0);
         row.availPool = inv.avail != null ? Math.max(0, parseFloat(inv.avail || '0') || 0) : onHand;
+        row.shelf = onHand;
       }
       stockSource = 'live';
     } catch { /* keep the mirrored figures */ }
   }
+  const stockSyncedAt = stockSource === 'mirror' ? await loadInventorySyncedAt(service) : null;
 
   // ── Holds: this estimate's vs everyone else's ──
   // Every reserved row counts against the pool whoever owns it — a job's
@@ -382,6 +392,7 @@ export async function computeEstimateReadiness(
       free: m.free,
       usable: m.usable,
       on_hand: w.availPool,
+      shelf: w.shelf,
       on_order: w.on_order,
       short: m.short,
       // An uncatalogued line has no stock figure to be short OF — saying so
@@ -404,7 +415,7 @@ export async function computeEstimateReadiness(
   rows.sort((a, b) => (stateRank[a.state] - stateRank[b.state]) || a.item_number.localeCompare(b.item_number));
 
   return {
-    vehicleCount: units, stockSource, parts: rows, skippedNonStock,
+    vehicleCount: units, stockSource, stockSyncedAt, parts: rows, skippedNonStock,
     summary: summarizeEstimateReadiness(rows),
   };
 }

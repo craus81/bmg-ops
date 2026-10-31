@@ -21,6 +21,7 @@ import { theme } from '@/lib/theme';
 import { createClient } from '@/lib/supabase-browser';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { deepLinks } from '@/lib/deep-links';
+import { syncedText } from '@/lib/stock-synced-text';
 import NetsuiteVendorSearch from '@/components/NetsuiteVendorSearch';
 import CreatePoReviewModal, { type CreatePoResult } from '@/components/CreatePoReviewModal';
 
@@ -83,6 +84,8 @@ export default function OrderPartModal({ part, canCreatePo, onClose }: Props) {
   const [note, setNote] = useState('');
   const [projects, setProjects] = useState<ProjectOpt[]>([]);
   const [pending, setPending] = useState<PendingRow[] | null>(null);
+  const [stock, setStock] = useState<{ on_hand: number; available: number; on_order: number } | null>(null);
+  const [syncedAt, setSyncedAt] = useState<string | null>(null);
   const [step, setStep] = useState<Step>({ kind: 'form' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -105,9 +108,11 @@ export default function OrderPartModal({ part, canCreatePo, onClose }: Props) {
     })();
     (async () => {
       try {
-        const res = await fetch('/api/purchase-requests?status=pending');
+        const res = await fetch(`/api/purchase-requests?status=pending&stockItem=${encodeURIComponent(part.item_number)}`);
         const body = await res.json().catch(() => ({}));
         if (cancelled) return;
+        setStock(body.stockItem || null);
+        setSyncedAt(body.inventorySyncedAt || null);
         const rows = ((body.requests || []) as any[])
           .filter(r => itemKey(r.item_number) === itemKey(part.item_number));
         setPending(rows.map(r => ({
@@ -261,12 +266,29 @@ export default function OrderPartModal({ part, canCreatePo, onClose }: Props) {
         <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
           {step.kind === 'form' && (
             <>
+              {part.netsuite_id && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '6px', marginBottom: '8px' }}>
+                  {[
+                    ['On hand', stock?.on_hand],
+                    ['Available', stock ? stock.available : part.quantity_available],
+                    ['On order', stock?.on_order],
+                    ['Waiting in Purchasing', pending === null ? undefined : totalPending],
+                  ].map(([label, n]) => (
+                    <div key={label as string} style={{ background: theme.inputBg, border: `1px solid ${theme.border}`, borderRadius: '8px', padding: '6px 4px', textAlign: 'center' }}>
+                      <div style={{ fontSize: '17px', fontWeight: 800, color: theme.textPrimary }}>
+                        {n == null ? (pending === null ? '…' : '—') : qtyText(Number(n))}
+                      </div>
+                      <div style={{ fontSize: '10px', color: theme.textMuted, lineHeight: 1.2 }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px', lineHeight: 1.5 }}>
-                {part.quantity_available != null && <>Available now: <b>{qtyText(Number(part.quantity_available))}</b>. </>}
-                {pending === null ? 'Checking Purchasing…'
-                  : totalPending > 0 ? <>Already waiting in Purchasing: <b>{qtyText(totalPending)}</b>.</>
-                    : 'Nothing waiting in Purchasing for this part.'}
-                {part.vendor && <> Vendor: <b>{part.vendor}</b>.</>}
+                {part.netsuite_id ? <>From NetSuite: {pending === null ? 'checking…' : syncedText(syncedAt)} · O’Fallon. </>
+                  : pending === null ? 'Checking Purchasing…'
+                    : totalPending > 0 ? <>Already waiting in Purchasing: <b>{qtyText(totalPending)}</b>. </>
+                      : 'Nothing waiting in Purchasing for this part. '}
+                {part.vendor && <>Vendor: <b>{part.vendor}</b>.</>}
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: '10px', marginBottom: '10px' }}>

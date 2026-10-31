@@ -5,8 +5,8 @@ const data: StockCheckData = {
   estimateNumber: 'EST-2041', customer: 'Acme Plumbing', vehicle: '2026 Ford Transit 250',
   vin: '1FTBR1C82PKA12345', soNumber: 'SO #1186', accepted: true,
   lines: [
-    { itemNumber: 'ACC-8000', description: 'Ratchet strap', needed: 2, onHand: 1, onOrder: 0, requesting: 1, short: true, uncatalogued: false },
-    { itemNumber: '13193', description: 'Curt hitch', needed: 1, onHand: 3, onOrder: 2, requesting: 0, short: false, uncatalogued: false },
+    { itemNumber: 'ACC-8000', description: 'Ratchet strap', needed: 2, onHand: 1, available: 1, onOrder: 0, requesting: 1, short: true, uncatalogued: false },
+    { itemNumber: '13193', description: 'Curt hitch', needed: 1, onHand: 3, available: 2, onOrder: 2, requesting: 0, short: false, uncatalogued: false },
     { itemNumber: 'CUSTOM-1', description: null, needed: 1.5, onOrder: 0, requesting: 1.5, short: false, uncatalogued: true },
   ],
 };
@@ -14,9 +14,9 @@ const data: StockCheckData = {
 describe('stockCheckRows', () => {
   it('shows counts, flags short and uncatalogued parts, and leaves Counted/OK blank', () => {
     expect(stockCheckRows(data.lines)).toEqual([
-      ['ACC-8000  SHORT\nRatchet strap', '2', '1', '0', '1', '', ''],
-      ['13193\nCurt hitch', '1', '3', '2', '—', '', ''],
-      ['CUSTOM-1  (not in catalog)', '1.5', '—', '0', '1.5', '', ''],
+      ['ACC-8000  SHORT\nRatchet strap', '2', '1', '1', '0', '1', '', ''],
+      ['13193\nCurt hitch', '1', '3', '2', '2', '—', '', ''],
+      ['CUSTOM-1  (not in catalog)', '1.5', '—', '—', '0', '1.5', '', ''],
     ]);
   });
 });
