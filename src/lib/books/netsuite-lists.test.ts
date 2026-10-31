@@ -20,6 +20,7 @@ import {
   mapTaxAccounts,
   listTerms,
   namesField,
+  noteItemAccountsChanged,
   noteTermsChanged,
   readList,
   recordNotFound,
@@ -266,7 +267,7 @@ describe('mapping NetSuite rows', () => {
   });
 });
 
-describe('terms FleetSuite changes in NetSuite', () => {
+describe('terms and accounts FleetSuite changes in NetSuite', () => {
   /** A stand-in for the service client: what its one read answers, what the list's apply answers, and everything asked. */
   const fake = (read: { data?: unknown; error?: { message: string } }, applyError?: { message: string }) => {
     const asked: Array<[string, unknown[]]> = [];
@@ -314,6 +315,28 @@ describe('terms FleetSuite changes in NetSuite', () => {
     await expect(noteTermsChanged(fake({ error: { message: 'gl_netsuite_lists is busy' } }).service, 'customer', '4410', '2'))
       .rejects.toThrow('gl_netsuite_lists is busy');
     await expect(noteTermsChanged(fake({ data: ROW }, { message: 'apply refused' }).service, 'vendor', '2207', '2')).rejects.toThrow('apply refused');
+  });
+
+  it("puts an item's new accounts in its row of the copy, keeping the rest of it", async () => {
+    const ITEM = {
+      netsuite_id: '501', name: '51-2002', parent_netsuite_id: null, active: true,
+      details: { item_type: 'InvtPart', display_name: 'Hitch ball mount', income_account: '101', asset_account: '105' },
+    };
+    const { service, asked, called } = fake({ data: ITEM });
+    expect(await noteItemAccountsChanged(service, '501', { asset_account: '106', expense_account: '108' })).toEqual({ noted: true });
+    expect(asked).toEqual([
+      ['from', ['gl_netsuite_lists']],
+      ['select', ['netsuite_id, name, parent_netsuite_id, active, details']],
+      ['eq', ['kind', 'item']],
+      ['eq', ['netsuite_id', '501']],
+      ['is', ['gone_at', null]],
+    ]);
+    expect(called).toEqual([['gl_netsuite_lists_apply', { p: { kind: 'item', rows: [{
+      ...ITEM, details: { item_type: 'InvtPart', display_name: 'Hitch ball mount', income_account: '101', asset_account: '106', expense_account: '108' },
+    }] } }]]);
+    const none = fake({});
+    expect(await noteItemAccountsChanged(none.service, '501', { income_account: '102' })).toEqual({ noted: false });
+    expect(none.called).toEqual([]);
   });
 
   it("lists NetSuite's active terms by name", async () => {

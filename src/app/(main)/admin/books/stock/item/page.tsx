@@ -249,10 +249,12 @@ export default function BooksStockItemPage() {
           {data.setup && (
             <div style={banner(RED)}>
               In NetSuite, this item&apos;s asset account is {data.setup.account}, {data.setup.accountKind}, not an asset account, so what
-              it costs lands in the wrong place when it&apos;s received and when it ships. On its Accounting tab in NetSuite, set Asset
-              Account to {data.setup.usual ? `${data.setup.usual}, as most stocked items have it,` : 'your inventory asset account'} and
-              check COGS Account is your cost of goods sold account: FleetSuite can&apos;t read that one. This goes once{' '}
-              <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied again, every two hours or on Sync now.
+              it costs lands in the wrong place when it&apos;s received and when it ships. With{' '}
+              <Link href={deepLinks.itemAccounts(data.item.id)} className="rep-link">Change accounts</Link>, set its inventory asset
+              account to {data.setup.usual ? `${data.setup.usual}, as most stocked items have it,` : 'your inventory asset account'} and
+              check its cost of goods sold account there: this page can&apos;t read that one. This goes once it&apos;s changed there, or after
+              a change made in NetSuite once <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied
+              again, every two hours or on Sync now.
             </div>
           )}
           {data.leftover.length > 0 && (

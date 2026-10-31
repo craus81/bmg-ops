@@ -1,12 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
- * The changes FleetSuite made to a customer's or a vendor's details in NetSuite (migration 473, detail_changes: Customer
- * Terms and Vendor Details, src/lib/customer-terms.ts and src/lib/vendor-details.ts), as both screens list them under
- * Changed before.
+ * The changes FleetSuite made to a customer's or a vendor's details, or an item's accounts, in NetSuite (migrations 473
+ * and 478, detail_changes: Customer Terms, Vendor Details and Item Accounts, src/lib/customer-terms.ts,
+ * src/lib/vendor-details.ts and src/lib/item-accounts.ts), as each screen lists them under Changed before.
  */
 
-export type DetailRecordType = 'customer' | 'vendor';
+export type DetailRecordType = 'customer' | 'vendor' | 'item';
 
 export interface DetailChange {
   id: string;

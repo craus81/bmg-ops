@@ -10,6 +10,7 @@ import OAuth from 'oauth-1.0a';
 import CryptoJS from 'crypto-js';
 import { safeStringLiteral } from './sql-safe';
 import { netsuiteFetch } from './netsuite-sends';
+import type { ItemRecordType } from './item-accounts';
 
 interface NetSuiteConfig {
   accountId: string;
@@ -1650,20 +1651,21 @@ export async function updateCustomer(
 }
 
 /**
- * One call against a customer's or a vendor's record, for Customer Terms
- * and Vendor Details (src/lib/customer-terms.ts, src/lib/vendor-details.ts):
- * a GET reads it whole, a vendor's address book with it; a PATCH changes
- * it. NetSuite's refusal comes back as its own words; a PATCH that timed
- * out, or a fault on NetSuite's side (5xx), is `unsure`, since NetSuite may
- * have made the change anyway. Nothing sent is ever logged: a vendor's may
- * carry its tax ID.
+ * One call against a customer's, a vendor's or an item's record, for
+ * Customer Terms, Vendor Details and Item Accounts (src/lib/customer-terms.ts,
+ * src/lib/vendor-details.ts, src/lib/item-accounts.ts): a GET reads it
+ * whole, a vendor's address book with it; a PATCH changes it. NetSuite's
+ * refusal comes back as its own words, with the HTTP status it answered;
+ * a PATCH that timed out, or a fault on NetSuite's side (5xx), is `unsure`,
+ * since NetSuite may have made the change anyway. Nothing sent is ever
+ * logged: a vendor's may carry its tax ID.
  */
 async function entityRecordCall(
-  record: 'customer' | 'vendor',
+  record: 'customer' | 'vendor' | ItemRecordType,
   id: string,
   method: 'GET' | 'PATCH',
   body?: Record<string, unknown>,
-): Promise<{ success: true; record: any } | { success: false; error: string; notFound?: boolean; unsure?: boolean }> {
+): Promise<{ success: true; record: any } | { success: false; error: string; status?: number; notFound?: boolean; unsure?: boolean }> {
   if (!/^\d+$/.test(id)) return { success: false, error: `Bad ${record} id` };
   const config = getConfig();
   const baseUrl = getBaseUrl(config.accountId);
@@ -1694,6 +1696,7 @@ async function entityRecordCall(
       return {
         success: false,
         error: `NetSuite error (${response.status}): ${detail}`,
+        status: response.status,
         ...(response.status === 404 ? { notFound: true } : {}),
         ...(method === 'PATCH' && response.status >= 500 ? { unsure: true } : {}),
       };
@@ -1724,6 +1727,37 @@ export async function patchEntityRecord(
   body: Record<string, unknown>,
 ): Promise<{ success: boolean; error?: string; unsure?: boolean }> {
   const res = await entityRecordCall(record, id, 'PATCH', body);
+  return res.success ? { success: true } : { success: false, error: res.error, ...(res.unsure ? { unsure: true } : {}) };
+}
+
+/**
+ * An item's record as NetSuite has it now, read live because a change of its accounts is worked out against it.
+ * NetSuite files each kind of item under a record type of its own, and the copy of its items says only roughly which
+ * (a service, a non-inventory item), so each of `types` is tried in turn until one has it. When NetSuite doesn't
+ * answer, the next isn't tried: it wouldn't fare better.
+ */
+export async function getItemRecord(
+  types: readonly ItemRecordType[],
+  id: string,
+): Promise<{ success: true; recordType: ItemRecordType; record: any } | { success: false; error: string; notFound?: boolean }> {
+  let refused: string | null = null;
+  for (const type of types) {
+    const res = await entityRecordCall(type, id, 'GET');
+    if (res.success) return { success: true, recordType: type, record: res.record };
+    if (res.notFound) continue;
+    if (res.status === undefined) return { success: false, error: res.error };
+    refused ??= res.error;
+  }
+  return refused ? { success: false, error: refused } : { success: false, error: `NetSuite has no item with id ${id}.`, notFound: true };
+}
+
+/** Changes an item's record of type `type`: only the fields in `body`. */
+export async function patchItemRecordFields(
+  type: ItemRecordType,
+  id: string,
+  body: Record<string, unknown>,
+): Promise<{ success: boolean; error?: string; unsure?: boolean }> {
+  const res = await entityRecordCall(type, id, 'PATCH', body);
   return res.success ? { success: true } : { success: false, error: res.error, ...(res.unsure ? { unsure: true } : {}) };
 }
 
