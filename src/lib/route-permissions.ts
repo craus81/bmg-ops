@@ -592,6 +592,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/journal-entries/route.ts': feature('vendor_payments', "switchIsOn(service, 'journal_entries')"),
   // Inventory transfers (migration 470): admins once switched on, as Inventory Adjust; until then super admins can make and save them, and nothing is moved.
   'src/app/api/inventory-transfers/route.ts': admin("switchIsOn(service, 'inventory_transfers')"),
+  // Customer and vendor details (migration 473): once switched on, anyone with Credit Applications who can see prices changes a customer's terms and credit limit, and anyone with Payments a vendor's details; until then super admins can look and nothing is sent.
+  'src/app/api/customer-terms/route.ts': feature('credit_applications', "switchIsOn(service, 'customer_vendor_details')"),
+  'src/app/api/vendor-details/route.ts': feature('vendor_payments', "switchIsOn(service, 'customer_vendor_details')"),
   'src/app/api/purchasing/sync-sales-orders/route.ts': admin(),
   'src/app/api/purchase-requests/create-po/route.ts': feature('parts_ordering', 'requireAdmin('),
   'src/app/api/purchase-requests/got-it/route.ts': feature('parts_ordering'),

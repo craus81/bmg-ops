@@ -20,7 +20,9 @@ import { COPY_FROM } from './netsuite-gl';
  * to gl_netsuite_lists_apply in pages; then gl_netsuite_lists_finish marks
  * what NetSuite no longer has. One list NetSuite won't give doesn't stop the
  * others, and a field it won't give is left out with a note rather than
- * failing the list. Nothing is written back to NetSuite.
+ * failing the list. Nothing is written back to NetSuite. When FleetSuite
+ * changes a customer's or a vendor's terms in NetSuite, its row takes them
+ * then too (noteTermsChanged).
  *
  * Which account a tax code posts to comes from what sales tax actually
  * posted to since the GL copy starts: its tax lines, counted by tax code and
@@ -442,6 +444,55 @@ export interface BooksListsSyncResult {
   notes?: string[];
   /** Set when no list could be read at all. */
   error?: string;
+}
+
+/**
+ * FleetSuite changed a customer's or a vendor's terms in NetSuite (Customer Terms, Vendor Details: src/lib/customer-terms.ts,
+ * src/lib/vendor-details.ts), so its row here takes the new terms now rather than at the list's next read, two hours
+ * on at most: Books' own invoices fall due by a customer's terms, and Snap a bill's bills by a vendor's. The row goes
+ * through gl_netsuite_lists_apply like any other; nothing is written when the copy has no row for it.
+ */
+export async function noteTermsChanged(
+  service: SupabaseClient,
+  kind: 'customer' | 'vendor',
+  netsuiteId: string,
+  termsId: string,
+): Promise<{ noted: boolean }> {
+  const { data, error } = await service
+    .from('gl_netsuite_lists')
+    .select('netsuite_id, name, parent_netsuite_id, active, details')
+    .eq('kind', kind)
+    .eq('netsuite_id', netsuiteId)
+    .is('gone_at', null)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  const row = data as ListRow | null;
+  if (!row) return { noted: false };
+  const noted: ListRow = {
+    netsuite_id: row.netsuite_id,
+    name: row.name,
+    parent_netsuite_id: row.parent_netsuite_id,
+    active: row.active,
+    details: { ...(row.details ?? {}), terms_id: termsId },
+  };
+  const applied = await service.rpc('gl_netsuite_lists_apply', { p: { kind, rows: [noted] } });
+  if (applied.error) throw new Error(applied.error.message);
+  return { noted: true };
+}
+
+/** NetSuite's terms a customer or vendor can be given: the copy's active ones, by name. */
+export async function listTerms(service: SupabaseClient): Promise<Array<{ id: string; name: string }>> {
+  const { data, error } = await service
+    .from('gl_netsuite_lists')
+    .select('netsuite_id, name')
+    .eq('kind', 'term')
+    .eq('active', true)
+    .is('gone_at', null)
+    .order('name', { ascending: true })
+    .order('netsuite_id', { ascending: true })
+    .limit(500);
+  if (error) throw new Error(`couldn't read NetSuite's terms (${error.message})`);
+  return ((data ?? []) as Array<{ netsuite_id: string; name: string }>).map((t) => ({ id: t.netsuite_id, name: t.name }));
 }
 
 async function applyList(service: SupabaseClient, kind: ListKind, rows: ListRow[]) {
