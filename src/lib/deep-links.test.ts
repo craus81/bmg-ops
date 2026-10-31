@@ -216,3 +216,9 @@ describe('Vendor credit links', () => {
     expect(deepLinks.vendorCredit()).toBe('/admin/purchasing/vendor-credit');
   });
 });
+
+describe('Card charge links', () => {
+  it('opens the card charges screen', () => {
+    expect(deepLinks.cardCharges()).toBe('/admin/card-charges');
+  });
+});

@@ -63,9 +63,12 @@ and each vendor is owed by how late, the AR and AP agings, next to
 NetSuite's, part 33, each report and an account line's documents as
 an Excel file, with each side's running balance, part 34, credit memos
 made in FleetSuite against an invoice and sent on to NetSuite, with Books'
-own copy of each, built switched off, and part 35, vendor credits entered
+own copy of each, built switched off, part 35, vendor credits entered
 in FleetSuite and applied to the vendor's open bills, sent on to NetSuite
-the same way, with Books' own copy of each, built switched off. The screens are the accounts page at `/admin/books`, the trial
+the same way, with Books' own copy of each, built switched off, and part
+36, the Chase card's charges coded in FleetSuite and sent on to NetSuite as
+one journal entry a month, with Books' own copy of each, built switched
+off. The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
@@ -90,7 +93,10 @@ screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
 super admins can open it while credit memos are switched off. The vendor
 credit screen, `/admin/purchasing/vendor-credit`, is admins', opened from
 More → Purchasing → Vendor Credits: only super admins can open it while
-vendor credits are switched off.
+vendor credits are switched off. The card charges screen,
+`/admin/card-charges`, is for staff with Payments, opened from More →
+Money & Books → Card Charges: only super admins can open it while card
+charges are switched off.
 
 | Piece | Where |
 | --- | --- |
@@ -189,7 +195,10 @@ vendor credits are switched off.
 | Vendor credits entered in FleetSuite and applied to the vendor's open bills, sent on to NetSuite, and Books' own copy of each | `migrations/467-vendor-credits-in-fleetsuite.sql`, `src/lib/vendor-credit.ts`, `src/lib/books/own-vendor-credits.ts`, `getVendorOpenBills`, `findVendorCredit` and `createVendorCredit` in `src/lib/netsuite.ts`, `src/app/api/purchasing/vendor-credit/route.ts` |
 | The vendor credit screen and More → Purchasing's Vendor Credits | `src/app/(main)/admin/purchasing/vendor-credit/page.tsx`, `src/app/(main)/more/page.tsx` |
 | Vendor credit tests | `src/lib/vendor-credit.test.ts`, `src/lib/vendor-credit-route.test.ts`, `src/lib/netsuite-vendor-credit.test.ts`, `src/lib/books/own-vendor-credits.test.ts`, and the tables and the copy's writer `src/lib/books/own-vendor-credits-sql.test.ts` |
-| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql` and `migrations/467-vendor-credits-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
+| The Chase card's charges coded in FleetSuite, sent on to NetSuite as one journal entry a month, and Books' own copy of each journal entry | `migrations/468-card-charges-in-fleetsuite.sql`, `src/lib/card-charges.ts`, `src/lib/books/own-journal-entries.ts`, `findJournalEntry` and `createJournalEntry` in `src/lib/netsuite.ts`, `src/app/api/card-charges/route.ts` |
+| The card charges screen and More → Money & Books' Card Charges | `src/app/(main)/admin/card-charges/page.tsx`, `src/app/(main)/more/page.tsx` |
+| Card charge tests | `src/lib/card-charges.test.ts`, `src/lib/card-charges-route.test.ts`, `src/lib/netsuite-journal-entry.test.ts`, `src/lib/books/own-journal-entries.test.ts`, and the tables and their functions `src/lib/books/own-journal-entries-sql.test.ts` |
+| Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql` and `migrations/468-card-charges-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -3541,10 +3550,112 @@ shelf at O'Fallon.
 - A vendor credit can't yet be made from a bill, or from a return of parts
   received on a PO; it's entered on its own.
 
+## Card charges coded in FleetSuite
+
+From January 1, 2027 the Chase card's charges are coded in FleetSuite, and
+FleetSuite sends each month's charges to NetSuite as one journal entry and
+keeps Books' own copy (the NetSuite Exit Checklist's January pieces, owner
+decisions 2026-10-31). The bookkeeper enters the card's statements in
+NetSuite as journal entries (owner, 2026-10-16: NetSuite has no credit card
+charges of BMG's), so FleetSuite does the same. It's built switched off
+("Switches"): until a super admin turns it on, only super admins can open
+the screen, to add and code charges and see what a send would make, and
+nothing goes to NetSuite. Once it's on, anyone with Payments can, and More
+→ Money & Books shows Card Charges to them.
+
+The screen is `/admin/card-charges` (`deepLinks.cardCharges`), and it needs
+price access too. The person picks the company (BMG unless they pick
+another) and the card's own account in the chart (a credit card or other
+current liability account the company can use), and adds the card's
+activity as Chase downloads it: in Chase, open the card, choose Download
+account activity, and pick CSV. `readChaseDownload` in
+`src/lib/card-charges.ts` finds the columns by their headings (Transaction
+Date, Post Date, Description, Category, Type, Amount and Memo, with Card
+first when the account has more than one card) and refuses the whole file
+when any line can't be read, saying which. Chase shows a purchase as money
+out, below 0; a file whose sales are all above 0 is read the other way
+round, and one whose sales go both ways is refused. Payments to the card
+are left out and counted, since they're paid from the bank, which stays in
+NetSuite. So are $0 lines.
+
+Each charge is kept once per card however often a download repeats it
+(`card_charges`, by its fingerprint: its dates, description, amount and
+card; two identical charges in one file are told apart by their place). The
+merchant is the description's words up to the first that's a store number
+or a reference (`merchantKey`), so "ACME HARDWARE #1234" and "ACME HARDWARE
+#5678" are one merchant. Saving charges' accounts remembers each merchant's
+for the company (`card_merchant_rules`: the account most of its charges
+went to in that save; the latest save wins), and a new charge from a
+remembered merchant comes in coded to it, marked Remembered until a person
+saves it. Picking an account on one charge fills it in on the merchant's
+other uncoded charges on the screen. A charge can have a note, which goes
+on its lines in NetSuite. Undo on a file takes its charges back off, all
+but those sent or being sent.
+
+The screen shows the charges by month, oldest first, with how many are left
+to code. Send sends one month as one journal entry (`workOutCardEntry`,
+`card_charges@1`): for each charge, a line to its account and a line to the
+card's account, to the cent, so the card's side matches Chase's statement
+line for line. A charge is a debit to its account and a credit to the card,
+its balance owed; money back from a merchant goes the other way. The entry
+is dated the month's latest charge, and its memo names the card's account
+and the month. Every charge in the month has to be coded first, to an
+account the company can use that isn't the card's own. One journal entry
+takes 250 charges at most, so a busier month goes in parts, oldest first.
+No month before January 2027 can be sent: those are on the bookkeeper's
+journal entries in NetSuite already.
+
+Send sends it once. The page makes an id for each month's press, and the
+route (`/api/card-charges`) claims the month's coded charges for it
+(`card_charges_claim`, `card_charge_sends`) and works the entry out again
+from the charges as they're kept, never from what the page sent: when they
+come to a different count or amount than the page showed, it lets go of
+them and nothing is sent. The press's id is the journal entry's External ID
+in NetSuite (`fleetsuite-card-` and the id). The route asks NetSuite for it
+first (`findJournalEntry`) and sends nothing when NetSuite can't say. Then
+it makes the journal entry (`createJournalEntry`, which refuses one whose
+debits and credits don't match to the cent) and keeps NetSuite's id on the
+press. Pressing again says what the first press made. A refusal lets go of
+the charges and shows NetSuite's reason in red. When NetSuite may have made
+it anyway (no answer, a server error, or no id in its answer), the charges
+stay held; pressing again after five minutes asks NetSuite, and the send
+finishes or lets go. A held charge can't be coded or taken back off.
+
+Books keeps its own copy of each journal entry, worked out by these rules
+rather than read back from NetSuite (`gl_own_journal_entries` and their
+lines, saved only by `gl_own_journal_entry_save`,
+`src/lib/books/own-journal-entries.ts`): each line's account, debit or
+credit, memo and the charge it's for. Its debits must match its credits and
+its total. Saving it never stops a send; one that can't be saved is said on
+the screen in red.
+
+Made-up example: in January a card has a $125.50 hardware purchase on the
+3rd, then $20.00 back from the same store and a $42.10 marketplace order on
+the 7th, coded to shop supplies, shop supplies and freight in. They make one
+journal entry of six lines dated January 7: shop supplies debited $125.50 and credited $20.00,
+freight in debited $42.10, and the card's account credited $125.50 and
+$42.10 and debited $20.00, $147.60 onto the card in all.
+
+### What isn't done yet
+
+- Books' own copies aren't checked against NetSuite's journal entries,
+  listed or posted yet. Until they are, the journal entry posts from the
+  copy of NetSuite's ledger as the bookkeeper's do.
+- Before switching on, check against a real Chase download and NetSuite:
+  that the download's headings and signs are as read here (and its Card
+  column, when the account has more than one card); that NetSuite's query
+  finds a journal entry by its External ID and refuses a second under the
+  same one; whether journal entry approval holds FleetSuite's for approval;
+  whether a line needs a location, department or class; and what NetSuite
+  says to a closed month. Then send the first month and compare it with
+  Chase's statement.
+- Payments to the card aren't matched to the bank's; they stay in NetSuite
+  with banking.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 and 467, `src/lib/books/switches.ts`),
+row each in `books_switches` (migrations 466 to 468, `src/lib/books/switches.ts`),
 and stays off until a super admin turns it on in Books → Switches
 (`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
 on on January 1, 2027, asking the owner once in late December.
@@ -3559,6 +3670,7 @@ in the audit log (`switch_on`, `switch_off`).
 | --- | --- | --- |
 | `credit_memos` | Anyone with Invoicing makes a credit memo against an invoice in FleetSuite, and FleetSuite makes it in NetSuite ("Credit memos made in FleetSuite") | Invoicing → Invoiced → Credit on an invoice |
 | `vendor_credits` | Admins with Parts Ordering enter a vendor's credit in FleetSuite and apply it to that vendor's open bills, and FleetSuite makes it in NetSuite ("Vendor credits made in FleetSuite") | More → Purchasing → Vendor Credits |
+| `card_charges` | Anyone with Payments adds the Chase card's activity and codes each charge to its account, and FleetSuite sends each month's charges to NetSuite as one journal entry ("Card charges coded in FleetSuite") | More → Money & Books → Card Charges |
 
 ## Posting
 
