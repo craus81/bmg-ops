@@ -21,6 +21,9 @@ const h = vi.hoisted(() => {
     getVendorOpenBills: vi.fn(),
     findVendorCredit: vi.fn(),
     createVendorCredit: vi.fn(),
+    getVendorBillRecord: vi.fn(),
+    getVendorBillAmounts: vi.fn(),
+    getBillPostings: vi.fn(),
   };
 
   // typed_vendor_credits_once: one press holds a vendor's credit number while it's claimed or made.
@@ -160,6 +163,19 @@ const ONE = {
   expectedTotalCents: 14550,
 };
 const rowsOf = () => state.tables.typed_vendor_credits ?? [];
+/** Bill B-100 from Acme Racks, as NetSuite has it: an expense line and a shelf billed off a purchase order. */
+const BILL_RECORD = {
+  id: '3001', tranId: 'B-100', tranDate: '2026-09-01', entity: { id: '4001', refName: 'Acme Racks' }, subsidiary: { id: '2' }, location: { id: '1' },
+  userTotal: 345.05, status: { refName: 'Open' },
+  expense: { items: [{ line: 1, account: { id: '610', refName: '5100 Shop supplies' }, amount: 95.05, memo: 'Gloves' }] },
+  item: { items: [{ line: 1, item: { id: '55', refName: 'SHELF-1' }, itemType: 'InvtPart', quantity: 2, rate: 125, amount: 250, orderDoc: { id: '2001' }, orderLine: 1 }] },
+};
+/** What it posted: payables, Shop supplies, and the account received stock is held against. */
+const BILL_POSTINGS = [
+  { lineId: '0', accountId: '200', debitCents: 0, creditCents: 34505, payables: true, memo: null },
+  { lineId: '1', accountId: '610', debitCents: 9505, creditCents: 0, payables: false, memo: 'Gloves' },
+  { lineId: '2', accountId: '140', debitCents: 25000, creditCents: 0, payables: false, memo: null },
+];
 
 const switchOn = (on: boolean) => { state.tables.books_switches = [{ piece: 'vendor_credits', is_on: on }, { piece: 'credit_memos', is_on: !on }]; };
 
@@ -174,6 +190,9 @@ beforeEach(() => {
   netsuite.getVendorOpenBills.mockResolvedValue({ success: true, bills: BILLS, credits: [{ id: '6001', number: 'VC-1', date: '2026-09-04', dueDate: null, openCents: 1234 }] });
   netsuite.findVendorCredit.mockResolvedValue(null);
   netsuite.createVendorCredit.mockResolvedValue({ success: true, vendorCreditId: '6002' });
+  netsuite.getVendorBillRecord.mockResolvedValue({ success: true, record: BILL_RECORD });
+  netsuite.getVendorBillAmounts.mockResolvedValue({ success: true, totalCents: 34505, owedCents: 34505, status: 'Bill : Open', voided: false });
+  netsuite.getBillPostings.mockResolvedValue({ success: true, rows: BILL_POSTINGS });
 });
 
 describe('while vendor credits are switched off', () => {
@@ -190,6 +209,8 @@ describe('while vendor credits are switched off', () => {
     expect(refused.status).toBe(403);
     expect(await refused.json()).toEqual({ error: 'Vendor credits are switched off until January 1, 2027.', switchedOff: true });
     expect((await get('vendors=acme')).status).toBe(403);
+    expect((await get('bill=3001')).status).toBe(403);
+    expect(netsuite.getVendorBillRecord).not.toHaveBeenCalled();
 
     state.roles = ['super_admin'];
     const res = await get('');
@@ -270,6 +291,80 @@ describe('once vendor credits are switched on', () => {
     const missing = await get('vendor=4999&company=BMG');
     expect(missing.status).toBe(404);
     expect(await missing.json()).toEqual({ error: "That vendor isn't in FleetSuite's copy of NetSuite's vendors." });
+  });
+
+  it('fills in a vendor credit for all of a bill, from what it posted, applied to what is open on it', async () => {
+    const res = await get('bill=3001');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      prefill: {
+        billId: '3001', billNumber: 'B-100', vendor: { id: '4001', name: 'Acme Racks' }, company: 'BMG', locationId: '1',
+        number: 'VOID-B-100', reason: 'Undoes bill B-100',
+        lines: [{ accountId: '610', amount: 95.05, memo: 'Gloves' }, { accountId: '140', amount: 250, memo: null }],
+        applyCents: 34505, why: null,
+      },
+    });
+    for (const fn of [netsuite.getVendorBillRecord, netsuite.getVendorBillAmounts, netsuite.getBillPostings]) expect(fn).toHaveBeenCalledWith('3001');
+
+    // Part paid: what's still open on it is what the credit takes off it.
+    netsuite.getVendorBillAmounts.mockResolvedValueOnce({ success: true, totalCents: 34505, owedCents: 10000, status: 'Bill : Partially Paid', voided: false });
+    expect((await (await get('bill=3001')).json()).prefill).toMatchObject({ applyCents: 10000 });
+    // When NetSuite can't say what's open, nothing is applied, and the bill is picked by hand.
+    netsuite.getVendorBillAmounts.mockResolvedValueOnce({ success: false, error: 'busy' });
+    expect((await (await get('bill=3001')).json()).prefill).toMatchObject({ applyCents: 0, why: null });
+  });
+
+  it("fills in what it can of a bill without a number, a vendor or one of the company's locations", async () => {
+    netsuite.getVendorBillRecord.mockResolvedValueOnce({ success: true, record: { ...BILL_RECORD, tranId: '', entity: null, location: { id: '7' } } });
+    expect((await (await get('bill=3001')).json()).prefill).toMatchObject({
+      billNumber: null, vendor: null, locationId: null, number: 'VOID-3001', reason: 'Undoes NetSuite bill 3001',
+    });
+    netsuite.getVendorBillRecord.mockResolvedValueOnce({ success: true, record: { ...BILL_RECORD, location: { id: '5' } } });
+    expect((await (await get('bill=3001')).json()).prefill).toMatchObject({ locationId: '5' });
+    netsuite.getVendorBillRecord.mockResolvedValueOnce({ success: true, record: { ...BILL_RECORD, location: null } });
+    expect((await (await get('bill=3001')).json()).prefill).toMatchObject({ locationId: null });
+
+    // What it posted that can't be read, or doesn't add up, is entered by hand.
+    netsuite.getBillPostings.mockResolvedValueOnce({ success: false, error: 'NetSuite SuiteQL error (503): busy' });
+    expect((await (await get('bill=3001')).json()).prefill).toMatchObject({
+      lines: [], why: "Couldn't read what bill B-100 posted from NetSuite (NetSuite SuiteQL error (503): busy), so enter its lines by hand.",
+    });
+    netsuite.getBillPostings.mockResolvedValueOnce({ success: true, rows: BILL_POSTINGS.slice(0, 2) });
+    expect((await (await get('bill=3001')).json()).prefill).toMatchObject({
+      lines: [], why: 'What bill B-100 posted comes to $95.05, not its total of $345.05, so enter this one by hand.',
+    });
+  });
+
+  it("won't fill in a vendor credit for a bill NetSuite hasn't got, has voided, or keeps for another company", async () => {
+    const bad = await get('bill=30x1');
+    expect(bad.status).toBe(400);
+    expect(await bad.json()).toEqual({ error: 'Bad bill id' });
+    netsuite.getVendorBillRecord.mockResolvedValueOnce({ success: false, error: 'NetSuite 404', notFound: true });
+    const missing = await get('bill=3009');
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: 'NetSuite has no bill with id 3009.' });
+    netsuite.getVendorBillRecord.mockResolvedValueOnce({ success: false, error: 'NetSuite request timed out' });
+    const slow = await get('bill=3001');
+    expect(slow.status).toBe(502);
+    expect(await slow.json()).toEqual({ error: 'NetSuite request timed out' });
+
+    netsuite.getVendorBillAmounts.mockResolvedValueOnce({ success: true, totalCents: 34505, owedCents: 0, status: 'Bill : Voided', voided: true });
+    const voided = await get('bill=3001');
+    expect(voided.status).toBe(409);
+    expect(await voided.json()).toEqual({ error: "Bill B-100 is voided in NetSuite, so there's nothing to credit." });
+
+    netsuite.getVendorBillRecord.mockResolvedValueOnce({ success: true, record: { ...BILL_RECORD, subsidiary: { id: '9' } } });
+    const elsewhere = await get('bill=3001');
+    expect(elsewhere.status).toBe(409);
+    expect(await elsewhere.json()).toEqual({ error: "Bill B-100 is for a company FleetSuite doesn't keep books for." });
+    // A bill naming no company isn't one FleetSuite has without one either.
+    h.companies.push({ id: 'g3', code: 'NEW', name: 'New Co', subsidiaryId: null as unknown as string, locations: [] });
+    try {
+      netsuite.getVendorBillRecord.mockResolvedValueOnce({ success: true, record: { ...BILL_RECORD, subsidiary: null } });
+      expect((await get('bill=3001')).status).toBe(409);
+    } finally {
+      h.companies.pop();
+    }
   });
 
   it('makes the vendor credit in NetSuite once, keeps Books its copy, and says what an earlier press did', async () => {

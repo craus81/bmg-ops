@@ -3,11 +3,14 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import {
   billPayload,
+  fixedOwnBillPayload,
   poBillLines,
   readPoCopyLines,
+  saveFixedOwnBill,
   saveOwnBill,
   toCents,
   workOutOwnBill,
+  type FixedBillCopy,
   type MadeBill,
   type PoCopyLine,
 } from './own-bills';
@@ -235,5 +238,92 @@ describe('saving the copy', () => {
     const thrown = fakeService();
     thrown.rpc.mockRejectedValueOnce(new Error('fetch failed'));
     expect(await saveOwnBill(thrown.service, made(), AT)).toEqual({ saved: false, reason: 'fetch failed' });
+  });
+});
+
+describe("a fixed bill's next version", () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+  const FIX = 'f0000000-0000-4000-8000-000000000040';
+  const BY = 'a0000000-0000-4000-8000-000000000001';
+  // Two racks where three were billed, still billing PO line 2, a freight line added, and the supplies line as it was.
+  const FIXED: FixedBillCopy = {
+    number: 'INV-5521A', date: '2026-10-22',
+    lines: [
+      { accountId: '650', itemId: null, itemNumber: null, description: 'Gloves', quantity: null, rate: null, cents: 2005, poLineId: null },
+      { accountId: null, itemId: '9001', itemNumber: 'RACK-48', description: 'Ladder rack', quantity: 2, rate: 178.3333, cents: 35667, poLineId: '2' },
+      { accountId: '655', itemId: null, itemNumber: null, description: null, quantity: null, rate: null, cents: 4000, poLineId: null },
+    ],
+  };
+
+  it('is the bill as fixed: its number, date and every line, adding up to its total', () => {
+    expect(fixedOwnBillPayload('8802', 1, FIXED, { fixId: FIX, by: BY })).toEqual({
+      netsuite_id: '8802', version: 1, fix_id: FIX, fixed_by: BY, number: 'INV-5521A', bill_date: '2026-10-22',
+      // 20.05 + 356.67 + 40.00.
+      total: '416.72',
+      lines: [
+        { line_no: 1, account_netsuite_id: '650', item_netsuite_id: null, item_number: null, description: 'Gloves', quantity: null, rate: null, amount: '20.05', po_line_id: null },
+        { line_no: 2, account_netsuite_id: null, item_netsuite_id: '9001', item_number: 'RACK-48', description: 'Ladder rack', quantity: 2, rate: 178.3333, amount: '356.67', po_line_id: '2' },
+        { line_no: 3, account_netsuite_id: '655', item_netsuite_id: null, item_number: null, description: null, quantity: null, rate: null, amount: '40.00', po_line_id: null },
+      ],
+    });
+    expect(fixedOwnBillPayload('8802', 3, { ...FIXED, lines: [{ ...FIXED.lines[0], cents: -500 }] }, { fixId: FIX, by: null }))
+      .toMatchObject({ version: 3, fixed_by: null, total: '-5.00', lines: [expect.objectContaining({ amount: '-5.00' })] });
+  });
+
+  /** Just enough of the service client: the read of the copy's version, and the fix. */
+  function fixService(copy: { netsuite_id: string; version: number } | null | { error: string }, answer: { data?: unknown; error?: { message: string } } = { data: { saved: true, version: 2, lines: 3 } }) {
+    const reads: Array<{ table: string; columns: string; filters: Array<[string, unknown]> }> = [];
+    const rpc = vi.fn(async (_fn: string, _args: unknown) => ({ data: answer.data ?? null, error: answer.error ?? null }));
+    const service = {
+      from(table: string) {
+        const read = { table, columns: '', filters: [] as Array<[string, unknown]> };
+        reads.push(read);
+        const q: any = {
+          select(columns: string) { read.columns = columns; return q; },
+          eq(column: string, value: unknown) { read.filters.push([column, value]); return q; },
+          maybeSingle: async () => (copy && 'error' in copy ? { data: null, error: { message: copy.error } } : { data: copy, error: null }),
+        };
+        return q;
+      },
+      rpc,
+    } as unknown as SupabaseClient;
+    return { service, rpc, reads };
+  }
+
+  it('makes the next version of the copy the fix read', async () => {
+    const { service, rpc, reads } = fixService({ netsuite_id: '8802', version: 2 }, { data: { saved: true, version: 3, lines: 3 } });
+    expect(await saveFixedOwnBill(service, { netsuiteId: '8802', fixed: FIXED, fixId: FIX, by: BY })).toEqual({ saved: true, version: 3 });
+    expect(reads).toEqual([{ table: 'gl_own_bills', columns: 'netsuite_id, version', filters: [['netsuite_id', '8802']] }]);
+    expect(rpc).toHaveBeenCalledTimes(1);
+    const [fn, args] = rpc.mock.calls[0];
+    expect(fn).toBe('gl_own_bill_fix');
+    expect((args as { p: Record<string, unknown> }).p).toMatchObject({ netsuite_id: '8802', version: 2, fix_id: FIX, fixed_by: BY, total: '416.72' });
+  });
+
+  it("says when there's no copy, or the copy changed or went while the fix was made", async () => {
+    const none = fixService(null);
+    expect(await saveFixedOwnBill(none.service, { netsuiteId: '8802', fixed: FIXED, fixId: FIX, by: BY })).toEqual({ saved: false, none: true, reason: 'no copy' });
+    expect(none.rpc).not.toHaveBeenCalled();
+    const changed = fixService({ netsuite_id: '8802', version: 1 }, { data: { saved: false, reason: 'changed', version: 2 } });
+    expect(await saveFixedOwnBill(changed.service, { netsuiteId: '8802', fixed: FIXED, fixId: FIX, by: BY }))
+      .toEqual({ saved: false, reason: 'the copy changed while the fix was being made' });
+    const gone = fixService({ netsuite_id: '8802', version: 1 }, { data: { saved: false, reason: 'none' } });
+    expect(await saveFixedOwnBill(gone.service, { netsuiteId: '8802', fixed: FIXED, fixId: FIX, by: BY }))
+      .toEqual({ saved: false, reason: 'the copy is gone' });
+  });
+
+  it('never throws: a failed read or a refused save is only logged', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failing = fixService({ error: 'statement timeout' });
+    expect(await saveFixedOwnBill(failing.service, { netsuiteId: '8802', fixed: FIXED, fixId: FIX, by: BY }))
+      .toEqual({ saved: false, reason: 'statement timeout' });
+    expect(failing.rpc).not.toHaveBeenCalled();
+    const refused = fixService({ netsuite_id: '8802', version: 1 }, { error: { message: "gl: fixed own bill 8802's lines don't add up to its total" } });
+    expect(await saveFixedOwnBill(refused.service, { netsuiteId: '8802', fixed: FIXED, fixId: FIX, by: BY }))
+      .toEqual({ saved: false, reason: "gl: fixed own bill 8802's lines don't add up to its total" });
+    expect(error).toHaveBeenCalledWith("[books] own copy of fixed NetSuite bill 8802 not saved: gl: fixed own bill 8802's lines don't add up to its total");
+    const thrown = fixService({ netsuite_id: '8802', version: 1 });
+    thrown.rpc.mockRejectedValueOnce(new Error('fetch failed'));
+    expect(await saveFixedOwnBill(thrown.service, { netsuiteId: '8802', fixed: FIXED, fixId: FIX, by: BY })).toEqual({ saved: false, reason: 'fetch failed' });
   });
 });

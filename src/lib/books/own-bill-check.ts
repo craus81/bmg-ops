@@ -61,6 +61,10 @@ export interface OwnBillData {
   made_at: string;
   /** Who made it (migration 436). */
   made_by?: string | null;
+  /** 1 as it was made; each fix FleetSuite makes to the bill makes the next (migration 472). */
+  version?: number;
+  /** When FleetSuite last fixed the bill (migration 472). */
+  fixed_at?: string | null;
   lines: OwnBillLineData[];
 }
 
@@ -268,6 +272,11 @@ export function checkOwnBill(pair: BillPairData, lists: BillLists, copies: BillC
   const own = pair.own;
   const unknowns = new Set(own.unknowns ?? []);
   const madeAt = Date.parse(own.made_at);
+  // A fixed copy's number, date and lines are the bill's as FleetSuite fixed it, not as it was made (migration 472).
+  const fixes = Math.max(0, (own.version ?? 1) - 1);
+  const fixedAt = fixes && own.fixed_at ? Date.parse(own.fixed_at) : NaN;
+  /** The copy of NetSuite's bills hasn't read the bill since FleetSuite last fixed it. */
+  const fixUnread = !Number.isNaN(fixedAt) && !(copies.bills && Date.parse(copies.bills) > fixedAt);
   const billsRanSince = !!copies.bills && Date.parse(copies.bills) > madeAt;
   const ledgerRanSince = !!copies.ledger && Date.parse(copies.ledger) > madeAt + LEDGER_RUN_MS;
   const gone = !!pair.netsuite && (pair.netsuite.gone || pair.netsuite.voided);
@@ -384,7 +393,7 @@ export function checkOwnBill(pair: BillPairData, lists: BillLists, copies: BillC
       fleetsuite: ours,
       netsuite: ns ? ns.number : null,
       same,
-      why: same === false ? `NetSuite's bill is numbered ${ns!.number} now. It was ${ours} when FleetSuite made it.` : null,
+      why: same === false ? `NetSuite's bill is numbered ${ns!.number} now. It was ${ours} when FleetSuite ${fixes ? 'fixed' : 'made'} it.` : null,
     });
   }
 
@@ -399,7 +408,7 @@ export function checkOwnBill(pair: BillPairData, lists: BillLists, copies: BillC
       netsuite: ns ? dayText(ns.date) : null,
       same,
       why: same === false
-        ? `FleetSuite ${own.made_from === 'snapped' ? 'sent it dated' : 'made it'} ${dayText(own.date)}, and NetSuite's bill is dated ${plural(Math.abs(days), 'day', 'days')} ${days > 0 ? 'later' : 'earlier'}.`
+        ? `FleetSuite ${fixes ? 'fixed it to' : own.made_from === 'snapped' ? 'sent it dated' : 'made it'} ${dayText(own.date)}, and NetSuite's bill is dated ${plural(Math.abs(days), 'day', 'days')} ${days > 0 ? 'later' : 'earlier'}.`
         : null,
     });
   }
@@ -469,6 +478,9 @@ export function checkOwnBill(pair: BillPairData, lists: BillLists, copies: BillC
   } else if (!ns) {
     status = 'waiting';
     summary = "Waiting for NetSuite's bill: the copy of NetSuite's bills runs every two hours.";
+  } else if (differing && fixUnread) {
+    status = 'waiting';
+    summary = "Waiting for the copy of NetSuite's bills to read the bill as FleetSuite fixed it: it runs every two hours.";
   } else if (differing) {
     status = 'differs';
     const first = fields.find((f) => f.same === false)!;
@@ -497,21 +509,27 @@ export function checkOwnBill(pair: BillPairData, lists: BillLists, copies: BillC
 
   const sent = own.lines?.[0];
   const workedOut: string[] = [];
+  const madeOn = Number.isNaN(madeAt) ? null : chicagoDate(new Date(madeAt));
+  const madeDay = fixes ? madeOn : own.date;
   if (own.made_from === 'parts_mail') {
-    workedOut.push(`Made by Create bill on a Parts Mail invoice on ${dayText(own.date)}, from ${own.po_number ?? 'its purchase order'}.`);
-    workedOut.push(`NetSuite bills a purchase order at its own prices, so the lines are what FleetSuite's copy of ${own.po_number ?? 'the purchase order'} still had to bill, each at the PO's price, to the cent.`);
+    workedOut.push(`Made by Create bill on a Parts Mail invoice${madeDay ? ` on ${dayText(madeDay)}` : ''}, from ${own.po_number ?? 'its purchase order'}.`);
+    if (!fixes) workedOut.push(`NetSuite bills a purchase order at its own prices, so the lines are what FleetSuite's copy of ${own.po_number ?? 'the purchase order'} still had to bill, each at the PO's price, to the cent.`);
     const invoice = cents(own.invoice_total);
     if (invoice !== null) workedOut.push(`The vendor's invoice says ${dollars(invoice)}.`);
   } else if (own.made_from === 'snapped') {
-    const made = Number.isNaN(madeAt) ? null : chicagoDate(new Date(madeAt));
-    workedOut.push(`Made with Snap a bill${made ? ` on ${dayText(made)}` : ''}: FleetSuite read a picture of the vendor's bill, and it was checked before Send to NetSuite.`);
-    workedOut.push(`${plural((own.lines ?? []).length, 'line', 'lines')}, as FleetSuite sent them: each line's amount to the account picked for it.`);
-    workedOut.push("Dated as the vendor's bill is: FleetSuite sends NetSuite the bill's own date.");
+    workedOut.push(`Made with Snap a bill${madeOn ? ` on ${dayText(madeOn)}` : ''}: FleetSuite read a picture of the vendor's bill, and it was checked before Send to NetSuite.`);
+    if (!fixes) {
+      workedOut.push(`${plural((own.lines ?? []).length, 'line', 'lines')}, as FleetSuite sent them: each line's amount to the account picked for it.`);
+      workedOut.push("Dated as the vendor's bill is: FleetSuite sends NetSuite the bill's own date.");
+    }
   } else {
-    workedOut.push(`Made by Create Bill in NetSuite on ${BILL_MADE_FROM_TEXT[own.made_from]} on ${dayText(own.date)}.`);
-    workedOut.push(`One line: ${sent ? `${dollars(cents(sent.amount) ?? 0)} to ${accountName(sent.account_id)}` : 'the amount FleetSuite sent'}, as FleetSuite sent it.`);
+    workedOut.push(`Made by Create Bill in NetSuite on ${BILL_MADE_FROM_TEXT[own.made_from]}${madeDay ? ` on ${dayText(madeDay)}` : ''}.`);
+    if (!fixes) workedOut.push(`One line: ${sent ? `${dollars(cents(sent.amount) ?? 0)} to ${accountName(sent.account_id)}` : 'the amount FleetSuite sent'}, as FleetSuite sent it.`);
   }
-  if (own.made_from !== 'snapped') {
+  if (fixes) {
+    const on = Number.isNaN(fixedAt) ? '' : ` on ${dayText(chicagoDate(new Date(fixedAt)))}`;
+    workedOut.push(`Fixed in FleetSuite${fixes > 1 ? ` ${plural(fixes, 'time', 'times')}, last` : ''}${on}: its number, date and lines are the bill's as FleetSuite fixed it, the lines it kept as NetSuite had them and the ones it changed or added as FleetSuite sent them.`);
+  } else if (own.made_from !== 'snapped') {
     workedOut.push("Dated the day FleetSuite made it, in Central time: FleetSuite sends NetSuite no date for a bill, so NetSuite dates it that day.");
   }
 

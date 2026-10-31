@@ -305,3 +305,52 @@ export function keptVendorCreditLines(w: WorkedVendorCredit) {
 
 /** The bills as typed_vendor_credits keeps them. */
 export const keptApplied = (w: WorkedVendorCredit) => w.applied.map((a) => ({ billId: a.billId, billNumber: a.billNumber, cents: a.cents }));
+
+// ── Credit all of it ───────────────────────────────────────────────────────
+
+/** One of a bill's posting lines, as NetSuite posted it (getBillPostings in src/lib/netsuite.ts). */
+export interface BillPosting {
+  accountId: string;
+  debitCents: number;
+  creditCents: number;
+  /** The bill's own line, which posts to payables. */
+  payables: boolean;
+  memo: string | null;
+}
+
+/** The lines of a vendor credit for all of a bill, or why they can't be filled in. */
+export interface CreditAllOfBill {
+  lines: Array<{ accountId: string; cents: number; memo: string | null }>;
+  why: string | null;
+}
+
+/**
+ * Credit all of it, from a bill's Fix screen (src/lib/bill-fix.ts): the lines of a vendor credit that undoes the bill,
+ * account by account the way the bill posted (its posting lines but payables), so a part billed off a purchase order
+ * comes back off the account received stock is held against, and no stock moves. Applied to the bill, it takes all of
+ * it off what's owed. `name` is how the bill is named ("bill INV-1234"). Pure.
+ */
+export function creditAllOfBill(postings: BillPosting[], totalCents: number | null, name: string): CreditAllOfBill {
+  const byAccount = new Map<string, { cents: number; memo: string | null }>();
+  for (const p of postings) {
+    if (p.payables) continue;
+    const was = byAccount.get(p.accountId) ?? { cents: 0, memo: null };
+    byAccount.set(p.accountId, { cents: was.cents + p.debitCents - p.creditCents, memo: was.memo ?? (p.memo?.trim().slice(0, 300) || null) });
+  }
+  const lines = [...byAccount].map(([accountId, v]) => ({ accountId, cents: v.cents, memo: v.memo })).filter((l) => l.cents !== 0);
+  const Name = name.charAt(0).toUpperCase() + name.slice(1);
+  const byHand = (why: string): CreditAllOfBill => ({ lines: [], why });
+  if (lines.length === 0) return byHand(`NetSuite hasn't posted ${name} (it may be waiting for approval), so there's nothing to take back yet.`);
+  if (lines.some((l) => l.cents < 0)) {
+    return byHand(`${Name} takes money off an account (a discount, say), which a vendor credit's lines can't do, so enter this one by hand.`);
+  }
+  const sum = lines.reduce((s, l) => s + l.cents, 0);
+  if (totalCents !== null && sum !== totalCents) {
+    return byHand(`What ${name} posted comes to ${formatCents(sum)}, not its total of ${formatCents(totalCents)}, so enter this one by hand.`);
+  }
+  if (lines.length > MAX_VENDOR_CREDIT_LINES) return byHand(`${Name} posted to more than ${MAX_VENDOR_CREDIT_LINES} accounts, so enter this one by hand.`);
+  return { lines, why: null };
+}
+
+/** The number a vendor credit that undoes a bill starts with: VOID- and the bill's number, as long as a credit's can be. */
+export const creditAllNumber = (billNumber: string, billId: string) => `VOID-${billNumber.trim() || billId}`.slice(0, CREDIT_NUMBER_MAX);

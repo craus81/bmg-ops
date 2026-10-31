@@ -3006,6 +3006,220 @@ export async function findVendorBill(vendorId: string | number, referenceNo: str
 }
 
 /**
+ * A vendor bill read live, both its lists of lines included (expenses and
+ * items), for the Fix screen (src/lib/bill-fix.ts parses it), as
+ * getInvoiceRecord reads an invoice: live because a fix must be worked out
+ * against what NetSuite has now.
+ */
+export async function getVendorBillRecord(
+  billId: string,
+): Promise<{ success: true; record: any } | { success: false; error: string; notFound?: boolean }> {
+  if (!/^\d+$/.test(billId)) return { success: false, error: 'Bad bill id' };
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/vendorBill/${billId}?expandSubResources=true`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'GET' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite ${response.status}: ${detail}`, ...(response.status === 404 ? { notFound: true } : {}) };
+    }
+    const text = await response.text();
+    return { success: true, record: text ? JSON.parse(text) : {} };
+  } catch (e: any) {
+    const msg = e?.name === 'AbortError' ? 'NetSuite request timed out' : e?.message || 'Unknown error';
+    return { success: false, error: msg };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * What NetSuite says of a bill's money now: its total, what's still owed on
+ * it (the total less what's paid or credited) and its status, for the Fix
+ * screen, since the REST record doesn't say what's owed. Read as the vendor
+ * credit screen reads open bills (getVendorOpenBills); a voided bill's status
+ * says so, as the copy of NetSuite's bills reads it.
+ */
+export async function getVendorBillAmounts(
+  billId: string,
+): Promise<{ success: true; totalCents: number; owedCents: number; status: string | null; voided: boolean } | { success: false; error: string; notFound?: boolean }> {
+  // Interpolated into SuiteQL, so only ever a bare number.
+  if (!/^\d+$/.test(billId)) return { success: false, error: 'Bad bill id' };
+  try {
+    const result = await suiteqlQuery(`
+      SELECT t.id, t.foreigntotal AS total, t.foreignamountunpaid AS unpaid, BUILTIN.DF(t.status) AS status_label
+      FROM transaction t
+      WHERE t.id = ${billId} AND t.type = 'VendBill'
+    `);
+    const row = result?.items?.[0];
+    if (!row) return { success: false, error: `NetSuite has no bill with id ${billId}.`, notFound: true };
+    const total = parseFloat(String(row.total ?? ''));
+    const unpaid = parseFloat(String(row.unpaid ?? ''));
+    if (!Number.isFinite(total) || !Number.isFinite(unpaid)) {
+      return { success: false, error: "NetSuite sent a total or an amount owed FleetSuite can't read" };
+    }
+    const status = row.status_label ? String(row.status_label) : null;
+    return {
+      success: true,
+      totalCents: Math.round(Math.abs(total) * 100),
+      owedCents: Math.round(Math.abs(unpaid) * 100),
+      status,
+      voided: /\bvoid/i.test(status ?? ''),
+    };
+  } catch (e: any) {
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
+/**
+ * Fix a bill from FleetSuite's Fix screen (src/lib/bill-fix.ts,
+ * planBillFix): its header and its lines, each line by its `line` key on
+ * its list. `replace` names the lists a line is taken off: each becomes
+ * exactly the lines sent, every line kept going with its key, as
+ * patchInvoice does. NetSuite's refusal comes back as its own words; a
+ * request that timed out, or a fault on NetSuite's side (5xx), is `unsure`,
+ * since NetSuite may have made the change anyway.
+ */
+export async function patchVendorBill(
+  billId: string,
+  body: Record<string, unknown>,
+  opts: { replace: Array<'expense' | 'item'> },
+): Promise<{ success: boolean; error?: string; unsure?: boolean }> {
+  if (!/^\d+$/.test(billId)) return { success: false, error: 'Bad bill id' };
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/vendorBill/${billId}${opts.replace.length ? `?replace=${opts.replace.join(',')}` : ''}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25000);
+  try {
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite fix bill error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}`, ...(response.status >= 500 ? { unsure: true } : {}) };
+    }
+    return { success: true };
+  } catch (e: any) {
+    const error = e?.name === 'AbortError' ? 'NetSuite took too long to answer' : `Couldn't reach NetSuite: ${e?.message || 'unknown error'}`;
+    return { success: false, error, unsure: true };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * NetSuite's id for each line of an order (a purchase order or a sales
+ * order), by the line's sequence number: what a bill's or invoice's
+ * `orderLine` names, as the transforms take it, while FleetSuite's copies of
+ * orders and Books' own copies name a line by its id
+ * (netsuite_vendor_po_lines.line_id). Read as Receiving reads a PO's lines.
+ * Throws when NetSuite can't be asked.
+ */
+export async function getOrderLineIds(orderId: string): Promise<Map<number, string>> {
+  // Interpolated into SuiteQL, so only ever a bare number.
+  if (!/^\d+$/.test(orderId)) throw new Error(`NetSuite order id "${orderId}" isn't a number`);
+  const result = await suiteqlQuery(`
+    SELECT tl.id, tl.linesequencenumber
+    FROM transactionline tl
+    WHERE tl.transaction = ${orderId}
+      AND tl.mainline = 'F'
+    ORDER BY tl.linesequencenumber
+  `);
+  const ids = new Map<number, string>();
+  for (const row of (result?.items || []) as any[]) {
+    const seq = parseInt(String(row.linesequencenumber ?? ''), 10);
+    const id = String(row.id ?? '').trim();
+    if (Number.isInteger(seq) && /^\d+$/.test(id)) ids.set(seq, id);
+  }
+  return ids;
+}
+
+/** One of a bill's posting lines (getBillPostings): the account, and the line's debit and credit, in cents. */
+export interface BillPostingRow {
+  lineId: string;
+  accountId: string;
+  debitCents: number;
+  creditCents: number;
+  /** The bill's own line, which posts to payables. */
+  payables: boolean;
+  memo: string | null;
+}
+
+/**
+ * Every line a bill posted, from NetSuite's own posting lines
+ * (transactionaccountingline): the account each went to and its debit or
+ * credit. What a vendor credit for all of the bill takes back, the other way
+ * round (src/lib/vendor-credit.ts creditAllOfBill), so a part billed off a
+ * purchase order comes back off the account received stock is held against,
+ * and no stock moves. A bill waiting for approval hasn't posted, so it has
+ * none.
+ */
+export async function getBillPostings(billId: string): Promise<{ success: true; rows: BillPostingRow[] } | { success: false; error: string }> {
+  // Interpolated into SuiteQL, so only ever a bare number.
+  if (!/^\d+$/.test(billId)) return { success: false, error: 'Bad bill id' };
+  try {
+    const rows = await suiteqlQueryAll(`
+      SELECT tal.transactionline AS line_id, tal.account AS account_id, tal.debit, tal.credit, tl.mainline, tl.memo
+      FROM transactionaccountingline tal
+      JOIN transactionline tl ON tl.transaction = tal.transaction AND tl.id = tal.transactionline
+      WHERE tal.transaction = ${billId} AND tal.posting = 'T' AND tal.account IS NOT NULL
+      ORDER BY tal.transactionline, tal.account
+    `, 1000);
+    const cents = (v: unknown) => {
+      const n = parseFloat(String(v ?? ''));
+      return Number.isFinite(n) ? Math.round(n * 100) : 0;
+    };
+    return {
+      success: true,
+      rows: (rows as any[])
+        .filter((r) => /^\d+$/.test(String(r.account_id ?? '').trim()))
+        .map((r) => ({
+          lineId: String(r.line_id ?? ''),
+          accountId: String(r.account_id).trim(),
+          debitCents: cents(r.debit),
+          creditCents: cents(r.credit),
+          payables: String(r.mainline ?? '').toUpperCase() === 'T' || r.mainline === true,
+          memo: r.memo ? String(r.memo).trim() || null : null,
+        })),
+    };
+  } catch (e: any) {
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
+/**
  * Create a Vendor Bill in NetSuite from a Purchase Order.
  * Uses: POST /services/rest/record/v1/purchaseOrder/{poId}/!transform/vendorBill
  * (same transform pattern as createInvoiceFromSO — the old `?init=…&id=…`

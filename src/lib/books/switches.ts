@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 471, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 472, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -13,7 +13,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * that can't be read counts as off.
  */
 
-export type SwitchPiece = 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes';
+export type SwitchPiece =
+  | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes';
 
 export interface SwitchInfo {
   name: string;
@@ -53,6 +54,11 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     name: 'Fixing invoices',
     what: "Anyone with Invoicing fixes an invoice after it's made, its PO number, memo and VIN, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy for the books.",
     where: 'Invoicing → Invoiced → Fix on an invoice',
+  },
+  bill_fixes: {
+    name: 'Fixing bills',
+    what: "Admins with Parts Ordering fix a bill after it's made, its number, memo and due date, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy for the books.",
+    where: 'More → Purchasing → Fix a Bill, or Fix on Books → Own bills',
   },
 };
 

@@ -173,13 +173,12 @@ export default function BooksOwnBillPage() {
               {b.poNumber ? `, from ${b.poNumber}` : ''}.
             </div>
             <OwnBooksLine posting={posting} status={b.status} theirs="bill" company={b.company} kind="bill" netsuiteId={b.netsuiteId} date={b.date} />
-            {(b.netsuiteUrl || b.poUrl) && (
-              <div style={{ fontSize: '12px', marginTop: '2px' }}>
-                {b.netsuiteUrl && <a href={b.netsuiteUrl} target="_blank" rel="noreferrer" style={link}>Bill in NetSuite ↗</a>}
-                {b.netsuiteUrl && b.poUrl && ' · '}
-                {b.poUrl && <a href={b.poUrl} target="_blank" rel="noreferrer" style={link}>{b.poNumber ?? 'Purchase order'} in NetSuite ↗</a>}
-              </div>
-            )}
+            <div style={{ fontSize: '12px', marginTop: '2px' }}>
+              {b.netsuiteUrl && <><a href={b.netsuiteUrl} target="_blank" rel="noreferrer" style={link}>Bill in NetSuite ↗</a>{' · '}</>}
+              {b.poUrl && <><a href={b.poUrl} target="_blank" rel="noreferrer" style={link}>{b.poNumber ?? 'Purchase order'} in NetSuite ↗</a>{' · '}</>}
+              {/* Fixing bills is super admins' only until it's switched on, and this page is theirs. */}
+              <Link href={deepLinks.billFix(b.netsuiteId)} style={link}>Fix this bill</Link>
+            </div>
           </div>
 
           <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px' }}>
