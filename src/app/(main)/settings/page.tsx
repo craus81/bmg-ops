@@ -1467,6 +1467,7 @@ export default function SettingsPage() {
           accountEmail={prefs.notify_email}
           emailMessages={prefs.email_messages}
           emailMentions={prefs.email_mentions ?? true}
+          copyNewAlerts={prefs.copy_new_alerts}
           onChange={next => setPrefs({ ...prefs, type_channels: next })}
         />
       </div>

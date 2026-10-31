@@ -681,7 +681,7 @@ export function itemUrl(internalId: string | number): string {
 
 /** NetSuite UI link for a transaction record (customer invoice, vendor bill or bill credit, purchase order, item receipt, check, card charge or refund). */
 export function transactionUrl(
-  page: 'custinvc' | 'vendbill' | 'vendcred' | 'purchord' | 'itemrcpt' | 'check' | 'cardchrg' | 'cardrfnd',
+  page: 'custinvc' | 'vendbill' | 'vendcred' | 'purchord' | 'itemrcpt' | 'invadjst' | 'check' | 'cardchrg' | 'cardrfnd',
   internalId: string | number,
 ): string {
   const accountForUrl = getConfig().accountId.replace(/-/g, '_').toUpperCase();

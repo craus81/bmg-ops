@@ -276,6 +276,7 @@ export default function AdminUserSettings({ userId, userName }: { userId: string
             accountEmail={prefs.notify_email}
             emailMessages={prefs.email_messages}
             emailMentions={prefs.email_mentions ?? true}
+            copyNewAlerts={prefs.copy_new_alerts}
             onChange={next => setPrefs(prev => ({ ...prev, type_channels: next }))}
           />
 

@@ -67,8 +67,10 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migrations 314, 407, 416 and 435 point at in the app's own schema.
+    -- What migrations 314, 407, 416, 435 and 454 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
+    CREATE TABLE public.netsuite_parts (id UUID PRIMARY KEY);
+    CREATE FUNCTION public.is_admin() RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT false $$;
     CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT, netsuite_id TEXT, tax_exempt BOOLEAN);
     CREATE TABLE public.netsuite_sales_orders (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(), netsuite_id TEXT NOT NULL UNIQUE, tranid TEXT,
@@ -94,7 +96,8 @@ async function freshDb(): Promise<PGlite> {
     // FleetSuite's own invoices, which the job reads with BMG's invoices.
     '407-books-own-invoices.sql', '409-books-own-invoice-posting.sql',
     // Books' own fulfillments, receipts and bills, which the job reads with NetSuite's.
-    '416-books-own-fulfillments.sql', '435-books-own-bills.sql', '436-books-snap-a-bill.sql', '456-books-own-postings.sql',
+    '416-books-own-fulfillments.sql', '435-books-own-bills.sql', '436-books-snap-a-bill.sql', '454-inventory-adjustments.sql',
+    '456-books-own-postings.sql', '457-books-own-adjustments.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);

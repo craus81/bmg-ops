@@ -197,6 +197,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'books_own_fulfillment_differs', label: "An own fulfillment differs from NetSuite's", description: "FleetSuite's daily check found one of FleetSuite's own fulfillments that takes from stock differently from NetSuite's fulfillment (its items, location, date or cost), or one where more differs than before. Opens that fulfillment's check on Own fulfillments, or the ones that differ when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
   { type: 'books_own_bill_differs', label: "An own bill differs from NetSuite's", description: "FleetSuite's daily check found one of Books' own bills (the copy it keeps of each bill FleetSuite makes from Parts Mail, a CNI vendor invoice or an installer payout) that differs from NetSuite's bill (its vendor, number, date, company, lines or total), or one where more differs than before. Opens that bill's check on Own bills, or the ones that differ when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
   { type: 'books_own_receipt_differs', label: "An own receipt differs from NetSuite's", description: "FleetSuite's daily check found one of Books' own receipts (the copy it keeps of each Receive on the Receiving page) that differs from NetSuite's item receipt (its date, company, items or what it added to stock), or one where more differs than before. Opens that receipt's check on Own receipts, or the ones that differ when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
+  // The first Books alert since "Copy me on new alerts" (Craig, 2026-10-28):
+  // its email goes only to a super admin with that ticked, as the books'
+  // others are never emailed.
+  { type: 'books_own_adjustment_differs', label: "An Inventory Adjust differs from NetSuite's", description: "FleetSuite's daily check found a change made with Inventory Adjust that differs from NetSuite's inventory adjustment (its date, location, change, value or account), or one where more differs than before. Opens that adjustment's check on Own adjustments, or the ones that differ when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, the only people who can open the books.' },
   { type: 'books_mistake_found', label: 'Books found likely mistakes in NetSuite', description: "FleetSuite's nightly mistake checks found a bill, check or card charge copied from NetSuite that looks like a mistake (entered twice, far off the vendor's usual, a monthly charge missing, or coded to an account the vendor doesn't use) and nobody has cleared it by the daily check's second look. Opens it on Mistake checks, or the list when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
 
   // ── Contract installers (CNI) ─────────────────────────────────────────
@@ -302,9 +310,10 @@ export interface ChannelPrefsRow {
   notify_in_app?: boolean | null;
   notify_email?: boolean | null;
   type_channels?: unknown;
-  /** Read only by rows with fixedChannels (direct messages, mentions). */
+  /** Read only by rows with fixedChannels (direct messages, mentions, and Books' Inventory Adjusts). */
   email_messages?: boolean | null;
   email_mentions?: boolean | null;
+  copy_new_alerts?: boolean | null;
 }
 
 /**

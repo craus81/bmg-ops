@@ -236,7 +236,7 @@ export async function GET(req: NextRequest) {
         const through = { stock: stockCopy.data?.last_synced_at ?? null, ledger: gl.data?.last_synced_at ?? null };
         const [books, own] = await Promise.all([
           service.rpc('gl_stock_postings', { p_company: company, p_source_ids: documents.map((d) => d.netsuite_id), p_lines: true }),
-          // Books' own copies of the month's fulfillments and receipts, as the posting run reads them, so what this shows is what it posts.
+          // Books' own copies of the month's fulfillments, receipts and adjustments, as the posting run reads them, so what this shows is what it posts.
           readOwnStockSince(service)
             .then((since) => readOwnStockCopies(service, company, documents, since, through))
             .then((read) => ({ read, error: null }), (err: Error) => ({ read: null, error: err })),

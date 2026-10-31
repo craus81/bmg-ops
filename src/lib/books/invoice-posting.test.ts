@@ -1883,6 +1883,8 @@ describe('stock documents', () => {
     const fromNetsuite = held({ current: { ...held().current!, posting_rule: 'stock@1' } });
     const received = () => one(fulfillment({ type: 'ItemRcpt', number: 'IR1301' }));
     const adjusted = () => one(fulfillment({ type: 'InvAdjst', number: 'ADJ77' }));
+    const moved = () => one(fulfillment({ type: 'InvTrnfr', number: 'TO88' }));
+    const ADJUST_ID = '4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c';
 
     it("replaces NetSuite's entry with the copy's when the copy posts, keeps that, and goes back when it no longer does", () => {
       expect(decideStockDocument(one(), fromNetsuite, posts)).toEqual({ kind: 'replace' });
@@ -1904,10 +1906,20 @@ describe('stock documents', () => {
       expect(decideStockDocument(one(), held({ current: { ...held().current!, posting_rule: 'own_fulfillment@1' } }), null)).toEqual({ kind: 'replace' });
     });
 
-    it('takes no copy for any other kind of stock document', () => {
-      expect(decideStockDocument(adjusted(), held(), posts)).toEqual({ kind: 'keep' });
-      expect(decideStockDocument(adjusted(), fromNetsuite, posts)).toEqual({ kind: 'keep' });
+    it("keeps an adjustment's under the adjustment's own rule, as a receipt's", () => {
+      expect(decideStockDocument(adjusted(), fromNetsuite, posts)).toEqual({ kind: 'replace' });
+      expect(decideStockDocument(adjusted(), fromOwn(ownEntry, 'own_adjustment@1'), posts)).toEqual({ kind: 'keep' });
+      expect(decideStockDocument(adjusted(), fromOwn(ownEntry, 'own_adjustment@1'), doesnt)).toEqual({ kind: 'replace' });
+      expect(decideStockDocument(adjusted(), fromOwn(ownEntry, 'own_receipt@1'), posts)).toEqual({ kind: 'replace' });
       expect(stockJournalEntry(adjusted(), 'BMG', 1, ids, ownEntry).entry).toMatchObject({
+        sourceType: 'inventory_adjustment', postingRule: 'own_adjustment@1', idempotencyKey: 'inventory_adjustment:8101:1', memo: 'ADJ77',
+      });
+    });
+
+    it('takes no copy for any other kind of stock document', () => {
+      expect(decideStockDocument(moved(), held(), posts)).toEqual({ kind: 'keep' });
+      expect(decideStockDocument(moved(), fromNetsuite, posts)).toEqual({ kind: 'keep' });
+      expect(stockJournalEntry(moved(), 'BMG', 1, ids, ownEntry).entry).toMatchObject({
         postingRule: 'stock@1', entryDate: '2026-09-15', lines: [{ sourceLineRef: '1', itemNumber: null }, { sourceLineRef: '2', itemNumber: null }],
       });
     });
@@ -1938,6 +1950,10 @@ describe('stock documents', () => {
       expect(stockDocumentBooks(one(), fromNetsuite)).toEqual({ entryNo: 61, next: null, earlier: [], from: 'netsuite' });
       expect(stockDocumentBooks(one(), held())).toEqual({ entryNo: 61, next: null, earlier: [] });
       expect(stockDocumentBooks(adjusted(), fromNetsuite)).toEqual({ entryNo: 61, next: null, earlier: [], from: 'netsuite' });
+      // An adjustment's carries FleetSuite's id for its Inventory Adjust.
+      expect(stockDocumentBooks(adjusted(), fromOwn(ownEntry, 'own_adjustment@1'), { ...posts, adjustmentId: ADJUST_ID }))
+        .toEqual({ entryNo: 63, next: null, earlier, from: 'fleetsuite', own: { posts: true, adjustmentId: ADJUST_ID } });
+      expect(stockDocumentBooks(moved(), fromNetsuite)).toEqual({ entryNo: 61, next: null, earlier: [], from: 'netsuite' });
     });
 
     it("posts the copy's lines under its own rule, with NetSuite's key and memo, the copy's date and each line's item", () => {
@@ -1956,7 +1972,7 @@ describe('stock documents', () => {
       expect(stockJournalEntry(one(), 'BMG', 2, new Map([['130', 'a-130']]), ownEntry)).toEqual({ entry: null, missing: ['500'] });
     });
 
-    it("says in the reversal's memo when a fulfillment or receipt changes copies, and otherwise that NetSuite changed it", () => {
+    it("says in the reversal's memo when a fulfillment, receipt or adjustment changes copies, and otherwise that NetSuite changed it", () => {
       expect(replaceStockMemo(one(), fromNetsuite.current, posts)).toBe("IF1201 now posts from FleetSuite's own copy");
       expect(replaceStockMemo(one(), fromOwn().current, doesnt)).toBe("IF1201 now posts from NetSuite's fulfillment");
       expect(replaceStockMemo(received(), fromOwn(ownEntry, 'own_receipt@1').current, null)).toBe("IR1301 now posts from NetSuite's receipt");
@@ -1965,7 +1981,9 @@ describe('stock documents', () => {
       expect(replaceStockMemo(one(), fromNetsuite.current, doesnt)).toBe('IF1201 changed in NetSuite');
       expect(replaceStockMemo(one(), held().current, posts)).toBe('IF1201 changed in NetSuite');
       expect(replaceStockMemo(one(), null, posts)).toBe('IF1201 changed in NetSuite');
-      expect(replaceStockMemo(adjusted(), fromNetsuite.current, posts)).toBe('ADJ77 changed in NetSuite');
+      expect(replaceStockMemo(adjusted(), fromNetsuite.current, posts)).toBe("ADJ77 now posts from FleetSuite's own copy");
+      expect(replaceStockMemo(adjusted(), fromOwn(ownEntry, 'own_adjustment@1').current, doesnt)).toBe("ADJ77 now posts from NetSuite's adjustment");
+      expect(replaceStockMemo(moved(), fromNetsuite.current, posts)).toBe('TO88 changed in NetSuite');
     });
 
     it('builds an entry from the copy that fits what it is compared against once posted', () => {

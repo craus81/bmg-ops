@@ -4,15 +4,17 @@
 // migration 401's, at each customer's and vendor's balance the way Customer
 // and vendor balances does, through migration 406's, at FleetSuite's own
 // invoices the way Own invoices does, through migration 407's, at its own
-// fulfillments the way Own fulfillments does, through migration 416's, and at
-// the likely mistakes the night's look kept, through migration 431's. This
+// fulfillments the way Own fulfillments does, through migration 416's, at the
+// Inventory Adjusts the way Own adjustments does, through migration 457's, and
+// at the likely mistakes the night's look kept, through migration 431's. This
 // runs the same migrations as differences-sql.test.ts, with 401, 406, 407,
-// 416 and 431, in an in-memory Postgres (PGlite) as the app's server login,
-// copies a made-up handful of NetSuite documents for BMG and 1084, posts
-// FleetSuite's entries for some of them, copies a few stock moves and
-// NetSuite's counts, saves an own invoice, an own fulfillment and a few likely
-// mistakes, and runs the check's looks against it the way the cron does,
-// holding what it tells the super admins and what it records.
+// 416, 431, 435, 454 and 457, in an in-memory Postgres (PGlite) as the app's
+// server login, copies a made-up handful of NetSuite documents for BMG and
+// 1084, posts FleetSuite's entries for some of them, copies a few stock moves
+// and NetSuite's counts, saves an own invoice, an own fulfillment, a few
+// Inventory Adjusts and a few likely mistakes, and runs the check's looks
+// against it the way the cron does, holding what it tells the super admins and
+// what it records.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -47,8 +49,10 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migrations 314, 416 and 435 point at in the app's own schema.
+    -- What migrations 314, 416, 435 and 454 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
+    CREATE TABLE public.netsuite_parts (id UUID PRIMARY KEY);
+    CREATE FUNCTION public.is_admin() RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT false $$;
     CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT);
     CREATE TABLE public.netsuite_sales_orders (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(), netsuite_id TEXT NOT NULL UNIQUE, tranid TEXT,
@@ -68,7 +72,7 @@ async function freshDb(): Promise<PGlite> {
     '389-books-bill-payments.sql', '390-books-bill-payment-posting.sql', '391-books-checks-and-cards.sql', '392-books-spending-posting.sql',
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
     '402-books-stock-values.sql', '406-books-party-balances.sql', '407-books-own-invoices.sql', '416-books-own-fulfillments.sql',
-    '431-books-mistake-checks.sql', '435-books-own-bills.sql',
+    '431-books-mistake-checks.sql', '435-books-own-bills.sql', '454-inventory-adjustments.sql', '457-books-own-adjustments.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -141,13 +145,14 @@ describe('the daily books check', () => {
   const store = new Map<string, { last_result: unknown; updated_at: string; last_synced_at?: string }>();
   /** When a function fails, by what it was asked. */
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
-  /** What a look told about months and stock; about balances, own invoices, fulfillments, bills and receipts, and likely mistakes, apart. */
+  /** What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, and likely mistakes, apart. */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
   let toldOwn: CheckAlert[] = [];
   let toldFulfillments: CheckAlert[] = [];
   let toldBills: CheckAlert[] = [];
   let toldReceipts: CheckAlert[] = [];
+  let toldAdjustments: CheckAlert[] = [];
   let toldMistakes: CheckAlert[] = [];
 
   /** A read of one of the books' tables, built the way supabase-js builds it, run against the database. */
@@ -217,10 +222,11 @@ describe('the daily books check', () => {
     toldFulfillments = [];
     toldBills = [];
     toldReceipts = [];
+    toldAdjustments = [];
     toldMistakes = [];
     const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
       : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
-        : alert.about === 'mistake' ? toldMistakes : told);
+        : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
@@ -366,6 +372,7 @@ describe('the daily books check', () => {
       fulfillments: { known: {}, noted: {} },
       bills: { known: {}, noted: {} },
       receipts: { known: {}, noted: {} },
+      adjustments: { known: {}, noted: {} },
       mistakes: { known: {}, noted: {} },
     });
   });
@@ -530,7 +537,7 @@ describe('the daily books check', () => {
   it('records items and how far apart their counts are, never an amount', () => {
     const record = store.get(BOOKS_DAILY_CHECK)!.last_result as Record<string, unknown>;
     expect(Object.keys(record).sort()).toEqual([
-      'balances', 'bills', 'companies', 'fulfillments', 'look', 'mistakes', 'own', 'receipts', 'stock', 'told',
+      'adjustments', 'balances', 'bills', 'companies', 'fulfillments', 'look', 'mistakes', 'own', 'receipts', 'stock', 'told',
     ]);
     expect(record.stock).toEqual({ by: 'item', known: { [LADDER]: 1, [BINS]: 5 }, noted: {} });
   });
@@ -840,6 +847,71 @@ describe('the daily books check', () => {
   it('records which own bills and receipts differ and in how many things, never an amount', () => {
     expect(heldBills()).toEqual({ known: { 6301: 2 }, noted: {} });
     expect(heldReceipts()).toEqual({ known: { [RECEIPT_KEY]: 2 }, noted: {} });
+  });
+
+  // ── The Inventory Adjusts ──────────────────────────────────────────────
+
+  const ADJUST_ID = '4f5a6b7c-8d9e-4f0a-9b1c-2d3e4f5a6b7c';
+  const heldAdjustments = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.adjustments;
+  /** An Inventory Adjust as Inventory Adjust saves it, made at 10 AM Central on Oct 30. */
+  const adjusted = (id: string, netsuiteId: string | null, change: string) => pg.exec(`
+    RESET ROLE;
+    INSERT INTO inventory_adjustments (id, netsuite_item_id, item_number, location_id, mode, entered_qty, change, on_hand_before, reason,
+      netsuite_adjustment_id, netsuite_adjustment_number, created_by_name, created_at)
+    VALUES ('${id}', '${BINS}', 'BIN-10', '${WENTZVILLE}', 'delta', abs(${change}), ${change}, 43, 'Damaged',
+      ${netsuiteId ? `'${netsuiteId}', 'ADJ${netsuiteId}'` : 'NULL, NULL'}, 'Pat Example', '2026-10-30T15:00:00Z');
+    SET ROLE service_role;
+  `);
+
+  it('tells when an Inventory Adjust stops matching NetSuite\'s adjustment, linking to its check', async () => {
+    // Pat took two damaged bins off at Wentzville, and NetSuite's adjustment, with nothing booked in the copy of its
+    // ledger made since, took three.
+    await adjusted(ADJUST_ID, '6501', '-2');
+    await moved('6501', 'InvAdjst', '2026-10-30', [['1', BINS, WENTZVILLE, '-3']]);
+    await counted([{ item_id: LADDER, quantity: '19' }, { item_id: BINS, quantity: '35' }], 'item');
+    // One NetSuite didn't say it made, and one still waiting for NetSuite's, neither told about.
+    await adjusted('5a6b7c8d-9e0f-4a1b-8c2d-3e4f5a6b7c8d', null, '-1');
+    await adjusted('6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e', '6502', '1');
+
+    await look('first');
+    expect(toldAdjustments).toEqual([]);
+    expect(heldAdjustments()).toEqual({ known: {}, noted: { [ADJUST_ID]: 1 } });
+
+    expect(await look('second')).toMatchObject({ told: 1 });
+    expect(toldAdjustments).toEqual([{
+      title: "Own adjustments: ADJ6501 (BIN-10, 2 fewer) differs from NetSuite's",
+      body: "Change: Inventory Adjust made it 2 fewer BIN-10, and NetSuite's adjustment 3 fewer. Own adjustments shows why.",
+      url: `/admin/books/own-adjustments/adjustment?id=${ADJUST_ID}`,
+      about: 'adjustment',
+    }]);
+    expect([told, toldOwn, toldFulfillments, toldBills, toldReceipts]).toEqual([[], [], [], [], []]);
+    expect(heldAdjustments()).toEqual({ known: { [ADJUST_ID]: 1 }, noted: {} });
+
+    // The next morning, nothing more.
+    await look('first');
+    await look('second');
+    expect(toldAdjustments).toEqual([]);
+  });
+
+  it("keeps what it held for the Inventory Adjusts when it couldn't look, and says why", async () => {
+    const before = heldAdjustments();
+    for (const [read, error] of [
+      ['gl_own_adjustment_pairs', "Own adjustments: couldn't check October 2026's adjustments (gl_own_adjustment_pairs failed)"],
+      ['gl_own_adjustment_months', "Own adjustments: couldn't list the months (gl_own_adjustment_months failed)"],
+    ]) {
+      failing = (name) => name === read;
+      try {
+        const result = await look('first');
+        expect(result.error).toBe(error);
+        expect(heldAdjustments()).toEqual(before);
+      } finally {
+        failing = null;
+      }
+    }
+  });
+
+  it('records which Inventory Adjusts differ by their id alone, never an item or an amount', () => {
+    expect(heldAdjustments()).toEqual({ known: { [ADJUST_ID]: 1 }, noted: {} });
   });
 
   // ── Likely mistakes ────────────────────────────────────────────────────

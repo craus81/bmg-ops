@@ -2,11 +2,11 @@ import type { OwnBooks } from './own-invoice-posting';
 import type { OwnPostingView } from './own-posting-view';
 
 /**
- * What Own fulfillments, Own receipts and Own bills say the books hold for
- * Books' own copies (migration 456, docs/books.md "Posting FleetSuite's own
- * fulfillments, receipts and bills"), in words: a chip and a count on each
- * list, and a sentence on each one's page (src/components/BooksOwnPosting.tsx).
- * Pure.
+ * What Own fulfillments, Own receipts, Own adjustments and Own bills say the
+ * books hold for Books' own copies (migrations 456 and 457, docs/books.md
+ * "Posting FleetSuite's own fulfillments, receipts and bills"), in words: a
+ * chip and a count on each list, and a sentence on each one's page
+ * (src/components/BooksOwnPosting.tsx). Pure.
  */
 
 /** A copy's status as its check says it, the receipts' 'not_in_netsuite' among them. */
