@@ -275,6 +275,11 @@ export const deepLinks = {
    *  the Invoiced tab's Credit. Anyone with Invoicing once credit memos are
    *  switched on in Books → Switches; until then super admins only. */
   creditMemo: (invoiceNetsuiteId: string) => `/invoices/credit-memo?${new URLSearchParams({ invoice: invoiceNetsuiteId })}`,
+  /** A vendor's credit, entered and applied to the vendor's open bills
+   *  (src/lib/vendor-credit.ts), from More → Purchasing. Admins with Parts
+   *  Ordering once vendor credits are switched on in Books → Switches; until
+   *  then super admins only. */
+  vendorCredit: () => '/admin/purchasing/vendor-credit',
   /** Invoices hub — opens the create-invoice dialog for a shipped graphics job.
    *  NOTE: this exact string doubles as the match key that marks the prompt
    *  read once the invoice exists (graphics-invoice-notify.ts) — change both

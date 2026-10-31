@@ -210,3 +210,9 @@ describe('Credit memo links', () => {
     expect(deepLinks.booksSwitches()).toBe('/admin/books/switches');
   });
 });
+
+describe('Vendor credit links', () => {
+  it('opens the vendor credit screen in Purchasing', () => {
+    expect(deepLinks.vendorCredit()).toBe('/admin/purchasing/vendor-credit');
+  });
+});

@@ -3794,6 +3794,170 @@ export async function getInvoiceCreditMemos(
   }
 }
 
+/** One of a vendor's open bills or open credits, for the vendor credit screen (src/lib/vendor-credit.ts). */
+export interface VendorOpenDoc {
+  id: string;
+  number: string | null;
+  date: string;
+  dueDate: string | null;
+  /** What's still open on it. */
+  openCents: number;
+}
+
+/**
+ * A vendor's bills NetSuite has open now, oldest first, and the vendor credits
+ * it still has open (not yet applied to a bill), for one subsidiary when one
+ * is given: what a new vendor credit can be applied to, read the way the
+ * agings copy reads open documents (status A, NetSuite's own open amount on
+ * the document's payable line; src/lib/books/netsuite-open-items.ts).
+ */
+export async function getVendorOpenBills(
+  vendorId: string | number,
+  subsidiaryId?: string | null,
+): Promise<{ success: true; bills: VendorOpenDoc[]; credits: VendorOpenDoc[] } | { success: false; error: string }> {
+  // Interpolated into SuiteQL, so only ever a bare number.
+  const id = String(vendorId).trim();
+  if (!/^\d+$/.test(id)) return { success: false, error: 'Bad vendor id' };
+  try {
+    const rows = await suiteqlQueryAll(`
+      SELECT t.id, t.type, t.tranid, t.trandate, t.duedate, t.foreignamountunpaid AS unpaid, tl.subsidiary AS subsidiary_id
+      FROM transaction t
+      JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'
+      WHERE t.type IN ('VendBill', 'VendCred') AND t.status = 'A' AND t.entity = ${id}
+      ORDER BY t.trandate, t.id
+    `, 1000);
+    const bills: VendorOpenDoc[] = [];
+    const credits: VendorOpenDoc[] = [];
+    const seen = new Set<string>();
+    for (const r of rows as any[]) {
+      const docId = String(r.id ?? '');
+      const date = suiteqlDay(r.trandate);
+      const openCents = Math.round(Math.abs(parseFloat(String(r.unpaid ?? '')) || 0) * 100);
+      if (!/^\d+$/.test(docId) || !date || openCents <= 0 || seen.has(docId)) continue;
+      if (subsidiaryId && String(r.subsidiary_id ?? '') !== String(subsidiaryId)) continue;
+      seen.add(docId);
+      const doc = { id: docId, number: r.tranid ? String(r.tranid) : null, date, dueDate: suiteqlDay(r.duedate), openCents };
+      (r.type === 'VendCred' ? credits : bills).push(doc);
+    }
+    return { success: true, bills, credits };
+  } catch (e: any) {
+    return { success: false, error: e?.message || String(e) };
+  }
+}
+
+/**
+ * The vendor credit NetSuite already has from this vendor under this number
+ * (its Reference No., tranId), or null when it has none, so the same credit
+ * from the vendor isn't entered twice. Throws when NetSuite can't be asked,
+ * so the caller fails closed (as findVendorBill).
+ */
+export async function findVendorCredit(vendorId: string | number, creditNumber: string): Promise<{ vendorCreditId: string; number: string } | null> {
+  const id = vendorId.toString().trim();
+  if (!/^\d+$/.test(id)) throw new Error(`NetSuite vendor id "${id}" isn't a number`);
+  const ref = creditNumber.trim().replace(/'/g, "''");
+  if (!ref) throw new Error('No credit number to look for');
+  const result = await suiteqlQuery(`
+    SELECT id, tranid
+    FROM transaction
+    WHERE type = 'VendCred' AND entity = ${id} AND UPPER(tranid) = UPPER('${ref}')
+    ORDER BY id
+    FETCH FIRST 1 ROWS ONLY
+  `);
+  const row = result?.items?.[0];
+  return row ? { vendorCreditId: row.id?.toString() ?? '', number: row.tranid ?? '' } : null;
+}
+
+/** What createVendorCredit sends: src/lib/vendor-credit.ts's netsuiteVendorCredit. */
+export interface VendorCreditPayload {
+  vendorId: string;
+  /** The vendor's own number for the credit: its Reference No. */
+  tranId: string;
+  /** 'YYYY-MM-DD'. */
+  tranDate: string;
+  subsidiaryId: string;
+  locationId?: string | null;
+  memo: string;
+  /** Money back to an account. */
+  expenses: { accountId: string; amount: number; memo?: string }[];
+  /** Parts going back to the vendor, out of the header location's stock. */
+  items: { itemId: string; quantity: number; rate: number; amount: number }[];
+  /** The vendor's open bills it applies to; the rest stays open on the vendor. */
+  apply: { billId: string; amount: number }[];
+}
+
+/**
+ * Make a vendor credit in NetSuite: POST /services/rest/record/v1/vendorCredit,
+ * NetSuite's Enter Vendor Credit. Location is on the header only, as a bill's
+ * is (a line location is refused unless per-line locations are on), and the
+ * currency is the vendor's own, as createVendorBill sends it. The apply list
+ * names each bill by its id with the amount applied to it.
+ */
+export async function createVendorCredit(p: VendorCreditPayload): Promise<{ success: boolean; vendorCreditId?: string; error?: string }> {
+  if (p.expenses.length === 0 && p.items.length === 0) return { success: false, error: 'Nothing to credit' };
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/vendorCredit`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+  const currencyId = await resolveVendorCurrency(p.vendorId);
+
+  const body: any = {
+    entity: { id: p.vendorId },
+    ...(currencyId ? { currency: { id: currencyId } } : {}),
+    tranId: p.tranId,
+    tranDate: p.tranDate,
+    subsidiary: { id: p.subsidiaryId },
+    ...(p.locationId ? { location: { id: p.locationId } } : {}),
+    memo: p.memo,
+    ...(p.expenses.length
+      ? { expense: { items: p.expenses.map((l) => ({ account: { id: l.accountId }, amount: l.amount, ...(l.memo ? { memo: l.memo } : {}) })) } }
+      : {}),
+    ...(p.items.length
+      ? { item: { items: p.items.map((l) => ({ item: { id: l.itemId }, quantity: l.quantity, rate: l.rate, amount: l.amount })) } }
+      : {}),
+    ...(p.apply.length
+      ? { apply: { items: p.apply.map((a) => ({ doc: { id: a.billId }, apply: true, amount: a.amount })) } }
+      : {}),
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create vendor credit error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}` };
+    }
+
+    let vendorCreditId = response.headers.get('Location')?.match(/\/(\d+)$/)?.[1] || '';
+    if (!vendorCreditId) {
+      try {
+        const result = await response.json();
+        vendorCreditId = result.id?.toString() || '';
+      } catch {
+        // 204 No Content
+      }
+    }
+    if (!vendorCreditId) return { success: false, error: "NetSuite said it made the vendor credit but didn't say its id. Look for it in NetSuite before trying again." };
+    return { success: true, vendorCreditId };
+  } catch (e: any) {
+    return { success: false, error: `Failed to create the vendor credit: ${e.message}` };
+  }
+}
+
 /**
  * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
  *
