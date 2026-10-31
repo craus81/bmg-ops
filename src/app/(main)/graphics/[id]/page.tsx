@@ -1168,7 +1168,6 @@ export default function GraphicsJobRecordPage() {
           saveLabel="Save Changes"
           savingLabel="Saving..."
           onCancel={() => setEdit(null)}
-          cancelLabel="Discard Edits"
         />
       )}
 

@@ -489,7 +489,7 @@ export default function JournalEntriesPage() {
           saveLabel="Save"
           savingLabel="Saving…"
           onCancel={() => { if (savedDraft) setDraft(toDraft(savedDraft)); else { setDraft(null); go(''); } setError(null); }}
-          cancelLabel={savedDraft ? 'Undo changes' : 'Discard'}
+          cancelLabel={savedDraft ? 'Undo changes' : undefined}
         />
       )}
       <div>
