@@ -3978,7 +3978,7 @@ export async function findJournalEntry(externalId: string): Promise<{ journalId:
   return row ? { journalId: row.id?.toString() ?? '', number: row.tranid ?? '' } : null;
 }
 
-/** What createJournalEntry sends: src/lib/card-charges.ts's netsuiteJournalEntry. */
+/** What createJournalEntry sends: src/lib/card-charges.ts's netsuiteJournalEntry, or src/lib/typed-journal-entries.ts's netsuiteTypedEntry. */
 export interface JournalEntryPayload {
   subsidiaryId: string;
   /** 'YYYY-MM-DD'. */

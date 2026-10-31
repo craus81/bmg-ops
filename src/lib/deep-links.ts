@@ -285,6 +285,12 @@ export const deepLinks = {
    *  with Payments once card charges are switched on in Books → Switches;
    *  until then super admins only. */
   cardCharges: () => '/admin/card-charges',
+  /** Journal entries typed in FleetSuite, asked for approval and made in
+   *  NetSuite once a super admin approves them
+   *  (src/lib/typed-journal-entries.ts), from More → Money & Books; with an
+   *  id, that entry open. Anyone with Payments once journal entries are
+   *  switched on in Books → Switches; until then super admins only. */
+  journalEntries: (id?: string | null) => `/admin/journal-entries${id ? `?${new URLSearchParams({ id })}` : ''}`,
   /** Invoices hub — opens the create-invoice dialog for a shipped graphics job.
    *  NOTE: this exact string doubles as the match key that marks the prompt
    *  read once the invoice exists (graphics-invoice-notify.ts) — change both

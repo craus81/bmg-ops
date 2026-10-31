@@ -583,6 +583,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // Vendor credits (migration 467): admins with Parts Ordering once switched on; until then super admins can look and nothing is sent.
   'src/app/api/purchasing/vendor-credit/route.ts': feature('parts_ordering', "switchIsOn(service, 'vendor_credits')"),
   'src/app/api/card-charges/route.ts': feature('vendor_payments', "switchIsOn(service, 'card_charges')"),
+  // Typed journal entries (migration 469): anyone with Payments once switched on; until then super admins can type and look, and nothing is asked or sent.
+  'src/app/api/journal-entries/route.ts': feature('vendor_payments', "switchIsOn(service, 'journal_entries')"),
   'src/app/api/purchasing/sync-sales-orders/route.ts': admin(),
   'src/app/api/purchase-requests/create-po/route.ts': feature('parts_ordering', 'requireAdmin('),
   'src/app/api/purchase-requests/got-it/route.ts': feature('parts_ordering'),
