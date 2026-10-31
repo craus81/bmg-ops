@@ -8,6 +8,10 @@
  * Inside a modal pass `inModal`: it becomes the modal's own header row and
  * pins to the top of the modal's scroll area instead.
  *
+ * The leave button says "Leave without saving" (Craig, 2026-10-31): it only
+ * drops unsaved edits; it never cancels, closes, or deletes the order. On a
+ * narrow phone it wraps to two short lines instead of crowding Save.
+ *
  * On the Duo small screen the bar lives in the page column, left of the side
  * rail, so the clock bubble over the rail never covers Save.
  */
@@ -36,6 +40,14 @@ function useHeaderOffset(enabled: boolean) {
   return top;
 }
 
+/** The bar's leave button (Craig 2026-10-31: not "Cancel", which read like canceling the order). */
+export const LEAVE_WITHOUT_SAVING = 'Leave without saving';
+
+/** Joins the last two words so a squeezed button wraps to two lines, never three. */
+export function twoLineLabel(label: string): string {
+  return label.replace(/ (\S+)$/, '\u00a0$1');
+}
+
 /** For a bar that opens a 16px-padded page card: spans the card edge to edge. */
 export const CARD_BAR: CSSProperties = {
   margin: '-16px -16px 12px', background: 'var(--card)', borderRadius: '14px 14px 0 0',
@@ -43,7 +55,7 @@ export const CARD_BAR: CSSProperties = {
 
 export default function TopSaveBar({
   title, subtitle, onSave, saving = false, disabled = false,
-  saveLabel = 'Save', savingLabel = 'Saving…', onCancel, cancelLabel = 'Cancel',
+  saveLabel = 'Save', savingLabel = 'Saving…', onCancel, cancelLabel = LEAVE_WITHOUT_SAVING,
   inModal = false, extra, style, error,
 }: {
   /** What's being edited, e.g. "Estimate #1234". */
@@ -104,10 +116,12 @@ export default function TopSaveBar({
           style={{
             padding: '8px 12px', borderRadius: '10px', background: 'transparent',
             border: '1px solid var(--border)', color: 'var(--text-body, var(--text-secondary))',
-            fontWeight: 700, fontSize: '13px', cursor: 'pointer', whiteSpace: 'nowrap',
+            fontWeight: 700, fontSize: '13px', cursor: 'pointer',
+            // One line on a computer; two short lines on a phone (min-width wins).
+            maxWidth: 'min(170px, calc(30vw / var(--ts, 1)))', minWidth: 'min-content', lineHeight: 1.15, textAlign: 'center',
           }}
         >
-          {cancelLabel}
+          {twoLineLabel(cancelLabel)}
         </button>
       )}
       <button

@@ -82,7 +82,7 @@ import { DeliveryPicker } from '@/components/DeliveryPicker';
 import { EMPTY_DELIVERY, deliveryColumns, deliveryFromRow, deliveryText, sameDelivery, type Delivery } from '@/lib/delivery';
 import VehicleTemplatePicker from '@/components/VehicleTemplatePicker';
 import { remapWorksheetIds } from '@/lib/estimate-copy-worksheets';
-import TopSaveBar from '@/components/TopSaveBar';
+import TopSaveBar, { LEAVE_WITHOUT_SAVING } from '@/components/TopSaveBar';
 import SentBox, { SentChip, useDocumentSends } from '@/components/SentBox';
 import { docRef, sendTone } from '@/lib/document-sends';
 import { estimateCopiedFrom, oldRecordCopiedFrom } from '@/lib/estimate-copied-from';
@@ -4915,6 +4915,21 @@ export default function EstimatesPage() {
     }
     setView('list');
   };
+  // The top bar's "Leave without saving" (Craig 2026-10-31): asks first when
+  // there are edits, and throws away this device's backup of them so the
+  // next open doesn't offer them back. "← Back" still keeps the backup.
+  const leaveWithoutSaving = async () => {
+    if (draftSerialized !== draftBaselineRef.current) {
+      const ok = await dialog.confirm(
+        'The estimate stays exactly as it was last saved. Nothing is canceled, closed, or deleted.',
+        { title: 'Leave without saving your edits?', confirmLabel: LEAVE_WITHOUT_SAVING, cancelLabel: 'Keep editing', destructive: true },
+      );
+      if (!ok) return;
+    }
+    pendingDraftRef.current = null;
+    clearEstimateDraft(editingId);
+    leaveBuilder();
+  };
   const editingAltNumber = editingId ? estimateAltNumber(editingEst) : null;
   // Craig 2026-10-28: a copy says where it came from until it's saved.
   const copiedFrom = editingId ? estimateCopiedFrom(editingEst) : null;
@@ -4930,7 +4945,7 @@ export default function EstimatesPage() {
         saving={saving}
         saveLabel={editingId ? 'Save Changes' : 'Save Draft'}
         savingLabel="Saving..."
-        onCancel={leaveBuilder}
+        onCancel={leaveWithoutSaving}
       />
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>

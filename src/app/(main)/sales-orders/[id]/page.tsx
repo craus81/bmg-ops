@@ -21,7 +21,7 @@ import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { openNetSuitePdf } from '@/lib/netsuite-pdf-client';
 import { openJobOrder } from '@/lib/job-order-pdf';
-import TopSaveBar from '@/components/TopSaveBar';
+import TopSaveBar, { LEAVE_WITHOUT_SAVING } from '@/components/TopSaveBar';
 import FulfillInvoiceModal from '@/components/FulfillInvoiceModal';
 import EmailInvoicesModal from '@/components/EmailInvoicesModal';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
@@ -244,7 +244,7 @@ export default function SalesOrderPage() {
 
   const cancel = async () => {
     if (edit && edit.count > 0) {
-      const ok = await dialog.confirm('Throw away your changes to this sales order?', { confirmLabel: 'Throw away', cancelLabel: 'Keep editing', destructive: true });
+      const ok = await dialog.confirm('The sales order stays exactly as it was last saved. Nothing is canceled, closed, or deleted.', { title: 'Leave without saving your edits?', confirmLabel: LEAVE_WITHOUT_SAVING, cancelLabel: 'Keep editing', destructive: true });
       if (!ok) return;
     }
     setEditing(false);
