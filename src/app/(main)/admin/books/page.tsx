@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
+import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
 
 /**
@@ -16,6 +17,9 @@ import { looseMatcher } from '@/lib/loose-search';
  * which opens this page. Read-only — until the changeover the accounts are
  * copied from NetSuite every two hours (or on "Sync now", not the CPA's), so
  * they're added and changed there.
+ *
+ * The CPA's own adjustments (Books part 53) are typed on Journal entries,
+ * linked here for the CPA once journal entries are switched on.
  */
 
 interface Account {
@@ -110,6 +114,23 @@ export default function BooksAccountsPage() {
   const [syncError, setSyncError] = useState('');
   // The CPA reads; syncing now and Snap a bill are the bookkeeper's too.
   const canKeep = booksAllows(booksAccess(hasRole), 'keep');
+  // The CPA types its own adjustments on Journal entries once journal entries are switched on.
+  const isCpa = !authLoading && hasRole('cpa');
+  const [cpaAdjustments, setCpaAdjustments] = useState(false);
+  useEffect(() => {
+    if (!isCpa) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/journal-entries?status=1');
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setCpaAdjustments(res.ok && !!body.on);
+      } catch {
+        if (!cancelled) setCpaAdjustments(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isCpa]);
 
   const load = useCallback(async () => {
     try {
@@ -183,6 +204,12 @@ export default function BooksAccountsPage() {
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             FleetSuite&apos;s own books. Until the changeover these accounts are copied from NetSuite every two hours,
             so add or change an account in NetSuite.{' '}
+            {cpaAdjustments && (
+              <>
+                <Link href={deepLinks.journalEntries()} style={{ color: 'var(--text-secondary)' }}>CPA adjustments</Link>
+                {' · '}
+              </>
+            )}
             <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
             {' · '}
             <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>

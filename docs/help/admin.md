@@ -43,6 +43,12 @@ month, clear mistake checks, snap a bill and upload NetSuite's 1099 report.
 The switches, going live, Changed in NetSuite and reopening a month stay
 with super admins.
 
+Once journal entries are switched on (January 1, 2027), the CPA also types
+their own adjustments under **Books → CPA adjustments**. Each needs a super
+admin's approval before it's made in NetSuite, and its memo there starts
+"CPA adjustment:". For the bookkeeper to type journal entries, add the
+**Finance** role too.
+
 To see what they see, pick **Bookkeeper** or **CPA** under **View As**.
 
 ---

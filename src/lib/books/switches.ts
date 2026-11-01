@@ -51,7 +51,7 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
   },
   journal_entries: {
     name: 'Journal entries',
-    what: 'Anyone with Payments types a journal entry in FleetSuite and asks for approval, a super admin who didn\'t ask approves it, and FleetSuite makes it in NetSuite and keeps its own copy for the books.',
+    what: 'Anyone with Payments types a journal entry in FleetSuite, and the CPA its own adjustments, and asks for approval, a super admin who didn\'t ask approves it, and FleetSuite makes it in NetSuite and keeps its own copy for the books.',
     where: 'More → Money & Books → Journal Entries',
   },
   inventory_transfers: {

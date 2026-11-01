@@ -600,8 +600,11 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // Fixing bills (migration 472): admins with Parts Ordering who can see prices once switched on; until then super admins can look and nothing is sent.
   'src/app/api/purchasing/bill-fix/route.ts': feature('parts_ordering', "switchIsOn(service, 'bill_fixes')"),
   'src/app/api/card-charges/route.ts': feature('vendor_payments', "switchIsOn(service, 'card_charges')"),
-  // Typed journal entries (migration 469): anyone with Payments once switched on; until then super admins can type and look, and nothing is asked or sent.
-  'src/app/api/journal-entries/route.ts': feature('vendor_payments', "switchIsOn(service, 'journal_entries')"),
+  // Typed journal entries (migrations 469 and 484): once switched on, anyone with Payments in the general journal and the CPA in its own adjustments; until then super admins can type and look, and nothing is asked or sent.
+  'src/app/api/journal-entries/route.ts': authScoped(
+    "anyone with Payments types in the general journal and the CPA and super admins in the CPA's adjustments (journalsFor, Books part 53); everyone else is refused, and every step on an entry checks its journal is one of the caller's",
+    "profileHasFeature(auth.user.id, auth.profile, 'vendor_payments')", 'journalsFor(', 'notTheirs(row.journal)', "switchIsOn(service, 'journal_entries')",
+  ),
   // Inventory transfers (migration 470): admins once switched on, as Inventory Adjust; until then super admins can make and save them, and nothing is moved.
   'src/app/api/inventory-transfers/route.ts': admin("switchIsOn(service, 'inventory_transfers')"),
   // Customer and vendor details (migration 473): once switched on, anyone with Credit Applications who can see prices changes a customer's terms and credit limit, and anyone with Payments a vendor's details; until then super admins can look and nothing is sent.

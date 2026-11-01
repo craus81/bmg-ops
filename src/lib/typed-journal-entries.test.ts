@@ -2,12 +2,14 @@
 // (src/lib/typed-journal-entries.ts): the company, date, memo and lines it
 // needs, each line an account the company can use and a debit or a credit to
 // the cent, never to Accounts Receivable or Payable, debits matching credits;
-// how its lines are kept and read back; and what's sent to NetSuite. Made-up
+// how its lines are kept and read back; what's sent to NetSuite; and the
+// CPA's own adjustments journal (Books part 53): who types in which journal,
+// and a CPA adjustment's memo starting "CPA adjustment:" in NetSuite. Made-up
 // data.
 import { describe, it, expect } from 'vitest';
 import {
-  MAX_LINES, MAX_LINE_CENTS, MEMO_MAX, accountName, isDay, keptLines, linesToKeep, netsuiteTypedEntry, reversalDate, reversed,
-  typedExternalId, workOutTypedEntry,
+  CPA_MEMO_PREFIX, MAX_LINES, MAX_LINE_CENTS, MEMO_MAX, accountName, entryNoun, isDay, journalMemo, journalsFor, keptLines,
+  linesToKeep, memoMax, netsuiteTypedEntry, reversalDate, reversed, typedExternalId, workOutTypedEntry,
   type JournalAccount, type TypedEntry, type TypedEntryFacts, type TypedLine,
 } from './typed-journal-entries';
 
@@ -189,5 +191,53 @@ describe('what NetSuite is sent', () => {
   it('names an account by its number and name', () => {
     expect(accountName({ number: '6100', name: 'Depreciation' })).toBe('6100 Depreciation');
     expect(accountName({ number: null, name: 'Closed out' })).toBe('Closed out');
+  });
+});
+
+describe("the CPA's adjustments journal", () => {
+  const holding = (...roles: string[]) => (role: string) => roles.includes(role);
+
+  it('has whoever has Payments type in the general journal, and the CPA and super admins in the CPA adjustments', () => {
+    expect(journalsFor({ payments: true, hasRole: holding('admin') })).toEqual(['general']);
+    expect(journalsFor({ payments: true, hasRole: holding('finance', 'bookkeeper') })).toEqual(['general']);
+    expect(journalsFor({ payments: false, hasRole: holding('cpa') })).toEqual(['cpa_adjustments']);
+    expect(journalsFor({ payments: true, hasRole: holding('cpa', 'finance') })).toEqual(['general', 'cpa_adjustments']);
+    expect(journalsFor({ payments: true, hasRole: holding('admin', 'super_admin') })).toEqual(['general', 'cpa_adjustments']);
+    expect(journalsFor({ payments: false, hasRole: holding('super_admin') })).toEqual(['cpa_adjustments']);
+    for (const roles of [['bookkeeper'], ['executive'], ['admin'], []]) {
+      expect(journalsFor({ payments: false, hasRole: holding(...roles) }), roles.join()).toEqual([]);
+    }
+  });
+
+  it("names each journal's entries", () => {
+    expect([entryNoun('general'), entryNoun('cpa_adjustments')]).toEqual(['journal entry', 'CPA adjustment']);
+  });
+
+  it("starts a CPA adjustment's memo \"CPA adjustment: \" for NetSuite, once, leaving the general journal's as typed", () => {
+    expect(CPA_MEMO_PREFIX).toBe('CPA adjustment: ');
+    expect(journalMemo('cpa_adjustments', '2026 depreciation')).toBe('CPA adjustment: 2026 depreciation');
+    expect(journalMemo('cpa_adjustments', 'CPA adjustment: 2026 depreciation')).toBe('CPA adjustment: 2026 depreciation');
+    expect(journalMemo('cpa_adjustments', 'cpa Adjustment:loan interest')).toBe('cpa Adjustment:loan interest');
+    expect(journalMemo('cpa_adjustments', 'CPA adjustments for 2026')).toBe('CPA adjustment: CPA adjustments for 2026');
+    expect(journalMemo('general', '2026 depreciation')).toBe('2026 depreciation');
+
+    const cpa = workOutTypedEntry({ ...ENTRY, journal: 'cpa_adjustments' }, FACTS);
+    expect(cpa).toMatchObject({ memo: 'CPA adjustment: January depreciation', problems: [], debitCents: 125000 });
+    expect(netsuiteTypedEntry(cpa, '2', 'e0000000-0000-4000-8000-000000000001').memo).toBe('CPA adjustment: January depreciation');
+    expect(workOutTypedEntry(ENTRY, FACTS).memo).toBe('January depreciation');
+    expect(workOutTypedEntry({ ...ENTRY, journal: 'general' }, FACTS).memo).toBe('January depreciation');
+    // No memo is still no memo, and a problem.
+    expect(workOutTypedEntry({ ...ENTRY, journal: 'cpa_adjustments', memo: '  ' }, FACTS)).toMatchObject({
+      memo: '', problems: ['Say what the entry is for in its memo.'],
+    });
+  });
+
+  it("keeps a CPA adjustment's memo short enough to start that way within NetSuite's 300 characters", () => {
+    expect([memoMax('general'), memoMax('cpa_adjustments')]).toEqual([MEMO_MAX, MEMO_MAX - 16]);
+    expect(problemsOf({ journal: 'cpa_adjustments', memo: 'm'.repeat(284) })).toEqual([]);
+    expect(workOutTypedEntry({ ...ENTRY, journal: 'cpa_adjustments', memo: 'm'.repeat(284) }, FACTS).memo).toHaveLength(300);
+    expect(problemsOf({ journal: 'cpa_adjustments', memo: 'm'.repeat(285) }))
+      .toEqual(['A CPA adjustment\'s memo takes 284 characters at most, as NetSuite\'s starts "CPA adjustment:".']);
+    expect(problemsOf({ memo: 'm'.repeat(285) })).toEqual([]);
   });
 });

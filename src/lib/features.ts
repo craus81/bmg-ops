@@ -164,7 +164,8 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
 
   // The books' own logins (Books part 52): the Books pages go by role, not
   // feature (src/lib/books/access.ts), so these carry nothing else. Home
-  // opens the books for them.
+  // opens the books for them. The CPA's own adjustments journal goes by the
+  // role too (journalsFor in src/lib/typed-journal-entries.ts, part 53).
   bookkeeper: ['home'],
   cpa: ['home'],
 };

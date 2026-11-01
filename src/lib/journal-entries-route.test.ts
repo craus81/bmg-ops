@@ -5,7 +5,9 @@
 // ask, checked again as it's kept, made once in NetSuite under the entry's
 // own External ID however often it's pressed, let go when NetSuite refuses
 // and kept when it can't tell, with Books' own copy kept, and each step
-// alerting whoever it's for and Craig. Made-up data.
+// alerting whoever it's for and Craig. And the CPA's own adjustments journal
+// (Books part 53): the CPA types and sees only its own, staff only the general
+// one, super admins both. Made-up data.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
@@ -13,6 +15,7 @@ const STAFF = 'd0000000-0000-4000-8000-000000000001';
 const BOSS = 'd0000000-0000-4000-8000-000000000002';
 const CRAIG = 'd0000000-0000-4000-8000-000000000003';
 const OTHER = 'd0000000-0000-4000-8000-000000000004';
+const CPA = 'd0000000-0000-4000-8000-000000000005';
 
 // The route makes its service client when it loads, so what the mocks hand it is made first.
 const h = vi.hoisted(() => {
@@ -105,9 +108,8 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock('@/lib/api-auth', () => ({
-  requireFeature: vi.fn(async (_req: unknown, feature: string) => (h.state.hasPayments && feature === 'vendor_payments'
-    ? { user: { id: h.state.userId }, profile: { roles: h.state.roles } }
-    : { error: new Response('Forbidden', { status: 403 }) })),
+  requireAuth: vi.fn(async () => ({ user: { id: h.state.userId }, profile: { roles: h.state.roles } })),
+  profileHasFeature: vi.fn(async (_userId: string, _profile: unknown, feature: string) => h.state.hasPayments && feature === 'vendor_payments'),
   getProfileRoles: (profile: { roles: string[] }) => profile.roles,
 }));
 vi.mock('@/lib/netsuite', () => h.netsuite);
@@ -143,7 +145,7 @@ const LINES = [
   { account_netsuite_id: '150', debit_cents: 0, credit_cents: 125000, memo: null },
 ];
 const entry = (id: string, over: Record<string, unknown> = {}) => ({
-  id, company: 'BMG', tran_date: '2027-01-31', memo: 'January depreciation', lines: LINES, total_cents: 125000, status: 'draft',
+  id, journal: 'general', company: 'BMG', tran_date: '2027-01-31', memo: 'January depreciation', lines: LINES, total_cents: 125000, status: 'draft',
   created_by: STAFF, created_at: '2027-01-31T15:00:00Z', updated_by: STAFF, updated_at: '2027-01-31T15:00:00.123456+00:00',
   asked_by: null, asked_at: null, returned_by: null, returned_at: null, returned_reason: null, approved_by: null, approved_at: null,
   netsuite_journal_id: null, netsuite_number: null, error: null, ...over,
@@ -167,11 +169,13 @@ function answers() {
     typed_journal_entry_save: (p) => {
       const total = p.lines.reduce((s: number, l: any) => s + l.debit_cents, 0);
       const fields = { company: p.company, tran_date: p.tran_date, memo: p.memo?.trim() || null, lines: p.lines, total_cents: total, updated_by: p.by, updated_at: stamp() };
+      const journal = p.journal || 'general';
       const r = find(p.id);
       if (!r) {
-        state.tables.typed_journal_entries.push(entry(p.id, { ...fields, created_by: p.by }));
+        state.tables.typed_journal_entries.push(entry(p.id, { ...fields, journal, created_by: p.by }));
         return { data: { saved: true, status: 'draft', updated_at: fields.updated_at }, error: null };
       }
+      if (r.journal !== journal) return { data: { saved: false, status: 'other_journal', journal: r.journal, updated_at: r.updated_at }, error: null };
       if (r.status !== 'draft') return { data: { saved: false, status: r.status, updated_at: r.updated_at }, error: null };
       Object.assign(r, fields);
       return { data: { saved: true, status: 'draft', updated_at: r.updated_at }, error: null };
@@ -241,7 +245,7 @@ beforeEach(() => {
       ], total_cents: 50000, status: 'waiting', created_by: OTHER, asked_by: STAFF, asked_at: ASKED_AT }),
       entry(MADE, { status: 'made', asked_by: STAFF, asked_at: ASKED_AT, approved_by: BOSS, approved_at: '2027-01-31T18:00:00Z', netsuite_journal_id: '7001', netsuite_number: 'JE-500' }),
     ],
-    profiles: [{ id: STAFF, full_name: 'Sam Staff' }, { id: BOSS, full_name: 'Bo Boss' }, { id: CRAIG, full_name: null }],
+    profiles: [{ id: STAFF, full_name: 'Sam Staff' }, { id: BOSS, full_name: 'Bo Boss' }, { id: CRAIG, full_name: null }, { id: CPA, full_name: 'Cass CPA' }],
   };
   switchOn(false);
   state.rpcs.length = 0;
@@ -260,11 +264,14 @@ const SAVE = {
 };
 
 describe('while journal entries are switched off', () => {
-  it('shows Journal Entries to super admins with Payments only, and lets nobody approve', async () => {
-    expect(await (await get('status=1')).json()).toEqual({ on: false, canUse: false, canApprove: false });
+  it('shows Journal Entries to super admins only, with the journals each types in, and lets nobody approve', async () => {
+    expect(await (await get('status=1')).json()).toEqual({ on: false, canUse: false, canApprove: false, journals: ['general'] });
     as(BOSS, ['super_admin']);
-    expect(await (await get('status=1')).json()).toEqual({ on: false, canUse: true, canApprove: false });
+    expect(await (await get('status=1')).json()).toEqual({ on: false, canUse: true, canApprove: false, journals: ['general', 'cpa_adjustments'] });
+    // A super admin types CPA adjustments by role, and in the general journal with Payments.
     state.hasPayments = false;
+    expect(await (await get('status=1')).json()).toEqual({ on: false, canUse: true, canApprove: false, journals: ['cpa_adjustments'] });
+    as(STAFF, ['admin']);
     expect((await get('status=1')).status).toBe(403);
   });
 
@@ -281,6 +288,7 @@ describe('while journal entries are switched off', () => {
     expect(body).toMatchObject({
       companies: [{ code: 'BMG', name: 'BMG Fleet', subsidiaryId: '2' }, { code: '1084', name: '1084 Cool Springs', subsidiaryId: '3' }],
       me: BOSS,
+      journals: ['general', 'cpa_adjustments'],
       superAdmin: true,
       switchedOn: false,
       offText: "Journal entries are switched off until January 1, 2027. You can type and save entries to see what they'd make; none is asked for approval or sent to NetSuite.",
@@ -289,7 +297,7 @@ describe('while journal entries are switched off', () => {
     expect(body.accounts.map((a: { id: string }) => a.id)).toEqual(['150', '230', '610', '640']);
     expect(body.entries.map((e: { id: string }) => e.id).sort()).toEqual([DRAFT, WAITING, MADE]);
     expect(body.entries.find((e: { id: string }) => e.id === DRAFT)).toEqual({
-      id: DRAFT, company: 'BMG', date: '2027-01-31', memo: 'January depreciation',
+      id: DRAFT, journal: 'general', company: 'BMG', date: '2027-01-31', memo: 'January depreciation',
       lines: [
         { accountId: '610', debitCents: 125000, creditCents: 0, memo: 'Shop truck' },
         { accountId: '150', debitCents: 0, creditCents: 125000, memo: null },
@@ -350,20 +358,29 @@ describe('once journal entries are switched on', () => {
   beforeEach(() => switchOn(true));
 
   it('lets anyone with Payments use them, super admins approve, and nobody else in', async () => {
-    expect(await (await get('status=1')).json()).toEqual({ on: true, canUse: true, canApprove: false });
+    expect(await (await get('status=1')).json()).toEqual({ on: true, canUse: true, canApprove: false, journals: ['general'] });
     expect((await get('')).status).toBe(200);
     as(BOSS, ['super_admin']);
-    expect(await (await get('status=1')).json()).toEqual({ on: true, canUse: true, canApprove: true });
+    expect(await (await get('status=1')).json()).toEqual({ on: true, canUse: true, canApprove: true, journals: ['general', 'cpa_adjustments'] });
+    // Without Payments, a super admin has the CPA's adjustments and not the general journal.
     state.hasPayments = false;
-    expect((await get('')).status).toBe(403);
-    expect((await post(SAVE)).status).toBe(403);
+    expect((await (await get('')).json()).entries).toEqual([]);
+    const general = await post(SAVE);
+    expect(general.status).toBe(403);
+    expect(await general.json()).toEqual({ error: 'The general journal needs the Payments permission.' });
+    for (const roles of [['admin'], ['bookkeeper'], ['finance', 'executive']]) {
+      as(STAFF, roles);
+      expect((await get('')).status, roles.join()).toBe(403);
+      expect((await post(SAVE)).status, roles.join()).toBe(403);
+    }
+    expect(state.rpcs).toEqual([]);
   });
 
   it('saves a draft as typed, refuses a company or day there is no such thing as, and says why a draft that moved on is not saved', async () => {
     expect(await (await post(SAVE)).json()).toEqual({ success: true, updatedAt: '2027-02-01T10:00:01.000001+00:00' });
     expect(state.rpcs[0]).toEqual(['typed_journal_entry_save', {
       p: {
-        id: NEW, company: 'BMG', tran_date: '2027-02-28', memo: ' February depreciation ', by: STAFF,
+        id: NEW, journal: 'general', company: 'BMG', tran_date: '2027-02-28', memo: ' February depreciation ', by: STAFF,
         lines: [
           { account_netsuite_id: '610', debit_cents: 125000, credit_cents: 0, memo: 'Shop truck' },
           { account_netsuite_id: '150', debit_cents: 0, credit_cents: 125000, memo: null },
@@ -411,7 +428,7 @@ describe('once journal entries are switched on', () => {
     expect(state.tables.typed_journal_entries.map((r) => r.id)).toEqual([WAITING, MADE]);
     expect(logAudit).toHaveBeenCalledWith(expect.anything(), {
       actorId: CRAIG, table: 'typed_journal_entries', recordId: DRAFT, action: 'delete',
-      detail: { company: 'BMG', date: '2027-01-31', memo: 'January depreciation', total: '$1,250.00' },
+      detail: { journal: 'general', company: 'BMG', date: '2027-01-31', memo: 'January depreciation', total: '$1,250.00' },
     });
     expect(await (await post({ action: 'delete', id: DRAFT })).json()).toEqual({ success: true, already: true });
     as(STAFF, ['admin']);
@@ -434,7 +451,7 @@ describe('once journal entries are switched on', () => {
     expect(state.rpcs).toEqual([['typed_journal_entry_ask', { p: { id: DRAFT, by: STAFF, updated_at: '2027-01-31T15:00:00.123456+00:00' } }]]);
     expect(logAudit).toHaveBeenCalledWith(expect.anything(), {
       actorId: STAFF, table: 'typed_journal_entries', recordId: DRAFT, action: 'ask_approval',
-      detail: { company: 'BMG', date: '2027-01-31', memo: 'January depreciation', total: '$1,250.00', lines: 2 },
+      detail: { journal: 'general', company: 'BMG', date: '2027-01-31', memo: 'January depreciation', total: '$1,250.00', lines: 2 },
     });
     expect(notifyMany).toHaveBeenCalledTimes(1);
     expect(notifyMany).toHaveBeenCalledWith([BOSS, CRAIG], {
@@ -572,7 +589,10 @@ describe('once journal entries are switched on', () => {
     });
     expect(logAudit).toHaveBeenCalledWith(expect.anything(), {
       actorId: BOSS, table: 'typed_journal_entries', recordId: WAITING, action: 'approve',
-      detail: { netsuite_journal_id: '7002', company: 'BMG', date: '2027-01-31', lines: 2, total: '$500.00', asked_by: STAFF, found_in_netsuite: false },
+      detail: {
+        netsuite_journal_id: '7002', journal: 'general', company: 'BMG', date: '2027-01-31', lines: 2, total: '$500.00', asked_by: STAFF,
+        found_in_netsuite: false,
+      },
     });
     expect(notifyMany).toHaveBeenCalledWith([STAFF, OTHER, CRAIG], {
       type: 'books_journal_entry_decided',
@@ -753,7 +773,7 @@ describe('once journal entries are switched on', () => {
       { ...SAVE, lines: [{ accountId: '610', debitCents: 10_000_000_001, creditCents: 0 }] },
       { ...SAVE, lines: [{ accountId: 'Shop', debitCents: 1, creditCents: 0 }] },
       { ...SAVE, lines: [{ accountId: '610', debitCents: 1, creditCents: 0, memo: 'm'.repeat(301) }] },
-      { ...SAVE, memo: 'm'.repeat(301) },
+      { ...SAVE, memo: 'm'.repeat(301) }, { ...SAVE, journal: 'payroll' }, { ...SAVE, journal: 'CPA adjustments' },
       { ...SAVE, lines: Array.from({ length: 201 }, () => ({ accountId: '610', debitCents: 1, creditCents: 0 })) },
       { action: 'ask', id: DRAFT }, { action: 'approve', id: WAITING }, { action: 'send_back', id: WAITING, reason: 'r'.repeat(501) },
       { action: 'post', id: DRAFT },
@@ -761,5 +781,154 @@ describe('once journal entries are switched on', () => {
       expect((await post(body)).status).toBe(400);
     }
     expect(state.rpcs).toEqual([]);
+  });
+});
+
+describe("the CPA's adjustments journal", () => {
+  const CPA_DRAFT = E(5);
+  const CPA_WAITING = E(6);
+  /** The year's depreciation the CPA books: $9,600.00 to depreciation, against accumulated depreciation. */
+  const YEAR = [
+    { account_netsuite_id: '610', debit_cents: 960000, credit_cents: 0, memo: null },
+    { account_netsuite_id: '150', debit_cents: 0, credit_cents: 960000, memo: null },
+  ];
+  const CPA_SAVE = { ...SAVE, id: NEW, journal: 'cpa_adjustments', date: '2026-12-31', memo: '2026 loan interest' };
+  const ids = async (q = '') => ((await (await get(q)).json()).entries as Array<{ id: string; journal: string }>).map((e) => `${e.journal} ${e.id}`).sort();
+
+  beforeEach(() => {
+    switchOn(true);
+    as(CPA, ['cpa']);
+    state.hasPayments = false;
+    state.tables.typed_journal_entries.push(
+      entry(CPA_DRAFT, { journal: 'cpa_adjustments', tran_date: '2026-12-31', memo: '2026 depreciation', lines: YEAR, total_cents: 960000, created_by: CPA, updated_by: CPA }),
+      entry(CPA_WAITING, {
+        journal: 'cpa_adjustments', tran_date: '2026-12-31', memo: '2026 depreciation', lines: YEAR, total_cents: 960000,
+        status: 'waiting', created_by: CPA, updated_by: CPA, asked_by: CPA, asked_at: ASKED_AT,
+      }),
+    );
+  });
+
+  it('shows the CPA its own journal and nothing else, once journal entries are on', async () => {
+    expect(await (await get('status=1')).json()).toEqual({ on: true, canUse: true, canApprove: false, journals: ['cpa_adjustments'] });
+    expect(await ids()).toEqual([`cpa_adjustments ${CPA_DRAFT}`, `cpa_adjustments ${CPA_WAITING}`]);
+    // Not even a general one asked for by its id.
+    expect(await ids(`id=${DRAFT}`)).toEqual([`cpa_adjustments ${CPA_DRAFT}`, `cpa_adjustments ${CPA_WAITING}`]);
+    expect((await (await get('')).json()).journals).toEqual(['cpa_adjustments']);
+
+    // Staff with Payments see the general journal only, and super admins both.
+    as(STAFF, ['admin']);
+    state.hasPayments = true;
+    expect(await ids()).toEqual([`general ${DRAFT}`, `general ${WAITING}`, `general ${MADE}`]);
+    expect(await ids(`id=${CPA_DRAFT}`)).not.toContain(`cpa_adjustments ${CPA_DRAFT}`);
+    as(BOSS, ['super_admin']);
+    expect(await ids()).toHaveLength(5);
+
+    // Switched off, the CPA is kept out like everyone but super admins.
+    switchOn(false);
+    as(CPA, ['cpa']);
+    state.hasPayments = false;
+    expect(await (await get('status=1')).json()).toEqual({ on: false, canUse: false, canApprove: false, journals: ['cpa_adjustments'] });
+    const off = await get('');
+    expect(off.status).toBe(403);
+    expect(await off.json()).toEqual({ error: 'Journal entries are switched off until January 1, 2027.', switchedOff: true });
+    expect((await post(CPA_SAVE)).status).toBe(403);
+    expect(state.rpcs).toEqual([]);
+  });
+
+  it('lets the CPA type, change and ask for approval of CPA adjustments, and nothing in the general journal', async () => {
+    expect(await (await post(CPA_SAVE)).json()).toEqual({ success: true, updatedAt: expect.any(String) });
+    expect(state.rpcs[0][1].p).toMatchObject({ id: NEW, journal: 'cpa_adjustments', memo: '2026 loan interest', by: CPA });
+    expect(rowOf(NEW)).toMatchObject({ journal: 'cpa_adjustments', status: 'draft', created_by: CPA });
+
+    // The general journal isn't the CPA's, nor is an entry started there.
+    const general = await post({ ...CPA_SAVE, id: E(7), journal: undefined });
+    expect(general.status).toBe(403);
+    expect(await general.json()).toEqual({ error: 'The general journal needs the Payments permission.' });
+    const moved = await post({ ...CPA_SAVE, id: DRAFT });
+    expect(moved.status).toBe(409);
+    expect(await moved.json()).toEqual({
+      error: "It wasn't saved. It was started in another journal, and an entry stays in the journal it was started in.", status: 'other_journal',
+    });
+    expect(rowOf(DRAFT)).toMatchObject({ journal: 'general', memo: 'January depreciation' });
+    for (const [action, extra] of [['ask', { updatedAt: rowOf(DRAFT).updated_at }], ['delete', {}], ['take_back', {}]] as const) {
+      const res = await post({ action, id: action === 'take_back' ? WAITING : DRAFT, ...extra });
+      expect(res.status, action).toBe(403);
+      expect(await res.json(), action).toEqual({ error: 'The general journal needs the Payments permission.' });
+    }
+    expect(rowOf(WAITING).status).toBe('waiting');
+
+    // Asked for, every super admin hears a CPA adjustment is waiting.
+    expect(await (await post({ action: 'ask', id: CPA_DRAFT, updatedAt: rowOf(CPA_DRAFT).updated_at })).json()).toEqual({ success: true, askedAt: ASKED_AT });
+    expect(logAudit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      action: 'ask_approval', detail: expect.objectContaining({ journal: 'cpa_adjustments', total: '$9,600.00' }),
+    }));
+    expect(notifyMany).toHaveBeenCalledWith([BOSS, CRAIG], {
+      type: 'books_journal_entry_waiting',
+      title: 'A CPA adjustment is waiting for approval',
+      body: 'BMG CPA adjustment dated 2026-12-31 for $9,600.00: 2026 depreciation. Approve it to make it in NetSuite, or send it back.',
+      url: `/admin/journal-entries?id=${CPA_DRAFT}`,
+      channels: ['in_app', 'push', 'email'],
+    });
+    expect(await (await post({ action: 'take_back', id: CPA_DRAFT })).json()).toEqual({ success: true });
+
+    // Its memo leaves room for what NetSuite's starts with.
+    rowOf(CPA_DRAFT).memo = 'm'.repeat(285);
+    const long = await post({ action: 'ask', id: CPA_DRAFT, updatedAt: rowOf(CPA_DRAFT).updated_at });
+    expect(long.status).toBe(400);
+    expect((await long.json()).problems).toEqual(['A CPA adjustment\'s memo takes 284 characters at most, as NetSuite\'s starts "CPA adjustment:".']);
+
+    // And nobody but the CPA and super admins types one.
+    as(STAFF, ['admin']);
+    state.hasPayments = true;
+    for (const body of [{ ...CPA_SAVE, id: E(8) }, { action: 'delete', id: CPA_DRAFT }, { action: 'ask', id: CPA_DRAFT, updatedAt: rowOf(CPA_DRAFT).updated_at }]) {
+      const res = await post(body);
+      expect(res.status, body.action).toBe(403);
+      expect(await res.json(), body.action).toEqual({ error: 'Only the CPA and super admins type CPA adjustments.' });
+    }
+    expect(state.tables.typed_journal_entries.map((r) => r.id)).not.toContain(E(8));
+  });
+
+  it("is approved by a super admin, made in NetSuite with its memo starting \"CPA adjustment:\", and the CPA hears", async () => {
+    const cpa = await post({ action: 'approve', id: CPA_WAITING, askedAt: ASKED_AT });
+    expect(cpa.status).toBe(403);
+    expect(await cpa.json()).toEqual({ error: 'Only a super admin approves journal entries or sends them back.' });
+
+    as(BOSS, ['super_admin']);
+    expect(await (await post({ action: 'approve', id: CPA_WAITING, askedAt: ASKED_AT })).json())
+      .toEqual({ success: true, journalId: '7002', number: null, totalCents: 960000 });
+    expect(netsuite.createJournalEntry).toHaveBeenCalledWith({
+      subsidiaryId: '2', tranDate: '2026-12-31', memo: 'CPA adjustment: 2026 depreciation', externalId: `fleetsuite-je-${CPA_WAITING}`,
+      lines: [{ accountId: '610', debit: 9600 }, { accountId: '150', credit: 9600 }],
+    });
+    expect(state.rpcs.find(([fn]) => fn === 'gl_own_journal_entry_save')![1].p).toMatchObject({
+      source: 'typed', made_from_id: CPA_WAITING, memo: 'CPA adjustment: 2026 depreciation', total: '9600.00',
+    });
+    expect((logAudit as any).mock.calls.at(-1)[1]).toMatchObject({ action: 'approve', detail: { journal: 'cpa_adjustments' } });
+    expect(notifyMany).toHaveBeenCalledWith([CPA, CRAIG], {
+      type: 'books_journal_entry_decided',
+      title: 'Your CPA adjustment was approved',
+      body: 'BMG CPA adjustment dated 2026-12-31 for $9,600.00: 2026 depreciation, approved and made in NetSuite as journal entry 7002.',
+      url: `/admin/journal-entries?id=${CPA_WAITING}`,
+      channels: ['in_app', 'push', 'email'],
+    });
+
+    // Sent back, the CPA hears why.
+    Object.assign(rowOf(CPA_DRAFT), { status: 'waiting', asked_by: CPA, asked_at: ASKED_AT });
+    vi.mocked(notifyMany).mockClear();
+    expect(await (await post({ action: 'send_back', id: CPA_DRAFT, reason: 'Use the loan schedule' })).json()).toEqual({ success: true });
+    expect(vi.mocked(notifyMany).mock.calls[0][1]).toMatchObject({
+      title: 'Your CPA adjustment was sent back',
+      body: 'BMG CPA adjustment dated 2026-12-31 for $9,600.00: 2026 depreciation, sent back to be fixed: Use the loan schedule',
+    });
+
+    // A super admin without Payments approves the CPA's, and doesn't approve or send back the general journal's.
+    state.hasPayments = false;
+    for (const body of [{ action: 'approve', id: WAITING, askedAt: ASKED_AT }, { action: 'send_back', id: WAITING, reason: 'Split it' }]) {
+      const general = await post(body);
+      expect(general.status, body.action).toBe(403);
+      expect(await general.json(), body.action).toEqual({ error: 'The general journal needs the Payments permission.' });
+    }
+    expect(rowOf(WAITING).status).toBe('waiting');
+    expect(netsuite.createJournalEntry).toHaveBeenCalledTimes(1);
   });
 });
