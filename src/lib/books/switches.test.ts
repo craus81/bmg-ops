@@ -68,9 +68,9 @@ describe('switches', () => {
     });
     expect(SWITCHES.fleetsuite_records).toEqual({
       name: "FleetSuite's record wins",
-      what: "A change made in NetSuite to a customer's name, email, phone or billing address, or a vendor's name, email or phone, no longer comes into FleetSuite over what FleetSuite has: it's listed under Books → Changed in NetSuite, to keep FleetSuite's (sent on to NetSuite) or take NetSuite's. Until it's on, NetSuite's changes come in as they do today.",
-      where: 'The NetSuite customer and vendor syncs, and Books → Changed in NetSuite',
-      turnOn: "Switch on FleetSuite's record wins? From now on a change made in NetSuite to a customer's or vendor's name, email, phone or address doesn't come into FleetSuite by itself: it's listed under Books → Changed in NetSuite.",
+      what: "A change made in NetSuite to a customer's name, email, phone or billing address, a vendor's name, email or phone, or an item's number, display name, description, purchase price, vendor or labor hours, no longer comes into FleetSuite over what FleetSuite has: it's listed under Books → Changed in NetSuite, to keep FleetSuite's (sent on to NetSuite, but for an item's vendor and labor hours, which stay in FleetSuite) or take NetSuite's. Until it's on, NetSuite's changes come in as they do today.",
+      where: 'The NetSuite customer, vendor and parts syncs, and Books → Changed in NetSuite',
+      turnOn: "Switch on FleetSuite's record wins? From now on a change made in NetSuite to a customer's or vendor's name, email, phone or address, or to an item's number, names, description, purchase price, vendor or labor hours, doesn't come into FleetSuite by itself: it's listed under Books → Changed in NetSuite.",
       turnOff: "Switch off FleetSuite's record wins? NetSuite's changes come into FleetSuite again as before, over what FleetSuite has.",
     });
     // Only the pieces that are the other way round ask in their own words.

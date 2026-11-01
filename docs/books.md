@@ -1890,14 +1890,14 @@ super admin with "Copy me on new alerts" ticked) saying what it asked for,
 when and by whom, and why FleetSuite can't tell, opening it on the NetSuite
 feed; more than three at once get one, opening the feed.
 
-So is what NetSuite has instead of FleetSuite's record of a customer or
-vendor (part 48, "FleetSuite's record wins"): each field listed on Changed
-in NetSuite is told about at the first look that finds it, once, while the
-switch is on (`told_at` on its own row). Each gets its own notification
-(`books_record_changed_in_netsuite`, in the app and by push, and emailed to
-a super admin with "Copy me on new alerts" ticked) saying what each has,
-opening it on Changed in NetSuite; more than three at once get one, opening
-the list.
+So is what NetSuite has instead of FleetSuite's record of a customer,
+vendor or item (parts 48 and 49, "FleetSuite's record wins"): each field
+listed on Changed in NetSuite is told about at the first look that finds
+it, once, while the switch is on (`told_at` on its own row). Each gets its
+own notification (`books_record_changed_in_netsuite`, in the app and by
+push, and emailed to a super admin with "Copy me on new alerts" ticked)
+saying what each has, opening it on Changed in NetSuite; more than three at
+once get one, opening the list, which names the kinds of record they're of.
 
 ## Reports
 
@@ -4366,10 +4366,10 @@ that NetSuite's record is the master), and from January 1, 2027 the team
 changes them only in FleetSuite (the NetSuite Exit Checklist's "FleetSuite
 the master for customers, vendors and items"). Until now the NetSuite syncs
 copy a change made in NetSuite over FleetSuite's record. Part 48 stops that
-for customers and vendors (`src/lib/fleetsuite-records.ts`, migration 480).
-It's built switched off ("Switches") and, like "Estimates in FleetSuite
-only", the other way round: while it's off, the syncs work as they do now
-and nothing is listed.
+for customers and vendors (`src/lib/fleetsuite-records.ts`, migration 480),
+and part 49 for items, on the same switch. It's built switched off
+("Switches") and, like "Estimates in FleetSuite only", the other way round:
+while it's off, the syncs work as they do now and nothing is listed.
 
 Once it's on:
 
@@ -4387,9 +4387,28 @@ Once it's on:
   and phone FleetSuite has for a vendor in the same way. Vendor Details
   (`/api/vendor-details`) writes the email, phone and terms it sent to
   NetSuite into FleetSuite's copy too, so the next copy doesn't list them.
-- A customer or vendor FleetSuite hasn't got comes in as now, and what only
-  NetSuite keeps still comes: a customer's spend, entity ID and parent, and
-  a vendor's terms and whether it's inactive.
+- The parts syncs, every hour (`/api/cron/parts-sync`,
+  `syncPartsIncremental` in `src/lib/parts-sync.ts`) and Sync from NetSuite
+  on the Parts page (`/api/parts/sync`), keep the item number, display
+  name, description, purchase price, vendor and labor hours FleetSuite has
+  for a part (`netsuite_parts`). NetSuite's fills one FleetSuite has blank,
+  and one both have blank falls back as before: a display name to the
+  number, a description to the display name. A display name that's only
+  the part's number, a description that's only its display name or number,
+  and a purchase price of 0 count as blank, since that's how the syncs wrote
+  a part NetSuite had none for; labor hours of 0 are a value, no labor
+  charged (migration 258). A generic part's labor isn't looked at
+  (migration 462), and when Sync from NetSuite couldn't read NetSuite's
+  costs, FleetSuite's purchase price stays as it is, unlooked at. The sales
+  price was already FleetSuite's (`resolveSalesPrice`).
+- Looking a part up by its number (`findOrMirrorPart`, the scans' "is this
+  part real?") finds the part FleetSuite has for that NetSuite item under
+  its own number, bringing it back if it was put away, instead of writing
+  NetSuite's number and names over it.
+- A customer, vendor or item FleetSuite hasn't got comes in as now, and what
+  only NetSuite keeps still comes: a customer's spend, entity ID and parent,
+  a vendor's terms and whether it's inactive, and an item's type, class,
+  department, stock and whether it's taxable or inactive.
 
 Where NetSuite has something else for one of those fields, the sync lists
 it (`record_differences`, written by `note_record_differences`): one row for
@@ -4397,13 +4416,29 @@ each field of a record, open until it's dealt with. A sync that sees it
 again updates the open row with what each has now, and one that finds the
 two the same again closes it by itself. A name is compared as written, an
 email in any case, a phone by its digits with or without the leading 1, an
-address's lines in any case, and extra spaces never count. A sync that
+address's lines in any case, and extra spaces never count. An item's number
+and vendor are compared in any case, its display name and description as
+written, its purchase price to the cent and its labor hours to the
+hundredth. Where NetSuite has none for an item, FleetSuite's stays and
+nothing is listed: NetSuite's display names, vendors and labor hours are
+mostly blank, and listing each would bury the rest. A value longer than
+1,000 characters, as only an item's description gets, is listed cut short
+(`NOTED_TEXT`), so it can't fail the sync that notes it, and NetSuite's
+can't be taken from the list then. A sync that
 can't tell whether the switch is on (`recordsWinForSync`), or can't read
 FleetSuite's records, stops rather than write over what it couldn't see: a
 switch that can't be read counts as off everywhere else, and here off would
 copy NetSuite's over FleetSuite's with nothing listed. One that can't note
-what it found says so, and the two-hourly sync, which then doesn't move on,
-and the vendor copy see it again next time.
+what it found says so, and the two-hourly sync and the hourly parts sync,
+which then don't move on, and the vendor copy see it again next time;
+Sync from NetSuite on the Parts page says so in its answer.
+
+Both parts syncs now write their parts in groups that name the same
+columns (`upsertPartRows`). One write of parts naming different columns
+writes every column any of them names, and a part without one got nothing
+there: a part NetSuite has no labor hours for lost FleetSuite's whenever
+another part in the same 200 had NetSuite's. That was so before part 49
+too, switched off or on.
 
 Books → Changed in NetSuite (`/admin/books/changed-in-netsuite`,
 `deepLinks.booksChangedInNetsuite`) shows the open ones, newest first, each
@@ -4412,15 +4447,24 @@ NetSuite, and the last 25 dealt with. A super admin taps:
 
 - **Keep FleetSuite's:** FleetSuite sends its value to NetSuite, a
   customer's as the Customer Record's Edit panel does (`updateCustomer`), a
-  vendor's by changing its vendor record (`patchEntityRecord`). When
-  NetSuite refuses, nothing changed and it stays open. When FleetSuite can't
-  tell whether NetSuite took it, it stays open too, and the next sync closes
-  it once NetSuite has FleetSuite's. One that FleetSuite has meanwhile made
-  the same as NetSuite's closes without sending anything, and one where
-  FleetSuite has none now can only be taken.
+  vendor's by changing its vendor record (`patchEntityRecord`), and an
+  item's number, display name, description or purchase price through the
+  item script (`updateItemFields`, `scripts/netsuite-item-restlet.js`) as
+  the Parts page's edits do, which must say it wrote the field: one that
+  answers without it is an older script that needs replacing, and nothing
+  changed. An item's vendor and labor hours stay in FleetSuite (NetSuite
+  keeps an item's vendor as a link to a vendor record, and the script
+  doesn't write labor), so keeping FleetSuite's sends nothing and it's
+  listed again only if NetSuite's changes. When NetSuite refuses, nothing
+  changed and it stays open. When FleetSuite can't tell whether NetSuite
+  took it, it stays open too, and the next sync closes it once NetSuite has
+  FleetSuite's. One that FleetSuite has meanwhile made the same as
+  NetSuite's closes without sending anything, and one where FleetSuite has
+  none now can only be taken.
 - **Take NetSuite's:** FleetSuite's record takes NetSuite's value, a
-  customer's in the CRM record and the customer list. Nothing goes to
-  NetSuite.
+  customer's in the CRM record and the customer list, an item's in its
+  part. An item number another part in FleetSuite already has, in any case,
+  can't be taken. Nothing goes to NetSuite.
 
 Each asks first, is claimed before it's done so a second tap does nothing,
 and is audited (`POST /api/admin/books/changed-in-netsuite`,
@@ -4432,12 +4476,18 @@ Made-up example: on January 6, 2027 someone changes Acme Fleet Services'
 email in NetSuite to ap@acmefleet.example. FleetSuite has
 billing@acmefleet.example, so the next sync keeps it and lists the email.
 The next morning Craig opens the notification and taps Keep FleetSuite's,
-and FleetSuite sends billing@acmefleet.example to NetSuite.
+and FleetSuite sends billing@acmefleet.example to NetSuite. On January 8
+someone changes part C4-RA24-3's purchase price in NetSuite to $14.25 and
+its labor hours to 2. FleetSuite has $12.50 and 1.5 hours, so the next
+hourly parts sync keeps both and lists them. Keep FleetSuite's on the
+purchase price sends $12.50 to NetSuite through the item script; on the
+labor hours it keeps 1.5 in FleetSuite and sends nothing.
 
 ### What isn't done yet
 
-- Items (their number, names, description, purchase price, vendor and
-  labor) join in the next part.
+- Keeping FleetSuite's item number, display name, description or purchase
+  price needs the item script in NetSuite to be the current
+  `scripts/netsuite-item-restlet.js`, as the Parts page's edits do.
 
 ## Switches
 
@@ -4470,7 +4520,7 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 | `customer_vendor_details` | Anyone with Credit Applications changes a customer's terms and credit limit, and anyone with Payments a vendor's email, phone, terms, addresses and 1099 details, and FleetSuite makes the change in NetSuite ("Customer and vendor details changed in FleetSuite") | More → Sales → Customer Terms, or Change on a customer; More → Money & Books → Vendor Details |
 | `item_accounts` | Anyone with Payments changes an item's income account, an inventory item's cost of goods sold and inventory asset accounts, and the expense account of one that's bought, and FleetSuite makes the change in NetSuite ("Item accounts changed in FleetSuite") | More → Money & Books → Item Accounts, or Change accounts on Books → Stock by item |
 | `estimates_in_fleetsuite` | Estimates stay in FleetSuite: nobody pushes or syncs one to NetSuite, and NetSuite gets each job's sales order when it's made ("Estimates in FleetSuite only") | An estimate's buttons, where Push to NetSuite as Estimate goes |
-| `fleetsuite_records` | A change made in NetSuite to a customer's name, email, phone or billing address, or a vendor's name, email or phone, doesn't come over FleetSuite's: it's listed to keep FleetSuite's, sent on to NetSuite, or take NetSuite's ("FleetSuite's record wins") | The NetSuite customer and vendor syncs, and Books → Changed in NetSuite |
+| `fleetsuite_records` | A change made in NetSuite to a customer's name, email, phone or billing address, a vendor's name, email or phone, or an item's number, display name, description, purchase price, vendor or labor hours, doesn't come over FleetSuite's: it's listed to keep FleetSuite's, sent on to NetSuite (but for an item's vendor and labor hours, which stay in FleetSuite), or take NetSuite's ("FleetSuite's record wins") | The NetSuite customer, vendor and parts syncs, and Books → Changed in NetSuite |
 
 ## Posting
 

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { findItems } from './netsuite';
+import { recordsWinForSync } from './fleetsuite-records';
 
 export interface MirroredPart {
   id: string;
@@ -61,6 +62,30 @@ export async function findOrMirrorPart(
         .single();
       if (error || !revived) return { part: exact, mirrored: false, error: error?.message };
       return { part: revived as MirroredPart, mirrored: true };
+    }
+
+    // Once FleetSuite's record wins (part 49, src/lib/fleetsuite-records.ts),
+    // a part FleetSuite already has for this item, under another number or
+    // name, is the one: brought back if it was put away, never written over.
+    // A switch that can't be read mirrors nothing.
+    if (await recordsWinForSync(service)) {
+      const { data: mine, error: readErr } = await service
+        .from('netsuite_parts')
+        .select(PART_COLS)
+        .eq('netsuite_id', String(item.id))
+        .maybeSingle();
+      if (readErr) return { part: null, mirrored: false, error: readErr.message };
+      if (mine) {
+        if (mine.is_active !== false) return { part: mine as MirroredPart, mirrored: false };
+        const { data: revived, error } = await service
+          .from('netsuite_parts')
+          .update({ is_active: true, last_synced_at: new Date().toISOString() })
+          .eq('id', mine.id)
+          .select(PART_COLS)
+          .single();
+        if (error || !revived) return { part: mine as MirroredPart, mirrored: false, error: error?.message };
+        return { part: revived as MirroredPart, mirrored: true };
+      }
     }
 
     const { data: upserted, error } = await service

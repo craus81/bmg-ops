@@ -1,17 +1,17 @@
 // FleetSuite's record wins (src/lib/fleetsuite-records.ts, migration 480): the same value written two ways, what a sync
 // writes once it's on (FleetSuite's kept, NetSuite's filling a blank, what NetSuite has instead), noting it, the list,
 // and keeping FleetSuite's or taking NetSuite's: claimed first, sent once, opened again when it doesn't go through.
-// Made-up data.
+// Customers and vendors (part 48), and items (part 49). Made-up data.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const h = vi.hoisted(() => ({ updateCustomer: vi.fn(), patchEntityRecord: vi.fn() }));
-vi.mock('@/lib/netsuite', () => ({ updateCustomer: h.updateCustomer, patchEntityRecord: h.patchEntityRecord }));
+const h = vi.hoisted(() => ({ updateCustomer: vi.fn(), patchEntityRecord: vi.fn(), updateItemFields: vi.fn() }));
+vi.mock('@/lib/netsuite', () => ({ updateCustomer: h.updateCustomer, patchEntityRecord: h.patchEntityRecord, updateItemFields: h.updateItemFields }));
 
 import {
-  actOn, actRefusal, addressLine, changeOf, customerToWrite, isBlank, keepFleetsuite, noteDifferences, NO_ADDRESS,
-  prospectAddress, prospectFacts, readCustomerRecords, readDifferences, readVendorRecords, recordsWin, recordsWinForSync, sameValue,
-  shownValue,
-  FIELDS, LIST_LIMIT, type DifferenceRow, type Seen,
+  actOn, actRefusal, addressLine, changeOf, customerToWrite, isBlank, isCut, itemToWrite, keepFleetsuite, keepSends, netsuiteItemFacts,
+  noteDifferences, NO_ADDRESS, NOTED_TEXT, partFacts, prospectAddress, prospectFacts, readCustomerRecords, readDifferences, readItemRecords,
+  readVendorRecords, recordsWin, recordsWinForSync, sameValue, shownValue,
+  FIELDS, LIST_LIMIT, type DifferenceRow, type PartRecord, type Seen,
 } from './fleetsuite-records';
 
 type Row = Record<string, any>;
@@ -65,6 +65,11 @@ function fake(tables: Record<string, Row[]> = {}) {
       neq: (c: string, v: unknown) => { filters.push([`${c}!=${v}`, (r) => r[c] !== v]); return q; },
       is: (c: string, v: unknown) => { filters.push([`${c} is ${v}`, (r) => (r[c] ?? null) === v]); return q; },
       in: (c: string, v: unknown[]) => { filters.push([`${c} in ${v.length}`, (r) => v.includes(r[c])]); return q; },
+      // As Postgres's ILIKE: any case, with \ escaping % and _ (the only patterns these tests use are escaped ones).
+      ilike: (c: string, v: string) => {
+        filters.push([`${c} ilike ${v}`, (r) => String(r[c] ?? '').toLowerCase() === v.replace(/\\([%_\\])/g, '$1').toLowerCase()]);
+        return q;
+      },
       order: (c: string, o: { ascending?: boolean } = {}) => { sorts.push([c, o.ascending !== false]); return q; },
       limit: (n: number) => { limit = n; return q; },
       range: (a: number, b: number) => { range = [a, b]; return q; },
@@ -111,6 +116,7 @@ const prospect = (over: Row = {}) => ({
 beforeEach(() => {
   h.updateCustomer.mockReset();
   h.patchEntityRecord.mockReset();
+  h.updateItemFields.mockReset();
 });
 
 describe('the same value, written two ways', () => {
@@ -375,7 +381,7 @@ describe('the list', () => {
     expect(changeOf(kept, new Map([[BY, 'Craig']]), link)).toEqual({
       id: kept.id, kind: 'customer', kindName: 'Customer', netsuiteId: ACME, name: `NetSuite ID ${ACME}`, field: 'address', fieldName: 'Billing address',
       fleetsuite: "100 Main St, O'Fallon, MO, 63366", netsuite: '(none)', status: 'kept', firstSeenAt: kept.first_seen_at, lastSeenAt: kept.last_seen_at,
-      closedAt: '2027-01-07T15:00:00.000Z', closedBy: 'Craig', sent: true, link: `https://netsuite.example/customer/${ACME}`,
+      closedAt: '2027-01-07T15:00:00.000Z', closedBy: 'Craig', sent: true, sends: true, link: `https://netsuite.example/customer/${ACME}`,
     });
     expect(link).toHaveBeenCalledWith('customer', ACME);
     expect(changeOf(difference({ kind: 'vendor', closed_by: BY }), new Map(), () => null)).toMatchObject({ kindName: 'Vendor', closedBy: null, link: null });
@@ -601,5 +607,308 @@ describe('keeping FleetSuite’s or taking NetSuite’s', () => {
     const c = setup();
     c.failing.add('record_differences:update');
     await expect(actOn(c.service, { id: difference().id, act: 'take', by: BY })).rejects.toThrow("Couldn't take the difference: record_differences said no");
+  });
+});
+
+// ── Items (part 49) ────────────────────────────────────────────────────────
+
+const PART = '5001';
+
+/** A part as FleetSuite's catalog has it. */
+const part = (over: Partial<PartRecord> = {}): PartRecord => ({
+  netsuite_id: PART, item_number: 'C4-RA24-3', display_name: 'Class III hitch receiver', description: 'Receiver for 2-inch shank, 6,000 lb',
+  purchase_price: '12.50', vendor: 'CURT Manufacturing', labor_hours: '1.50', is_generic: false, ...over,
+});
+
+describe("an item's fields", () => {
+  it('takes its number and vendor in any case, its names as written, its cost to the cent and labor to the hundredth', () => {
+    expect(sameValue('item_number', 'c4-ra24-3', 'C4-RA24-3 ')).toBe(true);
+    expect(sameValue('item_number', 'C4-RA24-3', 'C4-RA24-4')).toBe(false);
+    expect(sameValue('vendor', 'curt manufacturing', 'CURT  Manufacturing')).toBe(true);
+    expect(sameValue('display_name', 'Hitch  receiver', 'Hitch receiver')).toBe(true);
+    expect(sameValue('display_name', 'hitch receiver', 'Hitch receiver')).toBe(false);
+    expect(sameValue('description', 'Class III', 'class iii')).toBe(false);
+    expect(sameValue('purchase_price', '12.5', '12.50')).toBe(true);
+    expect(sameValue('purchase_price', '12.504', '12.5')).toBe(true);
+    expect(sameValue('purchase_price', '12.51', '12.5')).toBe(false);
+    // Half up, as Postgres keeps 1.005 in a numeric(12,2): 1.01.
+    expect(sameValue('purchase_price', '1.005', '1.01')).toBe(true);
+    expect(sameValue('labor_hours', '1.5', '1.50')).toBe(true);
+    expect(sameValue('labor_hours', '1.5', '1.51')).toBe(false);
+    expect(sameValue('labor_hours', '0', '0.00')).toBe(true);
+    expect(sameValue('labor_hours', '0', null)).toBe(false);
+  });
+
+  it('shows a purchase price in dollars and labor in hours, and any other as written', () => {
+    expect(shownValue('12.5', 'purchase_price')).toBe('$12.50');
+    expect(shownValue('1234.5', 'purchase_price')).toBe('$1,234.50');
+    expect(shownValue('0.0125', 'purchase_price')).toBe('$0.0125');
+    expect(shownValue('1', 'labor_hours')).toBe('1 hour');
+    expect(shownValue('1.5', 'labor_hours')).toBe('1.5 hours');
+    expect(shownValue('0', 'labor_hours')).toBe('0 hours');
+    expect(shownValue('12.5', 'display_name')).toBe('12.5');
+    expect(shownValue('12.5')).toBe('12.5');
+    expect(shownValue(null, 'purchase_price')).toBe('(none)');
+  });
+
+  it("counts a display name that's only the number, a description that's only the name or number, and a cost of 0 as none", () => {
+    expect(partFacts(part())).toEqual({
+      item_number: 'C4-RA24-3', display_name: 'Class III hitch receiver', description: 'Receiver for 2-inch shank, 6,000 lb',
+      purchase_price: '12.5', vendor: 'CURT Manufacturing', labor_hours: '1.5',
+    });
+    // As the syncs write a part NetSuite has nothing for.
+    expect(partFacts(part({ display_name: 'c4-ra24-3 ', description: 'C4-RA24-3', purchase_price: 0, vendor: null, labor_hours: null }))).toEqual({
+      item_number: 'C4-RA24-3', display_name: null, description: null, purchase_price: null, vendor: null, labor_hours: null,
+    });
+    expect(partFacts(part({ description: 'class iii  hitch receiver' })).description).toBeNull();
+    expect(partFacts(part({ description: 'c4-ra24-3' })).description).toBeNull();
+    // Labor of 0 is a value: no labor charged.
+    expect(partFacts(part({ labor_hours: 0 })).labor_hours).toBe('0');
+    expect(partFacts(part({ purchase_price: '-1' })).purchase_price).toBeNull();
+    expect(partFacts(part({ item_number: ' ', display_name: ' ', description: '' }))).toMatchObject({ item_number: null, display_name: null, description: null });
+  });
+
+  it("reads NetSuite's item as the syncs always have: a cost of 0 as none, labor as a number", () => {
+    expect(netsuiteItemFacts({ item_number: 'C4-RA24-3', display_name: '', description: 'Receiver', vendor_name: null, labor_hours: '1.50' }, '0')).toEqual({
+      item_number: 'C4-RA24-3', display_name: null, description: 'Receiver', purchase_price: null, vendor: null, labor_hours: '1.5',
+    });
+    expect(netsuiteItemFacts({ labor_hours: 'abc' }, 14.25)).toMatchObject({ purchase_price: '14.25', labor_hours: '0' });
+    expect(netsuiteItemFacts({ labor_hours: ' ' }, null)).toMatchObject({ purchase_price: null, labor_hours: null });
+  });
+
+  it('sends on keeping only what NetSuite takes from FleetSuite: not an item’s vendor or labor hours', () => {
+    expect(FIELDS.item.filter((f) => keepSends('item', f))).toEqual(['item_number', 'display_name', 'description', 'purchase_price']);
+    expect(keepSends('customer', 'email')).toBe(true);
+    expect(keepSends('vendor', 'phone')).toBe(true);
+  });
+});
+
+describe('what a parts sync writes once FleetSuite’s record wins', () => {
+  const netsuite = (over: Record<string, unknown> = {}, cost: unknown = '14.25') => netsuiteItemFacts({
+    item_number: 'C4-RA24-3B', display_name: 'Hitch receiver', description: 'Receiver for 2-inch shank', vendor_name: 'Curt Mfg', labor_hours: '2', ...over,
+  }, cost);
+
+  it("keeps FleetSuite's part and says where NetSuite has something else", () => {
+    const { columns, seen } = itemToWrite(PART, netsuite(), part(), { costRead: true });
+    expect(columns).toEqual({
+      item_number: 'C4-RA24-3', display_name: 'Class III hitch receiver', description: 'Receiver for 2-inch shank, 6,000 lb',
+      purchase_price: 12.5, vendor: 'CURT Manufacturing', labor_hours: 1.5,
+    });
+    expect(seen.map((s) => [s.field, s.differs])).toEqual([
+      ['item_number', true], ['display_name', true], ['description', true], ['purchase_price', true], ['vendor', true], ['labor_hours', true],
+    ]);
+    expect(seen[3]).toEqual({ kind: 'item', netsuite_id: PART, name: 'C4-RA24-3', field: 'purchase_price', fleetsuite: '12.5', netsuite: '14.25', differs: true });
+  });
+
+  it("fills a blank with NetSuite's, and one both have blank as the syncs always have", () => {
+    const blank = part({ display_name: 'C4-RA24-3', description: 'C4-RA24-3', purchase_price: 0, vendor: null, labor_hours: null });
+    const filled = itemToWrite(PART, netsuite({ description: null }), blank, { costRead: true });
+    expect(filled.columns).toEqual({
+      item_number: 'C4-RA24-3', display_name: 'Hitch receiver', description: 'Hitch receiver', purchase_price: 14.25, vendor: 'Curt Mfg', labor_hours: 2,
+    });
+    expect(filled.seen.filter((s) => s.differs).map((s) => s.field)).toEqual(['item_number']);
+    const none = itemToWrite(PART, netsuite({ display_name: null, description: null, vendor_name: null, labor_hours: null }, 0), blank, { costRead: true });
+    expect(none.columns).toEqual({ item_number: 'C4-RA24-3', display_name: 'C4-RA24-3', description: '', purchase_price: 0, vendor: null });
+    // A cost below 0 is none too, so NetSuite's 0 comes over it.
+    expect(itemToWrite(PART, netsuite({}, 0), part({ purchase_price: -1 }), { costRead: true }).columns.purchase_price).toBe(0);
+  });
+
+  it("doesn't list where NetSuite has none for an item, so it closes one open for it", () => {
+    const { columns, seen } = itemToWrite(PART, netsuite({ item_number: 'C4-RA24-3', display_name: '', description: null, vendor_name: null, labor_hours: null }, 0), part(), { costRead: true });
+    expect(columns).toMatchObject({ display_name: 'Class III hitch receiver', purchase_price: 12.5, vendor: 'CURT Manufacturing', labor_hours: 1.5 });
+    expect(seen.map((s) => [s.field, s.netsuite, s.differs])).toEqual([
+      ['item_number', 'C4-RA24-3', false], ['display_name', null, false], ['description', null, false],
+      ['purchase_price', null, false], ['vendor', null, false], ['labor_hours', null, false],
+    ]);
+  });
+
+  it("leaves a generic part's labor alone, and a cost it couldn't read as FleetSuite has it, unlooked at", () => {
+    const generic = itemToWrite(PART, netsuite(), part({ is_generic: true, labor_hours: null }), { costRead: true });
+    expect('labor_hours' in generic.columns).toBe(false);
+    expect(generic.seen.map((s) => s.field)).not.toContain('labor_hours');
+    const unread = itemToWrite(PART, netsuite({}, 0), part({ purchase_price: '0' }), { costRead: false });
+    expect(unread.columns.purchase_price).toBe(0);
+    expect(unread.seen.map((s) => s.field)).not.toContain('purchase_price');
+    expect(itemToWrite(PART, netsuite({}, 0), part(), { costRead: false }).columns.purchase_price).toBe(12.5);
+  });
+
+  it("names a part by FleetSuite's number, or NetSuite's when FleetSuite has none", () => {
+    const { columns, seen } = itemToWrite(PART, netsuite(), part({ item_number: null, display_name: null }), { costRead: true });
+    expect(columns).toMatchObject({ item_number: 'C4-RA24-3B', display_name: 'Hitch receiver' });
+    expect(seen[0]).toMatchObject({ name: 'C4-RA24-3B', fleetsuite: null, netsuite: 'C4-RA24-3B', differs: false });
+  });
+
+  it('reads the parts by NetSuite ID, 200 at a time, each once, and throws when they can’t be read', async () => {
+    const ids = Array.from({ length: 201 }, (_, i) => String(5000 + i));
+    const f = fake({ netsuite_parts: [part({ netsuite_id: '5000' }), part({ netsuite_id: '5200', item_number: 'X-1' }), part({ netsuite_id: null })] });
+    const read = await readItemRecords(f.service, [...ids, '5000', 'not-an-id', '']);
+    expect([...read.keys()]).toEqual(['5000', '5200']);
+    expect(f.reads.map((r) => r.filters)).toEqual([['netsuite_id in 200'], ['netsuite_id in 1']]);
+    f.failing.add('netsuite_parts');
+    await expect(readItemRecords(f.service, ['5000'])).rejects.toThrow("Couldn't read FleetSuite's items: netsuite_parts said no");
+  });
+});
+
+describe('noting a long value', () => {
+  it('keeps one too long for the list cut, ending in an ellipsis, and knows it was', async () => {
+    const f = fake();
+    const long = 'Receiver '.repeat(200);
+    await noteDifferences(f.service, 'item', [{ kind: 'item', netsuite_id: PART, name: 'C4-RA24-3', field: 'description', fleetsuite: 'Short', netsuite: long, differs: true }]);
+    const [noted] = f.rpcs[0].args.p;
+    expect(noted.fleetsuite).toBe('Short');
+    expect(noted.netsuite).toHaveLength(NOTED_TEXT);
+    expect(noted.netsuite).toBe(`${long.slice(0, NOTED_TEXT - 1)}…`);
+    expect(isCut(noted.netsuite)).toBe(true);
+    expect(isCut(long.slice(0, NOTED_TEXT))).toBe(false);
+    expect(isCut('Short…')).toBe(false);
+    expect(isCut(null)).toBe(false);
+  });
+});
+
+describe('keeping FleetSuite’s or taking NetSuite’s for an item', () => {
+  const item = (over: Partial<DifferenceRow> = {}) => difference({
+    kind: 'item', netsuite_id: PART, name: 'C4-RA24-3', field: 'purchase_price', fleetsuite_value: '12.5', netsuite_value: '14.25', ...over,
+  });
+  const setup = (row: DifferenceRow = item(), parts: Row[] = [part()]) => fake({ record_differences: [{ ...row }], netsuite_parts: parts.map((p) => ({ ...p })) });
+  const after = (f: ReturnType<typeof fake>) => f.tables.record_differences[0];
+  const press = (f: ReturnType<typeof fake>, act: 'keep' | 'take') => actOn(f.service, { id: difference().id, act, by: BY, now: new Date('2027-01-08T15:00:00.000Z') });
+
+  it('acts on the six fields of an item, and no other', () => {
+    for (const field of FIELDS.item) expect(actRefusal(item({ field }))).toBeNull();
+    expect(actRefusal(item({ field: 'email' }))).toMatchObject({ status: 409 });
+  });
+
+  it("takes NetSuite's purchase price, labor hours and names into the part, sending nothing", async () => {
+    const f = setup();
+    expect(await press(f, 'take')).toMatchObject({ ok: true, status: 'taken' });
+    expect(f.tables.netsuite_parts[0].purchase_price).toBe(14.25);
+    expect(f.updates.map((u) => [u.table, u.filters])).toEqual([
+      ['record_differences', [`id=${difference().id}`, 'status=open']], ['netsuite_parts', [`netsuite_id=${PART}`]],
+    ]);
+    expect(f.updates[1].values).toEqual({ purchase_price: 14.25, updated_at: expect.any(String) });
+    const l = setup(item({ field: 'labor_hours', fleetsuite_value: '1.5', netsuite_value: '2' }));
+    await press(l, 'take');
+    expect(l.tables.netsuite_parts[0].labor_hours).toBe(2);
+    const d = setup(item({ field: 'display_name', fleetsuite_value: 'Class III hitch receiver', netsuite_value: ' Hitch receiver ' }));
+    await press(d, 'take');
+    expect(d.tables.netsuite_parts[0].display_name).toBe('Hitch receiver');
+    expect(h.updateItemFields).not.toHaveBeenCalled();
+  });
+
+  it("won't take NetSuite's number while another part in FleetSuite has it, in any case", async () => {
+    const row = item({ field: 'item_number', fleetsuite_value: 'C4-RA24-3', netsuite_value: 'C4-RA24-3B' });
+    const f = setup(row, [part(), part({ netsuite_id: '5002', item_number: 'c4-ra24-3b' })]);
+    expect(await press(f, 'take')).toEqual({
+      ok: false, status: 409, error: "Another part in FleetSuite already has the number c4-ra24-3b, so NetSuite's can't be taken. Nothing changed.",
+    });
+    expect(after(f).status).toBe('open');
+    expect(f.tables.netsuite_parts[0].item_number).toBe('C4-RA24-3');
+    // A part FleetSuite keeps by hand, with no NetSuite ID, counts too.
+    const m = setup(row, [part(), part({ netsuite_id: null, item_number: 'C4-RA24-3B' })]);
+    expect(await press(m, 'take')).toMatchObject({ status: 409 });
+    // The part's own number, or one only like it, doesn't.
+    const own = setup(row, [part({ item_number: 'c4-ra24-3b' })]);
+    expect(await press(own, 'take')).toMatchObject({ ok: true, status: 'taken' });
+    expect(own.tables.netsuite_parts[0].item_number).toBe('C4-RA24-3B');
+    const g = setup(row, [part(), part({ netsuite_id: '5003', item_number: 'C4-RA24-3BX' })]);
+    expect(await press(g, 'take')).toMatchObject({ ok: true, status: 'taken' });
+    expect(g.tables.netsuite_parts[0].item_number).toBe('C4-RA24-3B');
+    const w = setup(item({ field: 'item_number', fleetsuite_value: 'C4_RA24%3', netsuite_value: 'C4_RA24%3B' }), [part({ item_number: 'C4_RA24%3' }), part({ netsuite_id: '5004', item_number: 'C4XRA24Y3B' })]);
+    expect(await press(w, 'take')).toMatchObject({ ok: true });
+    const x = setup(row);
+    x.state.failRead = (table, filters) => table === 'netsuite_parts' && filters.some((n) => n.includes('ilike'));
+    await expect(press(x, 'take')).rejects.toThrow("Couldn't look for another part with that number: netsuite_parts said no");
+  });
+
+  it("won't take a value the list only has cut short", async () => {
+    const f = setup(item({ field: 'description', fleetsuite_value: 'Receiver', netsuite_value: `${'x'.repeat(NOTED_TEXT - 1)}…` }));
+    expect(await press(f, 'take')).toEqual({
+      ok: false, status: 409, error: "NetSuite's description is too long to take from the list. Nothing changed: copy it from NetSuite into FleetSuite instead.",
+    });
+    expect(after(f).status).toBe('open');
+    expect(f.tables.netsuite_parts[0].description).toBe('Receiver for 2-inch shank, 6,000 lb');
+  });
+
+  it("keeps FleetSuite's number, names, description and purchase price by sending them through the item script", async () => {
+    const sends: Array<[Partial<DifferenceRow>, Record<string, unknown>, string[]]> = [
+      [{ field: 'purchase_price' }, { purchasePrice: 12.5 }, ['cost']],
+      [{ field: 'item_number', fleetsuite_value: 'C4-RA24-3', netsuite_value: 'C4-RA24-3B' }, { itemNumber: 'C4-RA24-3' }, ['itemid']],
+      [{ field: 'display_name', fleetsuite_value: 'Class III hitch receiver', netsuite_value: 'Hitch' }, { displayName: 'Class III hitch receiver' }, ['displayname']],
+      [{ field: 'description', fleetsuite_value: 'x', netsuite_value: 'Receiver' }, { description: 'Receiver for 2-inch shank, 6,000 lb' }, ['purchasedescription']],
+    ];
+    for (const [over, body, fieldsSet] of sends) {
+      h.updateItemFields.mockReset();
+      h.updateItemFields.mockResolvedValue({ success: true, fieldsSet });
+      const f = setup(item(over));
+      expect(await press(f, 'keep')).toMatchObject({ ok: true, status: 'kept' });
+      expect(h.updateItemFields).toHaveBeenCalledWith(PART, body);
+      expect(after(f)).toMatchObject({ status: 'kept', sent_to_netsuite: true, closed_by: BY });
+    }
+  });
+
+  it("opens it again when the item script answers without changing it, or NetSuite refuses, or can't be sure", async () => {
+    h.updateItemFields.mockResolvedValue({ success: true, fieldsSet: ['displayname'] });
+    const f = setup();
+    expect(await press(f, 'keep')).toEqual({
+      ok: false, status: 502,
+      error: "NetSuite didn't take it: the item script in NetSuite answered without changing it, so it may need replacing with the newer scripts/netsuite-item-restlet.js. Nothing changed.",
+    });
+    expect(after(f)).toMatchObject({ status: 'open', sent_to_netsuite: null });
+    h.updateItemFields.mockResolvedValue({ success: true });
+    expect(await press(setup(), 'keep')).toMatchObject({ status: 502, error: expect.stringContaining('answered without changing it') });
+    h.updateItemFields.mockResolvedValue({ success: false, error: 'Item RESTlet not configured.' });
+    expect(await press(setup(), 'keep')).toMatchObject({ status: 502, error: "NetSuite didn't take it: Item RESTlet not configured. Nothing changed." });
+    h.updateItemFields.mockResolvedValue({ success: false, error: 'NetSuite RESTlet error (502): Bad gateway', unsure: true });
+    const u = setup();
+    expect(await press(u, 'keep')).toMatchObject({ status: 502, error: expect.stringContaining("so FleetSuite can't tell whether NetSuite took it") });
+    expect(after(u).status).toBe('open');
+  });
+
+  it("keeps FleetSuite's vendor and labor hours in FleetSuite, sending nothing", async () => {
+    for (const over of [
+      { field: 'vendor' as const, fleetsuite_value: 'CURT Manufacturing', netsuite_value: 'Curt Mfg' },
+      { field: 'labor_hours' as const, fleetsuite_value: '1.5', netsuite_value: '2' },
+    ]) {
+      const f = setup(item(over));
+      expect(await press(f, 'keep')).toMatchObject({ ok: true, status: 'kept' });
+      expect(after(f)).toMatchObject({ status: 'kept', sent_to_netsuite: false, closed_by: BY, closed_at: '2027-01-08T15:00:00.000Z' });
+      expect(f.tables.netsuite_parts[0]).toEqual(part());
+    }
+    expect(h.updateItemFields).not.toHaveBeenCalled();
+    // One FleetSuite has none of now can only be taken.
+    const g = setup(item({ field: 'vendor', fleetsuite_value: 'CURT Manufacturing', netsuite_value: 'Curt Mfg' }), [part({ vendor: null })]);
+    expect(await press(g, 'keep')).toEqual({
+      ok: false, status: 409, error: "FleetSuite has no vendor for the item C4-RA24-3 now, so there's nothing to keep. Take NetSuite's instead.",
+    });
+    const p = setup(item(), [part({ purchase_price: 0 })]);
+    expect(await press(p, 'keep')).toMatchObject({ error: expect.stringContaining('nothing to send') });
+    // And a second press does nothing.
+    const s = setup(item({ field: 'labor_hours', fleetsuite_value: '1.5', netsuite_value: '2' }));
+    s.state.before = (table) => { if (table === 'record_differences') after(s).status = 'taken'; };
+    expect(await press(s, 'keep')).toMatchObject({ status: 409, error: expect.stringContaining('just now') });
+  });
+
+  it("closes one as the same when FleetSuite's has become NetSuite's, and refuses one for a part FleetSuite no longer has", async () => {
+    const f = setup(item({ netsuite_value: '12.50' }));
+    expect(await press(f, 'keep')).toMatchObject({ ok: true, status: 'same' });
+    expect(h.updateItemFields).not.toHaveBeenCalled();
+    const g = setup(item(), []);
+    expect(await press(g, 'take')).toEqual({
+      ok: false, status: 409, error: "FleetSuite doesn't have the item C4-RA24-3 any more, so there's nothing to keep or take.",
+    });
+    const r = setup();
+    r.failing.add('netsuite_parts');
+    await expect(press(r, 'take')).rejects.toThrow("Couldn't read FleetSuite's item: netsuite_parts said no");
+    const w = setup();
+    w.failing.add('netsuite_parts:update');
+    expect(await press(w, 'take')).toEqual({ ok: false, status: 500, error: "Couldn't change FleetSuite's item: netsuite_parts said no. Nothing changed." });
+    expect(after(w).status).toBe('open');
+  });
+
+  it('shows an item on the list with its values in dollars and hours, and whether keeping sends it on', () => {
+    expect(changeOf(item(), new Map(), () => null)).toMatchObject({ kindName: 'Item', name: 'C4-RA24-3', fieldName: 'Purchase price', fleetsuite: '$12.50', netsuite: '$14.25', sends: true });
+    expect(changeOf(item({ field: 'labor_hours', fleetsuite_value: '1', netsuite_value: '2.5' }), new Map(), () => null))
+      .toMatchObject({ fieldName: 'Labor hours', fleetsuite: '1 hour', netsuite: '2.5 hours', sends: false });
+    expect(changeOf(item({ field: 'vendor', status: 'kept', sent_to_netsuite: false }), new Map(), () => null)).toMatchObject({ fieldName: 'Vendor', sends: false, sent: false });
   });
 });

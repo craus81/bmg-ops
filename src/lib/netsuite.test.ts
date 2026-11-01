@@ -13,6 +13,7 @@ import {
   createCustomerOrLead,
   updateCustomer,
   getItemBasePrices,
+  updateItemFields,
 } from './netsuite';
 
 // Characterization tests for the NetSuite client. All network calls are
@@ -880,5 +881,43 @@ describe('updateCustomer', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('do not have permissions');
+  });
+});
+
+// The item script's field changes (scripts/netsuite-item-restlet.js), as the Parts page's edits and Books → Changed in
+// NetSuite send them: what the script says it wrote comes back, a refusal is a no, and no answer or a fault on
+// NetSuite's side is not sure, since NetSuite may have made the change anyway.
+describe('updateItemFields', () => {
+  const SCRIPT = 'https://1234567-sb1.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=101&deploy=1';
+  beforeEach(() => { vi.stubEnv('NETSUITE_ITEM_RESTLET_URL', SCRIPT); });
+
+  it('sends only the fields asked for, and says which NetSuite fields the script wrote', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, recordType: 'inventoryitem', fieldsSet: ['cost'] }));
+    expect(await updateItemFields('812', { purchasePrice: 12.5 })).toEqual({ success: true, recordType: 'inventoryitem', fieldsSet: ['cost'] });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(SCRIPT);
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body)).toEqual({ itemId: '812', purchasePrice: 12.5 });
+  });
+
+  it("is a no when the script or NetSuite refuses, and not sure when NetSuite didn't answer or faulted", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: false, error: 'Item 813 is inactive' }));
+    expect(await updateItemFields(813, { displayName: 'Hitch receiver' })).toEqual({ success: false, error: 'Item 813 is inactive' });
+    fetchMock.mockResolvedValueOnce(new Response('Invalid login attempt.', { status: 401 }));
+    expect(await updateItemFields(812, { displayName: 'Hitch receiver' })).toEqual({ success: false, error: 'NetSuite RESTlet error (401): Invalid login attempt.' });
+    fetchMock.mockResolvedValueOnce(new Response('An unexpected error occurred.', { status: 500 }));
+    expect(await updateItemFields(812, { displayName: 'Hitch receiver' })).toEqual({
+      success: false, error: 'NetSuite RESTlet error (500): An unexpected error occurred.', unsure: true,
+    });
+    fetchMock.mockRejectedValueOnce(new Error('The operation was aborted due to timeout'));
+    expect(await updateItemFields(812, { displayName: 'Hitch receiver' })).toMatchObject({ success: false, unsure: true, error: expect.stringContaining('timeout') });
+  });
+
+  it("sends nothing, and says so, when the script isn't set up", async () => {
+    vi.stubEnv('NETSUITE_ITEM_RESTLET_URL', '');
+    expect(await updateItemFields(812, { purchasePrice: 12.5 })).toEqual({
+      success: false, error: 'Item RESTlet not configured. Set NETSUITE_ITEM_RESTLET_URL (deploy scripts/netsuite-item-restlet.js).',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

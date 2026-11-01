@@ -12,11 +12,13 @@ import type { Act, Change } from '@/lib/fleetsuite-records';
  * Books → Changed in NetSuite (docs/books.md "FleetSuite's record wins").
  *
  * Once FleetSuite's record wins is switched on, a change made in NetSuite to a
- * customer's name, email, phone or billing address, or to a vendor's name,
- * email or phone, doesn't come into FleetSuite over what FleetSuite has. Each
- * one is listed here, newest first, to keep FleetSuite's, which sends it on to
- * NetSuite, or take NetSuite's into FleetSuite. One a sync finds the same in
- * both again goes by itself. Super admins only, as the books are.
+ * customer's name, email, phone or billing address, to a vendor's name, email
+ * or phone, or to an item's number, display name, description, purchase
+ * price, vendor or labor hours, doesn't come into FleetSuite over what
+ * FleetSuite has. Each one is listed here, newest first, to keep FleetSuite's,
+ * which sends it on to NetSuite (an item's vendor and labor hours stay in
+ * FleetSuite), or take NetSuite's into FleetSuite. One a sync finds the same
+ * in both again goes by itself. Super admins only, as the books are.
  */
 
 interface Payload {
@@ -59,7 +61,7 @@ const card = (picked: boolean): React.CSSProperties => ({
   border: `1px solid ${picked ? AMBER : 'var(--border)'}`, borderRadius: '8px', padding: '10px 12px', background: 'var(--card)',
 });
 
-const KIND_COLORS: Record<Change['kind'], string> = { customer: '#3b82f6', vendor: '#a855f7' };
+const KIND_COLORS: Record<Change['kind'], string> = { customer: '#3b82f6', vendor: '#a855f7', item: '#14b8a6' };
 
 /** What each side has, one under the other. */
 function Values({ c, size }: { c: Change; size: string }) {
@@ -76,7 +78,7 @@ function Values({ c, size }: { c: Change; size: string }) {
 function outcome(c: Change): string {
   const by = c.closedBy ? ` by ${c.closedBy}` : '';
   const at = c.closedAt ? ` ${when(c.closedAt)}` : '';
-  if (c.status === 'kept') return `FleetSuite's kept and sent on to NetSuite${by}${at}`;
+  if (c.status === 'kept') return c.sent === false ? `FleetSuite's kept in FleetSuite${by}${at}` : `FleetSuite's kept and sent on to NetSuite${by}${at}`;
   if (c.status === 'taken') return `NetSuite's taken into FleetSuite${by}${at}`;
   return `The same in both again${at}`;
 }
@@ -126,7 +128,9 @@ export default function BooksChangedInNetsuitePage() {
     const field = c.fieldName.toLowerCase();
     const ok = await dialog.confirm(
       how === 'keep'
-        ? `Keep FleetSuite's ${field} for ${c.name}? FleetSuite sends "${c.fleetsuite}" to NetSuite in place of "${c.netsuite}".`
+        ? c.sends
+          ? `Keep FleetSuite's ${field} for ${c.name}? FleetSuite sends "${c.fleetsuite}" to NetSuite in place of "${c.netsuite}".`
+          : `Keep FleetSuite's ${field} for ${c.name}? FleetSuite keeps "${c.fleetsuite}" and nothing goes to NetSuite, which stays "${c.netsuite}". It's listed again only if NetSuite's changes.`
         : `Take NetSuite's ${field} for ${c.name}? FleetSuite's record changes to "${c.netsuite}" from "${c.fleetsuite}". Nothing goes to NetSuite.`,
       { confirmLabel: how === 'keep' ? "Keep FleetSuite's" : "Take NetSuite's", cancelLabel: 'Not now', title: c.name },
     );
@@ -153,14 +157,17 @@ export default function BooksChangedInNetsuitePage() {
       <div style={{ marginBottom: '14px' }}>
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Changed in NetSuite</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          A customer&apos;s or vendor&apos;s details changed in NetSuite wait here instead of coming over FleetSuite&apos;s.
+          A customer&apos;s, vendor&apos;s or item&apos;s details changed in NetSuite wait here instead of coming over FleetSuite&apos;s.
           Keep FleetSuite&apos;s, which sends it on to NetSuite, or take NetSuite&apos;s.{' '}
           <button onClick={() => setMore(!more)} style={link}>{more ? 'Less' : 'More'}</button>
           {more && (
             <span style={{ display: 'block', marginTop: '4px' }}>
-              That&apos;s a customer&apos;s name, email, phone and billing address, and a vendor&apos;s name, email and phone. Where FleetSuite
-              has none, NetSuite&apos;s comes in by itself, and so does a new customer or vendor. One a sync finds the same in both again
-              goes off the list by itself. The daily check tells the super admins about each new one once. Visible only to super admins.
+              That&apos;s a customer&apos;s name, email, phone and billing address, a vendor&apos;s name, email and phone, and an item&apos;s
+              number, display name, description, purchase price, vendor and labor hours. An item&apos;s vendor and labor hours stay in
+              FleetSuite, so keeping FleetSuite&apos;s sends nothing for those. Where FleetSuite has none, NetSuite&apos;s comes in by itself,
+              and so does a new customer, vendor or item; where NetSuite has none for an item, FleetSuite&apos;s stays and nothing is
+              listed. One a sync finds the same in both again goes off the list by itself. The daily check tells the super admins
+              about each new one once. Visible only to super admins.
             </span>
           )}
         </div>
@@ -210,7 +217,7 @@ export default function BooksChangedInNetsuitePage() {
                   </div>
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
                     <button onClick={() => decide(c, 'keep')} disabled={!enabled} style={act(GREEN, enabled)}>
-                      {busy?.id === c.id && busy.how === 'keep' ? 'Sending…' : "Keep FleetSuite's"}
+                      {busy?.id === c.id && busy.how === 'keep' ? (c.sends ? 'Sending…' : 'Keeping…') : "Keep FleetSuite's"}
                     </button>
                     <button onClick={() => decide(c, 'take')} disabled={!enabled} style={act(null, enabled)}>
                       {busy?.id === c.id && busy.how === 'take' ? 'Taking…' : "Take NetSuite's"}

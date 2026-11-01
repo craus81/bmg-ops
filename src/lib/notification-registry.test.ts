@@ -134,7 +134,7 @@ describe('direct messages and mentions', () => {
 describe.each([
   ["Books' Inventory Adjusts", 'books_own_adjustment_differs', "An Inventory Adjust differs from NetSuite's"],
   ["sends to NetSuite FleetSuite isn't sure about", 'books_netsuite_send_unsure', "FleetSuite isn't sure NetSuite took a send"],
-  ["a customer's or vendor's details changed in NetSuite", 'books_record_changed_in_netsuite', "A customer's or vendor's details changed in NetSuite"],
+  ["a customer's, vendor's or item's details changed in NetSuite", 'books_record_changed_in_netsuite', "A customer's, vendor's or item's details changed in NetSuite"],
 ])('%s (Craig, 2026-10-28: new alerts copy him by email)', (_what, type, label) => {
 
   it('is listed in Settings → Notifications by what it tells', () => {

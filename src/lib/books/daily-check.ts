@@ -24,7 +24,7 @@ import { MISTAKE_KINDS, type MistakeKind } from './mistake-checks';
 import { readClosedMonths } from './months';
 import { readNames } from './netsuite-feed';
 import { describeSend, NO_ANSWER_MS, type SendAction } from '@/lib/netsuite-sends';
-import { FIELD_NAMES, isBlank, KIND_NAMES, recordsWin, shownValue, type DifferenceRow } from '@/lib/fleetsuite-records';
+import { FIELD_NAMES, isBlank, keepSends, KIND_NAMES, recordsWin, shownValue, type DifferenceRow } from '@/lib/fleetsuite-records';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -103,11 +103,11 @@ import { FIELD_NAMES, isBlank, KIND_NAMES, recordsWin, shownValue, type Differen
  * or that never heard back, which nobody has looked for in NetSuite yet, is
  * told about at the first look that finds it, once.
  *
- * And what NetSuite has instead of FleetSuite's record of a customer or a
- * vendor once FleetSuite's record wins (part 48, "FleetSuite's record wins";
- * src/lib/fleetsuite-records.ts): each field listed on Books → Changed in
- * NetSuite is told about at the first look that finds it, once, while it's
- * switched on.
+ * And what NetSuite has instead of FleetSuite's record of a customer, a
+ * vendor or an item once FleetSuite's record wins (parts 48 and 49,
+ * "FleetSuite's record wins"; src/lib/fleetsuite-records.ts): each field
+ * listed on Books → Changed in NetSuite is told about at the first look that
+ * finds it, once, while it's switched on.
  *
  * In-app and push only (books_month_differs, books_stock_differs,
  * books_balance_differs, books_own_invoice_differs,
@@ -721,10 +721,10 @@ export function sendAlertsFor(items: SendAlertItem[]): CheckAlert[] {
   }));
 }
 
-/** A field of a customer or vendor NetSuite has something else for, as a notification names it. */
+/** A field of a customer, vendor or item NetSuite has something else for, as a notification names it. */
 export interface ChangeAlertItem {
   id: string;
-  /** 'Customer' or 'Vendor'. */
+  /** 'Customer', 'Vendor' or 'Item'. */
   kindName: string;
   name: string;
   /** 'Billing address'. */
@@ -732,10 +732,17 @@ export interface ChangeAlertItem {
   fleetsuite: string;
   /** None when NetSuite has none. */
   netsuite: string | null;
+  /** Whether keeping FleetSuite's sends it on to NetSuite: not an item's vendor or labor hours. */
+  sends: boolean;
 }
 
 /** A value as a sentence of a notification's length quotes it, cut at a word. */
 const quoted = (text: string) => `"${text.length <= 80 ? text : `${text.slice(0, 80).replace(/\s+\S*$/, '')}…`}"`;
+
+/** What's next for what changed in NetSuite, as a notification says it. */
+const untilKept = (sends: boolean) => (sends
+  ? "FleetSuite's stays until someone keeps it, which sends it on to NetSuite, or takes NetSuite's."
+  : "FleetSuite's stays until someone keeps it or takes NetSuite's.");
 
 /**
  * What the super admins are told about what changed in NetSuite: a notification for each, opening it on Books →
@@ -746,10 +753,10 @@ export function changeAlertsFor(items: ChangeAlertItem[]): CheckAlert[] {
   const whose = (i: ChangeAlertItem) => `the ${i.fieldName.toLowerCase()} of ${i.name}`;
   if (items.length > ONE_BY_ONE) {
     const names = listed([...items.slice(0, ONE_BY_ONE).map(whose), `${items.length - ONE_BY_ONE} more`]);
+    const kinds = ['Customer', 'Vendor', 'Item'].filter((k) => items.some((i) => i.kindName === k));
     return [{
-      title: `Changed in NetSuite: ${items.length} customer and vendor details`,
-      body: `${names.charAt(0).toUpperCase()}${names.slice(1)}. FleetSuite's stays until someone keeps it, which sends it on `
-        + "to NetSuite, or takes NetSuite's.",
+      title: `Changed in NetSuite: ${items.length} ${listed(kinds).toLowerCase() || 'record'} details`,
+      body: `${names.charAt(0).toUpperCase()}${names.slice(1)}. ${untilKept(items.every((i) => i.sends))}`,
       url: deepLinks.booksChangedInNetsuite(),
       about: 'change',
     }];
@@ -757,7 +764,7 @@ export function changeAlertsFor(items: ChangeAlertItem[]): CheckAlert[] {
   return items.map((i) => ({
     title: `${i.fieldName} changed in NetSuite for ${i.name}`,
     body: `NetSuite has ${i.netsuite === null ? `no ${i.fieldName.toLowerCase()}` : quoted(i.netsuite)} where FleetSuite has `
-      + `${quoted(i.fleetsuite)}. FleetSuite's stays until someone keeps it, which sends it on to NetSuite, or takes NetSuite's.`,
+      + `${quoted(i.fleetsuite)}. ${untilKept(i.sends)}`,
     url: deepLinks.booksChangedInNetsuite(i.id),
     about: 'change',
   }));
@@ -1039,8 +1046,9 @@ async function lookAtChanges(service: SupabaseClient): Promise<ChangeAlertItem[]
     kindName: KIND_NAMES[r.kind] ?? r.kind,
     name: r.name ?? `NetSuite ID ${r.netsuite_id}`,
     fieldName: FIELD_NAMES[r.field] ?? r.field,
-    fleetsuite: shownValue(r.fleetsuite_value),
-    netsuite: isBlank(r.netsuite_value) ? null : shownValue(r.netsuite_value),
+    fleetsuite: shownValue(r.fleetsuite_value, r.field),
+    netsuite: isBlank(r.netsuite_value) ? null : shownValue(r.netsuite_value, r.field),
+    sends: keepSends(r.kind, r.field),
   }));
 }
 

@@ -4972,6 +4972,8 @@ export async function getAccountBalancesFromRestlet(
  * NetSuite. Send only the fields that changed. `fieldsSet` echoes the NetSuite
  * fields actually written, so the caller can confirm the edit landed (e.g.
  * detect a RESTlet deployment that predates a field and needs re-uploading).
+ * No answer, or a fault on NetSuite's side (5xx), is `unsure`: NetSuite may
+ * have made the change anyway.
  *
  * Requires the extended scripts/netsuite-item-restlet.js to be deployed.
  */
@@ -4984,7 +4986,7 @@ export async function updateItemFields(
     salesPrice?: number;
     purchasePrice?: number;
   },
-): Promise<{ success: boolean; recordType?: string; fieldsSet?: string[]; error?: string }> {
+): Promise<{ success: boolean; recordType?: string; fieldsSet?: string[]; error?: string; unsure?: boolean }> {
   const restletUrl = process.env.NETSUITE_ITEM_RESTLET_URL;
   if (!restletUrl) {
     return {
@@ -5007,7 +5009,8 @@ export async function updateItemFields(
     }
     return { success: false, error: result?.error || 'NetSuite update failed' };
   } catch (e: any) {
-    return { success: false, error: e?.message || 'NetSuite update failed' };
+    const status = /RESTlet error \((\d+)\)/.exec(String(e?.message ?? ''))?.[1];
+    return { success: false, error: e?.message || 'NetSuite update failed', ...(!status || Number(status) >= 500 ? { unsure: true } : {}) };
   }
 }
 

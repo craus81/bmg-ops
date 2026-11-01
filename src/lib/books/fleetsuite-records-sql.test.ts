@@ -204,6 +204,13 @@ describe('migration 480', () => {
     expect(await note()).toEqual({ opened: 0, closed: 0 });
   });
 
+  it("takes an item's description as the app cuts it, even all quotes and line breaks (part 49)", async () => {
+    const cut = `${'"\n'.repeat(499)}"…`;
+    expect(cut).toHaveLength(1000);
+    await note(seen({ kind: 'item', netsuite_id: '5001', name: 'C4-RA24-3', field: 'description', fleetsuite: 'Receiver', netsuite: cut }));
+    expect((await rows()).map((r) => [r.kind, r.field, r.netsuite_value])).toEqual([['item', 'description', cut]]);
+  });
+
   it('cuts a long name to fit', async () => {
     await note(seen({ name: `  ${'A'.repeat(320)} ` }));
     expect((await rows())[0].name).toBe('A'.repeat(300));

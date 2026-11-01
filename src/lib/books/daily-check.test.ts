@@ -797,7 +797,7 @@ describe('changeAlertsFor', () => {
     'c4a90000-0000-4000-8000-000000000003', 'c4a90000-0000-4000-8000-000000000004'];
   const item = (id: string, over: Partial<ChangeAlertItem> = {}): ChangeAlertItem => ({
     id, kindName: 'Customer', name: 'Acme Fleet Services', fieldName: 'Email', fleetsuite: 'billing@acmefleet.example',
-    netsuite: 'ap@acmefleet.example', ...over,
+    netsuite: 'ap@acmefleet.example', sends: true, ...over,
   });
 
   it('names the field, the record and what each has, and opens it on Changed in NetSuite', () => {
@@ -828,12 +828,36 @@ describe('changeAlertsFor', () => {
     }));
     expect(changeAlertsFor(items.slice(0, 3)).map((a) => a.url)).toEqual(ids.slice(0, 3).map((id) => deepLinks.booksChangedInNetsuite(id)));
     expect(changeAlertsFor(items)).toEqual([{
-      title: 'Changed in NetSuite: 4 customer and vendor details',
+      title: 'Changed in NetSuite: 4 customer details',
       body: 'The email of Acme Fleet Services, the phone of Fellers, the name of Ridge Supply Co and 1 more. '
         + "FleetSuite's stays until someone keeps it, which sends it on to NetSuite, or takes NetSuite's.",
       url: '/admin/books/changed-in-netsuite',
       about: 'change',
     }]);
     expect(changeAlertsFor([])).toEqual([]);
+  });
+
+  it('names the kinds of record several are of, customers first and items last', () => {
+    const kinds = ['Item', 'Vendor', 'Customer', 'Item'];
+    const items = ids.map((id, i) => item(id, { kindName: kinds[i] }));
+    expect(changeAlertsFor(items)[0].title).toBe('Changed in NetSuite: 4 customer, vendor and item details');
+    expect(changeAlertsFor(items.map((i) => ({ ...i, kindName: 'Item' })))[0].title).toBe('Changed in NetSuite: 4 item details');
+    expect(changeAlertsFor(items.map((i, n) => ({ ...i, kindName: n % 2 ? 'Vendor' : 'Item' })))[0].title)
+      .toBe('Changed in NetSuite: 4 vendor and item details');
+  });
+
+  it("doesn't say keeping sends it on for an item's vendor or labor hours", () => {
+    const labor = item(ids[0], { kindName: 'Item', name: 'C4-RA24-3', fieldName: 'Labor hours', fleetsuite: '1.5 hours', netsuite: '2 hours', sends: false });
+    expect(changeAlertsFor([labor])).toEqual([{
+      title: 'Labor hours changed in NetSuite for C4-RA24-3',
+      body: 'NetSuite has "2 hours" where FleetSuite has "1.5 hours". '
+        + "FleetSuite's stays until someone keeps it or takes NetSuite's.",
+      url: `/admin/books/changed-in-netsuite?change=${ids[0]}`,
+      about: 'change',
+    }]);
+    const four = ids.map((id) => item(id));
+    expect(changeAlertsFor([...four.slice(1), { ...labor, id: ids[0] }])[0].body)
+      .toMatch(/\. FleetSuite's stays until someone keeps it or takes NetSuite's\.$/);
+    expect(changeAlertsFor(four)[0].body).toMatch(/which sends it on to NetSuite, or takes NetSuite's\.$/);
   });
 });
