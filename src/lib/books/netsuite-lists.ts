@@ -12,7 +12,9 @@ import { COPY_FROM } from './netsuite-gl';
  * the same accounts NetSuite does, and the copied GL lines' locations,
  * departments and classes have names. Since migration 407 its customers
  * too, with their terms and how NetSuite taxes them, for FleetSuite's own
- * invoices (src/lib/books/own-invoices.ts).
+ * invoices (src/lib/books/own-invoices.ts). Since migration 481 whether
+ * each vendor gets a 1099, and its legal name, for the 1099s page
+ * (src/lib/books/1099s.ts).
  *
  * It runs right after the chart of accounts in the ledger mirror cron
  * (/api/cron/ledger-netsuite-mirror, :35 on even hours), and from "Sync now"
@@ -135,6 +137,9 @@ export const LISTS: readonly ListDef[] = [
       { field: 'expenseaccount', key: 'expense_account', label: 'default expense accounts' },
       { field: 'payablesaccount', key: 'payables_account', label: 'payables accounts' },
       { field: 'terms', key: 'terms_id', label: 'terms' },
+      // For the 1099s page (migration 481): whether it gets a 1099, and its legal name as on its W-9.
+      { field: 'is1099eligible', key: 'is_1099', label: '1099 flags' },
+      { field: 'legalname', key: 'legal_name', label: 'legal names' },
     ],
     minLeftMs: 20_000,
   },
@@ -310,6 +315,8 @@ export function mapListRow(def: ListDef, row: Row): ListRow | null {
       put('expense_account', numericId(row.expenseaccount));
       put('payables_account', numericId(row.payablesaccount));
       put('terms_id', numericId(row.terms));
+      if (text(row.is1099eligible)) put('is_1099', isTrue(row.is1099eligible) ? 'T' : 'F');
+      if (text(row.legalname) !== name) put('legal_name', text(row.legalname));
       break;
     case 'item':
       name = text(row.itemid);

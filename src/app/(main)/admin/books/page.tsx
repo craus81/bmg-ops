@@ -219,6 +219,8 @@ export default function BooksAccountsPage() {
             <Link href="/admin/books/netsuite-feed" style={{ color: 'var(--text-secondary)' }}>NetSuite feed</Link>
             {' · '}
             <Link href="/admin/books/changed-in-netsuite" style={{ color: 'var(--text-secondary)' }}>Changed in NetSuite</Link>
+            {' · '}
+            <Link href="/admin/books/1099s" style={{ color: 'var(--text-secondary)' }}>1099s</Link>
           </div>
         </div>
         <button

@@ -20,6 +20,12 @@ import type { BooksCompany } from './journal';
  * when NetSuite won't give the subsidiary reads, accounts keep the company
  * limits they had and the result notes why.
  *
+ * After the chart, which accounts NetSuite counts toward a 1099 is read on
+ * its own (migration 481, the 1099s page): the accounts it gives a 1099-MISC
+ * category, by the category's name, applied whole by
+ * gl_netsuite_1099_accounts_apply. A NetSuite that won't give them never
+ * stops the chart; the copy then keeps what it had and the result notes why.
+ *
  * The heartbeat (sync_state 'books_netsuite_accounts') is deliberately not
  * in HEALTH_MONITORS: the books are hidden from everyone but the owner, and
  * a failing read would push alerts to every System Health admin. The Books
@@ -65,6 +71,8 @@ export const ACCOUNTS_QUERY =
 export const ACCOUNT_SUBSIDIARIES_QUERY =
   'SELECT m.account, m.subsidiary FROM AccountSubsidiaryMap m ORDER BY m.account, m.subsidiary';
 export const SUBSIDIARIES_QUERY = 'SELECT s.id, s.name, s.isinactive FROM subsidiary s ORDER BY s.id';
+export const ACCOUNT_1099_QUERY =
+  'SELECT a.id, a.category1099misc AS category_id, BUILTIN.DF(a.category1099misc) AS category FROM account a WHERE a.category1099misc IS NOT NULL ORDER BY a.id';
 
 export interface SyncAccount {
   netsuite_id: string;
@@ -200,6 +208,31 @@ export function mapNetSuiteAccounts(
   return { accounts, skipped, unknownTypes: [...unknownTypes].sort() };
 }
 
+/** An account NetSuite counts toward a 1099, as gl_netsuite_1099_accounts_apply takes it. */
+export interface Account1099 {
+  netsuite_account_id: string;
+  /** NetSuite's name for its 1099-MISC category: the box of the form what's paid on it goes in. */
+  category: string;
+  category_id: string | null;
+}
+
+/**
+ * NetSuite's accounts with a 1099-MISC category, one per account. One whose
+ * category has no name NetSuite gives is named by the category's id; one
+ * with neither is left out.
+ */
+export function mapAccount1099s(rows: Array<Record<string, unknown>>): Account1099[] {
+  const byId = new Map<string, Account1099>();
+  for (const row of rows) {
+    const id = numericId(row.id);
+    if (!id) continue;
+    const categoryId = numericId(row.category_id);
+    const category = text(row.category) || (categoryId ? `1099 category ${categoryId}` : '');
+    if (category) byId.set(id, { netsuite_account_id: id, category, category_id: categoryId });
+  }
+  return [...byId.values()];
+}
+
 export interface BooksAccountsSyncResult {
   received?: number;
   added?: number;
@@ -209,6 +242,8 @@ export interface BooksAccountsSyncResult {
   skipped?: Record<string, number>;
   unknownTypes?: string[];
   linked?: SubsidiaryLink[];
+  /** How the read of the accounts that count toward a 1099 went: counts, or why NetSuite wouldn't give them. */
+  accounts1099?: { received?: number; added?: number; changed?: number; removed?: number; error?: string };
   /** What the run couldn't do, in plain words. */
   notes?: string[];
   error?: string;
@@ -266,6 +301,22 @@ export async function syncBooksAccounts(
     Object.assign(result, data, { skipped: mapped.skipped, unknownTypes: mapped.unknownTypes, linked });
   } catch (err) {
     result.error = reason(err);
+  }
+  try {
+    const accounts = mapAccount1099s(await query(ACCOUNT_1099_QUERY));
+    const { data, error } = await service.rpc('gl_netsuite_1099_accounts_apply', { p: { accounts } });
+    if (error) throw new Error(error.message);
+    const applied = (data ?? {}) as { received?: number; added?: number; changed?: number; removed?: number; here?: number; cut_short?: boolean };
+    result.accounts1099 = {
+      received: Number(applied.received) || 0, added: Number(applied.added) || 0,
+      changed: Number(applied.changed) || 0, removed: Number(applied.removed) || 0,
+    };
+    if (applied.cut_short) {
+      notes.push(`NetSuite listed ${accounts.length.toLocaleString('en-US')} accounts that count toward a 1099 and FleetSuite has ${(Number(applied.here) || 0).toLocaleString('en-US')}, so none were taken off.`);
+    }
+  } catch (err) {
+    result.accounts1099 = { error: reason(err) };
+    notes.push(`NetSuite wouldn't say which accounts count toward a 1099 (${reason(err)}), so the 1099s page keeps what it had.`);
   }
   if (notes.length) result.notes = notes;
   const heartbeat = await recordHeartbeat(service, BOOKS_ACCOUNTS_SYNC, result, {

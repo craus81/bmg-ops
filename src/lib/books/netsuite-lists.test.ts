@@ -205,6 +205,17 @@ describe('mapping NetSuite rows', () => {
     expect(mapListRow(def('vendor'), { id: 51, entityid: 'Pat Example', isinactive: 'F' })).toMatchObject({ name: 'Pat Example', details: {} });
   });
 
+  it("keeps whether a vendor gets a 1099, and its legal name when it isn't the vendor's name", () => {
+    expect(mapListRow(def('vendor'), { id: 52, entityid: 'V-52', companyname: 'Sample Painting', isinactive: 'F', is1099eligible: 'T', legalname: 'Sample Painting LLC' })!.details)
+      .toEqual({ entity_id: 'V-52', is_1099: 'T', legal_name: 'Sample Painting LLC' });
+    expect(mapListRow(def('vendor'), { id: 53, entityid: 'V-53', companyname: 'Sample Rentals', is1099eligible: false, legalname: 'Sample Rentals' })!.details)
+      .toEqual({ entity_id: 'V-53', is_1099: 'F' });
+    // NetSuite saying nothing isn't the same as saying no.
+    expect(mapListRow(def('vendor'), { id: 54, entityid: 'V-54', is1099eligible: null, legalname: ' ' })!.details).toEqual({});
+    expect(mapListRow(def('vendor'), { id: 55, entityid: 'V-55', is1099eligible: true })!.details).toEqual({ is_1099: 'T' });
+    expect(listQuery(def('vendor'))).toMatch(/r\.terms, r\.is1099eligible, r\.legalname FROM vendor r ORDER BY r\.id$/);
+  });
+
   it('names a customer by its company, keeping its terms and how NetSuite taxes it', () => {
     expect(mapListRow(def('customer'), { id: 9001, entityid: 'C-9001', companyname: 'Sample Fleet Co', isinactive: 'F', terms: '4', taxable: 'T', taxitem: '77' }))
       .toEqual({
