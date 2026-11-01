@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
@@ -22,8 +23,8 @@ import { ownBooksChip, ownBooksCount } from '@/lib/books/own-posting-text';
  * sentence. Tap one for its item by item check. The daily check tells the
  * super admins when one differs and links here (?only=differs) or to the
  * receipt. Each says what the books hold for NetSuite's receipt and which
- * copy made it (migration 456, src/lib/books/own-stock-posting.ts). Super
- * admins only, as the books are.
+ * copy made it (migration 456, src/lib/books/own-stock-posting.ts). Open to
+ * whoever opens the books.
  */
 
 type Row = Omit<OwnReceiptCheck, 'fields' | 'items' | 'workedOut'> & { netsuiteUrl: string | null; poUrl: string | null; books: OwnBooks | null };
@@ -148,7 +149,9 @@ function ReceiptLabel({ r }: { r: Row }) {
 
 export default function BooksOwnReceiptsPage() {
   const router = useRouter();
-  const { hasRole, loading: authLoading } = useAuth();
+  const { hasRole, hasFeature, loading: authLoading } = useAuth();
+  // Receiving opens with Parts Ordering; the bookkeeper and the CPA read without it.
+  const canReceive = hasFeature('parts_ordering');
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -174,7 +177,7 @@ export default function BooksOwnReceiptsPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // The daily check's notification about several own receipts opens the ones that differ (deepLinks.booksOwnReceipts).
     const q = new URLSearchParams(window.location.search);
     load(q.get('month') ?? '', q.get('only') === 'differs' ? 'differs' : 'all');
@@ -220,13 +223,17 @@ export default function BooksOwnReceiptsPage() {
           Each Receive on the Receiving page, kept by Books at the purchase order&apos;s prices and checked against
           NetSuite&apos;s item receipt; tap one for its item by item check. Nothing here changes NetSuite. The books post each
           one from this copy when it matches NetSuite&apos;s and its entry comes out the same, and from NetSuite&apos;s
-          otherwise. Each morning the daily check tells super admins when one differs. Visible only to super admins.{' '}
+          otherwise. Each morning the daily check tells super admins when one differs.{' '}
           <Link href="/admin/books/own-bills" style={{ color: 'var(--text-secondary)' }}>Own bills</Link>
           {' · '}
           <Link href="/admin/books/stock" style={{ color: 'var(--text-secondary)' }}>Stock by item</Link>
           {' · '}
-          <Link href={deepLinks.receiving()} style={{ color: 'var(--text-secondary)' }}>Receiving</Link>
-          {' · '}
+          {canReceive && (
+            <>
+              <Link href={deepLinks.receiving()} style={{ color: 'var(--text-secondary)' }}>Receiving</Link>
+              {' · '}
+            </>
+          )}
           <Link href="/admin/books/differences" style={{ color: 'var(--text-secondary)' }}>Differences vs NetSuite</Link>
         </div>
       </div>

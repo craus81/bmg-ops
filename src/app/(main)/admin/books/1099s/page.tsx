@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { docName, unsplitReason, type Payee1099, type Payment1099, type PaymentType, type Year1099 } from '@/lib/books/1099s';
@@ -23,8 +24,8 @@ import {
  * Card payments are left out and listed, with whoever was paid on an
  * account that counts without being marked, whoever is marked but was paid
  * only on other accounts, and the payments FleetSuite can't split. Tap a
- * vendor for its payments. Nothing is filed or sent. Super admins only, as
- * the books are.
+ * vendor for its payments. Nothing is filed or sent. Open to whoever opens
+ * the books.
  *
  * NetSuite's 1099 report for the year can be dropped on it (part 51,
  * migration 482, src/lib/books/1099-report.ts): it's read here on the
@@ -283,12 +284,14 @@ function readNote(r: ReportInfo, cmp: Comparison1099): string {
 
 type Busy = '' | 'reading' | 'saving' | 'removing';
 
-/** NetSuite's 1099 report: a box to drop it in, then the two side by side. */
-function NetSuiteReport({ data, busy, problems, error, onFile, onRemove }: {
+/** NetSuite's 1099 report: a box to drop it in, then the two side by side. Only
+ *  the bookkeeper and super admins upload it or take it off; the CPA reads it. */
+function NetSuiteReport({ data, busy, problems, error, canKeep, onFile, onRemove }: {
   data: Payload;
   busy: Busy;
   problems: string[];
   error: string;
+  canKeep: boolean;
   onFile: (f: File | undefined) => void;
   onRemove: () => void;
 }) {
@@ -311,9 +314,9 @@ function NetSuiteReport({ data, busy, problems, error, onFile, onRemove }: {
   return (
     <div
       style={{ ...section, padding: '10px 14px', borderColor: dragging ? GREEN : 'var(--border)' }}
-      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={(e) => { e.preventDefault(); setDragging(false); onFile(e.dataTransfer.files?.[0]); }}
+      onDragOver={canKeep ? (e) => { e.preventDefault(); setDragging(true); } : undefined}
+      onDragLeave={canKeep ? () => setDragging(false) : undefined}
+      onDrop={canKeep ? (e) => { e.preventDefault(); setDragging(false); onFile(e.dataTransfer.files?.[0]); } : undefined}
     >
       <div style={{ fontSize: '13px', fontWeight: 700, marginBottom: '6px' }}>Against NetSuite&apos;s 1099 report</div>
       <input
@@ -325,7 +328,11 @@ function NetSuiteReport({ data, busy, problems, error, onFile, onRemove }: {
         onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ''; }}
       />
 
-      {!r && (
+      {!r && !canKeep && (
+        <div style={muted}>No 1099 report from NetSuite is kept for {data.year} yet. The bookkeeper or a super admin uploads it here.</div>
+      )}
+
+      {!r && canKeep && (
         <div
           onClick={() => !busy && fileRef.current?.click()}
           style={{
@@ -344,10 +351,14 @@ function NetSuiteReport({ data, busy, problems, error, onFile, onRemove }: {
       {r && (
         <div style={{ ...muted, marginBottom: '6px' }}>
           {r.fileName}, uploaded{r.uploadedBy ? ` by ${r.uploadedBy}` : ''} {ago(r.uploadedAt)} · {count(r.vendors, 'vendor', 'vendors')}
-          {' · '}
-          <button style={linkButton} disabled={!!busy} onClick={() => fileRef.current?.click()}>Upload a new one</button>
-          {' · '}
-          <button style={linkButton} disabled={!!busy} onClick={onRemove}>Take it off</button>
+          {canKeep && (
+            <>
+              {' · '}
+              <button style={linkButton} disabled={!!busy} onClick={() => fileRef.current?.click()}>Upload a new one</button>
+              {' · '}
+              <button style={linkButton} disabled={!!busy} onClick={onRemove}>Take it off</button>
+            </>
+          )}
         </div>
       )}
 
@@ -487,7 +498,11 @@ const WHY_NOT_MARKED = (p: Payee1099) =>
 
 export default function Books1099sPage() {
   const router = useRouter();
-  const { hasRole, loading: authLoading } = useAuth();
+  const { hasRole, hasFeature, canSeeMoney, loading: authLoading } = useAuth();
+  // The CPA reads the year; the bookkeeper and super admins keep NetSuite's report.
+  const canKeep = booksAllows(booksAccess(hasRole), 'keep');
+  // Vendor Details is a Payments page (src/app/(main)/admin/vendor-details).
+  const canVendorDetails = hasFeature('vendor_payments') && canSeeMoney;
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -516,7 +531,7 @@ export default function Books1099sPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     const q = new URLSearchParams(window.location.search);
     load(q.get('company') ?? '', q.get('year') ?? '');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
@@ -601,7 +616,7 @@ export default function Books1099sPage() {
             NetSuite gives a 1099-MISC category, each category a box of the form. A bill payment counts on the accounts of the bills it
             paid, split in proportion to the cent. Card payments are left out, as the card company reports them, and every vendor is
             shown whatever the amount. Tap a vendor for its payments. Drop NetSuite&apos;s 1099 report on it to see the two side by
-            side, vendor by vendor and box by box. Nothing is filed or sent. Visible only to super admins.
+            side, vendor by vendor and box by box. Nothing is filed or sent.
           </div>
           <button
             onClick={() => setIntroOpen(!introOpen)}
@@ -613,8 +628,12 @@ export default function Books1099sPage() {
           <Link href="/admin/books/lists" style={{ color: 'var(--text-secondary)' }}>NetSuite lists</Link>
           {' · '}
           <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
-          {' · '}
-          <Link href="/admin/vendor-details" style={{ color: 'var(--text-secondary)' }}>Vendor Details</Link>
+          {canVendorDetails && (
+            <>
+              {' · '}
+              <Link href="/admin/vendor-details" style={{ color: 'var(--text-secondary)' }}>Vendor Details</Link>
+            </>
+          )}
         </div>
       </div>
 
@@ -688,7 +707,7 @@ export default function Books1099sPage() {
             {copies.spending?.at ? ` Checks and card charges ${ago(copies.spending.at)}.` : ''}
           </div>
 
-          <NetSuiteReport data={data} busy={busy} problems={problems} error={reportError} onFile={upload} onRemove={removeReport} />
+          <NetSuiteReport data={data} busy={busy} problems={problems} error={reportError} canKeep={canKeep} onFile={upload} onRemove={removeReport} />
 
           {data.forms.length > 0 && (
             <PayeeTable

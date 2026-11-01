@@ -4,13 +4,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
-let superAdmin = true;
+let roles = ['admin', 'super_admin'];
 let fullName: string | null = 'Craig';
-vi.mock('@/lib/api-auth', () => ({
-  requireSuperAdmin: vi.fn(async () => (superAdmin
-    ? { user: { id: 'u-craig', email: 'craig@example.com' }, profile: { full_name: fullName } }
-    : { error: new Response('Forbidden', { status: 403 }) })),
-}));
+vi.mock('@/lib/api-auth', async () => {
+  // The real levels (src/lib/books/access.ts) for whoever roles says is signed in.
+  const { booksAccess, booksAllows } = await import('@/lib/books/access');
+  return {
+    requireBooks: vi.fn(async (_req: unknown, need: 'read' | 'keep' | 'owner') => {
+      const access = booksAccess((r) => roles.includes(r));
+      return booksAllows(access, need) ? { ...{ user: { id: 'u-craig', email: 'craig@example.com' }, profile: { full_name: fullName } }, access } : { error: new Response('Forbidden', { status: 403 }) };
+    }),
+  };
+});
 vi.mock('@/lib/supabase-service', () => ({ createServiceClient: () => service }));
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
@@ -109,7 +114,7 @@ const statusCalls = () => rpcs.filter(([name]) => name === 'gl_set_period_status
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2027-03-15T15:00:00Z'));
-  superAdmin = true;
+  roles = ['admin', 'super_admin'];
   fullName = 'Craig';
   tables = {
     gl_companies: [
@@ -132,8 +137,8 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('Books → Months', () => {
-  it('is for super admins only', async () => {
-    superAdmin = false;
+  it('is for whoever opens the books, and not an admin who does not', async () => {
+    roles = ['admin'];
     expect((await GET(new NextRequest('https://go.bmgfleet.com/api/admin/books/months'))).status).toBe(403);
     const res = await POST(new NextRequest('https://go.bmgfleet.com/api/admin/books/months', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ company: 'BMG', month: '2027-02', action: 'close', reason: 'x' }),
@@ -231,6 +236,26 @@ describe('Books → Months: closing and reopening', () => {
     expect(months[2].events.map((e: any) => [e.action, e.by, e.reason])).toEqual([
       ['closed', 'Craig', null], ['reopened', 'craig@example.com', 'A late Grimco bill'],
     ]);
+  });
+
+  it('lets the bookkeeper close a month but not reopen one, and the CPA do neither', async () => {
+    roles = ['bookkeeper'];
+    expect(await post({ company: 'BMG', month: '2027-01', action: 'reopen', reason: 'A late Grimco bill' })).toEqual({
+      status: 403, body: { error: 'Only a super admin can reopen a month.' },
+    });
+    roles = ['cpa'];
+    expect((await get()).status).toBe(200);
+    const refused = await POST(new NextRequest('https://go.bmgfleet.com/api/admin/books/months', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company: 'BMG', month: '2027-02', action: 'close', reason: 'The CPA moved a bill in NetSuite' }),
+    }));
+    expect(refused.status).toBe(403);
+    expect(statusCalls()).toEqual([]);
+    roles = ['bookkeeper'];
+    expect(await post({ company: 'BMG', month: '2027-02', action: 'close', reason: 'The CPA moved a bill in NetSuite' })).toEqual({
+      status: 200, body: { company: 'BMG', month: FEB, status: 'closed' },
+    });
+    expect(statusCalls().map(([, args]) => args.p_status)).toEqual(['closed']);
   });
 
   it('refuses out of order, twice, early, without a reason, and for a company not live or not there', async () => {

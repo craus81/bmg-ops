@@ -5,10 +5,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
-let superAdmin = true;
-vi.mock('@/lib/api-auth', () => ({
-  requireSuperAdmin: vi.fn(async () => (superAdmin ? { user: { id: 'u-craig' } } : { error: new Response('Forbidden', { status: 403 }) })),
-}));
+let roles = ['admin', 'super_admin'];
+vi.mock('@/lib/api-auth', async () => {
+  // The real levels (src/lib/books/access.ts) for whoever roles says is signed in.
+  const { booksAccess, booksAllows } = await import('@/lib/books/access');
+  return {
+    requireBooks: vi.fn(async (_req: unknown, need: 'read' | 'keep' | 'owner') => {
+      const access = booksAccess((r) => roles.includes(r));
+      return booksAllows(access, need) ? { ...{ user: { id: 'u-craig' } }, access } : { error: new Response('Forbidden', { status: 403 }) };
+    }),
+    requireSuperAdmin: vi.fn(async () => (roles.includes('super_admin') ? { user: { id: 'u-craig' } } : { error: new Response('Forbidden', { status: 403 }) })),
+  };
+});
 vi.mock('@/lib/supabase-service', () => ({ createServiceClient: () => service }));
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
@@ -109,7 +117,7 @@ const reads = (company: string, through: string) => [
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-10-31T09:12:00Z'));
-  superAdmin = true;
+  roles = ['admin', 'super_admin'];
   netsuiteMoves = MOVES.map(([a, month, c]) => ({ netsuite_account_id: a, month, ...sides(c) }));
   booksTotals = [...BOOKS_TOTALS];
   tables = {
@@ -138,8 +146,8 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('Going live', () => {
-  it('is for super admins only', async () => {
-    superAdmin = false;
+  it('is for whoever opens the books, and not an admin who does not', async () => {
+    roles = ['admin'];
     const res = await GET(new NextRequest('https://go.bmgfleet.com/api/admin/books/going-live'));
     expect(res.status).toBe(403);
     expect(rpcs).toEqual([]);
@@ -297,8 +305,8 @@ describe('Going live', () => {
 describe('Going live: the tap', () => {
   beforeEach(() => { vi.setSystemTime(new Date('2026-12-28T16:00:00Z')); });
 
-  it('is for super admins only', async () => {
-    superAdmin = false;
+  it('is for super admins only, not the bookkeeper', async () => {
+    roles = ['finance', 'bookkeeper'];
     const res = await POST(new NextRequest('https://go.bmgfleet.com/api/admin/books/going-live', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ company: 'BMG', confirm: 'BMG' }),
     }));

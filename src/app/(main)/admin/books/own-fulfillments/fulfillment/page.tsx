@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { OwnCheckStatus } from '@/lib/books/own-invoice-check';
@@ -22,8 +23,8 @@ import { OwnBooksLine, OwnEntry } from '@/components/BooksOwnPosting';
  * on Stock by item); what the books hold for it, and the entry this copy
  * makes next to NetSuite's, or when it isn't worked out what NetSuite's
  * fulfillment posted (migration 456, src/lib/books/own-posting-view.ts);
- * what FleetSuite couldn't work out; and how it worked its copy out. Super
- * admins only, as the books are; opened from Own fulfillments or the daily
+ * what FleetSuite couldn't work out; and how it worked its copy out. Open
+ * to whoever opens the books; opened from Own fulfillments or the daily
  * check's notification (?id=, NetSuite's id for the fulfillment).
  */
 
@@ -151,7 +152,7 @@ export default function BooksOwnFulfillmentPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // Own fulfillments and the daily check link here with NetSuite's id for the fulfillment (deepLinks.booksOwnFulfillment).
     load(new URLSearchParams(window.location.search).get('id') ?? '');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it

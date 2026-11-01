@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { copyNetSuiteSpending } from '@/lib/books/netsuite-spending';
 
@@ -16,11 +16,11 @@ const COPY_BUDGET_MS = 240_000;
  * the response says only how the run went, and the invoices page's Checks
  * and cards switch reloads the rest.
  *
- * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md).
+ * Super admins and the bookkeeper; the CPA only reads (docs/books.md "Who can
+ * open the books").
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
 
   const result = await copyNetSuiteSpending(createServiceClient(), { deadline: Date.now() + COPY_BUDGET_MS });

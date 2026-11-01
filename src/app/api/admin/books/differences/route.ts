@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate } from '@/lib/books/netsuite-gl';
@@ -22,11 +22,11 @@ const DOCUMENTS_SHOWN = 300;
  * by default) each account, each kind of document, and each document that
  * FleetSuite posts differently from NetSuite, with why.
  *
- * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md).
+ * Super admins, the bookkeeper and the CPA (docs/books.md "Who can open the
+ * books").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;

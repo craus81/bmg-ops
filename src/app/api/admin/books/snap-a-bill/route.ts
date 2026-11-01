@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { z } from '@/lib/validate';
 import { ensureR2Cors, r2Get, r2GetBytes, r2Head, r2PresignPut, r2Upload } from '@/lib/r2';
@@ -183,7 +183,7 @@ async function namesOf(service: SupabaseClient, ids: Array<string | null>): Prom
   if (!want.length) return new Map();
   const { data, error } = await service.from('profiles').select('id, full_name').in('id', want);
   if (error) throw new Error(`couldn't read who did it (${error.message})`);
-  return new Map((data ?? []).map((p: { id: string; full_name: string | null }) => [p.id, p.full_name ?? 'a super admin']));
+  return new Map((data ?? []).map((p: { id: string; full_name: string | null }) => [p.id, p.full_name ?? 'someone']));
 }
 
 /** One snapped bill as the page shows it: the form, what's still to check, and its picture. */
@@ -250,11 +250,11 @@ async function oneBill(service: SupabaseClient, row: SnappedBillRow, given?: Sna
  * { action: 'mark_sent', id, form } a bill whose Send didn't finish, which
  * NetSuite has, kept as sent with Books' own copy; { action: 'throw_away', id }.
  *
- * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md).
+ * Super admins and the bookkeeper; the CPA reads the bills it made on Own bills
+ * (docs/books.md "Who can open the books").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
   const service = createServiceClient();
   const params = req.nextUrl.searchParams;
@@ -326,7 +326,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
   const actorId = auth.user.id;
 

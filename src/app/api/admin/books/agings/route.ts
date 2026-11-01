@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { BOOKS_GL_SYNC, type GlCopyResult } from '@/lib/books/netsuite-gl';
 import { BOOKS_INVOICE_POSTING, type InvoicePostingResult } from '@/lib/books/invoice-posting';
@@ -25,11 +25,11 @@ export const maxDuration = 120;
  * POST /api/admin/books/agings — Copy now: copies what NetSuite has open
  * (src/lib/books/netsuite-open-items.ts), as the cron does every two hours.
  *
- * Super admin only, as the rest of the books (docs/books.md "AR and AP
- * agings").
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md "AR and AP agings"); copying now (POST) isn't the CPA's.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;
@@ -98,7 +98,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
   const result = await copyNetSuiteOpenItems(createServiceClient());
   if (result.error) return NextResponse.json({ error: result.error }, { status: 502 });

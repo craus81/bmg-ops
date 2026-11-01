@@ -35,6 +35,9 @@ interface Notification {
 
 export default function Header({ activePartNumber, activeEndCustomer }: HeaderProps) {
   const { user, profile, isAdmin, isActualAdmin, viewAsRole, setViewAsRole, hasFeature, hasRole, signOut } = useAuth();
+  // The books' own logins are a super admin's to give, so only a super admin
+  // can view as one (src/lib/books/access.ts).
+  const isActualSuperAdmin = ((profile?.roles?.length ? profile.roles : [profile?.role]) as Array<string | undefined>).includes('super_admin');
   const router = useRouter();
   const split = useSplitScreen();
   const [showMenu, setShowMenu] = useState(false);
@@ -870,6 +873,7 @@ export default function Header({ activePartNumber, activeEndCustomer }: HeaderPr
                         { key: 'field_tech', label: 'Field Tech' },
                         { key: 'installer', label: 'Installer' },
                         { key: 'customer', label: 'Customer' },
+                        ...(isActualSuperAdmin ? [{ key: 'bookkeeper', label: 'Bookkeeper' }, { key: 'cpa', label: 'CPA' }] : []),
                       ].map(r => {
                         const active = viewAsRole === r.key;
                         return (

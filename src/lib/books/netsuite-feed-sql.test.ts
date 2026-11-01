@@ -17,12 +17,17 @@ const CRAIG = 'c0000000-0000-4000-8000-000000000001';
 const JESSIE = 'b2c3d4e5-0000-4000-8000-00000000000a';
 const ZACH = 'c0000000-0000-4000-8000-000000000003';
 
-let superAdmin = true;
-vi.mock('@/lib/api-auth', () => ({
-  requireSuperAdmin: vi.fn(async () => (superAdmin
-    ? { user: { id: CRAIG, email: 'craig@example.com' }, profile: { full_name: 'Craig' } }
-    : { error: new Response(JSON.stringify({ error: 'Forbidden: super admin required' }), { status: 403 }) })),
-}));
+let roles = ['admin', 'super_admin'];
+vi.mock('@/lib/api-auth', async () => {
+  // The real levels (src/lib/books/access.ts) for whoever roles says is signed in.
+  const { booksAccess, booksAllows } = await import('@/lib/books/access');
+  return {
+    requireBooks: vi.fn(async (_req: unknown, need: 'read' | 'keep' | 'owner') => {
+      const access = booksAccess((r) => roles.includes(r));
+      return booksAllows(access, need) ? { ...{ user: { id: CRAIG, email: 'craig@example.com' }, profile: { full_name: 'Craig' } }, access } : { error: new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 }) };
+    }),
+  };
+});
 vi.mock('@/lib/supabase-service', () => ({ createServiceClient: () => service }));
 
 import { GET, POST } from '../../app/api/admin/books/netsuite-feed/route';
@@ -227,7 +232,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.stubEnv('NETSUITE_ACCOUNT_ID', '1234567_SB1');
-  superAdmin = true;
+  roles = ['admin', 'super_admin'];
   failing = null;
   beforeUpdate = null;
 });
@@ -368,9 +373,11 @@ describe('Books → NetSuite feed', () => {
     await pg.query('DELETE FROM netsuite_sends WHERE id = ANY($1)', [[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(ID)]);
   });
 
-  it('is for super admins only', async () => {
-    superAdmin = false;
+  it('is for whoever opens the books, and noting a look is not the CPA\'s', async () => {
+    roles = ['admin'];
     expect((await get()).status).toBe(403);
+    roles = ['cpa'];
+    expect((await get()).status).toBe(200);
     expect((await post({ id: ID(3) })).status).toBe(403);
     expect((await pg.query('SELECT looked_at FROM netsuite_sends WHERE id = $1', [ID(3)])).rows).toEqual([{ looked_at: null }]);
   });

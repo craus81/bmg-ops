@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate, monthsBetween } from '@/lib/books/netsuite-gl';
@@ -91,11 +91,11 @@ const POSTING_BUDGET_MS = 240_000;
  * receipt or bill Books has its own copy of (migration 456,
  * src/lib/books/own-stock-posting.ts and own-bill-posting.ts).
  *
- * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md). It only reads.
+ * Super admins, the bookkeeper and the CPA (docs/books.md "Who can open the
+ * books"). It only reads; posting now (POST) isn't the CPA's.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;
@@ -470,7 +470,7 @@ export async function GET(req: NextRequest) {
  * the rest.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
 
   const result = await postInvoices(createServiceClient(), { deadline: Date.now() + POSTING_BUDGET_MS });

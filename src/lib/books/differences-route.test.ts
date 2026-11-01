@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
-vi.mock('@/lib/api-auth', () => ({ requireSuperAdmin: vi.fn(async () => ({ user: { id: 'u-craig' } })) }));
+vi.mock('@/lib/api-auth', () => ({ requireBooks: vi.fn(async () => ({ user: { id: 'u-craig' }, access: 'read' })) }));
 vi.mock('@/lib/supabase-service', () => ({ createServiceClient: () => service }));
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));

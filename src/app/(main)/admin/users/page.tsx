@@ -7,7 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 import TopSaveBar from '@/components/TopSaveBar';
 import { useDialog } from '@/components/DialogProvider';
 import type { Profile, AppRole } from '@/lib/types';
-import { FEATURES, ROLE_DEFAULT_FEATURES, resolveFeatures, type FeatureKey } from '@/lib/features';
+import { FEATURES, OWNER_GIVEN_ROLES, ROLE_DEFAULT_FEATURES, resolveFeatures, type FeatureKey } from '@/lib/features';
 import AdminUserSettings from '@/components/AdminUserSettings';
 import CustomerPicker from '@/components/CustomerPicker';
 
@@ -21,6 +21,9 @@ const ROLES: { value: AppRole; label: string; color: string }[] = [
   { value: 'admin', label: 'Admin', color: 'var(--orange)' },
   { value: 'executive', label: 'Executive', color: '#eab308' },
   { value: 'finance', label: 'Finance / AP', color: '#2dd4bf' },
+  // FleetSuite's own books (Books part 52): only a super admin gives these.
+  { value: 'bookkeeper', label: 'Bookkeeper', color: '#a3e635' },
+  { value: 'cpa', label: 'CPA', color: '#fb923c' },
   { value: 'sales', label: 'Sales', color: '#60a5fa' },
   { value: 'graphics_production', label: 'Graphics Production', color: '#c084fc' },
   { value: 'shop_tech', label: 'Shop Tech (O\'Fallon)', color: '#38bdf8' },
@@ -46,6 +49,10 @@ export default function UsersPage() {
   const { isAdmin, hasFeature, loading: authLoading, profile: myProfile } = useAuth();
   // Only super admins may open another user's settings panel below.
   const isSuperAdmin = ((myProfile?.roles as string[] | null) || []).includes('super_admin');
+  // Super admin, Bookkeeper and CPA are a super admin's to give (migration
+  // 483 refuses anyone else); anyone here can still take one away.
+  const canGiveRole = (role: AppRole, had: boolean) => isSuperAdmin || had || !OWNER_GIVEN_ROLES.includes(role);
+  const ownerOnlyChip = { opacity: 0.4, cursor: 'not-allowed' } as const;
   const supabase = createClient();
   const dialog = useDialog();
   const [users, setUsers] = useState<(Profile & { company_id?: string; company_name?: string })[]>([]);
@@ -849,9 +856,12 @@ export default function UsersPage() {
                     <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                       {ROLES.map(r => {
                         const active = userRoles.includes(r.value);
+                        const allowed = canGiveRole(r.value, active);
                         return (
                           <button
                             key={r.value}
+                            disabled={!allowed}
+                            title={allowed ? undefined : 'Only a super admin gives this role'}
                             onClick={() => {
                               const next = active
                                 ? userRoles.filter(x => x !== r.value)
@@ -864,6 +874,7 @@ export default function UsersPage() {
                               border: `1px solid ${active ? (r.value === 'admin' ? 'rgba(238,49,32,0.3)' : 'rgba(99,102,241,0.25)') : 'var(--border)'}`,
                               color: active ? r.color : 'var(--text-muted)',
                               cursor: 'pointer', transition: 'all 0.15s',
+                              ...(allowed ? {} : ownerOnlyChip),
                             }}
                           >
                             {active ? '✓ ' : ''}{r.label}
@@ -1087,10 +1098,13 @@ export default function UsersPage() {
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   {ROLES.map(r => {
                     const active = createForm.roles.includes(r.value);
+                    const allowed = canGiveRole(r.value, false);
                     return (
                       <button
                         key={r.value}
                         type="button"
+                        disabled={!allowed}
+                        title={allowed ? undefined : 'Only a super admin gives this role'}
                         onClick={() => toggleCreateRole(r.value)}
                         style={{
                           padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
@@ -1098,6 +1112,7 @@ export default function UsersPage() {
                           border: `1px solid ${active ? (r.value === 'admin' ? 'rgba(238,49,32,0.25)' : 'rgba(99,102,241,0.2)') : 'var(--border)'}`,
                           color: active ? r.color : 'var(--text-muted)',
                           cursor: 'pointer', transition: 'all 0.15s',
+                          ...(allowed ? {} : ownerOnlyChip),
                         }}
                       >
                         {active ? '✓ ' : ''}{r.label}
@@ -1207,10 +1222,13 @@ export default function UsersPage() {
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                   {ROLES.map(r => {
                     const active = editForm.roles.includes(r.value);
+                    const allowed = canGiveRole(r.value, getUserRoles(editUser).includes(r.value));
                     return (
                       <button
                         key={r.value}
                         type="button"
+                        disabled={!allowed}
+                        title={allowed ? undefined : 'Only a super admin gives this role'}
                         onClick={() => toggleEditRole(r.value)}
                         style={{
                           padding: '8px 14px', borderRadius: '10px', fontSize: '12px', fontWeight: 700,
@@ -1218,6 +1236,7 @@ export default function UsersPage() {
                           border: `1px solid ${active ? (r.value === 'admin' ? 'rgba(238,49,32,0.25)' : 'rgba(99,102,241,0.2)') : 'var(--border)'}`,
                           color: active ? r.color : 'var(--text-muted)',
                           cursor: 'pointer', transition: 'all 0.15s',
+                          ...(allowed ? {} : ownerOnlyChip),
                         }}
                       >
                         {active ? '✓ ' : ''}{r.label}

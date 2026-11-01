@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { NS_MIRROR_SYNC_TYPE } from '@/lib/ledger/netsuite-mirror';
 import { BOOKS_GL_SYNC } from '@/lib/books/netsuite-gl';
@@ -31,11 +31,11 @@ const monthEnd = (month: string) => {
  * copy or NetSuite's invoice (src/lib/books/own-invoice-posting.ts), null
  * when none stands. Amounts are whole cents.
  *
- * Super admin only, as the rest of the books (docs/books.md "FleetSuite's
- * own invoices").
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md "FleetSuite's own invoices").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;

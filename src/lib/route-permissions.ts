@@ -28,6 +28,7 @@ export type RouteGuardKind =
   | 'admin'        // requireAdmin
   | 'superAdmin'   // requireSuperAdmin — owner-level wall
   | 'financials'   // requireFinancials — super_admin / executive only
+  | 'books'        // requireBooks(req, need) — FleetSuite's own books: super admins, the bookkeeper, the CPA
   | 'money'        // requireMoney — sales/admin/finance/executive; not the floor
   | 'role'         // requireRole(...) — specific roles (admins auto-pass)
   | 'feature'      // requireFeature(req, key) — role defaults + per-user overrides
@@ -49,6 +50,11 @@ const staff = (): RouteGuard => ({ kind: 'staff', contains: ['requireStaff('] })
 const admin = (alsoContains?: string): RouteGuard => ({ kind: 'admin', contains: ['requireAdmin(', ...(alsoContains ? [alsoContains] : [])] });
 const superAdmin = (): RouteGuard => ({ kind: 'superAdmin', contains: ['requireSuperAdmin('] });
 const financials = (): RouteGuard => ({ kind: 'financials', contains: ['requireFinancials('] });
+/** FleetSuite's own books (src/lib/books/access.ts): 'read' lets the CPA in,
+ *  'keep' the bookkeeper too, 'owner' super admins only, which stays
+ *  requireSuperAdmin. Name every level the route's handlers ask for. */
+const books = (needs: Array<'read' | 'keep' | 'owner'>, ...alsoContains: string[]): RouteGuard =>
+  ({ kind: 'books', contains: [...needs.map((n) => (n === 'owner' ? 'requireSuperAdmin(' : `requireBooks(req, '${n}')`)), ...alsoContains] });
 /** Billing: what a customer was charged, what we paid, what we make. Narrower
  *  than staff, wider than financials (the owner-only P&L wall). */
 const money = (): RouteGuard => ({ kind: 'money', contains: ['requireMoney('] });
@@ -71,39 +77,39 @@ const webhook = (why: string, verifyMarker: string): RouteGuard =>
 const pub = (why: string): RouteGuard => ({ kind: 'public', contains: [], why });
 
 export const ROUTE_GUARDS: Record<string, RouteGuard> = {
-  // FleetSuite's own books, built hidden for the owner (docs/books.md).
-  'src/app/api/admin/books/1099s/route.ts': superAdmin(),
-  'src/app/api/admin/books/accounts/route.ts': superAdmin(),
-  'src/app/api/admin/books/agings/route.ts': superAdmin(),
-  'src/app/api/admin/books/balances/route.ts': superAdmin(),
-  'src/app/api/admin/books/balances/party/route.ts': superAdmin(),
-  'src/app/api/admin/books/bill-payments/route.ts': superAdmin(),
-  'src/app/api/admin/books/bills/route.ts': superAdmin(),
-  'src/app/api/admin/books/changed-in-netsuite/route.ts': superAdmin(),
-  'src/app/api/admin/books/deposits/route.ts': superAdmin(),
-  'src/app/api/admin/books/differences/route.ts': superAdmin(),
-  'src/app/api/admin/books/going-live/route.ts': superAdmin(),
-  'src/app/api/admin/books/invoices/route.ts': superAdmin(),
-  'src/app/api/admin/books/lists/route.ts': superAdmin(),
-  'src/app/api/admin/books/mistake-checks/route.ts': superAdmin(),
-  'src/app/api/admin/books/months/route.ts': superAdmin(),
-  'src/app/api/admin/books/netsuite-feed/route.ts': superAdmin(),
-  'src/app/api/admin/books/own-adjustments/route.ts': superAdmin(),
-  'src/app/api/admin/books/own-bills/route.ts': superAdmin(),
-  'src/app/api/admin/books/own-fulfillments/route.ts': superAdmin(),
-  'src/app/api/admin/books/own-invoices/route.ts': superAdmin(),
-  'src/app/api/admin/books/own-receipts/route.ts': superAdmin(),
-  'src/app/api/admin/books/reports/route.ts': superAdmin(),
-  'src/app/api/admin/books/reports/detail/route.ts': superAdmin(),
-  'src/app/api/admin/books/reports/detail/download/route.ts': superAdmin(),
-  'src/app/api/admin/books/reports/download/route.ts': superAdmin(),
-  'src/app/api/admin/books/sales/route.ts': superAdmin(),
-  'src/app/api/admin/books/snap-a-bill/route.ts': superAdmin(),
-  'src/app/api/admin/books/spending/route.ts': superAdmin(),
-  'src/app/api/admin/books/stock/route.ts': superAdmin(),
-  'src/app/api/admin/books/stock/item/route.ts': superAdmin(),
-  'src/app/api/admin/books/switches/route.ts': superAdmin(),
-  'src/app/api/admin/books/trial-balance/route.ts': superAdmin(),
+  // FleetSuite's own books (docs/books.md "Who can open the books").
+  'src/app/api/admin/books/1099s/route.ts': books(['read', 'keep']),
+  'src/app/api/admin/books/accounts/route.ts': books(['read', 'keep']),
+  'src/app/api/admin/books/agings/route.ts': books(['read', 'keep']),
+  'src/app/api/admin/books/balances/route.ts': books(['read']),
+  'src/app/api/admin/books/balances/party/route.ts': books(['read']),
+  'src/app/api/admin/books/bill-payments/route.ts': books(['keep']),
+  'src/app/api/admin/books/bills/route.ts': books(['keep']),
+  'src/app/api/admin/books/changed-in-netsuite/route.ts': books(['read', 'owner']),
+  'src/app/api/admin/books/deposits/route.ts': books(['keep']),
+  'src/app/api/admin/books/differences/route.ts': books(['read']),
+  'src/app/api/admin/books/going-live/route.ts': books(['read', 'owner']),
+  'src/app/api/admin/books/invoices/route.ts': books(['read', 'keep']),
+  'src/app/api/admin/books/lists/route.ts': books(['read', 'keep']),
+  'src/app/api/admin/books/mistake-checks/route.ts': books(['read', 'keep']),
+  'src/app/api/admin/books/months/route.ts': books(['read', 'keep'], "booksAllows(auth.access, 'owner')"),
+  'src/app/api/admin/books/netsuite-feed/route.ts': books(['read', 'keep']),
+  'src/app/api/admin/books/own-adjustments/route.ts': books(['read']),
+  'src/app/api/admin/books/own-bills/route.ts': books(['read']),
+  'src/app/api/admin/books/own-fulfillments/route.ts': books(['read']),
+  'src/app/api/admin/books/own-invoices/route.ts': books(['read']),
+  'src/app/api/admin/books/own-receipts/route.ts': books(['read']),
+  'src/app/api/admin/books/reports/route.ts': books(['read']),
+  'src/app/api/admin/books/reports/detail/route.ts': books(['read']),
+  'src/app/api/admin/books/reports/detail/download/route.ts': books(['read']),
+  'src/app/api/admin/books/reports/download/route.ts': books(['read']),
+  'src/app/api/admin/books/sales/route.ts': books(['read']),
+  'src/app/api/admin/books/snap-a-bill/route.ts': books(['keep']),
+  'src/app/api/admin/books/spending/route.ts': books(['keep']),
+  'src/app/api/admin/books/stock/route.ts': books(['read', 'keep']),
+  'src/app/api/admin/books/stock/item/route.ts': books(['read']),
+  'src/app/api/admin/books/switches/route.ts': books(['read', 'owner']),
+  'src/app/api/admin/books/trial-balance/route.ts': books(['read', 'keep']),
   'src/app/api/admin/business-pulse/route.ts': superAdmin(),
   'src/app/api/cron/books-netsuite-gl/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-invoice-posting/route.ts': cron('requireSuperAdmin('),

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { transactionUrl } from '@/lib/netsuite';
@@ -44,14 +44,15 @@ const syncStateOf = (row: { last_result: unknown; updated_at: string | null } | 
  * looked through last ran, for Books → Mistake checks.
  *
  * POST — { action: 'clear', id, how: 'fixed' | 'fine', note?, learn? },
- * { action: 'reopen', id } or { action: 'look' }: a super admin clears one,
- * opens one again, or has the check look now rather than wait for the night.
+ * { action: 'reopen', id } or { action: 'look' }: the bookkeeper or a super
+ * admin clears one, opens one again, or has the check look now rather than
+ * wait for the night.
  *
- * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md).
+ * Super admins, the bookkeeper and the CPA read it; the CPA changes nothing
+ * (docs/books.md "Who can open the books").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const service = createServiceClient();
@@ -81,7 +82,7 @@ export async function GET(req: NextRequest) {
   const clearers = [...new Set(rows.data.map((r) => r.cleared_by).filter((id): id is string => typeof id === 'string'))];
   const profiles = clearers.length ? await service.from('profiles').select('id, full_name').in('id', clearers) : { data: [], error: null };
   if (profiles.error) return NextResponse.json({ error: profiles.error.message }, { status: 500 });
-  const names = new Map((profiles.data ?? []).map((p: { id: string; full_name: string | null }) => [p.id, p.full_name ?? 'a super admin']));
+  const names = new Map((profiles.data ?? []).map((p: { id: string; full_name: string | null }) => [p.id, p.full_name ?? 'someone']));
 
   const link = (type: MistakeDocType, netsuiteId: string) => {
     try {
@@ -109,7 +110,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;

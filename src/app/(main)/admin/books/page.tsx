@@ -4,17 +4,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { looseMatcher } from '@/lib/loose-search';
 
 /**
  * Books → Chart of accounts (migrations 359/360, docs/books.md).
  *
- * FleetSuite's own books are built hidden: only super admins can open them,
- * and only they see the Books entry on the More page (Admin), which opens
- * this page. Read-only — until the changeover the accounts are copied
- * from NetSuite every two hours (or on "Sync now"), so they're added and
- * changed there.
+ * FleetSuite's own books open to super admins, the bookkeeper and the CPA
+ * (src/lib/books/access.ts), who see the Books entry on the More page,
+ * which opens this page. Read-only — until the changeover the accounts are
+ * copied from NetSuite every two hours (or on "Sync now", not the CPA's), so
+ * they're added and changed there.
  */
 
 interface Account {
@@ -107,6 +108,8 @@ export default function BooksAccountsPage() {
   const [showInactive, setShowInactive] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState('');
+  // The CPA reads; syncing now and Snap a bill are the bookkeeper's too.
+  const canKeep = booksAllows(booksAccess(hasRole), 'keep');
 
   const load = useCallback(async () => {
     try {
@@ -125,7 +128,7 @@ export default function BooksAccountsPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
   }, [authLoading, router, load]);
@@ -178,8 +181,8 @@ export default function BooksAccountsPage() {
         <div style={{ flex: '1 1 280px' }}>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>Chart of accounts</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            FleetSuite&apos;s own books, visible only to super admins while they&apos;re built. Until the changeover these
-            accounts are copied from NetSuite every two hours, so add or change an account in NetSuite.{' '}
+            FleetSuite&apos;s own books. Until the changeover these accounts are copied from NetSuite every two hours,
+            so add or change an account in NetSuite.{' '}
             <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
             {' · '}
             <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>
@@ -202,8 +205,12 @@ export default function BooksAccountsPage() {
             {' · '}
             <Link href="/admin/books/own-bills" style={{ color: 'var(--text-secondary)' }}>Own bills</Link>
             {' · '}
-            <Link href="/admin/books/snap-a-bill" style={{ color: 'var(--text-secondary)' }}>Snap a bill</Link>
-            {' · '}
+            {canKeep && (
+              <>
+                <Link href="/admin/books/snap-a-bill" style={{ color: 'var(--text-secondary)' }}>Snap a bill</Link>
+                {' · '}
+              </>
+            )}
             <Link href="/admin/books/own-receipts" style={{ color: 'var(--text-secondary)' }}>Own receipts</Link>
             {' · '}
             <Link href="/admin/books/own-adjustments" style={{ color: 'var(--text-secondary)' }}>Own adjustments</Link>
@@ -223,16 +230,18 @@ export default function BooksAccountsPage() {
             <Link href="/admin/books/1099s" style={{ color: 'var(--text-secondary)' }}>1099s</Link>
           </div>
         </div>
-        <button
-          onClick={syncNow}
-          disabled={syncing || loading}
-          style={{
-            padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
-            color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: syncing ? 'wait' : 'pointer',
-          }}
-        >
-          {syncing ? 'Syncing…' : 'Sync now'}
-        </button>
+        {canKeep && (
+          <button
+            onClick={syncNow}
+            disabled={syncing || loading}
+            style={{
+              padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
+              color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: syncing ? 'wait' : 'pointer',
+            }}
+          >
+            {syncing ? 'Syncing…' : 'Sync now'}
+          </button>
+        )}
       </div>
 
       {error && <div style={banner('#ef4444')}>{error}</div>}
@@ -241,7 +250,7 @@ export default function BooksAccountsPage() {
       {!loading && !error && (
         <>
           {!lastSync && (
-            <div style={banner('#fbbf24')}>No NetSuite account sync has run yet. It runs every two hours, or press Sync now.</div>
+            <div style={banner('#fbbf24')}>No NetSuite account sync has run yet. It runs every two hours{canKeep ? ', or press Sync now' : ''}.</div>
           )}
           {result?.error && (
             <div style={banner('#ef4444')}>The last sync failed {ago(lastSync!.at)}: {result.error}</div>

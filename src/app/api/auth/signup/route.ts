@@ -18,8 +18,9 @@ const SignupSchema = z.object({
     .optional(),
 });
 
-// Roles that must never arrive by self-service, even on a first insert.
-const PRIVILEGED_ROLES = ['admin', 'super_admin', 'executive'];
+// Roles that must never arrive by self-service, even on a first insert. The
+// books' own logins (migration 483) are a super admin's to give.
+const PRIVILEGED_ROLES = ['admin', 'super_admin', 'executive', 'bookkeeper', 'cpa'];
 
 /**
  * POST /api/auth/signup

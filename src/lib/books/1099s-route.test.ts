@@ -6,10 +6,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
-let superAdmin = true;
-vi.mock('@/lib/api-auth', () => ({
-  requireSuperAdmin: vi.fn(async () => (superAdmin ? { user: { id: 'u-craig' } } : { error: new Response('Forbidden', { status: 403 }) })),
-}));
+let roles = ['admin', 'super_admin'];
+vi.mock('@/lib/api-auth', async () => {
+  // The real levels (src/lib/books/access.ts) for whoever roles says is signed in.
+  const { booksAccess, booksAllows } = await import('@/lib/books/access');
+  return {
+    requireBooks: vi.fn(async (_req: unknown, need: 'read' | 'keep' | 'owner') => {
+      const access = booksAccess((r) => roles.includes(r));
+      return booksAllows(access, need) ? { ...{ user: { id: 'u-craig' } }, access } : { error: new Response('Forbidden', { status: 403 }) };
+    }),
+  };
+});
 vi.mock('@/lib/supabase-service', () => ({ createServiceClient: () => service }));
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
@@ -106,7 +113,7 @@ const YEAR: Year1099Data = {
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-11-01T15:00:00Z'));
-  superAdmin = true;
+  roles = ['admin', 'super_admin'];
   companies = [{ id: 'co-1084', code: '1084', name: '1084 Cool Springs' }, { id: 'co-bmg', code: 'BMG', name: 'BMG Fleet Installations' }];
   const ran = (last_result: unknown): SyncRow => ({ last_synced_at: '2026-11-01T14:00:00Z', last_result, updated_at: '2026-11-01T14:00:00Z' });
   syncRows = {
@@ -128,8 +135,8 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); });
 
 describe('1099s', () => {
-  it('is for super admins only', async () => {
-    superAdmin = false;
+  it('is for whoever opens the books, and not an admin who does not', async () => {
+    roles = ['admin'];
     const res = await GET(new NextRequest('https://go.bmgfleet.com/api/admin/books/1099s'));
     expect(res.status).toBe(403);
     expect(rpcs).toEqual([]);
@@ -379,12 +386,18 @@ describe("NetSuite's 1099 report", () => {
     expect(audits).toEqual([]);
   });
 
-  it('is for super admins only', async () => {
-    superAdmin = false;
+  it('is for super admins and the bookkeeper, not the CPA', async () => {
+    roles = ['cpa'];
     const res = await POST(new NextRequest('https://go.bmgfleet.com/api/admin/books/1099s', {
       method: 'POST', body: JSON.stringify({ company: 'BMG', year: 2025, report: REPORT }),
     }));
     expect(res.status).toBe(403);
     expect(rpcs).toEqual([]);
+    // The CPA still reads the year, and the bookkeeper keeps the report.
+    expect((await get()).status).toBe(200);
+    rpcs.length = 0;
+    roles = ['bookkeeper'];
+    expect(await post({ company: 'BMG', year: 2025, report: REPORT })).toEqual({ status: 200, body: { saved: true, vendors: 1, replaced: false } });
+    expect(rpcs.map(([name]) => name)).toEqual(['gl_netsuite_1099_report_save']);
   });
 });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { itemMoves, stockSetup, type StockItemMovesData, type StockSetupData } from '@/lib/books/stock-items';
 
@@ -17,10 +17,11 @@ const SHOWN = 1000;
  * asset account, that account (stockSetup, migration 403). `item` is
  * NetSuite's id for it. Values are whole cents.
  *
- * Super admin only, as the rest of the books (docs/books.md "Stock by item").
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md "Stock by item").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const item = new URL(req.url).searchParams.get('item') ?? '';

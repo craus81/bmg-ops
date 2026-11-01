@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 
 /**
@@ -164,6 +165,8 @@ function StatusChips({ row }: { row: ListRow }) {
 export default function BooksListsPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
+  // Syncing now isn't the CPA's; looking things up is everyone's.
+  const canKeep = booksAllows(booksAccess(hasRole), 'keep');
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -190,7 +193,7 @@ export default function BooksListsPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
   }, [authLoading, router, load]);
@@ -533,7 +536,7 @@ export default function BooksListsPage() {
         Such an item, a payment item say, posts to an account of its own. The invoice rule uses the one NetSuite used most.
       </div>
       {!result?.itemAccounts ? (
-        <div style={muted}>Not read yet. Sync now reads it.</div>
+        <div style={muted}>Not read yet. {canKeep ? 'Sync now reads it.' : 'The next copy reads it.'}</div>
       ) : result.itemAccounts.length === 0 ? (
         <div style={muted}>No invoice since January 2025 has an item with no income account.</div>
       ) : (
@@ -616,8 +619,7 @@ export default function BooksListsPage() {
         <div style={{ flex: '1 1 280px' }}>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>NetSuite lists</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            FleetSuite&apos;s own books, visible only to super admins while they&apos;re built. The posting rules will pick
-            accounts from these lists the way NetSuite does. Until the changeover they&apos;re copied from NetSuite every two
+            The posting rules in FleetSuite&apos;s own books pick accounts from these lists the way NetSuite does. Until the changeover they&apos;re copied from NetSuite every two
             hours, so change them in NetSuite.{' '}
             <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
             {' · '}
@@ -638,16 +640,18 @@ export default function BooksListsPage() {
             <Link href="/admin/books/own-fulfillments" style={{ color: 'var(--text-secondary)' }}>Own fulfillments</Link>
           </div>
         </div>
-        <button
-          onClick={syncNow}
-          disabled={syncing || loading}
-          style={{
-            padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
-            color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: syncing ? 'wait' : 'pointer',
-          }}
-        >
-          {syncing ? 'Syncing…' : 'Sync now'}
-        </button>
+        {canKeep && (
+          <button
+            onClick={syncNow}
+            disabled={syncing || loading}
+            style={{
+              padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
+              color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: syncing ? 'wait' : 'pointer',
+            }}
+          >
+            {syncing ? 'Syncing…' : 'Sync now'}
+          </button>
+        )}
       </div>
 
       {error && <div style={banner('#ef4444')}>{error}</div>}
@@ -656,7 +660,7 @@ export default function BooksListsPage() {
       {!loading && !error && data && (
         <>
           {!data.lastSync && (
-            <div style={banner('#fbbf24')}>The lists haven&apos;t been copied yet. It runs every two hours, or press Sync now.</div>
+            <div style={banner('#fbbf24')}>The lists haven&apos;t been copied yet. It runs every two hours{canKeep ? ', or press Sync now' : ''}.</div>
           )}
           {result?.error && (
             <div style={banner('#ef4444')}>The last copy failed {ago(data.lastSync!.at)}: {result.error}</div>

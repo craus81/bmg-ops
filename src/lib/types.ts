@@ -1,4 +1,4 @@
-export type AppRole = 'admin' | 'super_admin' | 'executive' | 'installer' | 'field_tech' | 'shop_tech' | 'sales' | 'graphics_production' | 'customer' | 'finance';
+export type AppRole = 'admin' | 'super_admin' | 'executive' | 'installer' | 'field_tech' | 'shop_tech' | 'sales' | 'graphics_production' | 'customer' | 'finance' | 'bookkeeper' | 'cpa';
 
 // Human-readable labels for roles
 export const ROLE_LABELS: Record<AppRole, string> = {
@@ -12,6 +12,8 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   graphics_production: 'Graphics Production',
   customer: 'Customer',
   finance: 'Finance / AP',
+  bookkeeper: 'Bookkeeper',
+  cpa: 'CPA',
 };
 
 // Legacy role mapping for backward compatibility

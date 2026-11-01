@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { BOOKS_STOCK_SYNC, copyNetSuiteStock, type StockCopyResult } from '@/lib/books/netsuite-stock';
 import {
@@ -34,10 +34,11 @@ const COPY_FIELDS: Array<keyof StockCopyResult> = [
  * wait for the two-hourly run (/api/cron/books-netsuite-stock). Same job,
  * same record of how it went; the response says only how the run went.
  *
- * Super admin only, as the rest of the books (docs/books.md "Stock by item").
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md "Stock by item"); copying now (POST) isn't the CPA's.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const service = createServiceClient();
@@ -71,7 +72,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
 
   const result = await copyNetSuiteStock(createServiceClient(), { deadline: Date.now() + COPY_BUDGET_MS });

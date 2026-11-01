@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { BooksCompany } from '@/lib/books/journal';
@@ -17,11 +18,11 @@ import type { MistakeKind, MistakeView } from '@/lib/books/mistake-checks';
  * Each night Books looks through the bills, checks and card charges it copies
  * from NetSuite for likely mistakes. Each company's open ones show the
  * likeliest first, each with why in a sentence and links to its documents in
- * NetSuite. A super admin clears one as fixed in NetSuite or fine as it is,
- * with a note; as fine it can also teach the check. Cleared ones keep who,
- * when and why, with "Open it again". The daily check tells the super admins
- * about new ones and links here (?company=…&item=…). Super admins only, as
- * the books are.
+ * NetSuite. The bookkeeper or a super admin clears one as fixed in NetSuite
+ * or fine as it is, with a note; as fine it can also teach the check. Cleared
+ * ones keep who, when and why, with "Open it again". The daily check tells
+ * the super admins about new ones and links here (?company=…&item=…). Open to
+ * whoever opens the books.
  */
 
 interface SyncState { at: string; error: string | null }
@@ -100,7 +101,7 @@ function clearedLine(item: MistakeView): string {
   const how = item.how === 'fixed' ? 'fixed in NetSuite.' : 'fine as it is.';
   const note = item.note ? ` “${item.note}”` : '';
   const learned = !item.learned ? '' : item.kind === 'missing' ? ' No longer watched.' : ` Fine for ${item.party ?? 'this vendor'} from now on.`;
-  return `Cleared by ${item.by ?? 'a super admin'}, ${at}: ${how}${note}${learned}`;
+  return `Cleared by ${item.by ?? 'someone'}, ${at}: ${how}${note}${learned}`;
 }
 
 function ClearPanel({ item, how, busy, error, onClear, onCancel }: {
@@ -154,12 +155,14 @@ function ClearPanel({ item, how, busy, error, onClear, onCancel }: {
   );
 }
 
-function ItemRow({ item, open, busy, error, highlight, onOpen, onClear, onReopen }: {
+function ItemRow({ item, open, busy, error, highlight, canKeep, onOpen, onClear, onReopen }: {
   item: MistakeView;
   open: How | null;
   busy: boolean;
   error: string;
   highlight: boolean;
+  /** Clearing and opening again are the bookkeeper's and super admins'; the CPA reads. */
+  canKeep: boolean;
   onOpen: (how: How | null) => void;
   onClear: (how: How, note: string, learn: boolean) => void;
   onReopen: () => void;
@@ -198,7 +201,7 @@ function ItemRow({ item, open, busy, error, highlight, onOpen, onClear, onReopen
           ))}
         </span>
         <span style={{ marginLeft: 'auto', display: 'flex', gap: '6px' }}>
-          {cleared ? (
+          {!canKeep ? null : cleared ? (
             <button type="button" style={small()} disabled={busy} onClick={onReopen}>{busy ? 'Opening…' : 'Open it again'}</button>
           ) : (
             <>
@@ -209,7 +212,7 @@ function ItemRow({ item, open, busy, error, highlight, onOpen, onClear, onReopen
         </span>
       </div>
       {cleared && error && <div style={{ fontSize: '12px', fontWeight: 600, color: RED, marginTop: '6px' }}>{error}</div>}
-      {open && !cleared && (
+      {canKeep && open && !cleared && (
         <ClearPanel
           key={open}
           item={item}
@@ -227,6 +230,7 @@ function ItemRow({ item, open, busy, error, highlight, onOpen, onClear, onReopen
 export default function BooksMistakeChecksPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
+  const canKeep = booksAllows(booksAccess(hasRole), 'keep');
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState('');
   const [company, setCompany] = useState<BooksCompany>('BMG');
@@ -255,7 +259,7 @@ export default function BooksMistakeChecksPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // The daily check's notification opens a company's list, or one item on it (deepLinks.booksMistakeChecks).
     const q = new URLSearchParams(window.location.search);
     const wanted = q.get('company');
@@ -339,8 +343,8 @@ export default function BooksMistakeChecksPage() {
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             Each night Books looks through what it copies from NetSuite for likely mistakes: a bill entered twice, a bill or charge
             far off the vendor&apos;s usual, a monthly charge that didn&apos;t come, and a charge coded to an account that vendor
-            doesn&apos;t use. Each one says why. Clear it once it&apos;s fixed in NetSuite, or if it&apos;s fine as it is. Nothing here
-            changes NetSuite. Visible only to super admins.{' '}
+            doesn&apos;t use. Each one says why. {canKeep ? 'Clear it' : 'The bookkeeper or a super admin clears it'} once it&apos;s fixed in
+            NetSuite, or if it&apos;s fine as it is. Nothing here changes NetSuite.{' '}
             <Link href="/admin/books/differences" style={{ color: 'var(--text-secondary)' }}>Differences vs NetSuite</Link>
             {' · '}
             <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
@@ -348,17 +352,19 @@ export default function BooksMistakeChecksPage() {
             <Link href="/admin/books/lists" style={{ color: 'var(--text-secondary)' }}>NetSuite lists</Link>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={lookNow}
-          disabled={looking || !data}
-          style={{
-            padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
-            color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: looking ? 'wait' : 'pointer',
-          }}
-        >
-          {looking ? 'Looking…' : 'Look now'}
-        </button>
+        {canKeep && (
+          <button
+            type="button"
+            onClick={lookNow}
+            disabled={looking || !data}
+            style={{
+              padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
+              color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: looking ? 'wait' : 'pointer',
+            }}
+          >
+            {looking ? 'Looking…' : 'Look now'}
+          </button>
+        )}
       </div>
 
       {error && <div style={banner(RED)}>{error}</div>}
@@ -369,7 +375,7 @@ export default function BooksMistakeChecksPage() {
           {data.lastLook?.error && <div style={banner(RED)}>The last look didn&apos;t finish {whenText(data.lastLook.at)}: {data.lastLook.error}</div>}
           {copyFailed.map((text) => <div key={text} style={banner(RED)}>{text}</div>)}
           {!data.lastLook && (
-            <div style={banner(BLUE)}>The first look runs tonight at 4:46 AM. Tap Look now to look straight away.</div>
+            <div style={banner(BLUE)}>The first look runs tonight at 4:46 AM.{canKeep ? ' Tap Look now to look straight away.' : ''}</div>
           )}
           {data.lastLook && (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
@@ -416,6 +422,7 @@ export default function BooksMistakeChecksPage() {
                 busy={busy === item.id}
                 error={itemError?.id === item.id ? itemError.text : ''}
                 highlight={highlight === item.id}
+                canKeep={canKeep}
                 onOpen={(how) => { setItemError(null); setOpened(how ? { id: item.id, how } : null); }}
                 onClear={(how, note, learn) => act(item.id, { action: 'clear', how, note, learn })}
                 onReopen={() => act(item.id, { action: 'reopen' })}

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
@@ -23,7 +24,7 @@ import type { Buckets, PartyAging, Sides } from '@/lib/books/agings';
  * books have more on the document, since they don't record which payment
  * paid which invoice yet. What a customer's or vendor's open documents leave
  * of its balance (Customer and vendor balances) is "not in an open invoice".
- * Tap a name for its documents. Super admins only, as the books are.
+ * Tap a name for its documents. Open to whoever opens the books.
  */
 
 type Listed = Omit<PartyAging, 'documents'> & { documentCount: number };
@@ -158,6 +159,8 @@ function PartyLabel({ p, kind, company }: { p: Listed; kind: PartyKind; company:
 export default function BooksAgingsPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
+  // Copying now and posting now aren't the CPA's.
+  const canKeep = booksAllows(booksAccess(hasRole), 'keep');
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -190,7 +193,7 @@ export default function BooksAgingsPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     const q = new URLSearchParams(window.location.search);
     load(q.get('company') ?? '', q.get('kind') ?? '', q.get('only') === 'differs' ? 'differs' : 'all');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
@@ -244,7 +247,6 @@ export default function BooksAgingsPage() {
               aged from its due date, or its date when it has none, to today. NetSuite&apos;s side is what NetSuite has open on each one,
               copied every two hours. FleetSuite&apos;s books don&apos;t record yet which payment paid which invoice, so FleetSuite&apos;s
               side is NetSuite&apos;s open amount plus whatever FleetSuite&apos;s books have more on it. Tap a name for its documents.
-              Visible only to super admins.
             </div>
             <button
               onClick={() => setIntroOpen(!introOpen)}
@@ -260,9 +262,11 @@ export default function BooksAgingsPage() {
             <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
           </div>
         </div>
-        <button onClick={copyNow} disabled={copying || loading || !data} style={{ ...button(false), alignSelf: 'flex-start', cursor: copying ? 'wait' : 'pointer' }}>
-          {copying ? 'Copying…' : 'Copy now'}
-        </button>
+        {canKeep && (
+          <button onClick={copyNow} disabled={copying || loading || !data} style={{ ...button(false), alignSelf: 'flex-start', cursor: copying ? 'wait' : 'pointer' }}>
+            {copying ? 'Copying…' : 'Copy now'}
+          </button>
+        )}
       </div>
 
       {error && <div style={banner(RED)}>{error}</div>}
@@ -273,7 +277,7 @@ export default function BooksAgingsPage() {
           {!data.lastOpenCopy && (
             <div style={banner(AMBER)}>
               NetSuite&apos;s open invoices and bills haven&apos;t been copied yet, so NetSuite&apos;s side has nothing open and every balance shows as
-              not in an open {names.open}. Press Copy now, or wait for the next copy.
+              not in an open {names.open}. {canKeep ? 'Press Copy now, or wait for the next copy.' : "They're copied every two hours."}
             </div>
           )}
           {data.lastOpenCopy?.error && (
@@ -291,7 +295,7 @@ export default function BooksAgingsPage() {
           {data.lastPosting && !data.lastPosting.error && data.lastPosting.partial && (
             <div style={banner(AMBER)}>
               Still posting: the last run, {ago(data.lastPosting.at)}, stopped for time, so some documents aren&apos;t in FleetSuite&apos;s
-              books yet. It carries on at the next run, or press Post now on Invoices vs NetSuite.
+              books yet. It carries on at the next run{canKeep ? ', or press Post now on Invoices vs NetSuite' : ''}.
             </div>
           )}
           <div style={note}>

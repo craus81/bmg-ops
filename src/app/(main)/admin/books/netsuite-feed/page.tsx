@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 
 /**
@@ -12,8 +13,8 @@ import { apiFetch } from '@/lib/api-client';
  * Every send FleetSuite made to NetSuite, newest first, with what NetSuite
  * answered: it took it, refused it, or left FleetSuite unsure (no answer, a
  * timeout, a server error). NetSuite may have done an unsure one anyway, so
- * those wait at the top until a super admin has looked for them in NetSuite
- * and noted what they found. Super admins only, as the books are.
+ * those wait at the top until someone has looked for them in NetSuite and
+ * noted what they found. Open to whoever opens the books.
  */
 
 type FeedOutcome = 'took' | 'refused' | 'unsure' | 'no_answer' | 'sending';
@@ -116,6 +117,8 @@ function details(s: FeedSend): string {
 export default function BooksNetsuiteFeedPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
+  // Noting a look is the bookkeeper's and super admins'; the CPA reads.
+  const canKeep = booksAllows(booksAccess(hasRole), 'keep');
   const [data, setData] = useState<Payload | null>(null);
   const [show, setShow] = useState<Show>('all');
   const [kind, setKind] = useState('');
@@ -147,7 +150,7 @@ export default function BooksNetsuiteFeedPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // The daily check's notification names the send it's about.
     setPicked(new URLSearchParams(window.location.search).get('send') ?? '');
     load({ show: 'all', kind: '', page: 0 });
@@ -203,7 +206,7 @@ export default function BooksNetsuiteFeedPage() {
             <span style={{ display: 'block', marginTop: '4px' }}>
               Not sure means NetSuite didn&apos;t answer, took too long, or had a problem of its own, so it may have done it anyway.
               Look for it in NetSuite before anyone tries again. The daily check tells the super admins about each one once.
-              Nothing a send carried is kept here, only what it was for and what NetSuite said. Visible only to super admins.
+              Nothing a send carried is kept here, only what it was for and what NetSuite said.
             </span>
           )}
         </div>
@@ -247,7 +250,7 @@ export default function BooksNetsuiteFeedPage() {
                         NetSuite may have done it anyway. Look for it there before anyone tries again.
                         {s.link && <>{' '}<a href={s.link} target="_blank" rel="noreferrer" style={{ color: 'inherit', fontWeight: 700 }}>Open in NetSuite</a></>}
                       </div>
-                      <div style={{ marginTop: '8px' }}>
+                      {canKeep && <div style={{ marginTop: '8px' }}>
                         {asking ? (
                           <>
                             <input
@@ -271,7 +274,7 @@ export default function BooksNetsuiteFeedPage() {
                           </button>
                         )}
                         {actError?.id === s.id && <div style={{ ...banner(RED), marginTop: '8px', marginBottom: 0 }}>{actError.message}</div>}
-                      </div>
+                      </div>}
                     </div>
                   );
                 })}

@@ -6,6 +6,7 @@ import { useAuth } from '@/components/AuthProvider';
 import MentionsInbox from '@/components/MentionsInbox';
 import MyHome from '@/components/MyHome';
 import { resolveDashboardFocus } from '@/lib/dashboard-focus';
+import { booksOnly } from '@/lib/books/access';
 import NeedsInstallDate from '@/components/NeedsInstallDate';
 import ReadyToSchedule from '@/components/ReadyToSchedule';
 import RequestsHomeCard from '@/components/RequestsHomeCard';
@@ -95,6 +96,9 @@ export default function HomePage() {
   // per-user feature revoke forms an infinite /home ↔ page loop.
   const scanOk = hasFeature('scan');
   const isTech = isOnlyRole('field_tech') || isOnlyRole('shop_tech');
+  // A bookkeeper or CPA login with no other role has nothing here but the
+  // books, which admit them by role (src/lib/books/access.ts).
+  const booksHome = booksOnly(hasRole);
 
   useEffect(() => {
     if (!role) return;
@@ -104,11 +108,13 @@ export default function HomePage() {
     // decision 2026-09-29) with Scan / Check In on top, so they stay here.
     // Contract installers still land on Scan.
     if (isOnlyRole('installer') && !isTech && scanOk) { router.replace('/scan'); return; }
+    if (booksHome) { router.replace('/admin/books'); return; }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run when the effective role changes (including View As)
-  }, [role, isAdmin, scanOk, isTech]);
+  }, [role, isAdmin, scanOk, isTech, booksHome]);
 
   if (role === 'customer') return null;
   if (isOnlyRole('installer') && !isTech && scanOk) return null;
+  if (booksHome) return null;
 
   // Every Home ends with the small Requests card (2026-10-30).
   return (

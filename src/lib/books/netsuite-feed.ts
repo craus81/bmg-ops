@@ -6,9 +6,9 @@ import { NO_ANSWER_MS, describeSend, recordUrl, type SendAction, type SendOutcom
  * made to NetSuite (netsuite_sends, migration 477, kept by
  * src/lib/netsuite-sends.ts) and what NetSuite answered, newest first, and the
  * ones FleetSuite can't be sure about (an answer that didn't say, or none at
- * all) until a super admin has looked for them in NetSuite. NetSuite may
- * have made those anyway, so they're looked for before anyone tries again.
- * Super admins only, as the books are.
+ * all) until someone has looked for them in NetSuite. NetSuite may have
+ * made those anyway, so they're looked for before anyone tries again. Open to
+ * whoever opens the books.
  */
 
 /** How a send stands: NetSuite took it or refused it, FleetSuite isn't sure, it never heard back, or it's on its way. */

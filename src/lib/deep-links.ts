@@ -435,20 +435,21 @@ export const deepLinks = {
   /** Books → Differences vs NetSuite on one company's month ('YYYY-MM' or
    *  'YYYY-MM-01'), which the page opens from ?company= and ?month=: the
    *  landing for the daily books check's notification
-   *  (src/lib/books/daily-check.ts) and Reports' links to a month. Super
-   *  admins only, as the books are. */
+   *  (src/lib/books/daily-check.ts) and Reports' links to a month. Open
+   *  to whoever opens the books. */
   booksDifferences: (company: string, month: string) =>
     `/admin/books/differences?${new URLSearchParams({ company, month: month.slice(0, 7) })}`,
   /** Books → Reports on one company's report for the months from `from`
    *  through `to` ('YYYY-MM' or 'YYYY-MM-01'), which the page opens from its
-   *  params: the way back from an account's detail. Super admins only. */
+   *  params: the way back from an account's detail. Open to whoever opens
+   *  the books. */
   booksReport: (company: string, report: string, from: string, to: string) =>
     `/admin/books/reports?${new URLSearchParams({ company, report, from: from.slice(0, 7), to: to.slice(0, 7) })}`,
   /** Books → Reports → one account line's detail: the documents behind
    *  the line on `report` for the months from `from` through `to`, only
    *  those that differ from NetSuite with `differs` (docs/books.md "Report
    *  detail"). `account` is the line's key, NetSuite's id or 'fs:<id>'.
-   *  Super admins only. */
+   *  Open to whoever opens the books. */
   booksAccountDetail: (company: string, account: string, report: string, from: string, to: string, differs = false) =>
     `/admin/books/reports/detail?${new URLSearchParams({
       company, account, report, from: from.slice(0, 7), to: to.slice(0, 7), ...(differs ? { only: 'differs' } : {}),
@@ -456,65 +457,65 @@ export const deepLinks = {
   /** Books → Invoices vs NetSuite opened on one NetSuite document's line by
    *  line check: `kind` is the page's switch for it (listKindOf in
    *  src/lib/books/differences.ts) and `month` the month it lists it
-   *  under. Super admins only. */
+   *  under. Open to whoever opens the books. */
   booksDocument: (company: string, kind: string, month: string, netsuiteId: string) =>
     `/admin/books/invoices?${new URLSearchParams({ company, kind, month: month.slice(0, 7), doc: netsuiteId })}`,
   /** Books → Stock by item, only the items whose count or value differs
    *  from NetSuite's with `differs`: the landing for the daily books
    *  check's notification about several items (src/lib/books/daily-check.ts).
-   *  Super admins only. */
+   *  Open to whoever opens the books. */
   booksStock: (differs = false) => `/admin/books/stock${differs ? '?only=differs' : ''}`,
   /** Books → Stock by item → one item's moves, by its NetSuite id, with
    *  the row of one location (NetSuite's id) picked out: the landing for
-   *  the daily books check's notification about one item. Super admins
-   *  only. */
+   *  the daily books check's notification about one item. Open to
+   *  whoever opens the books. */
   booksStockItem: (itemId: string, locationId?: string | null) =>
     `/admin/books/stock/item?${new URLSearchParams({ item: itemId, ...(locationId ? { location: locationId } : {}) })}`,
   /** Books → Customer and vendor balances on one company's customers
    *  (`kind` 'customer') or vendors ('vendor'), only those whose balance
    *  differs from NetSuite's with `differs`: the landing for the daily
    *  books check's notification about several balances
-   *  (src/lib/books/daily-check.ts). Super admins only. */
+   *  (src/lib/books/daily-check.ts). Open to whoever opens the books. */
   booksBalances: (company: string, kind: string, differs = false) =>
     `/admin/books/balances?${new URLSearchParams({ company, kind, ...(differs ? { only: 'differs' } : {}) })}`,
   /** Books → Customer and vendor balances → one customer's (its FleetSuite
    *  id) or vendor's (its NetSuite id) balance and the documents behind it,
    *  '' for the lines FleetSuite can't name ('none' in the address), only
    *  the documents that differ from NetSuite with `differs`: the landing
-   *  for the daily books check's notification about one balance. Super
-   *  admins only. */
+   *  for the daily books check's notification about one balance. Open to
+   *  whoever opens the books. */
   booksBalance: (company: string, kind: string, party: string, differs = false) =>
     `/admin/books/balances/party?${new URLSearchParams({ company, kind, party: party || 'none', ...(differs ? { only: 'differs' } : {}) })}`,
   /** Books → AR and AP agings on one company's customers (`kind`
    *  'customer') or vendors ('vendor'), only those whose aging differs from
-   *  NetSuite's with `differs`. Super admins only. */
+   *  NetSuite's with `differs`. Open to whoever opens the books. */
   booksAgings: (company: string, kind: string, differs = false) =>
     `/admin/books/agings?${new URLSearchParams({ company, kind, ...(differs ? { only: 'differs' } : {}) })}`,
   /** Books → AR and AP agings → one customer's (its FleetSuite id) or
    *  vendor's (its NetSuite id) open documents, by how late, '' for the
-   *  lines FleetSuite can't name ('none' in the address). Super admins
-   *  only. */
+   *  lines FleetSuite can't name ('none' in the address). Open to
+   *  whoever opens the books. */
   booksAging: (company: string, kind: string, party: string) =>
     `/admin/books/agings/party?${new URLSearchParams({ company, kind, party: party || 'none' })}`,
   /** Books → Own invoices on the month ('YYYY-MM' or 'YYYY-MM-01') they
    *  were made in, the newest month when it's left out, only those that
    *  differ from NetSuite's with `differs`: the landing for the daily books
    *  check's notification about several own invoices
-   *  (src/lib/books/daily-check.ts). Super admins only. */
+   *  (src/lib/books/daily-check.ts). Open to whoever opens the books. */
   booksOwnInvoices: (month?: string | null, differs = false) => {
     const query = new URLSearchParams({ ...(month ? { month: month.slice(0, 7) } : {}), ...(differs ? { only: 'differs' } : {}) }).toString();
     return `/admin/books/own-invoices${query ? `?${query}` : ''}`;
   },
   /** Books → Own invoices → FleetSuite's own copy of one invoice, by
    *  NetSuite's id for it, next to NetSuite's line by line: the landing for
-   *  the daily books check's notification about one own invoice. Super
-   *  admins only. */
+   *  the daily books check's notification about one own invoice. Open to
+   *  whoever opens the books. */
   booksOwnInvoice: (netsuiteId: string) => `/admin/books/own-invoices/invoice?${new URLSearchParams({ id: netsuiteId })}`,
   /** Books → Own fulfillments on the month ('YYYY-MM' or 'YYYY-MM-01')
    *  they were made in, the newest month when it's left out, only those
    *  that differ from NetSuite's with `differs`: the landing for the daily
    *  books check's notification about several own fulfillments
-   *  (src/lib/books/daily-check.ts). Super admins only. */
+   *  (src/lib/books/daily-check.ts). Open to whoever opens the books. */
   booksOwnFulfillments: (month?: string | null, differs = false) => {
     const query = new URLSearchParams({ ...(month ? { month: month.slice(0, 7) } : {}), ...(differs ? { only: 'differs' } : {}) }).toString();
     return `/admin/books/own-fulfillments${query ? `?${query}` : ''}`;
@@ -522,27 +523,27 @@ export const deepLinks = {
   /** Books → Own fulfillments → FleetSuite's own copy of one fulfillment,
    *  by NetSuite's id for it, next to NetSuite's item by item: the landing
    *  for the daily books check's notification about one own fulfillment.
-   *  Super admins only. */
+   *  Open to whoever opens the books. */
   booksOwnFulfillment: (netsuiteId: string) => `/admin/books/own-fulfillments/fulfillment?${new URLSearchParams({ id: netsuiteId })}`,
   /** Books → Own bills on the month ('YYYY-MM' or 'YYYY-MM-01') they were
    *  made in, the newest month when it's left out, only those that differ
    *  from NetSuite's with `differs`: the landing for the daily books check's
    *  notification about several own bills (src/lib/books/daily-check.ts).
-   *  Super admins only. */
+   *  Open to whoever opens the books. */
   booksOwnBills: (month?: string | null, differs = false) => {
     const query = new URLSearchParams({ ...(month ? { month: month.slice(0, 7) } : {}), ...(differs ? { only: 'differs' } : {}) }).toString();
     return `/admin/books/own-bills${query ? `?${query}` : ''}`;
   },
   /** Books → Own bills → Books' own copy of one bill FleetSuite made, by
    *  NetSuite's id for it, next to NetSuite's line by line: the landing for
-   *  the daily books check's notification about one own bill. Super admins
-   *  only. */
+   *  the daily books check's notification about one own bill. Open to
+   *  whoever opens the books. */
   booksOwnBill: (netsuiteId: string) => `/admin/books/own-bills/bill?${new URLSearchParams({ id: netsuiteId })}`,
   /** Books → Own receipts on the month ('YYYY-MM' or 'YYYY-MM-01') they
    *  were received in, the newest month when it's left out, only those that
    *  differ from NetSuite's with `differs`: the landing for the daily books
    *  check's notification about several own receipts
-   *  (src/lib/books/daily-check.ts). Super admins only. */
+   *  (src/lib/books/daily-check.ts). Open to whoever opens the books. */
   booksOwnReceipts: (month?: string | null, differs = false) => {
     const query = new URLSearchParams({ ...(month ? { month: month.slice(0, 7) } : {}), ...(differs ? { only: 'differs' } : {}) }).toString();
     return `/admin/books/own-receipts${query ? `?${query}` : ''}`;
@@ -550,37 +551,39 @@ export const deepLinks = {
   /** Books → Own receipts → Books' own copy of one Receive on the Receiving
    *  page, by its key (FleetSuite's first row of it), next to NetSuite's item
    *  receipt item by item: the landing for the daily books check's
-   *  notification about one own receipt. Super admins only. */
+   *  notification about one own receipt. Open to whoever opens the books. */
   booksOwnReceipt: (receiptKey: string) => `/admin/books/own-receipts/receipt?${new URLSearchParams({ key: receiptKey })}`,
   /** Books → Own adjustments on the month ('YYYY-MM' or 'YYYY-MM-01') they
    *  were made in, the newest month when it's left out, only those that
    *  differ from NetSuite's with `differs`: the landing for the daily books
    *  check's notification about several own adjustments
-   *  (src/lib/books/daily-check.ts). Super admins only. */
+   *  (src/lib/books/daily-check.ts). Open to whoever opens the books. */
   booksOwnAdjustments: (month?: string | null, differs = false) => {
     const query = new URLSearchParams({ ...(month ? { month: month.slice(0, 7) } : {}), ...(differs ? { only: 'differs' } : {}) }).toString();
     return `/admin/books/own-adjustments${query ? `?${query}` : ''}`;
   },
   /** Books → Own adjustments → one Inventory Adjust, by FleetSuite's id for
    *  it, next to NetSuite's adjustment: the landing for the daily books
-   *  check's notification about one own adjustment. Super admins only. */
+   *  check's notification about one own adjustment. Open to whoever opens
+   *  the books. */
   booksOwnAdjustment: (id: string) => `/admin/books/own-adjustments/adjustment?${new URLSearchParams({ id })}`,
   /** Books → Switches: each piece that takes the team out of NetSuite, built
-   *  switched off (src/lib/books/switches.ts). Super admins only. */
+   *  switched off (src/lib/books/switches.ts). Open to whoever opens the
+   *  books; only a super admin flips one. */
   booksSwitches: () => '/admin/books/switches',
   /** Books → Snap a bill: a new one, or one already snapped (saved for
-   *  later, sent or thrown away) by its id, with its picture. Super admins
-   *  only. */
+   *  later, sent or thrown away) by its id, with its picture. The
+   *  bookkeeper's and super admins' only. */
   booksSnapBill: (id?: string | null) => `/admin/books/snap-a-bill${id ? `?${new URLSearchParams({ id })}` : ''}`,
-  /** The picture or PDF of one snapped bill, as bytes (same-origin, super
-   *  admins only; the books-bills prefix is denied on /api/storage). Feed a
-   *  PDF to `pdfViewer`. */
+  /** The picture or PDF of one snapped bill, as bytes (same-origin, the
+   *  bookkeeper's and super admins' only; the books-bills prefix is denied
+   *  on /api/storage). Feed a PDF to `pdfViewer`. */
   booksSnapBillFile: (id: string) => `/api/admin/books/snap-a-bill?${new URLSearchParams({ file: id })}`,
   /** Books → Mistake checks on a company's list ('BMG', '1084'), with one
    *  item on it picked out by its id: the landing for the daily books
    *  check's notification about new likely mistakes in the copies of
    *  NetSuite's bills, checks and card charges
-   *  (src/lib/books/daily-check.ts). Super admins only. */
+   *  (src/lib/books/daily-check.ts). Open to whoever opens the books. */
   booksMistakeChecks: (company?: string | null, item?: string | null) => {
     const query = new URLSearchParams({ ...(company ? { company } : {}), ...(item ? { item } : {}) }).toString();
     return `/admin/books/mistake-checks${query ? `?${query}` : ''}`;
@@ -588,18 +591,18 @@ export const deepLinks = {
   /** Books → NetSuite feed, with one send on it picked out by its id: the
    *  landing for the daily books check's notification about a send to
    *  NetSuite FleetSuite isn't sure about (src/lib/books/netsuite-feed.ts).
-   *  Super admins only. */
+   *  Open to whoever opens the books. */
   booksNetsuiteFeed: (send?: string | null) => `/admin/books/netsuite-feed${send ? `?${new URLSearchParams({ send })}` : ''}`,
   /** Books → Changed in NetSuite, with one change on it picked out by its
    *  id: the landing for the daily books check's notification about a
    *  customer's, vendor's or item's details changed in NetSuite once
-   *  FleetSuite's record wins (src/lib/fleetsuite-records.ts). Super admins
-   *  only. */
+   *  FleetSuite's record wins (src/lib/fleetsuite-records.ts). Open to
+   *  whoever opens the books. */
   booksChangedInNetsuite: (change?: string | null) =>
     `/admin/books/changed-in-netsuite${change ? `?${new URLSearchParams({ change })}` : ''}`,
   /** Books → 1099s on one company's year: what each vendor marked to get a
    *  1099 was paid on the accounts that count toward one (src/lib/books/1099s.ts).
-   *  Super admins only. */
+   *  Open to whoever opens the books. */
   books1099s: (company: string, year: number | string) =>
     `/admin/books/1099s?${new URLSearchParams({ company, year: String(year) })}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or

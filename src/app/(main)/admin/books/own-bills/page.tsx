@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
@@ -25,7 +26,7 @@ import { ownBooksChip, ownBooksCount } from '@/lib/books/own-posting-text';
  * check. The daily check tells the super admins when one differs and links
  * here (?only=differs) or to the bill. Each says what the books hold for
  * NetSuite's bill and which copy made it (migration 456,
- * src/lib/books/own-bill-posting.ts). Super admins only, as the books are.
+ * src/lib/books/own-bill-posting.ts). Open to whoever opens the books.
  */
 
 type Row = Omit<OwnBillCheck, 'fields' | 'lines' | 'workedOut'> & {
@@ -128,6 +129,9 @@ function TableRow({ label, style, children }: { label: React.ReactNode; style?: 
 
 /** A bill: its vendor and number (opening its check), status, what the books hold, the sentence saying how it compares, and where it came from. */
 function BillLabel({ r }: { r: Row }) {
+  // Snap a bill is the bookkeeper's and super admins'; the CPA reads who snapped it.
+  const { hasRole } = useAuth();
+  const canSnap = booksAllows(booksAccess(hasRole), 'keep');
   const s = STATUS[r.status];
   const books = ownBooksChip(r.books, r.status);
   return (
@@ -144,9 +148,11 @@ function BillLabel({ r }: { r: Row }) {
       </div>
       <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
         {r.madeFrom === 'snapped' && r.madeFromId ? (
-          <Link href={deepLinks.booksSnapBill(r.madeFromId)} style={{ color: 'var(--text-secondary)' }}>
-            {r.madeByName ? `Snapped by ${r.madeByName}` : MADE_FROM.snapped}
-          </Link>
+          canSnap ? (
+            <Link href={deepLinks.booksSnapBill(r.madeFromId)} style={{ color: 'var(--text-secondary)' }}>
+              {r.madeByName ? `Snapped by ${r.madeByName}` : MADE_FROM.snapped}
+            </Link>
+          ) : (r.madeByName ? `Snapped by ${r.madeByName}` : MADE_FROM.snapped)
         ) : MADE_FROM[r.madeFrom]}
         {r.poNumber ? `, ${r.poNumber}` : ''}
         {r.netsuiteUrl && (
@@ -163,6 +169,7 @@ function BillLabel({ r }: { r: Row }) {
 export default function BooksOwnBillsPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
+  const canSnap = booksAllows(booksAccess(hasRole), 'keep');
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -188,7 +195,7 @@ export default function BooksOwnBillsPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // The daily check's notification about several own bills opens the ones that differ (deepLinks.booksOwnBills).
     const q = new URLSearchParams(window.location.search);
     load(q.get('month') ?? '', q.get('only') === 'differs' ? 'differs' : 'all');
@@ -234,10 +241,13 @@ export default function BooksOwnBillsPage() {
           Each bill FleetSuite puts into NetSuite, from Snap a bill, Parts Mail, CNI vendor invoices or installer payouts,
           kept by Books and checked against NetSuite&apos;s copy; tap one for its line by line check. Nothing here changes
           NetSuite. The books post each one from this copy when it matches NetSuite&apos;s and its entry comes out the same,
-          and from NetSuite&apos;s otherwise. Each morning the daily check tells super admins when one differs. Visible only
-          to super admins.{' '}
-          <Link href={deepLinks.booksSnapBill()} style={{ color: 'var(--text-secondary)' }}>Snap a bill</Link>
-          {' · '}
+          and from NetSuite&apos;s otherwise. Each morning the daily check tells super admins when one differs.{' '}
+          {canSnap && (
+            <>
+              <Link href={deepLinks.booksSnapBill()} style={{ color: 'var(--text-secondary)' }}>Snap a bill</Link>
+              {' · '}
+            </>
+          )}
           <Link href="/admin/books/own-receipts" style={{ color: 'var(--text-secondary)' }}>Own receipts</Link>
           {' · '}
           <Link href="/admin/books/mistake-checks" style={{ color: 'var(--text-secondary)' }}>Mistake checks</Link>

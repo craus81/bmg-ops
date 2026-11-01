@@ -8,10 +8,17 @@ import { NextRequest } from 'next/server';
 import ExcelJS from 'exceljs';
 import type { AccountDocumentData, AccountDocumentsData } from './report-detail';
 
-let superAdmin = true;
-vi.mock('@/lib/api-auth', () => ({
-  requireSuperAdmin: vi.fn(async () => (superAdmin ? {} : { error: new Response('Forbidden', { status: 403 }) })),
-}));
+let roles = ['admin', 'super_admin'];
+vi.mock('@/lib/api-auth', async () => {
+  // The real levels (src/lib/books/access.ts) for whoever roles says is signed in.
+  const { booksAccess, booksAllows } = await import('@/lib/books/access');
+  return {
+    requireBooks: vi.fn(async (_req: unknown, need: 'read' | 'keep' | 'owner') => {
+      const access = booksAccess((r) => roles.includes(r));
+      return booksAllows(access, need) ? { ...{}, access } : { error: new Response('Forbidden', { status: 403 }) };
+    }),
+  };
+});
 vi.mock('@/lib/supabase-service', () => ({ createServiceClient: () => service }));
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
@@ -123,7 +130,7 @@ function under(ws: ExcelJS.Worksheet, first: string, last: number) {
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-10-31T09:12:00Z'));
-  superAdmin = true;
+  roles = ['admin', 'super_admin'];
   documents = { documents: 1, differing: 1, netsuite: '1250.00', fleetsuite: '1200.00', rows: [INVOICE] };
   documentsError = null;
   syncState = {
@@ -182,8 +189,8 @@ describe("a report's Excel download", () => {
       .toMatchObject({ report: 'trial_balance', from: '2026-08-01', to: '2026-08-01' });
   });
 
-  it('is for super admins alone', async () => {
-    superAdmin = false;
+  it('is for whoever opens the books, the CPA too', async () => {
+    roles = ['admin'];
     expect((await reportDownload(get('/api/admin/books/reports/download?company=BMG'))).status).toBe(403);
     expect(rpcs).toEqual([]);
   });
@@ -278,8 +285,8 @@ describe("an account line's Excel download", () => {
     expect(await failed.json()).toEqual({ error: 'statement timeout' });
   });
 
-  it('is for super admins alone', async () => {
-    superAdmin = false;
+  it('is for whoever opens the books, the CPA too', async () => {
+    roles = ['sales'];
     expect((await detailDownload(get(`/api/admin/books/reports/detail/download?${PATH}`))).status).toBe(403);
     expect(rpcs).toEqual([]);
   });

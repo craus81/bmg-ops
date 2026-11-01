@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { BOOKS_GL_SYNC, COPY_FROM, copyNetSuiteGl, monthOfDate } from '@/lib/books/netsuite-gl';
@@ -17,11 +17,11 @@ const COPY_BUDGET_MS = 240_000;
  * ledger, next to NetSuite's own (migration 361), with whether each month
  * since January 2025 matches. `month=start` is the starting entry.
  *
- * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md).
+ * Super admins, the bookkeeper and the CPA read it; the CPA changes nothing
+ * (docs/books.md "Who can open the books").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;
@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
  * wait for the two-hourly run. Same job, same record of how it went.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
 
   return NextResponse.json(await copyNetSuiteGl(createServiceClient(), { deadline: Date.now() + COPY_BUDGET_MS }));

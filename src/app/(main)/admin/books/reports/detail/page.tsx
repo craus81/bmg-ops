@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { useFileDownload } from '@/lib/use-file-download';
@@ -18,8 +19,8 @@ import type { DetailDocument } from '@/lib/books/report-detail';
  * sheet account its balance before and after them. Amounts read as the
  * report the line is on shows them, so the documents add up to the line.
  * Every document of the months downloads as Excel with each side's running
- * balance (docs/books.md "Excel downloads"). Super admins only, as the books
- * are; opened from a line on Reports.
+ * balance (docs/books.md "Excel downloads"). Open to whoever opens the
+ * books; opened from a line on Reports.
  */
 
 type Kind = 'profit_and_loss' | 'balance_sheet' | 'trial_balance';
@@ -227,7 +228,7 @@ export default function BooksReportDetailPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // Reports links here with the line's company, account, report and months (deepLinks.booksAccountDetail).
     const q = new URLSearchParams(window.location.search);
     load({

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { POSTING_COMPANIES } from '@/lib/books/invoice-posting';
 import { loadReports, reportRange } from '@/lib/books/report-data';
@@ -16,11 +16,11 @@ export const dynamic = 'force-dynamic';
  * (src/lib/books/reports.ts, migration 396), with whether the report for
  * each month alone since January 2025 matches.
  *
- * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md).
+ * Super admins, the bookkeeper and the CPA (docs/books.md "Who can open the
+ * books").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;

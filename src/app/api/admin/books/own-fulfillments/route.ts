@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { BOOKS_GL_SYNC } from '@/lib/books/netsuite-gl';
 import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
@@ -34,11 +34,11 @@ const monthEnd = (month: string) => {
  * NetSuite's, and why NetSuite's posts when it does (migration 456,
  * src/lib/books/own-posting-view.ts).
  *
- * Super admin only, as the rest of the books (docs/books.md "FleetSuite's
- * own fulfillments").
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md "FleetSuite's own fulfillments").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;

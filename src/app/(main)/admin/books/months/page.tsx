@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 
 /**
@@ -14,8 +15,8 @@ import { apiFetch } from '@/lib/api-client';
  * close and reopen. The first month that's open and over can be closed, the
  * latest one closed reopened, for a reason; closing one that doesn't match
  * NetSuite needs a reason too. A closed month takes nothing new, so what
- * NetSuite changes in it waits until it's reopened. Super admins only, as the
- * books are.
+ * NetSuite changes in it waits until it's reopened. Open to whoever opens the
+ * books.
  */
 
 interface Company {
@@ -103,6 +104,10 @@ function compared(m: Month): { words: string; color: string; differs: boolean } 
 export default function BooksMonthsPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
+  // The bookkeeper closes months too; only a super admin reopens one, and the CPA reads.
+  const access = booksAccess(hasRole);
+  const canClose = booksAllows(access, 'keep');
+  const canReopen = booksAllows(access, 'owner');
   const [data, setData] = useState<Payload | null>(null);
   const [company, setCompany] = useState('');
   const [loading, setLoading] = useState(true);
@@ -134,7 +139,7 @@ export default function BooksMonthsPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // A link may name the company (?company=BMG), as Differences vs NetSuite's does.
     load(new URLSearchParams(window.location.search).get('company') ?? '');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
@@ -189,7 +194,7 @@ export default function BooksMonthsPage() {
           {more && (
             <span style={{ display: 'block', marginTop: '4px' }}>
               Reopening needs a reason, and so does closing a month that doesn&apos;t match NetSuite. Each close and reopen is kept
-              with who did it and why. Visible only to super admins.
+              with who did it and why. The bookkeeper and super admins close months, and only a super admin reopens one.
             </span>
           )}
         </div>
@@ -249,7 +254,7 @@ export default function BooksMonthsPage() {
                     </div>
                   )}
 
-                  {(m.can === 'close' || asking) && (
+                  {((m.can === 'close' && canClose) || (asking && canReopen)) && (
                     <div style={{ marginTop: '8px' }}>
                       {needsReason && (
                         <input
@@ -280,7 +285,7 @@ export default function BooksMonthsPage() {
                       {actError?.month === m.month && <div style={{ ...banner(RED), marginTop: '8px', marginBottom: 0 }}>{actError.message}</div>}
                     </div>
                   )}
-                  {m.can === 'reopen' && !asking && (
+                  {m.can === 'reopen' && canReopen && !asking && (
                     <div style={{ marginTop: '8px' }}>
                       <button onClick={() => { setReopening(m.month); setTyped(null); setActError(null); }} disabled={busy} style={act(null, !busy)}>
                         Reopen

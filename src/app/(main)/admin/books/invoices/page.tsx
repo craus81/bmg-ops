@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 
@@ -34,8 +35,8 @@ import { deepLinks } from '@/lib/deep-links';
  * documents that move its stock and book their cost, with the cost lines of
  * its invoices and credit memos. An invoice FleetSuite made posts from
  * FleetSuite's own copy of it when that matches (migration 409,
- * src/lib/books/own-invoice-posting.ts), and its Books chip says so. Super
- * admins only while the books are built, linked from the other books pages.
+ * src/lib/books/own-invoice-posting.ts), and its Books chip says so. Open
+ * to whoever opens the books, linked from the other books pages.
  */
 
 type Status = 'matches' | 'differs' | 'unworkable' | 'waiting';
@@ -545,6 +546,8 @@ function InvoiceDetail({ invoice, accounts, one }: { invoice: Invoice; accounts:
 export default function BooksInvoicesPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
+  // Copying now and posting now aren't the CPA's; checking every month is everyone's.
+  const canKeep = booksAllows(booksAccess(hasRole), 'keep');
   const [data, setData] = useState<Payload | null>(null);
   const [company, setCompany] = useState('');
   const [month, setMonth] = useState('');
@@ -586,7 +589,7 @@ export default function BooksInvoicesPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // A link may name the company, kind, month and document to open (?company=BMG&kind=payment&month=2026-09&doc=123).
     const q = new URLSearchParams(window.location.search);
     const askedKind = q.get('kind');
@@ -813,7 +816,7 @@ export default function BooksInvoicesPage() {
                 again.
               </>
             )}
-            {' '}Visible only to super admins. <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
+            {' '}<Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
             {' · '}
             <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
             {' · '}
@@ -843,7 +846,7 @@ export default function BooksInvoicesPage() {
           >
             {checking ? `Checking ${monthName(checking)}…` : 'Check every month'}
           </button>
-          {COPIED[kind] && (
+          {canKeep && COPIED[kind] && (
             <button
               onClick={copyNow}
               disabled={busy}
@@ -855,7 +858,7 @@ export default function BooksInvoicesPage() {
               {copying ? 'Copying… up to 4 minutes' : 'Copy now'}
             </button>
           )}
-          {data?.posts && (
+          {canKeep && data?.posts && (
             <button
               onClick={postNow}
               disabled={busy}
@@ -877,14 +880,14 @@ export default function BooksInvoicesPage() {
         <>
           {!copied && (
             <div style={banner(GREY)}>
-              Nothing has been copied from NetSuite yet. The copy runs every two hours, or press Copy now.
+              Nothing has been copied from NetSuite yet. The copy runs every two hours{canKeep ? ', or press Copy now' : ''}.
             </div>
           )}
           {copied?.result.error && <div style={banner(RED)}>The last copy failed {ago(copied.at)}: {copied.result.error}</div>}
           {copied && !copied.result.error && (
             <div style={banner(copied.result.partial ? AMBER : GREEN)}>
               {copied.result.partial
-                ? `Still copying: the last run, ${ago(copied.at)}, read ${count(copied.result.read, words.one, words.many)} and stopped for time. It carries on at the next run, or press Copy now.`
+                ? `Still copying: the last run, ${ago(copied.at)}, read ${count(copied.result.read, words.one, words.many)} and stopped for time. It carries on at the next run${canKeep ? ', or press Copy now' : ''}.`
                 : `Copied from NetSuite ${ago(copied.at)}.`}
             </div>
           )}
@@ -895,7 +898,7 @@ export default function BooksInvoicesPage() {
         <>
           {!data.lastRun && (
             <div style={banner(GREY)}>
-              Nothing has been posted to FleetSuite&apos;s books yet. Posting runs every two hours, or press Post now. The first
+              Nothing has been posted to FleetSuite&apos;s books yet. Posting runs every two hours{canKeep ? ', or press Post now' : ''}. The first
               run posts every invoice, credit memo, payment, deposit, bill, bill payment, check, card charge, journal entry, bank
               deposit, transfer, customer refund and stock document since January 2025 and may take more than one run.
             </div>
@@ -904,7 +907,7 @@ export default function BooksInvoicesPage() {
           {data.lastRun && !run?.error && (
             <div style={banner(run?.partial ? AMBER : GREEN)}>
               {run?.partial
-                ? `Still posting: the last run, ${ago(data.lastRun.at)}, went through ${count(run.months?.length ?? 0, 'month', 'months')} and stopped for time (${runCounts(run)}). It carries on at the next run, or press Post now.`
+                ? `Still posting: the last run, ${ago(data.lastRun.at)}, went through ${count(run.months?.length ?? 0, 'month', 'months')} and stopped for time (${runCounts(run)}). It carries on at the next run${canKeep ? ', or press Post now' : ''}.`
                 : `Posted ${ago(data.lastRun.at)}: ${runCounts(run ?? {})}.`}
             </div>
           )}

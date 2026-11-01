@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { DiffAccountRow, DiffDocument, DiffKindRow, DiffMonth, MonthStatus } from '@/lib/books/differences';
@@ -14,8 +15,8 @@ import type { DiffAccountRow, DiffDocument, DiffKindRow, DiffMonth, MonthStatus 
  * FleetSuite's own journal next to the copy of NetSuite's general ledger, one
  * company and one month at a time: what NetSuite moved with kinds of
  * documents FleetSuite doesn't post yet, and, for the kinds it does, each
- * document whose entry differs from what NetSuite posted, with why. Super
- * admins only while the books are built, linked from the other books pages.
+ * document whose entry differs from what NetSuite posted, with why. Open to
+ * whoever opens the books, linked from the other books pages.
  */
 
 interface Company {
@@ -165,7 +166,7 @@ export default function BooksDifferencesPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // A link may name the company and month (?company=BMG&month=2026-09), as Reports' does.
     const q = new URLSearchParams(window.location.search);
     load(q.get('company') ?? '', q.get('month') ?? '');
@@ -190,7 +191,7 @@ export default function BooksDifferencesPage() {
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           FleetSuite&apos;s own books next to NetSuite&apos;s, account by account and month by month. What NetSuite moved with kinds
           of documents FleetSuite doesn&apos;t post yet is counted apart; for the kinds it does post, each document FleetSuite posted
-          differently from NetSuite is listed with why. Visible only to super admins.{' '}
+          differently from NetSuite is listed with why.{' '}
           <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
           {' · '}
           <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
