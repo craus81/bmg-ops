@@ -90,9 +90,11 @@ over a change made in NetSuite for customers and vendors, and part 49 for
 items, each built switched off, part 50, what each vendor marked to
 get a 1099 was paid in a year, by category, worked out from the copy of
 NetSuite, part 51, NetSuite's own 1099 report uploaded and held against
-those totals vendor by vendor and box by box, and part 52, the books opened
+those totals vendor by vendor and box by box, part 52, the books opened
 to a bookkeeper and a CPA, each a login of their own ("Who can open the
-books").
+books"), and part 53, the CPA's own adjustments journal, on the journal
+entries typed in FleetSuite and switched off with them ("The CPA's
+adjustments journal").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -124,7 +126,8 @@ vendor credits are switched off. The card charges screen,
 Money & Books → Card Charges: only super admins can open it while card
 charges are switched off. The journal entries screen,
 `/admin/journal-entries`, is for staff with Payments too, opened from More
-→ Money & Books → Journal Entries: only super admins can open it while
+→ Money & Books → Journal Entries, and the CPA's for its own adjustments,
+opened from Books → CPA adjustments: only super admins can open it while
 journal entries are switched off. The inventory transfers screen,
 `/admin/inventory-transfers`, is admins', opened from More → Parts &
 Inventory → Inventory Transfers: only super admins can open it while
@@ -232,9 +235,9 @@ admins can open it while fixing invoices is switched off.
 | The Chase card's charges coded in FleetSuite, sent on to NetSuite as one journal entry a month, and Books' own copy of each journal entry | `migrations/468-card-charges-in-fleetsuite.sql`, `src/lib/card-charges.ts`, `src/lib/books/own-journal-entries.ts`, `findJournalEntry` and `createJournalEntry` in `src/lib/netsuite.ts`, `src/app/api/card-charges/route.ts` |
 | The card charges screen and More → Money & Books' Card Charges | `src/app/(main)/admin/card-charges/page.tsx`, `src/app/(main)/more/page.tsx` |
 | Card charge tests | `src/lib/card-charges.test.ts`, `src/lib/card-charges-route.test.ts`, `src/lib/netsuite-journal-entry.test.ts`, `src/lib/books/own-journal-entries.test.ts`, and the tables and their functions `src/lib/books/own-journal-entries-sql.test.ts` |
-| Journal entries typed in FleetSuite, approved, sent on to NetSuite, and Books' own copy of each | `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `src/lib/typed-journal-entries.ts`, `src/lib/books/own-journal-entries.ts`, `findJournalEntry` and `createJournalEntry` in `src/lib/netsuite.ts`, `src/app/api/journal-entries/route.ts` |
-| The journal entries screen and More → Money & Books' Journal Entries | `src/app/(main)/admin/journal-entries/page.tsx`, `src/app/(main)/more/page.tsx` |
-| Typed journal entry tests | `src/lib/typed-journal-entries.test.ts`, `src/lib/journal-entries-route.test.ts`, `src/lib/books/own-journal-entries.test.ts`, and the table and its functions `src/lib/books/typed-journal-entries-sql.test.ts` |
+| Journal entries typed in FleetSuite, in the general journal or the CPA's adjustments journal, approved, sent on to NetSuite, and Books' own copy of each | `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `migrations/484-books-cpa-adjustments-journal.sql`, `src/lib/typed-journal-entries.ts`, `src/lib/books/own-journal-entries.ts`, `findJournalEntry` and `createJournalEntry` in `src/lib/netsuite.ts`, `src/app/api/journal-entries/route.ts` |
+| The journal entries screen, More → Money & Books' Journal Entries and Books' CPA adjustments | `src/app/(main)/admin/journal-entries/page.tsx`, `src/app/(main)/more/page.tsx`, `src/app/(main)/admin/books/page.tsx` |
+| Typed journal entry tests | `src/lib/typed-journal-entries.test.ts`, `src/lib/journal-entries-route.test.ts`, `src/lib/books/own-journal-entries.test.ts`, and the table and its functions `src/lib/books/typed-journal-entries-sql.test.ts` and `src/lib/books/cpa-adjustments-sql.test.ts` |
 | Inventory transfers made in FleetSuite and sent on to NetSuite | `migrations/470-inventory-transfers-made-in-fleetsuite.sql`, `src/lib/inventory-transfers.ts`, `findInventoryTransfer`, `getLocationOnHand` and `createInventoryTransfer` in `src/lib/netsuite.ts`, `src/app/api/inventory-transfers/route.ts` |
 | The inventory transfers screen and More → Parts & Inventory's Inventory Transfers | `src/app/(main)/admin/inventory-transfers/page.tsx`, `src/app/(main)/more/page.tsx` |
 | Inventory transfer tests | `src/lib/inventory-transfers.test.ts`, `src/lib/inventory-transfers-route.test.ts`, `src/lib/netsuite-inventory-transfer.test.ts`, and the table and its functions `src/lib/books/inventory-transfers-sql.test.ts` |
@@ -3804,6 +3807,51 @@ $450.00 for the box van, and accumulated depreciation credited $1,250.00.
 Asked for approval by someone with Payments and approved by a super
 admin, it's one journal entry of three lines in NetSuite, dated January 31.
 
+### The CPA's adjustments journal
+
+Part 53 (migration 484) gives the CPA a journal of its own, finishing the
+NetSuite Exit Checklist's "Bookkeeper and CPA access": the CPA reads every
+Books page and changes nothing there ("Who can open the books"), and types
+its adjustments (depreciation, loan interest, the year-end entries) on this
+screen, in its own journal and no other. Each entry is in one of two
+(`typed_journal_entries.journal`):
+
+| Journal | Who types in it, and sees it | Its memo in NetSuite and in Books' copy |
+| --- | --- | --- |
+| `general` | Anyone with Payments, as before part 53 | As typed |
+| `cpa_adjustments` | The CPA, and super admins for them | As typed, starting "CPA adjustment: " |
+
+`journalsFor` in `src/lib/typed-journal-entries.ts` says who types in
+which, and the route checks it on every step by the caller's own roles: the
+list holds only the caller's journals, and saving, deleting, asking, taking
+back, sending back or approving an entry in another one answers 403. A
+super admin has both and picks the journal when starting an entry; the
+CPA's screen is CPA adjustments alone. An entry stays in the journal it was
+started in (`typed_journal_entry_save` answers `other_journal` and changes
+nothing), and a copy or reversal of one starts in its journal. Every entry
+typed before part 53 is in the general journal.
+
+A CPA adjustment is checked, asked for, approved and made as any other: a
+super admin who didn't ask approves it, and the CPA approves nothing. Only
+its memo differs: NetSuite and Books' own copy show it starting "CPA
+adjustment: " (`journalMemo`, and not twice when it's typed that way), so
+the memo takes 284 characters, NetSuite's 300 less those. Its alerts call it
+a CPA adjustment. One dated in a month closed in FleetSuite's books is still
+made in NetSuite, and posts there once a super admin reopens the month, as
+any entry does ("Closing a month").
+
+It rides the `journal_entries` switch: while that's off, only super admins
+type either journal's entries, and the CPA, like anyone else, reads that
+journal entries are switched off. Once it's on, Books → CPA adjustments
+opens the CPA's screen, and View As → CPA shows it. The bookkeeper is
+unchanged: stack Finance on them for the general journal.
+
+Made-up example: on December 31, 2026 the CPA types the year's
+depreciation, $9,600.00 to depreciation against accumulated depreciation,
+with the memo "2026 depreciation". A super admin approves it, and NetSuite
+has one journal entry of two lines whose memo is "CPA adjustment: 2026
+depreciation".
+
 ### What isn't done yet
 
 - Books' own copies aren't checked against NetSuite's journal entries,
@@ -4538,7 +4586,7 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 | `credit_memos` | Anyone with Invoicing makes a credit memo against an invoice in FleetSuite, and FleetSuite makes it in NetSuite ("Credit memos made in FleetSuite") | Invoicing → Invoiced → Credit on an invoice |
 | `vendor_credits` | Admins with Parts Ordering enter a vendor's credit in FleetSuite and apply it to that vendor's open bills, and FleetSuite makes it in NetSuite ("Vendor credits made in FleetSuite") | More → Purchasing → Vendor Credits |
 | `card_charges` | Anyone with Payments adds the Chase card's activity and codes each charge to its account, and FleetSuite sends each month's charges to NetSuite as one journal entry ("Card charges coded in FleetSuite") | More → Money & Books → Card Charges |
-| `journal_entries` | Anyone with Payments types a journal entry and asks for approval, a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite ("Journal entries typed in FleetSuite") | More → Money & Books → Journal Entries |
+| `journal_entries` | Anyone with Payments types a journal entry, and the CPA its own adjustments, and asks for approval, a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite ("Journal entries typed in FleetSuite") | More → Money & Books → Journal Entries; the CPA's, Books → CPA adjustments |
 | `inventory_transfers` | Admins move stock from one of a company's locations to another in FleetSuite, and FleetSuite makes the transfer in NetSuite ("Inventory transfers made in FleetSuite") | More → Parts & Inventory → Inventory Transfers |
 | `invoice_fixes` | Anyone with Invoicing fixes an invoice after it's made, its PO number, memo and VIN, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy ("Invoices fixed in FleetSuite") | Invoicing → Invoiced → Fix on an invoice |
 | `bill_fixes` | Admins with Parts Ordering fix a bill after it's made, its number, memo and due date, and while nothing on it is paid its date and lines, and FleetSuite makes the change in NetSuite and in its own copy ("Bills fixed in FleetSuite") | More → Purchasing → Fix a Bill, or Fix on Books → Own bills |
@@ -4948,7 +4996,7 @@ a staff one:
 | --- | --- | --- |
 | Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, and reopening a closed month |
 | Bookkeeper | `keep` | Everything else: Sync now and Copy now, Post now, Look now, closing a month, clearing and reopening mistake checks, Looked at it on the NetSuite feed, Snap a bill, and NetSuite's 1099 report |
-| CPA | `read` | Every Books page and Excel download, changing nothing |
+| CPA | `read` | Every Books page and Excel download, changing nothing, and its own adjustments journal on Journal entries ("The CPA's adjustments journal") |
 
 How it's held:
 
@@ -4980,5 +5028,3 @@ How it's held:
 
 - The books' alerts (the daily check's, and with it the mistake checks' and
   the NetSuite feed's) still go to super admins only.
-- The CPA's own adjustments journal: a CPA login posting only to its own
-  journal, on typed journal entries (part 53).

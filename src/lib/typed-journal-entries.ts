@@ -14,6 +14,12 @@
  * needs a customer or vendor on those, which invoices, credit memos, bills
  * and vendor credits carry.
  *
+ * Each entry is in one of two journals (Books part 53, migration 484,
+ * docs/books.md "The CPA's adjustments journal"): the general journal, which
+ * the bookkeeper and BMG's staff type, and the CPA's own adjustments, whose
+ * memos start "CPA adjustment:" in NetSuite and the books (journalsFor says
+ * who types in which).
+ *
  * The rules here are pure; /api/journal-entries and the Journal entries page
  * both use them, the page to show what asking for approval would find and
  * the route to check and make the entry from its lines as they're kept.
@@ -47,6 +53,34 @@ export const JOURNAL_LINE_ACCOUNT_TYPES: readonly string[] = [
 
 export { formatCents };
 
+/** The journals a typed entry can be in (typed_journal_entries.journal, migration 484). */
+export type JournalKind = 'general' | 'cpa_adjustments';
+
+export const JOURNALS: readonly JournalKind[] = ['general', 'cpa_adjustments'];
+
+/** What one of a journal's entries is called. */
+export const entryNoun = (journal: JournalKind) => (journal === 'cpa_adjustments' ? 'CPA adjustment' : 'journal entry');
+
+/**
+ * The journals someone types entries in, and so sees: the general journal for
+ * whoever has Payments, and the CPA's adjustments for the CPA and super
+ * admins. The route asks it of the caller's own roles and permissions, the
+ * page of the ones it's viewed as.
+ */
+export function journalsFor(who: { payments: boolean; hasRole: (role: string) => boolean }): JournalKind[] {
+  return JOURNALS.filter((j) => (j === 'general' ? who.payments : who.hasRole('cpa') || who.hasRole('super_admin')));
+}
+
+/** What a CPA adjustment's memo starts with in NetSuite and the books, so it reads as the CPA's wherever it shows. */
+export const CPA_MEMO_PREFIX = 'CPA adjustment: ';
+
+/** The longest memo typed in a journal: a CPA adjustment's leaves room for what it starts with. */
+export const memoMax = (journal: JournalKind) => (journal === 'cpa_adjustments' ? MEMO_MAX - CPA_MEMO_PREFIX.length : MEMO_MAX);
+
+/** An entry's memo as NetSuite takes it: a CPA adjustment's starts "CPA adjustment: ", once. */
+export const journalMemo = (journal: JournalKind, memo: string) =>
+  (journal === 'cpa_adjustments' && !/^cpa adjustment\s*:/i.test(memo) ? `${CPA_MEMO_PREFIX}${memo}` : memo);
+
 /**
  * Where an entry is: being typed (or sent back to be fixed), asked for
  * approval, approved and being made in NetSuite, or made.
@@ -76,6 +110,8 @@ export interface TypedLine {
 }
 
 export interface TypedEntry {
+  /** The general journal when it isn't said. */
+  journal?: JournalKind;
   /** YYYY-MM-DD. */
   date: string;
   memo: string | null;
@@ -97,6 +133,7 @@ export interface WorkedTypedLine {
 
 export interface WorkedTypedEntry {
   date: string;
+  /** As NetSuite takes it: a CPA adjustment's starting "CPA adjustment: " (journalMemo). */
   memo: string;
   /** Its lines, in the order typed, once each is whole. */
   lines: WorkedTypedLine[];
@@ -126,8 +163,9 @@ export function isDay(s: string): boolean {
 /**
  * Works out the journal entry an entry's lines make, or says why it can't be
  * made: the company needs a NetSuite subsidiary; it needs a date, a memo
- * saying what it's for, and two lines or more; each line an account the
- * company can use and a debit or a credit above $0, to the cent; and its
+ * saying what it's for (a CPA adjustment's short enough to start "CPA
+ * adjustment: " in NetSuite), and two lines or more; each line an account
+ * the company can use and a debit or a credit above $0, to the cent; and its
  * debits must match its credits.
  */
 export function workOutTypedEntry(e: TypedEntry, f: TypedEntryFacts): WorkedTypedEntry {
@@ -136,9 +174,14 @@ export function workOutTypedEntry(e: TypedEntry, f: TypedEntryFacts): WorkedType
   if (!company) problems.push('Pick the company.');
   else if (!company.subsidiaryId) problems.push(`${company.name} has no NetSuite subsidiary in Books, so NetSuite can't take its journal entries.`);
   if (!isDay(e.date)) problems.push('Pick the date.');
+  const journal = e.journal ?? 'general';
   const memo = (e.memo ?? '').trim();
   if (!memo) problems.push('Say what the entry is for in its memo.');
-  else if (memo.length > MEMO_MAX) problems.push(`The memo takes ${MEMO_MAX} characters at most.`);
+  else if (memo.length > memoMax(journal)) {
+    problems.push(journal === 'cpa_adjustments'
+      ? `A CPA adjustment's memo takes ${memoMax(journal)} characters at most, as NetSuite's starts "${CPA_MEMO_PREFIX.trim()}".`
+      : `The memo takes ${MEMO_MAX} characters at most.`);
+  }
   if (e.lines.length < 2) problems.push('A journal entry needs two lines or more.');
   else if (e.lines.length > MAX_LINES) problems.push(`One journal entry takes ${MAX_LINES} lines at most, not ${e.lines.length}.`);
 
@@ -171,7 +214,7 @@ export function workOutTypedEntry(e: TypedEntry, f: TypedEntryFacts): WorkedType
   if (debitCents !== creditCents) {
     problems.push(`Its debits (${formatCents(debitCents)}) and credits (${formatCents(creditCents)}) don't match: they're ${formatCents(Math.abs(debitCents - creditCents))} apart.`);
   }
-  return { date: e.date, memo, lines, debitCents, creditCents, problems };
+  return { date: e.date, memo: memo && journalMemo(journal, memo), lines, debitCents, creditCents, problems };
 }
 
 /** An entry's lines as the page and the route read them back from how they're kept. */

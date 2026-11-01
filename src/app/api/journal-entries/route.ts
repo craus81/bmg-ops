@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { getProfileRoles, requireFeature } from '@/lib/api-auth';
+import { getProfileRoles, profileHasFeature, requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { createJournalEntry, findJournalEntry } from '@/lib/netsuite';
 import { SWITCH_ON_DATE_TEXT, switchIsOn } from '@/lib/books/switches';
@@ -11,9 +11,9 @@ import { getSuperAdminIds, notifyMany } from '@/lib/notify';
 import { newAlertWatcherIds } from '@/lib/new-alert-watchers';
 import { deepLinks } from '@/lib/deep-links';
 import {
-  JOURNAL_LINE_ACCOUNT_TYPES, MAX_LINES, MAX_LINE_CENTS, MEMO_MAX, REASON_MAX, formatCents, isDay, keptLines, linesToKeep,
-  netsuiteTypedEntry, typedExternalId, workOutTypedEntry,
-  type JournalAccount, type JournalCompany, type KeptLine, type TypedStatus, type WorkedTypedEntry,
+  JOURNALS, JOURNAL_LINE_ACCOUNT_TYPES, MAX_LINES, MAX_LINE_CENTS, MEMO_MAX, REASON_MAX, entryNoun, formatCents, isDay,
+  journalsFor, keptLines, linesToKeep, netsuiteTypedEntry, typedExternalId, workOutTypedEntry,
+  type JournalAccount, type JournalCompany, type JournalKind, type KeptLine, type TypedStatus, type WorkedTypedEntry,
 } from '@/lib/typed-journal-entries';
 
 export const dynamic = 'force-dynamic';
@@ -26,30 +26,52 @@ const OFF = `Journal entries are switched off until ${SWITCH_ON_DATE_TEXT}.`;
 /** How long an approval can say it's being made before FleetSuite asks NetSuite what became of it. */
 const STALE_MS = 5 * 60 * 1000;
 
-type Auth = Awaited<ReturnType<typeof requireFeature>>;
+type Auth = Awaited<ReturnType<typeof requireAuth>>;
 
 interface Gate {
   auth: Auth;
   on: boolean;
   /** Super admins approve, and send entries back. */
   superAdmin: boolean;
+  /** The journals this person types in, and so sees (journalsFor). */
+  journals: JournalKind[];
   error?: NextResponse;
 }
 
 /**
- * Anyone with Payments once journal entries are switched on (Books → Switches); until then only super admins, who
- * can type and save entries to see what they'd make, and none is asked for approval or sent.
+ * Who can use journal entries at all, switched on or off: anyone with Payments types in the general journal, and the
+ * CPA and super admins in the CPA's adjustments (journalsFor, Books part 53). Everyone else is refused.
+ */
+async function rights(req: NextRequest): Promise<Gate> {
+  const auth = await requireAuth(req);
+  if (auth.error) return { auth, on: false, superAdmin: false, journals: [], error: auth.error };
+  const roles = getProfileRoles(auth.profile);
+  const journals = journalsFor({
+    payments: await profileHasFeature(auth.user.id, auth.profile, 'vendor_payments'),
+    hasRole: (role) => roles.includes(role),
+  });
+  if (journals.length === 0) {
+    return { auth, on: false, superAdmin: false, journals, error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) };
+  }
+  return { auth, on: await switchIsOn(service, 'journal_entries'), superAdmin: roles.includes('super_admin'), journals };
+}
+
+/**
+ * Those people once journal entries are switched on (Books → Switches); until then only super admins, who can type
+ * and save entries to see what they'd make, and none is asked for approval or sent.
  */
 async function access(req: NextRequest): Promise<Gate> {
-  const auth = await requireFeature(req, 'vendor_payments');
-  if (auth.error) return { auth, on: false, superAdmin: false, error: auth.error };
-  const on = await switchIsOn(service, 'journal_entries');
-  const superAdmin = getProfileRoles(auth.profile).includes('super_admin');
-  if (!on && !superAdmin) {
-    return { auth, on, superAdmin, error: NextResponse.json({ error: OFF, switchedOff: true }, { status: 403 }) };
-  }
-  return { auth, on, superAdmin };
+  const gate = await rights(req);
+  if (gate.error || gate.on || gate.superAdmin) return gate;
+  return { ...gate, error: NextResponse.json({ error: OFF, switchedOff: true }, { status: 403 }) };
 }
+
+/** Why someone can't type in a journal, or change or approve an entry in it. */
+const NOT_THEIRS: Record<JournalKind, string> = {
+  general: 'The general journal needs the Payments permission.',
+  cpa_adjustments: 'Only the CPA and super admins type CPA adjustments.',
+};
+const notTheirs = (journal: JournalKind) => NextResponse.json({ error: NOT_THEIRS[journal] }, { status: 403 });
 
 interface Chart {
   companies: JournalCompany[];
@@ -68,11 +90,12 @@ async function readChart(): Promise<Chart> {
 
 const byNumber = (a: JournalAccount, b: JournalAccount) => (a.number || a.name).localeCompare(b.number || b.name, 'en', { numeric: true });
 
-const ENTRY_COLUMNS = 'id, company, tran_date, memo, lines, total_cents, status, created_by, created_at, updated_by, updated_at, '
+const ENTRY_COLUMNS = 'id, journal, company, tran_date, memo, lines, total_cents, status, created_by, created_at, updated_by, updated_at, '
   + 'asked_by, asked_at, returned_by, returned_at, returned_reason, approved_by, approved_at, netsuite_journal_id, netsuite_number, error';
 
 interface EntryRow {
   id: string;
+  journal: JournalKind;
   company: string;
   tran_date: string;
   memo: string | null;
@@ -102,18 +125,18 @@ const MADE_LIMIT = 25;
 const isUuid = (s: string | null): s is string => !!s && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 
 /**
- * GET /api/journal-entries?status=1 — whether journal entries are on, and whether this person can use and approve them.
- * GET /api/journal-entries[?id=<entry>] — the companies and the accounts a line can go to, the entries not made yet,
- * the last made, and the one asked for.
+ * GET /api/journal-entries?status=1 — whether journal entries are on, whether this person can use and approve them,
+ * and the journals they type in.
+ * GET /api/journal-entries[?id=<entry>] — the companies and the accounts a line can go to, and in this person's
+ * journals the entries not made yet, the last made, and the one asked for.
  */
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   if (params.get('status')) {
-    const auth = await requireFeature(req, 'vendor_payments');
-    if (auth.error) return auth.error;
-    const on = await switchIsOn(service, 'journal_entries');
-    const superAdmin = getProfileRoles(auth.profile).includes('super_admin');
-    return NextResponse.json({ on, canUse: on || superAdmin, canApprove: on && superAdmin });
+    const gate = await rights(req);
+    if (gate.error) return gate.error;
+    const { on, superAdmin, journals } = gate;
+    return NextResponse.json({ on, canUse: on || superAdmin, canApprove: on && superAdmin, journals });
   }
 
   const gate = await access(req);
@@ -123,12 +146,12 @@ export async function GET(req: NextRequest) {
     const chart = await readChart();
     const id = params.get('id');
     const [openRes, madeRes, oneRes] = await Promise.all([
-      service.from('typed_journal_entries').select(ENTRY_COLUMNS).neq('status', 'made')
+      service.from('typed_journal_entries').select(ENTRY_COLUMNS).in('journal', gate.journals).neq('status', 'made')
         .order('updated_at', { ascending: false }).limit(OPEN_LIMIT),
-      service.from('typed_journal_entries').select(ENTRY_COLUMNS).eq('status', 'made')
+      service.from('typed_journal_entries').select(ENTRY_COLUMNS).in('journal', gate.journals).eq('status', 'made')
         .order('approved_at', { ascending: false }).limit(MADE_LIMIT),
       isUuid(id)
-        ? service.from('typed_journal_entries').select(ENTRY_COLUMNS).eq('id', id).maybeSingle()
+        ? service.from('typed_journal_entries').select(ENTRY_COLUMNS).eq('id', id).in('journal', gate.journals).maybeSingle()
         : Promise.resolve({ data: null, error: null }),
     ]);
     if (openRes.error) throw new Error(openRes.error.message);
@@ -151,6 +174,7 @@ export async function GET(req: NextRequest) {
       accounts: [...chart.accounts.values()].filter((a) => a.companies.length > 0).sort(byNumber),
       entries: [...rows.values()].map((r) => ({
         id: r.id,
+        journal: r.journal,
         company: r.company,
         date: String(r.tran_date).slice(0, 10),
         memo: r.memo,
@@ -175,6 +199,7 @@ export async function GET(req: NextRequest) {
         error: r.error,
       })),
       me: gate.auth.user.id,
+      journals: gate.journals,
       superAdmin: gate.superAdmin,
       switchedOn: gate.on,
       offText: gate.on ? null : `${OFF} You can type and save entries to see what they'd make; none is asked for approval or sent to NetSuite.`,
@@ -192,6 +217,8 @@ const Schema = z.discriminatedUnion('action', [
     action: z.literal('save'),
     // Made by the page when the entry is started: it's the journal entry's External ID in NetSuite.
     id: z.string().uuid(),
+    // The journal it starts in, and stays in: the general journal when it isn't said.
+    journal: z.enum(JOURNALS as [JournalKind, ...JournalKind[]]).optional(),
     company: z.string().min(1).max(12),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     memo: z.string().max(MEMO_MAX).nullable().optional(),
@@ -213,6 +240,7 @@ const Schema = z.discriminatedUnion('action', [
 type Body = z.infer<typeof Schema>;
 
 const WHERE_IT_IS: Record<string, string> = {
+  other_journal: 'It was started in another journal, and an entry stays in the journal it was started in.',
   draft: "It's a draft now: it was taken back or sent back.",
   waiting: "It's asked for approval: take it back to change it.",
   sending: "It's being made in NetSuite.",
@@ -227,9 +255,9 @@ async function readEntry(id: string): Promise<EntryRow | null> {
   return (data as EntryRow | null) ?? null;
 }
 
-/** What an entry is, for an alert: its company, date, memo and total. */
-const describe = (r: Pick<EntryRow, 'company' | 'tran_date' | 'memo' | 'total_cents'>) =>
-  `${r.company} journal entry dated ${String(r.tran_date).slice(0, 10)} for ${formatCents(Number(r.total_cents))}${r.memo ? `: ${r.memo}` : ''}`;
+/** What an entry is, for an alert: its company, which journal's, its date, memo and total. */
+const describe = (r: Pick<EntryRow, 'journal' | 'company' | 'tran_date' | 'memo' | 'total_cents'>) =>
+  `${r.company} ${entryNoun(r.journal)} dated ${String(r.tran_date).slice(0, 10)} for ${formatCents(Number(r.total_cents))}${r.memo ? `: ${r.memo}` : ''}`;
 
 /**
  * An alert to these people and to anyone with "Copy me on new alerts" ticked, never to the one who did it. Never
@@ -249,7 +277,8 @@ async function tell(ids: Array<string | null | undefined>, actorId: string, aler
  * POST /api/journal-entries — { action: 'save' } saves a draft, new or changed; 'delete' deletes a draft; 'ask' asks
  * for approval; 'take_back' takes an ask back to a draft; 'send_back' (super admins) sends an ask back with why;
  * 'approve' (super admins who didn't ask) makes the entry in NetSuite from its lines as they're kept, and keeps
- * Books' copy. Asking and approving are refused while journal entries are switched off, for everyone.
+ * Books' copy. Each is refused on an entry in a journal this person doesn't type in. Asking and approving are refused
+ * while journal entries are switched off, for everyone.
  */
 export async function POST(req: NextRequest) {
   const gate = await access(req);
@@ -284,7 +313,9 @@ export async function POST(req: NextRequest) {
   }
 }
 
-async function save(body: Extract<Body, { action: 'save' }>, { auth }: Gate) {
+async function save(body: Extract<Body, { action: 'save' }>, { auth, journals }: Gate) {
+  const journal = body.journal ?? 'general';
+  if (!journals.includes(journal)) return notTheirs(journal);
   const chart = await readChart();
   const company = chart.companies.find((c) => c.code === body.company);
   if (!company) return NextResponse.json({ error: `There's no company ${body.company} in Books.` }, { status: 400 });
@@ -292,7 +323,7 @@ async function save(body: Extract<Body, { action: 'save' }>, { auth }: Gate) {
 
   const { data, error } = await service.rpc('typed_journal_entry_save', {
     p: {
-      id: body.id, company: company.code, tran_date: body.date, memo: body.memo ?? '', by: auth.user.id,
+      id: body.id, journal, company: company.code, tran_date: body.date, memo: body.memo ?? '', by: auth.user.id,
       lines: linesToKeep(body.lines.map((l) => ({ ...l, memo: l.memo ?? null }))),
     },
   });
@@ -302,9 +333,10 @@ async function save(body: Extract<Body, { action: 'save' }>, { auth }: Gate) {
   return NextResponse.json({ success: true, updatedAt: result.updated_at });
 }
 
-async function remove(body: Extract<Body, { action: 'delete' }>, { auth, superAdmin }: Gate) {
+async function remove(body: Extract<Body, { action: 'delete' }>, { auth, superAdmin, journals }: Gate) {
   const row = await readEntry(body.id);
   if (!row) return NextResponse.json({ success: true, already: true });
+  if (!journals.includes(row.journal)) return notTheirs(row.journal);
   if (row.status !== 'draft') return NextResponse.json({ error: `Only a draft can be deleted. ${whereItIs(row.status)}` }, { status: 409 });
   if (!superAdmin && row.created_by !== auth.user.id) {
     return NextResponse.json({ error: 'Only whoever started a draft, or a super admin, can delete it.' }, { status: 403 });
@@ -314,20 +346,21 @@ async function remove(body: Extract<Body, { action: 'delete' }>, { auth, superAd
   if ((data ?? []).length === 0) return NextResponse.json({ error: "It wasn't deleted: it was asked for approval just now." }, { status: 409 });
   await logAudit(service, {
     actorId: auth.user.id, table: 'typed_journal_entries', recordId: body.id, action: 'delete',
-    detail: { company: row.company, date: row.tran_date, memo: row.memo, total: formatCents(Number(row.total_cents)) },
+    detail: { journal: row.journal, company: row.company, date: row.tran_date, memo: row.memo, total: formatCents(Number(row.total_cents)) },
   });
   return NextResponse.json({ success: true });
 }
 
-async function ask(body: Extract<Body, { action: 'ask' }>, { auth }: Gate) {
+async function ask(body: Extract<Body, { action: 'ask' }>, { auth, journals }: Gate) {
   const row = await readEntry(body.id);
   if (!row) return NextResponse.json({ error: whereItIs('gone') }, { status: 404 });
+  if (!journals.includes(row.journal)) return notTheirs(row.journal);
   if (row.status !== 'draft') return NextResponse.json({ error: whereItIs(row.status) }, { status: 409 });
 
   // The same checks approving makes, on the lines as they're kept, before anyone's asked.
   const chart = await readChart();
   const worked = workOutTypedEntry(
-    { date: String(row.tran_date).slice(0, 10), memo: row.memo, lines: keptLines(row.lines) },
+    { journal: row.journal, date: String(row.tran_date).slice(0, 10), memo: row.memo, lines: keptLines(row.lines) },
     { company: chart.companies.find((c) => c.code === row.company), accounts: chart.accounts },
   );
   if (worked.problems.length > 0) {
@@ -344,12 +377,15 @@ async function ask(body: Extract<Body, { action: 'ask' }>, { auth }: Gate) {
 
   await logAudit(service, {
     actorId: auth.user.id, table: 'typed_journal_entries', recordId: body.id, action: 'ask_approval',
-    detail: { company: row.company, date: row.tran_date, memo: row.memo, total: formatCents(worked.debitCents), lines: worked.lines.length },
+    detail: {
+      journal: row.journal, company: row.company, date: row.tran_date, memo: row.memo, total: formatCents(worked.debitCents),
+      lines: worked.lines.length,
+    },
   });
   const approvers = await getSuperAdminIds(auth.user.id);
   await tell(approvers, auth.user.id, {
     type: 'books_journal_entry_waiting',
-    title: 'A journal entry is waiting for approval',
+    title: `A ${entryNoun(row.journal)} is waiting for approval`,
     body: `${describe(row)}. Approve it to make it in NetSuite, or send it back.`,
     url: deepLinks.journalEntries(body.id),
   });
@@ -360,9 +396,10 @@ async function ask(body: Extract<Body, { action: 'ask' }>, { auth }: Gate) {
   });
 }
 
-async function takeBack(body: Extract<Body, { action: 'take_back' }>, { auth, superAdmin }: Gate) {
+async function takeBack(body: Extract<Body, { action: 'take_back' }>, { auth, superAdmin, journals }: Gate) {
   const row = await readEntry(body.id);
   if (!row) return NextResponse.json({ error: whereItIs('gone') }, { status: 404 });
+  if (!journals.includes(row.journal)) return notTheirs(row.journal);
   if (row.status !== 'waiting') return NextResponse.json({ error: whereItIs(row.status) }, { status: 409 });
   if (!superAdmin && row.asked_by !== auth.user.id && row.created_by !== auth.user.id) {
     return NextResponse.json({ error: 'Only whoever asked, or a super admin, can take it back.' }, { status: 403 });
@@ -375,9 +412,10 @@ async function takeBack(body: Extract<Body, { action: 'take_back' }>, { auth, su
   return NextResponse.json({ success: true });
 }
 
-async function sendBack(body: Extract<Body, { action: 'send_back' }>, { auth }: Gate) {
+async function sendBack(body: Extract<Body, { action: 'send_back' }>, { auth, journals }: Gate) {
   const row = await readEntry(body.id);
   if (!row) return NextResponse.json({ error: whereItIs('gone') }, { status: 404 });
+  if (!journals.includes(row.journal)) return notTheirs(row.journal);
   const { data, error } = await service.rpc('typed_journal_entry_send_back', { p: { id: body.id, by: auth.user.id, reason: body.reason } });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const result = data as { state: string };
@@ -387,7 +425,7 @@ async function sendBack(body: Extract<Body, { action: 'send_back' }>, { auth }: 
   });
   await tell([row.asked_by, row.created_by], auth.user.id, {
     type: 'books_journal_entry_decided',
-    title: 'Your journal entry was sent back',
+    title: `Your ${entryNoun(row.journal)} was sent back`,
     body: `${describe(row)}, sent back to be fixed: ${body.reason}`,
     url: deepLinks.journalEntries(body.id),
   });
@@ -400,6 +438,8 @@ async function letGo(id: string, error: string) {
 
 async function approve(body: Extract<Body, { action: 'approve' }>, gate: Gate): Promise<NextResponse> {
   const { auth } = gate;
+  const row = await readEntry(body.id);
+  if (row && !gate.journals.includes(row.journal)) return notTheirs(row.journal);
   const { data, error } = await service.rpc('typed_journal_entry_claim', { p: { id: body.id, approver: auth.user.id, asked_at: body.askedAt } });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   const claim = data as {
@@ -423,7 +463,7 @@ async function approve(body: Extract<Body, { action: 'approve' }>, gate: Gate): 
   const chart = await readChart();
   const company = chart.companies.find((c) => c.code === entry.company);
   const worked = workOutTypedEntry(
-    { date: String(entry.tran_date).slice(0, 10), memo: entry.memo, lines: keptLines(entry.lines) },
+    { journal: entry.journal, date: String(entry.tran_date).slice(0, 10), memo: entry.memo, lines: keptLines(entry.lines) },
     { company, accounts: chart.accounts },
   );
   const externalId = typedExternalId(entry.id);
@@ -504,13 +544,13 @@ async function finish(entry: EntryRow, worked: WorkedTypedEntry, { auth }: Gate,
     recordId: entry.id,
     action: 'approve',
     detail: {
-      netsuite_journal_id: journalId, company: entry.company, date: worked.date, lines: worked.lines.length,
+      netsuite_journal_id: journalId, journal: entry.journal, company: entry.company, date: worked.date, lines: worked.lines.length,
       total: formatCents(worked.debitCents), asked_by: entry.asked_by, found_in_netsuite: already,
     },
   });
   await tell([entry.asked_by, entry.created_by], auth.user.id, {
     type: 'books_journal_entry_decided',
-    title: 'Your journal entry was approved',
+    title: `Your ${entryNoun(entry.journal)} was approved`,
     body: `${describe(entry)}, approved and made in NetSuite as ${number || `journal entry ${journalId}`}.`,
     url: deepLinks.journalEntries(entry.id),
   });

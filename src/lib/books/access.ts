@@ -10,7 +10,9 @@
  *   keep  — the bookkeeper: everything else, such as copying from NetSuite,
  *           posting, closing a month, clearing mistake checks, Snap a bill
  *           and NetSuite's 1099 report.
- *   read  — the CPA: every Books page, changing nothing.
+ *   read  — the CPA: every Books page, changing nothing. The CPA's own
+ *           adjustments are typed on Journal entries (journalsFor in
+ *           src/lib/typed-journal-entries.ts, part 53), not here.
  *
  * Client-safe: the Books pages ask it of the roles they're viewed as (View
  * As included), and requireBooks (src/lib/api-auth.ts) of the caller's own.
