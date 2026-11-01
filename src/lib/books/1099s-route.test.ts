@@ -259,7 +259,7 @@ const post = async (body: unknown) => {
 describe("NetSuite's 1099 report", () => {
   const kept = (fields: Record<string, unknown> = {}) => ({
     file_name: REPORT.fileName, title_lines: REPORT.title, amount_columns: REPORT.columns, left_out: REPORT.leftOut,
-    vendors: REPORT.vendors, skipped: { totals: 1, no_name: 0, combined: 0 }, uploaded_by: 'u-sam', uploaded_at: '2026-11-01T13:00:00Z',
+    vendors: REPORT.vendors, skipped: { totals: 1, no_name: 2, combined: 0 }, uploaded_by: 'u-sam', uploaded_at: '2026-11-01T13:00:00Z',
     ...fields,
   });
 
@@ -275,7 +275,7 @@ describe("NetSuite's 1099 report", () => {
     expect(status).toBe(200);
     expect(body.report).toEqual({
       fileName: '1099 Summary.csv', title: REPORT.title, columns: REPORT.columns, leftOut: ['Tax ID', 'Address'],
-      skipped: { totals: 1, noName: 0, combined: 0 }, vendors: 1, uploadedBy: 'Sam Sample', uploadedAt: '2026-11-01T13:00:00Z',
+      skipped: { totals: 1, noName: 2, combined: 0 }, vendors: 1, uploadedBy: 'Sam Sample', uploadedAt: '2026-11-01T13:00:00Z',
     });
     expect(body.comparison).toMatchObject({
       boxes: ['Nonemployee Compensation'], hasTotal: true, onlyInReport: [], onlyInFleetSuite: [],
@@ -348,6 +348,7 @@ describe("NetSuite's 1099 report", () => {
       [{ company: 'XYZ', year: 2025, report: REPORT }, 'No company XYZ'],
       [{ year: 2025, report: REPORT }, 'No company (none)'],
       [{ company: 'BMG', year: 2025 }, 'No report to keep'],
+      [{ company: 'BMG', year: 2025, remove: 'yes' }, 'No report to keep'],
       [{ company: 'BMG', year: 2025, report: { ...REPORT, columns: [] } }, 'The report needs 1 to 40 columns of amounts'],
     ] as Array<[unknown, string]>) {
       expect(await post(sent), JSON.stringify(sent)).toEqual({ status: 400, body: { error } });

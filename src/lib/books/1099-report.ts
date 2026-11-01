@@ -83,7 +83,7 @@ export function scrub(s: string): string {
   return s.replace(NINE_DIGITS_ALL, '***').replace(/\s+/g, ' ').trim().slice(0, MAX_TEXT);
 }
 
-const plain = (s: string) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const plain = (s: string) => s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const words = (s: string) => plain(s).replace(/&/g, ' and ').split(/[^a-z0-9]+/).filter(Boolean);
 
 /** A name as compared: without its case, accents, spacing or punctuation, "&" as "and". */
@@ -112,17 +112,6 @@ const OTHER_NAME_HEADERS = new Set([
   'legalname', 'vendorlegalname', 'recipientlegalname', 'printoncheckas', 'printas', 'dba', 'doingbusinessas',
   'businessname', 'vendorid', 'entityid', 'vendornumber', 'vendorno',
 ]);
-
-/** A heading that names a tax ID: TIN, SSN, EIN, Tax ID, Federal ID... */
-export function isTaxIdHeader(h: string): boolean {
-  const w = words(h);
-  const said = ` ${w.join(' ')} `;
-  return w.some((x) => ['tin', 'ssn', 'ein', 'fein', 'itin', 'atin', 'taxid', 'taxpayer', 'taxpayerid'].includes(x))
-    || / tax (id|ident|identification|number|no|num) /.test(said)
-    || / social security /.test(said)
-    || / employer identification /.test(said)
-    || / fed(eral)? (id|ident|identification|number|no) /.test(said);
-}
 
 /**
  * The 1099-MISC and 1099-NEC boxes NetSuite's categories are named for,
@@ -172,7 +161,6 @@ export function read1099Report(cells: string[][], boxes: readonly string[]): Rep
     if (!h.trim()) return { kind: 'out' };
     const box = known.get(boxKey(h));
     if (box) return { kind: 'box', box };
-    if (isTaxIdHeader(h)) return { kind: 'out' };
     if (isTotalHeader(h)) return { kind: 'total' };
     const k = words(h).join('');
     if (VENDOR_HEADERS.has(k)) return { kind: 'vendor' };
@@ -310,7 +298,8 @@ export async function read1099ReportFile(file: File, boxes: readonly string[]): 
     return first ?? { report: null, problems: ['That workbook is empty.'] };
   }
   if (ext === 'csv' || ext === 'tsv' || ext === 'txt') {
-    const text = (await file.text()).replace(/^﻿/, '');
+    // text() reads it as UTF-8 and drops the byte order mark Excel puts first.
+    const text = await file.text();
     return read1099Report(parseDelimited(text, ext === 'csv' ? ',' : text.includes('\t') ? '\t' : ','), boxes);
   }
   throw new Error(`FleetSuite can't read a ".${ext}" file. Use Export – CSV in NetSuite, or an Excel .xlsx.`);
@@ -460,8 +449,11 @@ function payeeKeys(p: Payee1099): string[] {
  * by box. A report vendor is FleetSuite's when its name, or failing that one
  * of its other names, is one of FleetSuite's vendor's names (its name, legal
  * name, NetSuite id, or id and name together), compared without case or
- * punctuation, and fits no other vendor. A box column is compared with the
- * category of the same name; the total with all FleetSuite counted.
+ * punctuation, and fits no other vendor. Failing those, the first word of its
+ * name is tried when it has a digit in it, as NetSuite puts a vendor's id
+ * before its name ("V1001 Sample Painting" for one FleetSuite knows only as
+ * V1001, a person whose company name is blank, say). A box column is compared
+ * with the category of the same name; the total with all FleetSuite counted.
  */
 export function compare1099(year: Year1099, report: Report1099): Comparison1099 {
   const payees = new Map<string, Payee1099>();
@@ -474,6 +466,10 @@ export function compare1099(year: Year1099, report: Report1099): Comparison1099 
     }
   }
   const find = (s: string) => index.get(nameKey(s)) ?? new Set<string>();
+  const byId = (label: string) => {
+    const first = label.trim().split(/\s+/)[0];
+    return /\d/.test(first) ? find(first) : new Set<string>();
+  };
 
   // Each column's box by FleetSuite's name for it when FleetSuite has the category.
   const fleetBoxes = new Map<string, string>();
@@ -504,7 +500,7 @@ export function compare1099(year: Year1099, report: Report1099): Comparison1099 
     let fits: Set<string>;
     if (byLabel.size === 1) fits = byLabel;
     else if (byLabel.size > 1) fits = new Set([...byLabel].filter((p) => byNames.has(p)));
-    else fits = byNames;
+    else fits = byNames.size ? byNames : byId(v.label);
     const amounts = amountsOf(v);
     if (fits.size !== 1) {
       const could = byLabel.size > 1 ? byLabel : fits;

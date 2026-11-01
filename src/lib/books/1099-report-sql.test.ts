@@ -11,6 +11,7 @@ import { checkReport, read1099Report } from './1099-report';
 import { parseDelimited } from '@/lib/import-installs-parse';
 
 const UPLOADER = '00000000-0000-4000-8000-000000000051';
+const NEXT_UPLOADER = '00000000-0000-4000-8000-000000000052';
 
 // A fresh database with Supabase's API roles and default grants, and the
 // migrations run twice as the owner.
@@ -25,7 +26,7 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
-    INSERT INTO public.profiles (id) VALUES ('${UPLOADER}');
+    INSERT INTO public.profiles (id) VALUES ('${UPLOADER}'), ('${NEXT_UPLOADER}');
   `);
   for (const file of ['359-books-ledger-core.sql', '482-books-1099-report.sql']) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
@@ -134,12 +135,18 @@ describe("NetSuite's 1099 reports (migration 482)", () => {
   });
 
   it('replaces the year\'s report with a new one', async () => {
-    const next = { ...payload('BMG', 2025, 'Again.csv'), vendors: [{ label: 'Demo Signs', names: ['Demo Signs LLC'], amounts: { c1: -500 } }], skipped: {} };
+    const next = {
+      ...payload('BMG', 2025, 'Again.csv'),
+      vendors: [{ label: 'Demo Signs', names: ['Demo Signs LLC'], amounts: { c1: -500 } }],
+      skipped: { no_name: 2 },
+      uploaded_by: NEXT_UPLOADER,
+    };
     expect(await save(next)).toEqual({ company: 'BMG', year: 2025, vendors: 1, replaced: true });
     const bmg = (await kept()).find((r) => r.code === 'BMG');
     expect(bmg).toMatchObject({
       file_name: 'Again.csv', vendors: [{ label: 'Demo Signs', names: ['Demo Signs LLC'], amounts: { c1: -500 } }],
-      skipped: { totals: 0, no_name: 0, combined: 0 },
+      skipped: { totals: 0, no_name: 2, combined: 0 },
+      uploaded_by: NEXT_UPLOADER,
     });
   });
 

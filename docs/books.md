@@ -4872,15 +4872,15 @@ The file is read on the phone or computer it's picked on
   the form's. A Legal Name, Print on Check As or Vendor ID column is kept as
   another name for matching.
 - Everything else is left out and only its heading is kept, to show what was
-  left out: a tax ID (a heading saying Tax ID, TIN, SSN, EIN, Federal ID and
-  so on, `isTaxIdHeader`), an address, a phone. A name column with nine
-  digits in a row in any cell is left out whole. Any run of nine digits, one
-  character apart at most (`123-45-6789`, `12 3456789`), is taken out of
-  whatever is kept (`scrub`), so **a vendor's tax ID never reaches
-  FleetSuite**. The route refuses one too (`checkReport`), and so do the
-  save function and the table (`gl_1099_report_has_nine_digits`). Amounts
-  are numbers, not text, so a million dollars (nine digits of cents) is
-  fine.
+  left out: a tax ID whatever its heading says (Tax ID, TIN, SSN, EIN,
+  Federal ID...), an address, a phone. A name column with nine digits in a
+  row in any cell is left out whole, and so is a row naming its vendor only
+  by nine digits. Any run of nine digits, one character apart at most
+  (`123-45-6789`, `12 3456789`), is taken out of whatever is kept (`scrub`),
+  so **a vendor's tax ID never reaches FleetSuite**. The route refuses one
+  too (`checkReport`), and so do the save function and the table
+  (`gl_1099_report_has_nine_digits`). Amounts are numbers, not text, so a
+  million dollars (nine digits of cents) is fine.
 - Amounts read as `$1,234.56`, `(1,234.56)` or `-1234.56`. A cell under a
   box that isn't an amount stops it, saying which row, and nothing is kept.
 - A total row ("Total", "Grand Total", "Total - Sample Painting") is
@@ -4903,8 +4903,11 @@ it follows the copies as they come up to date:
 - A report vendor is FleetSuite's when its name, or failing that one of its
   other names, is one of a FleetSuite vendor's names: its name, legal name,
   NetSuite id, or id and name together (`V-50 Sample Painting`), compared
-  without case or punctuation. One that fits more than one is listed with
-  the names it could be, unless another of its names says which. Report
+  without case or punctuation. Failing those, the first word of its name is
+  tried when it has a digit in it, as NetSuite puts a vendor's id before its
+  name (`V1001 Sample Person` for a vendor FleetSuite knows only as `V1001`,
+  a person with no company name, say). One that fits more than one is listed
+  with the names it could be, unless another of its names says which. Report
   rows that are all one vendor are added up.
 - Each box column is compared with FleetSuite's category of the same name,
   and the total with everything FleetSuite counted; with no total column,

@@ -241,7 +241,8 @@ function ComparedLabel({ v, open }: { v: ComparedVendor; open: boolean }) {
       <span style={{ ...muted, marginLeft: '6px' }}>{open ? '▴' : '▾'}</span>
       {other.length > 0 && <div style={muted}>In NetSuite&apos;s report as {other.join(', ')}</div>}
       {boxes.length > 0 && <div style={{ ...muted, color: RED }}>Differs in {boxes.join(', ')}</div>}
-      {v.marked !== true && <div style={{ ...muted, color: RED }}>Not marked to get a 1099 in NetSuite&apos;s vendor list</div>}
+      {v.marked === false && <div style={{ ...muted, color: RED }}>Not marked to get a 1099 in NetSuite&apos;s vendor list</div>}
+      {v.marked === null && <div style={{ ...muted, color: RED }}>FleetSuite&apos;s copy of the vendor list doesn&apos;t say whether it gets a 1099</div>}
       {v.unsplit !== 0 && <div style={{ ...muted, color: RED }}>FleetSuite can&apos;t split {fmt(v.unsplit)} of what it was paid.</div>}
     </div>
   );
