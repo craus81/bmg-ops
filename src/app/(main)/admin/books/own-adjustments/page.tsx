@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
@@ -23,8 +24,8 @@ import { ownBooksChip, ownBooksCount } from '@/lib/books/own-posting-text';
  * first, with why in a sentence. Tap one for its check. The daily check tells
  * the super admins when one differs and links here (?only=differs) or to the
  * adjustment. Each says what the books hold for NetSuite's adjustment and
- * which copy made it (src/lib/books/own-stock-posting.ts). Super admins only,
- * as the books are.
+ * which copy made it (src/lib/books/own-stock-posting.ts). Open to whoever
+ * opens the books.
  */
 
 type Row = Omit<OwnAdjustmentCheck, 'fields' | 'entry' | 'workedOut'> & { netsuiteUrl: string | null; books: OwnBooks | null };
@@ -174,7 +175,7 @@ export default function BooksOwnAdjustmentsPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // The daily check's notification about several own adjustments opens the ones that differ (deepLinks.booksOwnAdjustments).
     const q = new URLSearchParams(window.location.search);
     load(q.get('month') ?? '', q.get('only') === 'differs' ? 'differs' : 'all');
@@ -213,7 +214,7 @@ export default function BooksOwnAdjustmentsPage() {
           that&apos;s worth at FleetSuite&apos;s average cost there just before, from Stock by item. Each is put next to
           NetSuite&apos;s inventory adjustment; tap one for its check. Nothing here changes NetSuite. The books post each one
           from this copy when it matches NetSuite&apos;s and its entry comes out the same, and from NetSuite&apos;s otherwise.
-          Each morning the daily check tells super admins when one differs. Visible only to super admins.{' '}
+          Each morning the daily check tells super admins when one differs.{' '}
           <Link href="/admin/books/own-invoices" style={{ color: 'var(--text-secondary)' }}>Own invoices</Link>
           {' · '}
           <Link href="/admin/books/own-fulfillments" style={{ color: 'var(--text-secondary)' }}>Own fulfillments</Link>

@@ -89,8 +89,10 @@ estimates kept in FleetSuite only, part 48, FleetSuite's record winning
 over a change made in NetSuite for customers and vendors, and part 49 for
 items, each built switched off, part 50, what each vendor marked to
 get a 1099 was paid in a year, by category, worked out from the copy of
-NetSuite, and part 51, NetSuite's own 1099 report uploaded and held
-against those totals vendor by vendor and box by box.
+NetSuite, part 51, NetSuite's own 1099 report uploaded and held against
+those totals vendor by vendor and box by box, and part 52, the books opened
+to a bookkeeper and a CPA, each a login of their own ("Who can open the
+books").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -110,8 +112,9 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, and the 1099s at `/admin/books/1099s`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
-the accounts page; the others are linked from there. The credit memo
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, and the 1099s at `/admin/books/1099s`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
+the accounts page, and Home opens it for a bookkeeper or CPA with no other
+role; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
 super admins can open it while credit memos are switched off. The vendor
 credit screen, `/admin/purchasing/vendor-credit`, is admins', opened from
@@ -2057,8 +2060,9 @@ makes an account line's detail for the same company, account, report and
 months (`loadAccountDetail`): every document that moved the account, by
 date, with each side's balance after it, from the balance at the end of the
 month before (on the balance sheet) through retained earnings' row at a
-year's start to the line itself. Both are super admin only, as the rest of
-the books, and `src/lib/books/report-workbook.ts` builds them.
+year's start to the line itself. Both are open to whoever opens the books
+("Who can open the books"), and `src/lib/books/report-workbook.ts` builds
+them.
 
 Each file opens with the company's legal name, the report, its dates, what
 it is, when it was downloaded (Central time), and what the page warns about,
@@ -3133,29 +3137,29 @@ and opening it links to its copy.
 
 ## Snap a bill
 
-From the day part 28 shipped, a super admin can enter a vendor's bill in
-NetSuite from a picture of it (owner decision 2026-10-25, "Snap a bill", as
-Books Previews drew it). Books → Snap a bill (`/admin/books/snap-a-bill`,
-`deepLinks.booksSnapBill`) takes a picture with the phone's camera, or a
-PDF or picture picked from the phone or computer. FleetSuite reads it, the
-super admin checks each box against the bill, and Send to NetSuite enters
-it as a vendor bill for BMG or 1084, once only. Books keeps its own copy, as
-it does for the other bills FleetSuite makes ("FleetSuite's own bills and
-receipts"). Each snapped bill is a row of `gl_snapped_bills` (migration
-436), from its picture to NetSuite's bill.
+From the day part 28 shipped, a super admin, and since part 52 the
+bookkeeper, can enter a vendor's bill in NetSuite from a picture of it
+(owner decision 2026-10-25, "Snap a bill", as Books Previews drew it). Books
+→ Snap a bill (`/admin/books/snap-a-bill`, `deepLinks.booksSnapBill`) takes
+a picture with the phone's camera, or a PDF or picture picked from the phone
+or computer. FleetSuite reads it, they check each box against the bill, and
+Send to NetSuite enters it as a vendor bill for BMG or 1084, once only.
+Books keeps its own copy, as it does for the other bills FleetSuite makes
+("FleetSuite's own bills and receipts"). Each snapped bill is a row of
+`gl_snapped_bills` (migration 436), from its picture to NetSuite's bill.
 
 ### The picture
 
 The page turns an iPhone's HEIC picture into a JPEG and shrinks a photo to
 2400 pixels on its longest side before it uploads it
 (`shrinkPhotoForUpload`), then uploads it as record files go
-(`uploadRecordFile`): straight to storage, else through the route. A
-picture is taken up to 5MB and a PDF up to 20MB, the most the reader takes.
-It's kept under the storage prefix `books-bills`, named by a random id,
-which `/api/storage` never serves (`src/lib/storage-guard.ts`): only the
-route does (`?file=`, `deepLinks.booksSnapBillFile`), to super admins,
-never cached. A bill thrown away is kept, marked thrown away, with its
-picture.
+(`uploadRecordFile`): straight to storage, else through the route. A picture
+is taken up to 5MB and a PDF up to 20MB, the most the reader takes. It's
+kept under the storage prefix `books-bills`, named by a random id, which
+`/api/storage` never serves (`src/lib/storage-guard.ts`): only the route
+does (`?file=`, `deepLinks.booksSnapBillFile`), to the bookkeeper and super
+admins, never cached. A bill thrown away is kept, marked thrown away, with
+its picture.
 
 ### Reading it
 
@@ -3367,11 +3371,11 @@ on it, for Parts Mail's Create bill too.
 
 Each night FleetSuite looks through the bills, checks and card charges it
 copies from NetSuite for likely mistakes, and lists each one, with why, on
-Books → Mistake checks for a super admin to clear (owner decision
-2026-10-24, "Mistake checks": an idea borrowed from bookkeeping software,
-built next to the crossover, for the owner alone). Nothing is written to
-NetSuite or to the books: a mistake is fixed in NetSuite, and the copies
-bring the fix back.
+Books → Mistake checks for the bookkeeper or a super admin to clear (owner
+decision 2026-10-24, "Mistake checks": an idea borrowed from bookkeeping
+software, built next to the crossover, for the owner alone). Nothing is
+written to NetSuite or to the books: a mistake is fixed in NetSuite, and the
+copies bring the fix back.
 
 `/api/cron/books-mistake-checks` runs at 09:46 UTC (4:46 AM Central, 3:46
 in winter), after the night's copies of NetSuite's checks and card charges
@@ -3423,21 +3427,22 @@ company the vendor's others post to most, or BMG.
 
 Each item (`gl_mistake_checks`) is open until it's cleared:
 
-- **Fixed in NetSuite**, by a super admin, with a note if they like. If the
-  look still finds it once the copies made after the clear have it (the
-  older of the bills' and the checks and card charges' last runs), it
-  comes back, marked "Back" with the day.
-- **Fine as it is**, by a super admin, with a note. For an odd account or a
-  monthly charge a box, unticked to start, also teaches the check: those
-  accounts are fine for that vendor from now on, or that monthly charge
-  isn't watched. Opening the item again unlearns it.
+- **Fixed in NetSuite**, by the bookkeeper or a super admin, with a note if
+  they like. If the look still finds it once the copies made after the clear
+  have it (the older of the bills' and the checks and card charges' last
+  runs), it comes back, marked "Back" with the day.
+- **Fine as it is**, by the bookkeeper or a super admin, with a note. For an
+  odd account or a monthly charge a box, unticked to start, also teaches the
+  check: those accounts are fine for that vendor from now on, or that
+  monthly charge isn't watched. Opening the item again unlearns it.
 - **On its own**, when the copies no longer show it: a document gone from
   NetSuite, voided, or changed so the two no longer match, the missing
   charge come in, or an account now fine for the vendor. It says what
   changed, and comes back if the look finds it again.
 
-A super admin can open any cleared item again (`gl_mistake_check_reopen`).
-Who cleared each one, when, how and with what note is kept.
+The bookkeeper or a super admin can open any cleared item again
+(`gl_mistake_check_reopen`). Who cleared each one, when, how and with what
+note is kept.
 
 ### The page
 
@@ -4511,10 +4516,11 @@ labor hours it keeps 1.5 in FleetSuite and sends nothing.
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 473 and 478 to 480, `src/lib/books/switches.ts`),
-and stays off until a super admin turns it on in Books → Switches
-(`/admin/books/switches`, `deepLinks.booksSwitches`). The plan turns them
-on on January 1, 2027, asking the owner once in late December.
+row each in `books_switches` (migrations 466 to 473 and 478 to 480,
+`src/lib/books/switches.ts`), and stays off until a super admin turns it on
+in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
+which whoever opens the books can read. The plan turns them on on January 1,
+2027, asking the owner once in late December.
 
 While a piece is off, the people who'd use it don't see it at all; super
 admins can open its screen and see what it would send, and its route
@@ -4593,6 +4599,9 @@ The rules (`closeRefusal` and `reopenRefusal`):
   matches doesn't.
 - Only the latest month closed reopens, and only for a reason.
 
+The bookkeeper and super admins close a month; only a super admin reopens
+one ("Who can open the books").
+
 Both are audited (`close_month`, `reopen_month`), and the journal keeps
 who, when and why.
 
@@ -4665,14 +4674,14 @@ build a page whose code imports `next/headers` at the top of a file
 (`src/lib/client-graph.test.ts` finds one).
 
 The page shows the last seven days' counts, the sends FleetSuite isn't sure
-about that nobody has looked for yet, and every send, newest first, fifty
-at a time, narrowed to one outcome or kind of record. Each links to the
-record in NetSuite when FleetSuite knows its ID. One FleetSuite isn't sure
-about stays at the top until a super admin taps Looked at it, with a note
-of what they found in NetSuite (`POST /api/admin/books/netsuite-feed`,
-audited `look_at_send`). Only one NetSuite didn't settle can be marked, and
-only once. The daily check tells the super admins about each of those once
-("Daily check").
+about that nobody has looked for yet, and every send, newest first, fifty at
+a time, narrowed to one outcome or kind of record. Each links to the record
+in NetSuite when FleetSuite knows its ID. One FleetSuite isn't sure about
+stays at the top until the bookkeeper or a super admin taps Looked at it,
+with a note of what they found in NetSuite
+(`POST /api/admin/books/netsuite-feed`, audited `look_at_send`). Only one
+NetSuite didn't settle can be marked, and only once. The daily check tells
+the super admins about each of those once ("Daily check").
 
 The feed records; it doesn't retry. A send that isn't sure is looked for in
 NetSuite before anyone tries again, because sending it again is how a
@@ -4732,8 +4741,8 @@ on the same month a year earlier, a rehearsal of the same year end.
 
 ### The tap
 
-From `GO_LIVE_FROM` (December 1, 2026) the page offers going live, company
-by company: typing the company's code and Go live sets
+From `GO_LIVE_FROM` (December 1, 2026) the page offers a super admin going
+live, company by company: typing the company's code and Go live sets
 `gl_companies.books_live_from` to January 1, 2027
 (`POST /api/admin/books/going-live`, `goLiveRefusal` in
 `src/lib/books/going-live.ts`), once, audited as `go_live`. It can't be
@@ -4835,7 +4844,8 @@ companies, as which one it's for comes from its lines.
 The page opens on last year for BMG, so through 2026 it shows 2025, which
 can be checked against the 1099s filed in January 2026. It goes back to 2025
 and up to this year in Central time, and has each company
-(`GET /api/admin/books/1099s?company=&year=`, super admins only). It shows:
+(`GET /api/admin/books/1099s?company=&year=`, whoever opens the books). It
+shows:
 
 - The 1099s: each vendor marked to get one that was paid on an account that
   counts, a column for each category and a total, largest first. Tap one for
@@ -4895,7 +4905,7 @@ columns kept with the box each is for, the headings left out, each vendor's
 names and amounts in cents by column, what was skipped, and who uploaded it
 when (`POST /api/admin/books/1099s` with `{ company, year, report }`;
 `{ company, year, remove: true }` takes it off; both audited without
-amounts, super admins only).
+amounts, the bookkeeper's and super admins' only).
 
 The comparison (`compare1099`) is worked out each time the page opens, so
 it follows the copies as they come up to date:
@@ -4926,3 +4936,49 @@ it follows the copies as they come up to date:
 
 - Making the 1099s and e-filing them (the checklist's July to September
   2027), with this rule. FleetSuite keeps no vendor's tax ID.
+
+## Who can open the books
+
+Part 52 (migration 483, `src/lib/books/access.ts`) opens the books to two
+logins besides super admins, each its own role that only a super admin
+gives, so an outside bookkeeper or CPA has a login of their own rather than
+a staff one:
+
+| Who | Level | What they can do |
+| --- | --- | --- |
+| Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, and reopening a closed month |
+| Bookkeeper | `keep` | Everything else: Sync now and Copy now, Post now, Look now, closing a month, clearing and reopening mistake checks, Looked at it on the NetSuite feed, Snap a bill, and NetSuite's 1099 report |
+| CPA | `read` | Every Books page and Excel download, changing nothing |
+
+How it's held:
+
+- Every Books route checks the caller's own roles with
+  `requireBooks(req, need)` (`src/lib/api-auth.ts`), each step needing
+  `read`, `keep` or `owner` as the route manifest says
+  (`src/lib/route-permissions.ts`, kind `books`). A step the caller can't
+  take answers 403 with why.
+- Each page opens to whoever `booksAccess` lets in and shows a button only
+  to whoever can use it, by the roles it's viewed as: a super admin's View
+  As → Bookkeeper or CPA shows that login's pages, while the server still
+  answers by the super admin's own roles. View As offers the two to super
+  admins only.
+- A link from a Books page to one outside the books (Vendor Details, Item
+  Accounts, Fix a bill, Receiving, an AP invoice, a payout, Parts Mail)
+  shows only to whoever can open that page.
+- Neither role is BMG staff (`INTERNAL_STAFF_ROLES`, `is_internal_staff()`),
+  and neither carries a feature but Home, so nothing outside the books opens
+  to them; Home opens the books for a login with no other role. Stack
+  another role on a person who needs more.
+- Only a super admin gives the super admin, bookkeeper or CPA role: the
+  Users page greys the chip for anyone else, Add user refuses it
+  (`/api/admin/create-user`), and the database refuses it
+  (`guard_profile_privilege_columns`, migration 483), while an admin can
+  still take one away. Sign-up can't ask for either.
+- The AI assistant isn't open to a login that has nothing but these roles.
+
+### What isn't done yet
+
+- The books' alerts (the daily check's, and with it the mistake checks' and
+  the NetSuite feed's) still go to super admins only.
+- The CPA's own adjustments journal: a CPA login posting only to its own
+  journal, on typed journal entries (part 53).

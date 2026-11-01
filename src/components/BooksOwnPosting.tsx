@@ -12,7 +12,8 @@ import { ownBooksLinkText, ownBooksText, ownBooksWhy, type OwnCopyStatus } from 
  * (migration 456, src/lib/books/own-posting-view.ts, docs/books.md "Posting
  * FleetSuite's own fulfillments, receipts and bills"): the entry that stands,
  * and the copy's entry next to NetSuite's. The lists' chip and count are in
- * src/lib/books/own-posting-text.ts. Super admins only, as the pages are.
+ * src/lib/books/own-posting-text.ts. Open to whoever opens the books, as the
+ * pages are.
  */
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });

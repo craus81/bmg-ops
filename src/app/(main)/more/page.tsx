@@ -12,6 +12,7 @@ import { useCollapsed } from '@/components/CollapsibleCard';
 import { resolveDashboardFocus } from '@/lib/dashboard-focus';
 import { MORE_GROUPS, orderMoreGroups, searchMorePages, type MoreGroupId } from '@/lib/more-menu';
 import { deepLinks } from '@/lib/deep-links';
+import { booksAccess } from '@/lib/books/access';
 
 export default function MorePage() {
   const router = useRouter();
@@ -202,7 +203,7 @@ export default function MorePage() {
     { group: 'money', title: 'Vendor Details', sub: 'Change a vendor’s email, terms, addresses or 1099 details · changed in NetSuite', path: deepLinks.vendorDetails(), show: canVendorDetails },
     { group: 'money', title: 'Item Accounts', sub: 'Change the accounts an item’s sales, costs and stock post to · changed in NetSuite', path: deepLinks.itemAccounts(), show: canItemAccounts },
     { group: 'money', title: 'Reports', sub: 'Sales by customer detail & other custom reports', path: '/admin/reports', show: F('reports') },
-    { group: 'money', title: 'Books', sub: 'FleetSuite’s own books · reports, accounts, trial balance & NetSuite lists', path: '/admin/books', show: hasRole('super_admin') },
+    { group: 'money', title: 'Books', sub: 'FleetSuite’s own books · reports, accounts, trial balance & NetSuite lists', path: '/admin/books', show: booksAccess(hasRole) !== null },
     { group: 'money', title: 'Ledger', sub: 'QuickBooks history import, customer matching & NetSuite mirror', path: '/admin/ledger', show: F('ledger'), badge: badgeFor('ledger_unmatched_customers') },
     { group: 'money', title: 'Invoice Locations', sub: 'Backfill NetSuite invoice locations from the PO', path: '/admin/invoice-locations', show: F('invoice_admin') },
 

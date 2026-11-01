@@ -34,7 +34,9 @@ export function canSeeFinancials(roles: string[]): boolean {
   return roles.includes('super_admin') || roles.includes('executive');
 }
 
-/** FleetSuite's own books — the same wall as the Books pages: super admin only. */
+/** FleetSuite's own books, through the assistant: super admins only. The
+ *  bookkeeper and the CPA open the Books pages (src/lib/books/access.ts) but
+ *  not the assistant, which the chat route turns them away from. */
 export function canSeeBooks(roles: string[]): boolean {
   return roles.includes('super_admin');
 }

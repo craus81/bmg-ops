@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks, requireSuperAdmin } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
@@ -22,10 +22,11 @@ const failed = (err: unknown) => NextResponse.json({ error: String((err as any)?
  * NetSuite (an item's vendor and labor hours stay in FleetSuite), or takes
  * NetSuite's into FleetSuite's record. Only while it's on. Audited.
  *
- * Super admin only, as the books are.
+ * Super admins, the bookkeeper and the CPA see it; keeping or taking a change
+ * is super admins' only (docs/books.md "Who can open the books").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const service = createServiceClient();

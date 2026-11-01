@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { OwnCheckStatus } from '@/lib/books/own-invoice-check';
@@ -20,8 +21,8 @@ import { OwnBooksLine, OwnEntry } from '@/components/BooksOwnPosting';
  * each line paired with NetSuite's by what it's for; what the books hold for
  * NetSuite's bill, and the entry this copy makes next to the one NetSuite's
  * makes (migration 456, src/lib/books/own-posting-view.ts); what FleetSuite
- * couldn't work out; and how Books worked its copy out. Super admins only,
- * as the books are; opened from Own bills or the daily check's notification
+ * couldn't work out; and how Books worked its copy out. Open to whoever
+ * opens the books; opened from Own bills or the daily check's notification
  * (?id=, NetSuite's id for the bill).
  */
 
@@ -100,17 +101,28 @@ function Side({ side, missing }: { side: BillLinePair['fleetsuite'] | BillLinePa
   );
 }
 
-/** Where FleetSuite made the bill, as a link to it when there's a page for it. */
+/** Where FleetSuite made the bill, as a link to it when there's a page for it that the viewer can open. */
 function MadeFrom({ bill }: { bill: Bill }) {
+  const { hasRole, hasFeature } = useAuth();
   if (bill.madeFrom === 'vendor_invoice' && bill.madeFromId) {
-    return <Link href={deepLinks.apInvoice(bill.madeFromId)} style={link}>the CNI vendor invoice</Link>;
+    return hasFeature('vendor_payments')
+      ? <Link href={deepLinks.apInvoice(bill.madeFromId)} style={link}>the CNI vendor invoice</Link>
+      : <>the CNI vendor invoice</>;
   }
-  if (bill.madeFrom === 'payout') return <Link href="/admin/cni/payouts" style={link}>an installer payout</Link>;
-  if (bill.madeFrom === 'parts_mail') return <Link href="/admin/parts-mail" style={link}>a Parts Mail invoice</Link>;
+  if (bill.madeFrom === 'payout') {
+    return hasFeature('cni_admin') ? <Link href="/admin/cni/payouts" style={link}>an installer payout</Link> : <>an installer payout</>;
+  }
+  if (bill.madeFrom === 'parts_mail') {
+    return hasFeature('upfit_projects') || hasFeature('vendor_payments')
+      ? <Link href="/admin/parts-mail" style={link}>a Parts Mail invoice</Link>
+      : <>a Parts Mail invoice</>;
+  }
   if (bill.madeFrom === 'snapped' && bill.madeFromId) {
     return (
       <>
-        <Link href={deepLinks.booksSnapBill(bill.madeFromId)} style={link}>the picture snapped</Link>
+        {booksAllows(booksAccess(hasRole), 'keep')
+          ? <Link href={deepLinks.booksSnapBill(bill.madeFromId)} style={link}>the picture snapped</Link>
+          : 'the picture snapped'}
         {bill.madeByName ? ` by ${bill.madeByName}` : ''}
       </>
     );
@@ -120,7 +132,9 @@ function MadeFrom({ bill }: { bill: Bill }) {
 
 export default function BooksOwnBillPage() {
   const router = useRouter();
-  const { hasRole, loading: authLoading } = useAuth();
+  const { hasRole, hasFeature, canSeeMoney, loading: authLoading } = useAuth();
+  // Fix a Bill (src/app/(main)/admin/purchasing/bill-fix) opens with Parts Ordering and price access.
+  const canFixBills = hasFeature('parts_ordering') && canSeeMoney;
   const [bill, setBill] = useState<Bill | null>(null);
   const [posting, setPosting] = useState<OwnPostingView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -143,7 +157,7 @@ export default function BooksOwnBillPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // Own bills and the daily check link here with NetSuite's id for the bill (deepLinks.booksOwnBill).
     load(new URLSearchParams(window.location.search).get('id') ?? '');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
@@ -174,10 +188,10 @@ export default function BooksOwnBillPage() {
             </div>
             <OwnBooksLine posting={posting} status={b.status} theirs="bill" company={b.company} kind="bill" netsuiteId={b.netsuiteId} date={b.date} />
             <div style={{ fontSize: '12px', marginTop: '2px' }}>
-              {b.netsuiteUrl && <><a href={b.netsuiteUrl} target="_blank" rel="noreferrer" style={link}>Bill in NetSuite ↗</a>{' · '}</>}
-              {b.poUrl && <><a href={b.poUrl} target="_blank" rel="noreferrer" style={link}>{b.poNumber ?? 'Purchase order'} in NetSuite ↗</a>{' · '}</>}
-              {/* Fixing bills is super admins' only until it's switched on, and this page is theirs. */}
-              <Link href={deepLinks.billFix(b.netsuiteId)} style={link}>Fix this bill</Link>
+              {b.netsuiteUrl && <a href={b.netsuiteUrl} target="_blank" rel="noreferrer" style={link}>Bill in NetSuite ↗</a>}
+              {b.poUrl && <>{b.netsuiteUrl ? ' · ' : ''}<a href={b.poUrl} target="_blank" rel="noreferrer" style={link}>{b.poNumber ?? 'Purchase order'} in NetSuite ↗</a></>}
+              {/* Fix a Bill is a Purchasing page, super admins' only until it's switched on; the bookkeeper and the CPA read without it. */}
+              {canFixBills && <>{b.netsuiteUrl || b.poUrl ? ' · ' : ''}<Link href={deepLinks.billFix(b.netsuiteId)} style={link}>Fix this bill</Link></>}
             </div>
           </div>
 

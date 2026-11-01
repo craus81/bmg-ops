@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { COPY_FROM, monthsBetween } from '@/lib/books/netsuite-gl';
 import { loadAccountDetail, loadReports } from '@/lib/books/report-data';
@@ -22,10 +22,11 @@ const SHOWN = 1000;
  * line's key: the account's NetSuite id, or fs:<id> for one NetSuite doesn't
  * have.
  *
- * Super admin only, as the rest of the books (docs/books.md "Report detail").
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md "Report detail").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;

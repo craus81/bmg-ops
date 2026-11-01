@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
+import { booksAllows } from '@/lib/books/access';
 import { createServiceClient } from '@/lib/supabase-service';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
@@ -44,10 +45,12 @@ async function readMonths(service: SupabaseClient, company: CompanyRow, today: s
  * closed. Reopening needs a reason, and so does closing a month that doesn't
  * match NetSuite; the journal logs both (migration 359), and they're audited.
  *
- * Super admin only, as the books are.
+ * Super admins, the bookkeeper and the CPA see it; the bookkeeper and super
+ * admins close a month, and only a super admin reopens one (docs/books.md "Who
+ * can open the books").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const service = createServiceClient();
@@ -78,12 +81,15 @@ const Schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
   const { action, reason } = parsed.data;
+  if (action === 'reopen' && !booksAllows(auth.access, 'owner')) {
+    return NextResponse.json({ error: 'Only a super admin can reopen a month.' }, { status: 403 });
+  }
   const month = `${parsed.data.month}-01`;
   const service = createServiceClient();
   try {

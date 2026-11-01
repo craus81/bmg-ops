@@ -1113,8 +1113,10 @@ export async function POST(req: NextRequest) {
   const canSeeBooks = canSeeBooksFor(roles);
 
   // Customers (and any account with no recognized role) don't get the data
-  // assistant at all — it queries company-wide operational data.
-  if (roles.length === 0 || roles.every(r => r === 'customer')) {
+  // assistant at all — it queries company-wide operational data. Nor do the
+  // books' own logins, the bookkeeper and the CPA, who open the books and
+  // nothing else (src/lib/books/access.ts).
+  if (roles.length === 0 || roles.every(r => r === 'customer' || r === 'bookkeeper' || r === 'cpa')) {
     return NextResponse.json({ error: 'The assistant isn\'t available for your role.' }, { status: 403 });
   }
 

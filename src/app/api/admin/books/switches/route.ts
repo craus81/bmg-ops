@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks, requireSuperAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { SWITCHES, SWITCH_ON_DATE_TEXT, isSwitchPiece, readSwitches, setSwitch } from '@/lib/books/switches';
@@ -13,11 +13,12 @@ const service = createServiceClient();
  * Books → Switches (migration 466, src/lib/books/switches.ts): the pieces that
  * take the team out of NetSuite, each built switched off.
  *
- * GET  — every switch, whether it's on, and who changed it last.
+ * GET  — every switch, whether it's on, and who changed it last; anyone who
+ *        opens the books.
  * POST — { piece, on }: turn one on or off. Super admins only, and audited.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   try {

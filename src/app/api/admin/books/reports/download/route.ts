@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
 import { POSTING_COMPANIES } from '@/lib/books/invoice-posting';
@@ -17,10 +17,11 @@ export const dynamic = 'force-dynamic';
  * at the top (src/lib/books/report-workbook.ts, docs/books.md "Excel
  * downloads").
  *
- * Super admin only, as the rest of the books (docs/books.md).
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md).
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;

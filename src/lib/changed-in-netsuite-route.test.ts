@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
 const h = vi.hoisted(() => ({
-  superAdmin: true,
+  roles: ['admin', 'super_admin'],
   tables: {} as Record<string, Array<Record<string, any>>>,
   failing: new Set<string>(),
   audits: [] as Array<Record<string, any>>,
@@ -15,11 +15,17 @@ const h = vi.hoisted(() => ({
   updateItemFields: vi.fn(),
 }));
 
-vi.mock('@/lib/api-auth', () => ({
-  requireSuperAdmin: vi.fn(async () => (h.superAdmin
-    ? { user: { id: 'a0000000-0000-4000-8000-000000000001' } }
-    : { error: new Response('Forbidden', { status: 403 }) })),
-}));
+vi.mock('@/lib/api-auth', async () => {
+  // The real levels (src/lib/books/access.ts) for whoever h.roles says is signed in.
+  const { booksAccess, booksAllows } = await import('@/lib/books/access');
+  return {
+    requireBooks: vi.fn(async (_req: unknown, need: 'read' | 'keep' | 'owner') => {
+      const access = booksAccess((r) => h.roles.includes(r));
+      return booksAllows(access, need) ? { ...{ user: { id: 'a0000000-0000-4000-8000-000000000001' } }, access } : { error: new Response('Forbidden', { status: 403 }) };
+    }),
+    requireSuperAdmin: vi.fn(async () => (h.roles.includes('super_admin') ? { user: { id: 'a0000000-0000-4000-8000-000000000001' } } : { error: new Response('Forbidden', { status: 403 }) })),
+  };
+});
 vi.mock('@/lib/audit', () => ({ logAudit: vi.fn(async (_s: unknown, entry: Record<string, any>) => { h.audits.push(entry); }) }));
 vi.mock('@/lib/netsuite', () => ({ updateCustomer: h.updateCustomer, patchEntityRecord: h.patchEntityRecord, updateItemFields: h.updateItemFields }));
 vi.mock('@/lib/supabase-service', () => ({
@@ -81,7 +87,7 @@ const post = (body: unknown) => new NextRequest('http://localhost/api/admin/book
 const get = () => new NextRequest('http://localhost/api/admin/books/changed-in-netsuite');
 
 beforeEach(() => {
-  h.superAdmin = true;
+  h.roles = ['admin', 'super_admin'];
   h.failing = new Set();
   h.audits = [];
   h.updateCustomer.mockReset();
@@ -147,9 +153,11 @@ describe('GET', () => {
     expect(json.open).toHaveLength(1);
   });
 
-  it('is for super admins only', async () => {
-    h.superAdmin = false;
+  it('is for whoever opens the books, and keeping or taking is super admins\' only', async () => {
+    h.roles = ['admin'];
     expect((await GET(get())).status).toBe(403);
+    h.roles = ['finance', 'bookkeeper'];
+    expect((await GET(get())).status).toBe(200);
     expect((await POST(post({ id: OPEN, act: 'take' }))).status).toBe(403);
     expect(h.tables.record_differences[0].status).toBe('open');
   });

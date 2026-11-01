@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate } from '@/lib/books/netsuite-gl';
 import { monthParam } from '@/lib/books/report-data';
@@ -15,11 +15,11 @@ export const dynamic = 'force-dynamic';
  * the copy of NetSuite's ledger. The end defaults to last month and the start
  * to the eleven months before it.
  *
- * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md).
+ * Super admins, the bookkeeper and the CPA (docs/books.md "Who can open the
+ * books").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const service = createServiceClient();

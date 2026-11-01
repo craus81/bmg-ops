@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin, getProfileRoles } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
+import { OWNER_GIVEN_ROLES } from '@/lib/features';
 import { deepLinks, inviteLinkFrom } from '@/lib/deep-links';
 import { appStoreEmailBlock, usesStaffApp } from '@/lib/app-store';
 
@@ -9,6 +10,7 @@ export const dynamic = 'force-dynamic';
 
 const RoleEnum = z.enum([
   'super_admin', 'admin', 'executive', 'finance', 'installer', 'field_tech', 'shop_tech', 'sales', 'graphics_production', 'customer',
+  'bookkeeper', 'cpa',
 ]);
 
 const CreateUserSchema = z
@@ -84,8 +86,12 @@ export async function POST(req: NextRequest) {
     // Only a super_admin may mint another super_admin. Without this, a regular
     // admin (requireAdmin passes them) could POST roles:['super_admin'] and
     // hand out the owner-level wall — financials, user management, audit log.
-    if (userRoles.includes('super_admin') && !getProfileRoles(auth.profile).includes('super_admin')) {
-      return NextResponse.json({ error: 'Forbidden: only a super admin can create a super admin account' }, { status: 403 });
+    // The books' own logins, the bookkeeper and the CPA, are the same
+    // (migration 483 holds every other way of giving a role to it).
+    const ownerGiven = userRoles.find((r) => OWNER_GIVEN_ROLES.includes(r));
+    if (ownerGiven && !getProfileRoles(auth.profile).includes('super_admin')) {
+      const what = ownerGiven === 'super_admin' ? 'a super admin' : ownerGiven === 'cpa' ? 'a CPA' : 'a bookkeeper';
+      return NextResponse.json({ error: `Forbidden: only a super admin can create ${what} account` }, { status: 403 });
     }
     // super_admin implies admin in the roles array — without it the account
     // fails every roles-array gate (requireAdmin, PO-note tagging, View As).

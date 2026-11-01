@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 
 /**
@@ -11,8 +12,8 @@ import { apiFetch } from '@/lib/api-client';
  *
  * NetSuite's general ledger from January 2025 is copied into FleetSuite every
  * two hours (or on "Copy now"), and each company's month-end balances are
- * shown next to NetSuite's own. Super admins only while the books are built,
- * linked from the accounts page.
+ * shown next to NetSuite's own. Open to whoever opens the books, linked from
+ * the accounts page.
  */
 
 interface Company {
@@ -102,6 +103,8 @@ const cell: React.CSSProperties = { padding: '6px 10px', textAlign: 'right', fon
 export default function BooksTrialBalancePage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
+  // Copying now isn't the CPA's.
+  const canKeep = booksAllows(booksAccess(hasRole), 'keep');
   const [data, setData] = useState<Payload | null>(null);
   const [company, setCompany] = useState('');
   const [month, setMonth] = useState('');
@@ -131,7 +134,7 @@ export default function BooksTrialBalancePage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     load('', '');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
   }, [authLoading, router, load]);
@@ -172,7 +175,7 @@ export default function BooksTrialBalancePage() {
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             NetSuite&apos;s general ledger from January 2025, copied into FleetSuite&apos;s books every two hours, starting from
             NetSuite&apos;s balances on December 31, 2024. Each month-end balance is checked against NetSuite&apos;s own totals.
-            Visible only to super admins. <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
+            {' '}<Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
             {' · '}
             <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
             {' · '}
@@ -191,16 +194,18 @@ export default function BooksTrialBalancePage() {
             <Link href="/admin/books/own-fulfillments" style={{ color: 'var(--text-secondary)' }}>Own fulfillments</Link>
           </div>
         </div>
-        <button
-          onClick={copyNow}
-          disabled={copying || loading}
-          style={{
-            padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
-            color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: copying ? 'wait' : 'pointer',
-          }}
-        >
-          {copying ? 'Copying… up to 4 minutes' : 'Copy now'}
-        </button>
+        {canKeep && (
+          <button
+            onClick={copyNow}
+            disabled={copying || loading}
+            style={{
+              padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
+              color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: copying ? 'wait' : 'pointer',
+            }}
+          >
+            {copying ? 'Copying… up to 4 minutes' : 'Copy now'}
+          </button>
+        )}
       </div>
 
       {error && <div style={banner('#ef4444')}>{error}</div>}
@@ -210,14 +215,14 @@ export default function BooksTrialBalancePage() {
         <>
           {!data.lastRun && (
             <div style={banner('#fbbf24')}>
-              Nothing has been copied yet. The copy runs every two hours, or press Copy now. The first copy takes a few runs.
+              Nothing has been copied yet. The copy runs every two hours{canKeep ? ', or press Copy now' : ''}. The first copy takes a few runs.
             </div>
           )}
           {run?.error && <div style={banner('#ef4444')}>The last copy failed {ago(data.lastRun!.at)}: {run.error}</div>}
           {data.lastRun && !run?.error && run?.partial && (
             <div style={banner('#fbbf24')}>
               Still copying: the last run, {ago(data.lastRun.at)}, copied {run.swept?.length ?? 0} month(s) and stopped for time.
-              It carries on at the next run, or press Copy now.
+              It carries on at the next run{canKeep ? ', or press Copy now' : ''}.
             </div>
           )}
           {data.lastRun && !run?.error && !run?.partial && (

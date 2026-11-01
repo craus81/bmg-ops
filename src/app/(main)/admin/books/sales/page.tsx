@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 
 /**
@@ -13,8 +14,8 @@ import { apiFetch } from '@/lib/api-client';
  * A company's sales for a range of months by state, location and NetSuite
  * class, with returns, discounts and transportation charges apart, from the
  * copy of NetSuite's ledger; made for the insurance premium audit. Print
- * shows the report alone, for saving as a PDF. Super admins only while the
- * books are built, linked from Reports.
+ * shows the report alone, for saving as a PDF. Open to whoever opens the
+ * books, linked from Reports.
  */
 
 type Column = 'gross' | 'returns' | 'discounts' | 'transportation' | 'other';
@@ -153,7 +154,7 @@ export default function BooksSalesPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     const q = new URLSearchParams(window.location.search);
     load({ company: q.get('company') ?? undefined, from: q.get('from') ?? undefined, to: q.get('to') ?? undefined });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
@@ -190,7 +191,7 @@ export default function BooksSalesPage() {
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           Sales for the months picked by state, location and NetSuite class, with returns, discounts and transportation
           charges apart, from the copy of NetSuite&apos;s ledger. Net sales is the income on the profit and loss for the same
-          months. Visible only to super admins.{' '}
+          months.{' '}
           <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
           {' · '}
           <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>

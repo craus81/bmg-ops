@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
@@ -22,13 +22,14 @@ const FILTERS: readonly FeedFilter[] = ['all', 'took', 'refused', 'unsure'];
  * refused and left FleetSuite unsure about in the last 7 days; and the sends
  * FleetSuite can't be sure about that nobody has looked for in NetSuite yet.
  *
- * POST { id, note } — notes that a super admin looked for one of those in
- * NetSuite, and what they found. Audited.
+ * POST { id, note } — notes that someone looked for one of those in NetSuite,
+ * and what they found. Audited.
  *
- * Super admin only, as the books are.
+ * Super admins, the bookkeeper and the CPA read it; the CPA changes nothing
+ * (docs/books.md "Who can open the books").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;
@@ -68,7 +69,7 @@ const Schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, Schema);

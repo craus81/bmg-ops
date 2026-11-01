@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { OwnCheckStatus } from '@/lib/books/own-invoice-check';
@@ -21,7 +22,7 @@ import { OwnBooksLine, OwnEntry } from '@/components/BooksOwnPosting';
  * copy makes next to NetSuite's, or when it isn't worked out what NetSuite's
  * adjustment posted (src/lib/books/own-posting-view.ts); what FleetSuite
  * couldn't work out; and how it worked its copy out. The item opens its moves
- * on Stock by item. Super admins only, as the books are; opened from Own
+ * on Stock by item. Open to whoever opens the books; opened from Own
  * adjustments or the daily check's notification (?id=, FleetSuite's id for
  * the Inventory Adjust).
  */
@@ -115,7 +116,7 @@ export default function BooksOwnAdjustmentPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // Own adjustments and the daily check link here with FleetSuite's id for the Inventory Adjust (deepLinks.booksOwnAdjustment).
     load(new URLSearchParams(window.location.search).get('id') ?? '');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { BOOKS_ACCOUNTS_SYNC, syncBooksAccounts } from '@/lib/books/netsuite-accounts';
@@ -12,12 +12,12 @@ export const maxDuration = 60;
  * GET /api/admin/books/accounts — FleetSuite's chart of accounts (migrations
  * 359/360) and how the last NetSuite account sync went.
  *
- * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md). Read-only — until the changeover, accounts
- * are added and changed in NetSuite and copied here every two hours.
+ * Super admins, the bookkeeper and the CPA; syncing now (POST) isn't the CPA's
+ * (docs/books.md "Who can open the books"). Read-only — until the changeover,
+ * accounts are added and changed in NetSuite and copied here every two hours.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const service = createServiceClient();
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
  * refused NetSuite read comes back as the result's error, like the cron's.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
 
   return NextResponse.json(await syncBooksAccounts(createServiceClient()));

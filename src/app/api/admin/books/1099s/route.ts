@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { buildYear1099, type Year1099Data } from '@/lib/books/1099s';
 import { checkReport, compare1099, type Report1099 } from '@/lib/books/1099-report';
@@ -28,10 +28,11 @@ export const maxDuration = 60;
  * file when, and the report held against FleetSuite's totals vendor by
  * vendor and box by box, worked out afresh each time.
  *
- * Super admin only, as the rest of the books (docs/books.md "1099s").
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md "1099s").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;
@@ -124,10 +125,11 @@ export async function GET(req: NextRequest) {
  * a row in a name or heading, a tax ID maybe, is refused, so a vendor's tax
  * ID is never kept. Audited without amounts. Nothing is sent to NetSuite.
  *
- * Super admin only, as the rest of the books.
+ * Super admins and the bookkeeper; the CPA only reads (docs/books.md "Who can
+ * open the books").
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;

@@ -74,6 +74,12 @@ export const INTERNAL_STAFF_ROLES: string[] = [
   'admin', 'super_admin', 'sales', 'graphics_production', 'shop_tech', 'field_tech', 'finance',
 ];
 
+// Roles only a super admin gives out (migration 483 holds the database to
+// it): super admin, and the two logins FleetSuite's own books open to, the
+// bookkeeper and the CPA (src/lib/books/access.ts). An admin can still take
+// one away.
+export const OWNER_GIVEN_ROLES: string[] = ['super_admin', 'bookkeeper', 'cpa'];
+
 // Owner-level pages: super admins only by default. Regular admins don't see
 // these, but can be granted individual ones via per-user feature overrides.
 // `financials` is here so the executive P&L view (A/R, A/P, cash) is walled
@@ -155,6 +161,12 @@ export const ROLE_DEFAULT_FEATURES: Record<string, FeatureKey[]> = {
   ],
 
   customer: ['home'],
+
+  // The books' own logins (Books part 52): the Books pages go by role, not
+  // feature (src/lib/books/access.ts), so these carry nothing else. Home
+  // opens the books for them.
+  bookkeeper: ['home'],
+  cpa: ['home'],
 };
 
 /**

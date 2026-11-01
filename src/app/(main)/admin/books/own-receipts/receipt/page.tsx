@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { OwnReceiptCheck, ReceiptItemPair, ReceiptStatus } from '@/lib/books/own-receipt-check';
@@ -21,7 +22,7 @@ import { OwnBooksLine, OwnEntry } from '@/components/BooksOwnPosting';
  * it didn't take it; what the books hold for NetSuite's receipt, and the
  * entry this copy makes next to NetSuite's (migration 456,
  * src/lib/books/own-posting-view.ts); what FleetSuite couldn't work out; and
- * how Books worked its copy out. Super admins only, as the books are; opened
+ * how Books worked its copy out. Open to whoever opens the books; opened
  * from Own receipts or the daily check's notification (?key=, the receipt's
  * key).
  */
@@ -123,7 +124,9 @@ function NetSuiteSide({ side, copied, none }: { side: ReceiptItemPair['netsuite'
 
 export default function BooksOwnReceiptPage() {
   const router = useRouter();
-  const { hasRole, loading: authLoading } = useAuth();
+  const { hasRole, hasFeature, loading: authLoading } = useAuth();
+  // Receiving opens with Parts Ordering; the bookkeeper and the CPA read without it.
+  const canReceive = hasFeature('parts_ordering');
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [posting, setPosting] = useState<OwnPostingView | null>(null);
   const [loading, setLoading] = useState(true);
@@ -146,7 +149,7 @@ export default function BooksOwnReceiptPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // Own receipts and the daily check link here with the receipt's key (deepLinks.booksOwnReceipt).
     load(new URLSearchParams(window.location.search).get('key') ?? '');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
@@ -179,7 +182,8 @@ export default function BooksOwnReceiptPage() {
               {r.summary}
             </div>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              Books&apos; own copy of a Receive on the <Link href={deepLinks.receiving()} style={link}>Receiving page</Link>: {r.what}
+              Books&apos; own copy of a Receive on the{' '}
+              {canReceive ? <Link href={deepLinks.receiving()} style={link}>Receiving page</Link> : 'Receiving page'}: {r.what}
               {r.location ? ` at ${r.location}` : ''}, for {r.company}.
             </div>
             <OwnBooksLine posting={posting} status={r.status} theirs="receipt" company={r.company} kind="stock" netsuiteId={r.netsuiteId} date={r.date} />

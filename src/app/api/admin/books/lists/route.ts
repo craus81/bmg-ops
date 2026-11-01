@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { looseOrFilter } from '@/lib/loose-search';
@@ -33,12 +33,12 @@ const LOOKUP_LIMIT = 50;
  * &field=income_account&account=123 (or account=none) instead lists the
  * active ones posting to that account.
  *
- * Super admin only: the books are being built hidden, for the owner, until
- * they're ready (docs/books.md). Read-only — until the changeover these
- * lists are kept in NetSuite and copied here every two hours.
+ * Super admins, the bookkeeper and the CPA; syncing now (POST) isn't the CPA's
+ * (docs/books.md "Who can open the books"). Read-only — until the changeover
+ * these lists are kept in NetSuite and copied here every two hours.
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;
@@ -108,7 +108,7 @@ export async function GET(req: NextRequest) {
  * wait for the two-hourly run. Same job, same record of how it went.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'keep');
   if (auth.error) return auth.error;
 
   return NextResponse.json(await syncBooksLists(createServiceClient(), { deadline: Date.now() + SYNC_BUDGET_MS }));

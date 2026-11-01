@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { PartyKind } from '@/lib/books/party-balances';
@@ -17,7 +18,7 @@ import type { AgedDocument, PartyAging, Sides } from '@/lib/books/agings';
  * What it has open in each bucket, FleetSuite's books next to NetSuite's,
  * what its open documents leave of its balance, then every open document,
  * the most overdue first: its date, when it's due and how late it is each
- * side, and what's open on it each side. Super admins only, as the books are;
+ * side, and what's open on it each side. Open to whoever opens the books;
  * opened from a name on AR and AP agings.
  */
 
@@ -162,7 +163,7 @@ export default function BooksAgingPartyPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     const q = new URLSearchParams(window.location.search);
     const party = q.get('party') ?? '';
     const next = { company: q.get('company') ?? '', kind: q.get('kind') ?? 'customer', party: party === 'none' ? '' : party };

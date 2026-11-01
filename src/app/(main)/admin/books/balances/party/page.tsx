@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { PartyKind } from '@/lib/books/party-balances';
@@ -18,7 +19,7 @@ import type { DetailDocument } from '@/lib/books/report-detail';
  * then every document since that moved its balance, FleetSuite's journal
  * next to the copy of NetSuite's general ledger, those that differ first,
  * then the newest. Tap a document's number for its line by line check.
- * Super admins only, as the books are; opened from a name on Customer and
+ * Open to whoever opens the books; opened from a name on Customer and
  * vendor balances, or from the daily check's notification.
  */
 
@@ -189,7 +190,7 @@ export default function BooksBalancePage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // Customer and vendor balances and the daily check link here with the company, kind and party (deepLinks.booksBalance).
     const q = new URLSearchParams(window.location.search);
     load({ company: q.get('company') ?? '', kind: q.get('kind') ?? '', party: q.get('party') ?? '', differs: q.get('only') === 'differs' });

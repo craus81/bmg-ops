@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
@@ -22,8 +23,8 @@ import type { PartyBalance, PartyKind } from '@/lib/books/party-balances';
  * ledger mirror hasn't matched to one of its own, and lines that name none)
  * are one row, with NetSuite's names in it. Tap a name for the documents
  * behind its balance. The daily check tells the super admins when a balance
- * stops matching and links here (?only=differs) or to the balance. Super
- * admins only, as the books are.
+ * stops matching and links here (?only=differs) or to the balance. Open to
+ * whoever opens the books.
  */
 
 interface Payload {
@@ -204,7 +205,7 @@ export default function BooksBalancesPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // The daily check's notification about several balances opens the ones that differ (deepLinks.booksBalances).
     const q = new URLSearchParams(window.location.search);
     load(q.get('company') ?? '', q.get('kind') ?? '', q.get('only') === 'differs' ? 'differs' : 'all');
@@ -242,8 +243,7 @@ export default function BooksBalancesPage() {
           What each customer owes and each vendor is owed, FleetSuite&apos;s books next to NetSuite&apos;s. Both start where
           NetSuite&apos;s receivable and payable accounts stood for each one before 2025, then add every document since:
           FleetSuite&apos;s journal on one side, the copy of NetSuite&apos;s general ledger on the other. Tap a name for the documents
-          behind its balance. Each morning the daily check tells super admins when a balance stops matching. Visible only to super
-          admins.{' '}
+          behind its balance. Each morning the daily check tells super admins when a balance stops matching.{' '}
           <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
           {' · '}
           <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>

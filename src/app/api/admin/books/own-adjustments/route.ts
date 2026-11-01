@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { transactionUrl } from '@/lib/netsuite';
 import { BOOKS_GL_SYNC } from '@/lib/books/netsuite-gl';
@@ -46,11 +46,11 @@ const link = (netsuiteId: string | null) => {
  * next to NetSuite's, and why NetSuite's posts when it does
  * (src/lib/books/own-posting-view.ts).
  *
- * Super admin only, as the rest of the books (docs/books.md "FleetSuite's
- * own adjustments").
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md "FleetSuite's own adjustments").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;

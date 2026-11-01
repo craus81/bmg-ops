@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks, requireSuperAdmin } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
@@ -34,10 +34,11 @@ const failed = (err: unknown) => NextResponse.json({ error: String((err as any)?
  * The posting run posts the opening entry once December 31 is over
  * (src/lib/books/going-live.ts).
  *
- * Super admin only, as the books are.
+ * Super admins, the bookkeeper and the CPA see it; the tap is super admins'
+ * only (docs/books.md "Who can open the books").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;

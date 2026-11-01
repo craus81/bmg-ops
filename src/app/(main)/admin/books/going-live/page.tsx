@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 
 /**
@@ -16,7 +17,7 @@ import { apiFetch } from '@/lib/api-client';
  * month, how FleetSuite's balances since compare with NetSuite's. From
  * December 1, 2026, the tap that sets the books live on January 1, 2027,
  * which can't be undone; after it, the opening entries the posting run has
- * posted and why the next one waits. Super admins only, as the books are.
+ * posted and why the next one waits. Open to whoever opens the books.
  */
 
 interface Company {
@@ -150,6 +151,8 @@ const counted = (n: number, kind: Party['kind']) => `${n} ${kind}${n === 1 ? '' 
 export default function BooksGoingLivePage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
+  // The tap is the owner's; the bookkeeper and the CPA see the entry and the rehearsal.
+  const canGoLive = booksAllows(booksAccess(hasRole), 'owner');
   const [data, setData] = useState<Payload | null>(null);
   const [company, setCompany] = useState('');
   const [month, setMonth] = useState('');
@@ -182,7 +185,7 @@ export default function BooksGoingLivePage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     load('', '');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
   }, [authLoading, router, load]);
@@ -243,8 +246,7 @@ export default function BooksGoingLivePage() {
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Going live</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           The entry that opens FleetSuite&apos;s books at NetSuite&apos;s balances at the end of the month before they go live,
-          and the tap that sets them live. Pick any month to see its entry and a rehearsal of going live after it. Visible only
-          to super admins.{' '}
+          and the tap that sets them live. Pick any month to see its entry and a rehearsal of going live after it.{' '}
           <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>
           {' · '}
           <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
@@ -264,10 +266,11 @@ export default function BooksGoingLivePage() {
               {name}&apos;s books {data.liveFrom > data.today ? 'go' : 'went'} live on {longDate(data.liveFrom)}. The posting run
               posts the opening entry once {longDate(addDay(data.liveFrom, -1))} is over.
             </div>
-          ) : data.today < data.goLiveFrom ? (
+          ) : data.today < data.goLiveFrom || !canGoLive ? (
             <div style={banner('#94a3b8')}>
-              {name}&apos;s books aren&apos;t live yet. They&apos;re planned to go live on {longDate(data.plannedLiveFrom)}, and this page
-              offers that from {longDate(data.goLiveFrom)}. It can&apos;t be undone.
+              {name}&apos;s books aren&apos;t live yet. They&apos;re planned to go live on {longDate(data.plannedLiveFrom)}, and
+              {canGoLive ? ' this page offers that' : ' a super admin sets them live here'}
+              {data.today < data.goLiveFrom ? ` from ${longDate(data.goLiveFrom)}` : ''}. It can&apos;t be undone.
             </div>
           ) : (
             <div style={{ ...banner('#ef4444'), background: 'var(--card)' }}>

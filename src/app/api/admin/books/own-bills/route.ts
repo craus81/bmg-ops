@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { transactionUrl } from '@/lib/netsuite';
 import { BOOKS_BILLS_SYNC } from '@/lib/books/netsuite-bills';
@@ -60,11 +60,11 @@ async function namesOf(service: ReturnType<typeof createServiceClient>, bills: O
  * posts: its entry next to NetSuite's, and why NetSuite's posts when it does
  * (migration 456, src/lib/books/own-posting-view.ts).
  *
- * Super admin only, as the rest of the books (docs/books.md "FleetSuite's
- * own bills and receipts").
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md "FleetSuite's own bills and receipts").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;

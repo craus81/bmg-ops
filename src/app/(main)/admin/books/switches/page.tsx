@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { useDialog } from '@/components/DialogProvider';
 import { apiFetch } from '@/lib/api-client';
 import type { SwitchPiece } from '@/lib/books/switches';
@@ -16,7 +17,8 @@ import type { SwitchPiece } from '@/lib/books/switches';
  * Each piece that moves the team's work out of NetSuite is built switched
  * off, and stays off until it's switched on here. While off, super admins
  * can open it to see what it would send, and nothing goes to NetSuite.
- * Super admins only; every change is in the audit log.
+ * Whoever opens the books sees them; only a super admin flips one, and
+ * every change is in the audit log.
  */
 
 interface Switch {
@@ -39,6 +41,8 @@ export default function BooksSwitchesPage() {
   const router = useRouter();
   const dialog = useDialog();
   const { hasRole, loading: authLoading } = useAuth();
+  // Flipping a switch is the owner's; the bookkeeper and the CPA see which are on.
+  const canFlip = booksAllows(booksAccess(hasRole), 'owner');
   const [switches, setSwitches] = useState<Switch[] | null>(null);
   const [onDate, setOnDate] = useState('');
   const [error, setError] = useState('');
@@ -59,7 +63,7 @@ export default function BooksSwitchesPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
   }, [authLoading, router, load]);
@@ -97,6 +101,7 @@ export default function BooksSwitchesPage() {
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', maxWidth: '640px' }}>
           Each piece that moves the team&apos;s work out of NetSuite is built switched off{onDate ? `, to be switched on ${onDate}` : ''}.
           While a piece is off, super admins can open it to see what it would send, and nothing goes to NetSuite.
+          {canFlip ? '' : ' Only a super admin switches one on or off.'}
         </div>
       </div>
 
@@ -114,14 +119,16 @@ export default function BooksSwitchesPage() {
                   background: s.on ? 'var(--success-bg)' : 'var(--subtle-bg)', color: s.on ? 'var(--success)' : 'var(--text-muted)',
                 }}>{s.on ? 'ON' : 'OFF'}</span>
               </div>
-              <button
-                onClick={() => flip(s)}
-                disabled={busy !== null}
-                style={{
-                  padding: '7px 12px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: busy ? 'wait' : 'pointer',
-                  border: `1px solid ${s.on ? 'var(--border)' : GREEN}`, background: s.on ? 'var(--card)' : GREEN, color: s.on ? 'var(--text-primary)' : '#fff',
-                }}
-              >{busy === s.piece ? 'Changing…' : s.on ? 'Switch off' : 'Switch on'}</button>
+              {canFlip && (
+                <button
+                  onClick={() => flip(s)}
+                  disabled={busy !== null}
+                  style={{
+                    padding: '7px 12px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, cursor: busy ? 'wait' : 'pointer',
+                    border: `1px solid ${s.on ? 'var(--border)' : GREEN}`, background: s.on ? 'var(--card)' : GREEN, color: s.on ? 'var(--text-primary)' : '#fff',
+                  }}
+                >{busy === s.piece ? 'Changing…' : s.on ? 'Switch off' : 'Switch on'}</button>
+              )}
             </div>
             <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{s.what}</div>
             <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>

@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
     if (auth.error) return auth.error;
   }
 
-  // Super admins only, as only they can open the books; never by email, but
+  // Super admins only, not the bookkeeper or the CPA; never by email, but
   // for an Inventory Adjust, a send to NetSuite FleetSuite isn't sure about or
   // a change made in NetSuite to a customer or vendor, to one with "Copy me
   // on new alerts" ticked (the email books_own_adjustment_differs,

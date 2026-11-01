@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
@@ -29,8 +30,8 @@ import type { CountsBy, LedgerEntry, LedgerPart, StockLine, StockSetup } from '@
  * documents since that posted to it without a stocked item (migration 404;
  * owner decision 2026-10-19, "Break it down"), and, on any but the account
  * most stocked items name, the stocked items that put it there (migration
- * 405; owner decision 2026-10-19, "Name it"). Super admins only, as the
- * books are.
+ * 405; owner decision 2026-10-19, "Name it"). Open to whoever opens the
+ * books.
  */
 
 interface CopyResult {
@@ -194,15 +195,22 @@ function ItemLabel({ line, wrong }: { line: StockLine; wrong: boolean }) {
   );
 }
 
+/** Whether this login can open Item Accounts (src/app/(main)/admin/item-accounts), where Change accounts goes; anyone else reads these without the link. */
+function useCanChangeAccounts(): boolean {
+  const { hasFeature, canSeeMoney } = useAuth();
+  return hasFeature('vendor_payments') && canSeeMoney;
+}
+
 /** The stocked items NetSuite has set up with an asset account that isn't an asset account, and what to set it to. */
 function SetupList({ setup }: { setup: StockSetup }) {
+  const canChange = useCanChangeAccounts();
   return (
     <div style={banner(RED)}>
       <div>
         {count(setup.items.length, 'stocked item has', 'stocked items have')} an asset account in NetSuite that isn&apos;t an asset
         account. NetSuite puts what a stocked item costs on its asset account when it&apos;s received and takes it off when it ships,
-        so {setup.items.length === 1 ? 'its' : 'their'} cost lands in the wrong place. With Change accounts beside{' '}
-        {setup.items.length === 1 ? 'it' : 'each one'}, set its inventory asset account to {setup.usual ? `${setup.usual}, as most stocked items have it,` : 'your inventory asset account'} and
+        so {setup.items.length === 1 ? 'its' : 'their'} cost lands in the wrong place.{' '}
+        {canChange ? <>With Change accounts beside {setup.items.length === 1 ? 'it' : 'each one'},</> : 'In NetSuite,'} set its inventory asset account to {setup.usual ? `${setup.usual}, as most stocked items have it,` : 'your inventory asset account'} and
         check its cost of goods sold account there: this list can&apos;t read that one. An item drops off this list once it&apos;s changed there,
         or after a change made in NetSuite once <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied again,
         every two hours or on Sync now.
@@ -211,8 +219,8 @@ function SetupList({ setup }: { setup: StockSetup }) {
         {setup.items.map((i) => (
           <li key={i.itemId} style={{ overflowWrap: 'anywhere' }}>
             <Link href={deepLinks.booksStockItem(i.itemId)} className="rep-link" style={{ fontWeight: 700 }}>{i.item}</Link>
-            {i.description ? ` · ${i.description}` : ''}: asset account {i.account}, {i.accountKind} ·{' '}
-            <Link href={deepLinks.itemAccounts(i.itemId)} className="rep-link">Change accounts</Link>
+            {i.description ? ` · ${i.description}` : ''}: asset account {i.account}, {i.accountKind}
+            {canChange && <>{' · '}<Link href={deepLinks.itemAccounts(i.itemId)} className="rep-link">Change accounts</Link></>}
           </li>
         ))}
       </ul>
@@ -248,6 +256,7 @@ function EntryRow({ entry, company }: { entry: LedgerEntry; company: string }) {
 
 /** On an account other than the one most stocked items name: the stocked items that put it on the page, and what to set them to. */
 function NamedBy({ named }: { named: NonNullable<LedgerPart['namedBy']> }) {
+  const canChange = useCanChangeAccounts();
   const one = named.count === 1;
   return (
     <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px' }}>
@@ -259,15 +268,15 @@ function NamedBy({ named }: { named: NonNullable<LedgerPart['namedBy']> }) {
           <li key={i.itemId} style={{ overflowWrap: 'anywhere' }}>
             <Link href={deepLinks.booksStockItem(i.itemId)} className="rep-link" style={{ fontWeight: 700 }}>{i.item}</Link>
             {i.description ? ` · ${i.description}` : ''}
-            {i.active ? '' : ' · inactive'} ·{' '}
-            <Link href={deepLinks.itemAccounts(i.itemId)} className="rep-link">Change accounts</Link>
+            {i.active ? '' : ' · inactive'}
+            {canChange && <>{' · '}<Link href={deepLinks.itemAccounts(i.itemId)} className="rep-link">Change accounts</Link></>}
           </li>
         ))}
         {named.more > 0 && <li>and {count(named.more, 'more', 'more')}</li>}
       </ul>
       <div>
-        If {one ? 'it' : 'they'} shouldn&apos;t, set {one ? 'its' : 'each one\'s'} inventory asset account to {named.usual ?? 'your inventory asset account'} with
-        Change accounts. Once {one ? 'it\'s' : 'they\'re'} right, at once when changed there or after a change in NetSuite once{' '}
+        If {one ? 'it' : 'they'} shouldn&apos;t, set {one ? 'its' : 'each one\'s'} inventory asset account to {named.usual ?? 'your inventory asset account'}{' '}
+        {canChange ? 'with Change accounts' : 'in NetSuite'}. Once {one ? 'it\'s' : 'they\'re'} right, at once when changed there or after a change in NetSuite once{' '}
         <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied again, every two hours or on Sync now, the
         account leaves this page.
       </div>
@@ -381,6 +390,8 @@ function LedgerBreakdown({ part, named }: { part: LedgerPart; named: boolean }) 
 export default function BooksStockPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
+  // Copying now isn't the CPA's.
+  const canKeep = booksAllows(booksAccess(hasRole), 'keep');
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -406,7 +417,7 @@ export default function BooksStockPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // The daily check's notification about several items opens the ones that differ (deepLinks.booksStock).
     if (new URLSearchParams(window.location.search).get('only') === 'differs') setFilter('differs');
     load();
@@ -471,7 +482,7 @@ export default function BooksStockPage() {
             Each item&apos;s count and value at each location, FleetSuite&apos;s next to NetSuite&apos;s own. FleetSuite counts from where
             the item stood on December 31, 2024 and every NetSuite document since that moved it, copied every two hours, and values it at
             what NetSuite posted to the inventory accounts on those documents. NetSuite&apos;s count is read as each copy ends. Tap an item
-            for its moves. Each morning the daily check tells super admins when a count stops matching. Visible only to super admins.{' '}
+            for its moves. Each morning the daily check tells super admins when a count stops matching.{' '}
             <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
             {' · '}
             <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
@@ -491,16 +502,18 @@ export default function BooksStockPage() {
             <Link href="/admin/books/own-fulfillments" style={{ color: 'var(--text-secondary)' }}>Own fulfillments</Link>
           </div>
         </div>
-        <button
-          onClick={copyNow}
-          disabled={copying || loading}
-          style={{
-            padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
-            color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: copying ? 'wait' : 'pointer',
-          }}
-        >
-          {copying ? 'Copying…' : 'Copy now'}
-        </button>
+        {canKeep && (
+          <button
+            onClick={copyNow}
+            disabled={copying || loading}
+            style={{
+              padding: '8px 14px', borderRadius: '8px', border: '1px solid var(--border)', background: 'var(--card)',
+              color: 'var(--text-primary)', fontSize: '13px', fontWeight: 700, cursor: copying ? 'wait' : 'pointer',
+            }}
+          >
+            {copying ? 'Copying…' : 'Copy now'}
+          </button>
+        )}
       </div>
 
       {error && <div style={banner(RED)}>{error}</div>}
@@ -509,13 +522,13 @@ export default function BooksStockPage() {
       {data && (
         <>
           {!data.lastCopy && (
-            <div style={banner(AMBER)}>NetSuite&apos;s stock moves haven&apos;t been copied yet. They&apos;re copied every two hours, or press Copy now.</div>
+            <div style={banner(AMBER)}>NetSuite&apos;s stock moves haven&apos;t been copied yet. They&apos;re copied every two hours{canKeep ? ', or press Copy now' : ''}.</div>
           )}
           {r?.error && <div style={banner(RED)}>The last copy failed {ago(at)}: {r.error}</div>}
           {r && !r.error && r.partial && (
             <div style={banner(AMBER)}>
               Still copying: the last run, {ago(at)}, read {count(r.read ?? 0, 'document', 'documents')} and stopped for time. It carries on
-              at the next run, or press Copy now again. NetSuite&apos;s counts are read once every move is in.
+              at the next run{canKeep ? ', or press Copy now again' : ''}. NetSuite&apos;s counts are read once every move is in.
             </div>
           )}
           {r && !r.error && !r.partial && (

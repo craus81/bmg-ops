@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { OwnCheckStatus, OwnInvoiceCheck, OwnLinePair } from '@/lib/books/own-invoice-check';
@@ -18,8 +19,8 @@ import type { OwnBooks } from '@/lib/books/own-invoice-posting';
  * differ; each line FleetSuite billed paired with NetSuite's; what FleetSuite
  * couldn't work out; how it worked its copy out; and which copy the books
  * posted the invoice from (migration 409,
- * src/lib/books/own-invoice-posting.ts). Super admins only, as the books
- * are; opened from Own invoices, Invoices vs NetSuite, or the daily check's
+ * src/lib/books/own-invoice-posting.ts). Open to whoever opens the books;
+ * opened from Own invoices, Invoices vs NetSuite, or the daily check's
  * notification (?id=, NetSuite's id for the invoice).
  */
 
@@ -136,7 +137,7 @@ export default function BooksOwnInvoicePage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // Own invoices and the daily check link here with NetSuite's id for the invoice (deepLinks.booksOwnInvoice).
     load(new URLSearchParams(window.location.search).get('id') ?? '');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it

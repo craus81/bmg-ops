@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireSuperAdmin } from '@/lib/api-auth';
+import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { BOOKS_GL_SYNC, type GlCopyResult } from '@/lib/books/netsuite-gl';
 import { BOOKS_INVOICE_POSTING, type InvoicePostingResult } from '@/lib/books/invoice-posting';
@@ -20,11 +20,11 @@ export const dynamic = 'force-dynamic';
  * yet, and how the last posting run, copy and daily check went. Amounts are
  * whole cents: what a customer owes, what a vendor is owed.
  *
- * Super admin only, as the rest of the books (docs/books.md "Customer and
- * vendor balances").
+ * Super admins, the bookkeeper and the CPA, as the rest of the books
+ * (docs/books.md "Customer and vendor balances").
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSuperAdmin(req);
+  const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
   const params = new URL(req.url).searchParams;

@@ -12,6 +12,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createServiceClient } from './supabase-service';
 import { resolveFeatures, isAdminRole, INTERNAL_STAFF_ROLES, type FeatureKey } from '@/lib/features';
 import { loadRoleFeatureSettings } from '@/lib/role-feature-settings';
+import { booksAccess, booksAllows, type BooksAccess } from '@/lib/books/access';
 
 // Server-side call sites read admin authority through api-auth; the predicate
 // itself lives in features.ts (client-safe) so AuthProvider shares it.
@@ -308,6 +309,30 @@ export async function requireSuperAdmin(req: NextRequest): Promise<AuthResult> {
   }
 
   return auth;
+}
+
+/**
+ * Verify the request has a valid session AND the caller may do `need` in
+ * FleetSuite's own books (src/lib/books/access.ts): 'read' lets the CPA in,
+ * 'keep' the bookkeeper too, 'owner' only super admins. The caller's own
+ * level comes back as `access`, for a route one of whose steps needs more
+ * than the rest (Books → Months reopens a month for the owner only). Neither
+ * books role is BMG staff, so nothing else in the app opens to them.
+ */
+export async function requireBooks(req: NextRequest, need: BooksAccess): Promise<AuthResult & { access?: BooksAccess }> {
+  const auth = await requireAuth(req);
+  if (auth.error) return auth;
+
+  const roles = profileRoles(auth.profile);
+  const access = booksAccess((r) => roles.includes(r));
+  if (!booksAllows(access, need)) {
+    const error = need === 'owner' ? 'Forbidden: super admin required'
+      : access ? "Forbidden: this login reads the books but can't change them"
+      : 'Forbidden: no access to the books';
+    return { user: auth.user, profile: auth.profile, error: NextResponse.json({ error }, { status: 403 }) };
+  }
+
+  return { ...auth, access: access ?? undefined };
 }
 
 /**

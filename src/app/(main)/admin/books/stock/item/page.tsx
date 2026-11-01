@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import type { CountsBy, StockMove, StockPlace } from '@/lib/books/stock-items';
@@ -19,7 +20,7 @@ import type { CountsBy, StockMove, StockPlace } from '@/lib/books/stock-items';
  * item, which names a location (?location=) to pick out. Says when NetSuite
  * has the item's asset account wrong (migration 403) and where it has value
  * left over, with the moves that posted its value the wrong way round (owner
- * decision 2026-10-19, "Flag them"). Super admins only.
+ * decision 2026-10-19, "Flag them"). Open to whoever opens the books.
  */
 
 interface Payload {
@@ -153,7 +154,9 @@ function MoveLabel({ m, where }: { m: StockMove; where: boolean }) {
 
 export default function BooksStockItemPage() {
   const router = useRouter();
-  const { hasRole, loading: authLoading } = useAuth();
+  const { hasRole, hasFeature, canSeeMoney, loading: authLoading } = useAuth();
+  // Change accounts opens Item Accounts, a Payments page (src/app/(main)/admin/item-accounts).
+  const canChange = hasFeature('vendor_payments') && canSeeMoney;
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -177,7 +180,7 @@ export default function BooksStockItemPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // Stock by item and the daily check link here with the item and, when it's about one, its location (deepLinks.booksStockItem).
     const q = new URLSearchParams(window.location.search);
     const location = q.get('location') ?? '';
@@ -249,9 +252,9 @@ export default function BooksStockItemPage() {
           {data.setup && (
             <div style={banner(RED)}>
               In NetSuite, this item&apos;s asset account is {data.setup.account}, {data.setup.accountKind}, not an asset account, so what
-              it costs lands in the wrong place when it&apos;s received and when it ships. With{' '}
-              <Link href={deepLinks.itemAccounts(data.item.id)} className="rep-link">Change accounts</Link>, set its inventory asset
-              account to {data.setup.usual ? `${data.setup.usual}, as most stocked items have it,` : 'your inventory asset account'} and
+              it costs lands in the wrong place when it&apos;s received and when it ships.{' '}
+              {canChange ? <>With <Link href={deepLinks.itemAccounts(data.item.id)} className="rep-link">Change accounts</Link>,</> : 'In NetSuite,'} set its
+              inventory asset account to {data.setup.usual ? `${data.setup.usual}, as most stocked items have it,` : 'your inventory asset account'} and
               check its cost of goods sold account there: this page can&apos;t read that one. This goes once it&apos;s changed there, or after
               a change made in NetSuite once <Link href="/admin/books/lists" className="rep-link">NetSuite&apos;s lists</Link> are copied
               again, every two hours or on Sync now.

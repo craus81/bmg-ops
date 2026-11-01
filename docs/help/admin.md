@@ -27,6 +27,26 @@ They can sign in immediately.
 
 ---
 
+## Give your bookkeeper or CPA a login
+
+Only a super admin can give these two roles (or Super Admin).
+
+1. **Admin → Users** → **+ Create User**, or tap their row if they already
+   have an account.
+2. Tick **Bookkeeper** or **CPA** under the roles.
+3. Tap **Create User** (or **Save**).
+
+Both open **More → Books** and nothing else in FleetSuite; Home takes them
+straight there. The CPA can read every Books page and download it to Excel
+but can't change anything. The bookkeeper can also copy and post, close a
+month, clear mistake checks, snap a bill and upload NetSuite's 1099 report.
+The switches, going live, Changed in NetSuite and reopening a month stay
+with super admins.
+
+To see what they see, pick **Bookkeeper** or **CPA** under **View As**.
+
+---
+
 ## Lock someone out
 
 1. **Admin → Users** → tap the user.

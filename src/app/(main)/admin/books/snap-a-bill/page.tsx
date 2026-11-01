@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import PhotoLightbox from '@/components/PhotoLightbox';
 import TopSaveBar from '@/components/TopSaveBar';
 import { apiFetch } from '@/lib/api-client';
@@ -20,18 +21,18 @@ import type { SnapExtra, SnapForm, SnapLine, SnapNote, SnapView } from '@/lib/bo
  * bill-reader.ts, docs/books.md "Snap a bill"; owner decision 2026-10-25,
  * "Snap a bill", as Books Previews drew it).
  *
- * A super admin takes a picture of a vendor's bill, or picks its PDF.
- * FleetSuite reads it and fills in the form: the vendor matched to NetSuite's,
- * the bill number and dates, the due date from their terms, each line with
- * the account their earlier bills went to. Each box is checked against the
- * bill; what's still to do before Send to NetSuite is said under the lines in
- * red, and a bill NetSuite already has can't be sent at all. A bill for one
- * of the vendor's open POs bills that PO instead, after Parts Mail's
- * three-way match, with what it's more than the PO on a line of its own
- * (migration 444, src/lib/books/snap-po.ts; "Freight line"). Sent, the bill
- * is in NetSuite and Books keeps its own copy (Own bills). Save for later
- * keeps it here; Throw it away keeps it, picture and all, marked thrown away.
- * Super admins only, as the books are.
+ * The bookkeeper or a super admin takes a picture of a vendor's bill, or picks
+ * its PDF. FleetSuite reads it and fills in the form: the vendor matched to
+ * NetSuite's, the bill number and dates, the due date from their terms, each
+ * line with the account their earlier bills went to. Each box is checked
+ * against the bill; what's still to do before Send to NetSuite is said under
+ * the lines in red, and a bill NetSuite already has can't be sent at all. A
+ * bill for one of the vendor's open POs bills that PO instead, after Parts
+ * Mail's three-way match, with what it's more than the PO on a line of its own
+ * (migration 444, src/lib/books/snap-po.ts; "Freight line"). Sent, the bill is
+ * in NetSuite and Books keeps its own copy (Own bills). Save for later keeps
+ * it here; Throw it away keeps it, picture and all, marked thrown away. The
+ * bookkeeper's and super admins' only; the CPA reads the bills on Own bills.
  */
 
 const API = '/api/admin/books/snap-a-bill';
@@ -290,7 +291,9 @@ export default function BooksSnapBillPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    // The bookkeeper's and super admins'; the CPA reads the bills it made on Own bills.
+    const access = booksAccess(hasRole);
+    if (!booksAllows(access, 'keep')) { router.push(access ? deepLinks.booksOwnBills() : '/home'); return; }
     // Own bills links a snapped bill here by its id (deepLinks.booksSnapBill).
     const id = new URLSearchParams(window.location.search).get('id');
     if (id) openBill(id);
@@ -426,7 +429,7 @@ export default function BooksSnapBillPage() {
         <div style={{ fontSize: '24px', fontWeight: 800 }}>Snap a bill</div>
         <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
           Take a picture of a vendor&apos;s bill, or pick its PDF. FleetSuite reads it, you check it, and it goes into NetSuite as a
-          bill. Books keeps its own copy. Visible only to super admins.{' '}
+          bill. Books keeps its own copy.{' '}
           <Link href={deepLinks.booksOwnBills()} style={linkStyle}>Own bills</Link>
         </div>
       </div>

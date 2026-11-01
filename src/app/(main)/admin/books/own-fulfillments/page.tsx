@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
@@ -24,7 +25,7 @@ import { ownBooksChip, ownBooksCount } from '@/lib/books/own-posting-text';
  * daily check tells the super admins when one differs and links here
  * (?only=differs) or to the fulfillment. Each says what the books hold for
  * NetSuite's fulfillment and which copy made it (migration 456,
- * src/lib/books/own-stock-posting.ts). Super admins only, as the books are.
+ * src/lib/books/own-stock-posting.ts). Open to whoever opens the books.
  */
 
 type Row = Omit<OwnFulfillmentCheck, 'fields' | 'items' | 'entry' | 'workedOut'> & { books: OwnBooks | null };
@@ -165,7 +166,7 @@ export default function BooksOwnFulfillmentsPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // The daily check's notification about several own fulfillments opens the ones that differ (deepLinks.booksOwnFulfillments).
     const q = new URLSearchParams(window.location.search);
     load(q.get('month') ?? '', q.get('only') === 'differs' ? 'differs' : 'all');
@@ -204,7 +205,7 @@ export default function BooksOwnFulfillmentsPage() {
           cost itself, from Stock by item: each item at its average cost at that location just before. Each is put next to
           NetSuite&apos;s fulfillment; tap one for its item by item check. The books post each one from this copy when it matches
           NetSuite&apos;s and its entry comes out the same, and from NetSuite&apos;s otherwise. Each morning the daily check tells
-          super admins when one differs. Visible only to super admins.{' '}
+          super admins when one differs.{' '}
           <Link href="/admin/books/stock" style={{ color: 'var(--text-secondary)' }}>Stock by item</Link>
           {' · '}
           <Link href="/admin/books/own-invoices" style={{ color: 'var(--text-secondary)' }}>Own invoices</Link>

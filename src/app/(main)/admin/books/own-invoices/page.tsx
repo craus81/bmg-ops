@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
@@ -20,8 +21,8 @@ import type { OwnBooks } from '@/lib/books/own-invoice-posting';
  * first, with why in a sentence, and which copy the books posted it from
  * (migration 409, src/lib/books/own-invoice-posting.ts). Tap one for its
  * line by line check. The daily check tells the super admins when one
- * differs and links here (?only=differs) or to the invoice. Super admins
- * only, as the books are.
+ * differs and links here (?only=differs) or to the invoice. Open to whoever
+ * opens the books.
  */
 
 type Row = Omit<OwnInvoiceCheck, 'fields' | 'lines' | 'workedOut'> & { books: OwnBooks | null };
@@ -166,7 +167,7 @@ export default function BooksOwnInvoicesPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // The daily check's notification about several own invoices opens the ones that differ (deepLinks.booksOwnInvoices).
     const q = new URLSearchParams(window.location.search);
     load(q.get('month') ?? '', q.get('only') === 'differs' ? 'differs' : 'all');
@@ -205,7 +206,7 @@ export default function BooksOwnInvoicesPage() {
           and the due date from the customer&apos;s terms. Each is put next to NetSuite&apos;s invoice; tap one for its line by line
           check. The books post a copy that matches NetSuite&apos;s invoice, and makes the same entry, in place of NetSuite&apos;s; one
           that doesn&apos;t keeps posting NetSuite&apos;s, since that&apos;s what the customer was billed. Each morning the daily check
-          tells super admins when one differs. Visible only to super admins.{' '}
+          tells super admins when one differs.{' '}
           <Link href="/admin/books/invoices" style={{ color: 'var(--text-secondary)' }}>Invoices vs NetSuite</Link>
           {' · '}
           <Link href="/admin/books/differences" style={{ color: 'var(--text-secondary)' }}>Differences vs NetSuite</Link>

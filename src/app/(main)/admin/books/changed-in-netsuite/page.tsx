@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { useDialog } from '@/components/DialogProvider';
 import { apiFetch } from '@/lib/api-client';
 import type { Act, Change } from '@/lib/fleetsuite-records';
@@ -18,7 +19,7 @@ import type { Act, Change } from '@/lib/fleetsuite-records';
  * FleetSuite has. Each one is listed here, newest first, to keep FleetSuite's,
  * which sends it on to NetSuite (an item's vendor and labor hours stay in
  * FleetSuite), or take NetSuite's into FleetSuite. One a sync finds the same
- * in both again goes by itself. Super admins only, as the books are.
+ * in both again goes by itself. Open to whoever opens the books.
  */
 
 interface Payload {
@@ -87,6 +88,8 @@ export default function BooksChangedInNetsuitePage() {
   const router = useRouter();
   const dialog = useDialog();
   const { hasRole, loading: authLoading } = useAuth();
+  // Keeping or taking a change is the owner's; the bookkeeper and the CPA see what waits.
+  const canDecide = booksAllows(booksAccess(hasRole), 'owner');
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState('');
   const [more, setMore] = useState(false);
@@ -110,7 +113,7 @@ export default function BooksChangedInNetsuitePage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // The daily check's notification names the change it's about.
     setPicked(new URLSearchParams(window.location.search).get('change') ?? '');
     load();
@@ -158,7 +161,9 @@ export default function BooksChangedInNetsuitePage() {
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Changed in NetSuite</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           A customer&apos;s, vendor&apos;s or item&apos;s details changed in NetSuite wait here instead of coming over FleetSuite&apos;s.
-          Keep FleetSuite&apos;s, which sends it on to NetSuite, or take NetSuite&apos;s.{' '}
+          {canDecide
+            ? "Keep FleetSuite's, which sends it on to NetSuite, or take NetSuite's."
+            : "A super admin keeps FleetSuite's, which sends it on to NetSuite, or takes NetSuite's."}{' '}
           <button onClick={() => setMore(!more)} style={link}>{more ? 'Less' : 'More'}</button>
           {more && (
             <span style={{ display: 'block', marginTop: '4px' }}>
@@ -167,7 +172,7 @@ export default function BooksChangedInNetsuitePage() {
               FleetSuite, so keeping FleetSuite&apos;s sends nothing for those. Where FleetSuite has none, NetSuite&apos;s comes in by itself,
               and so does a new customer, vendor or item; where NetSuite has none for an item, FleetSuite&apos;s stays and nothing is
               listed. One a sync finds the same in both again goes off the list by itself. The daily check tells the super admins
-              about each new one once. Visible only to super admins.
+              about each new one once.
             </span>
           )}
         </div>
@@ -215,14 +220,14 @@ export default function BooksChangedInNetsuitePage() {
                     Seen {when(c.firstSeenAt)}{c.lastSeenAt !== c.firstSeenAt ? `, again ${when(c.lastSeenAt)}` : ''}
                     {c.link && <>{' · '}<a href={c.link} target="_blank" rel="noreferrer" style={{ color: 'var(--text-secondary)', fontWeight: 700 }}>Open in NetSuite</a></>}
                   </div>
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
+                  {canDecide && <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
                     <button onClick={() => decide(c, 'keep')} disabled={!enabled} style={act(GREEN, enabled)}>
                       {busy?.id === c.id && busy.how === 'keep' ? (c.sends ? 'Sending…' : 'Keeping…') : "Keep FleetSuite's"}
                     </button>
                     <button onClick={() => decide(c, 'take')} disabled={!enabled} style={act(null, enabled)}>
                       {busy?.id === c.id && busy.how === 'take' ? 'Taking…' : "Take NetSuite's"}
                     </button>
-                  </div>
+                  </div>}
                   {actError?.id === c.id && <div style={{ ...banner(RED), marginTop: '8px', marginBottom: 0 }}>{actError.message}</div>}
                 </div>
               );

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { detailMonths } from '@/lib/books/report-links';
@@ -15,8 +16,7 @@ import { useFileDownload } from '@/lib/use-file-download';
  * FleetSuite's own profit and loss, balance sheet and trial balance, each
  * line next to NetSuite's own totals, for every month from January 2025,
  * and the report shown as an Excel file (docs/books.md "Excel downloads").
- * Super admins only while the books are built, linked from the other books
- * pages.
+ * Open to whoever opens the books, linked from the other books pages.
  */
 
 type Kind = 'profit_and_loss' | 'balance_sheet' | 'trial_balance';
@@ -363,7 +363,7 @@ export default function BooksReportsPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!hasRole('super_admin')) { router.push('/home'); return; }
+    if (!booksAccess(hasRole)) { router.push('/home'); return; }
     // A link may name the company, report and months (deepLinks.booksReport), as a line's detail does.
     const q = new URLSearchParams(window.location.search);
     const asked = KINDS.find(([k]) => k === q.get('report'))?.[0];
@@ -411,7 +411,7 @@ export default function BooksReportsPage() {
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           FleetSuite&apos;s own books, from what has posted to them, next to NetSuite&apos;s own totals, for each month from
           January 2025. Both start from NetSuite&apos;s balances on December 31, 2024, and are laid out as NetSuite&apos;s reports
-          are. Visible only to super admins.{' '}
+          are.{' '}
           <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
           {' · '}
           <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>
