@@ -47,11 +47,12 @@ export async function GET(req: NextRequest) {
   }
 
   // Super admins only, not the bookkeeper or the CPA; never by email, but
-  // for an Inventory Adjust, a send to NetSuite FleetSuite isn't sure about or
-  // a change made in NetSuite to a customer or vendor, to one with "Copy me
-  // on new alerts" ticked (the email books_own_adjustment_differs,
-  // books_netsuite_send_unsure and books_record_changed_in_netsuite fix in
-  // the registry).
+  // for an Inventory Adjust, a send to NetSuite FleetSuite isn't sure about,
+  // a change made in NetSuite to a customer or vendor, or FleetSuite's own
+  // numbers, to one with "Copy me on new alerts" ticked (the email
+  // books_own_adjustment_differs, books_netsuite_send_unsure,
+  // books_record_changed_in_netsuite and books_own_number fix in the
+  // registry).
   const tell = async (alerts: CheckAlert[]) => {
     const ids = await getSuperAdminIds();
     for (const alert of alerts) {
@@ -66,6 +67,7 @@ export async function GET(req: NextRequest) {
       else if (alert.about === 'mistake') await notifyMany(ids, { type: 'books_mistake_found', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'send') await notifyMany(ids, { type: 'books_netsuite_send_unsure', ...sent, channels: ['in_app', 'push', 'email'] });
       else if (alert.about === 'change') await notifyMany(ids, { type: 'books_record_changed_in_netsuite', ...sent, channels: ['in_app', 'push', 'email'] });
+      else if (alert.about === 'number') await notifyMany(ids, { type: 'books_own_number', ...sent, channels: ['in_app', 'push', 'email'] });
       else await notifyMany(ids, { type: 'books_month_differs', ...sent, channels: ['in_app', 'push'] });
     }
   };

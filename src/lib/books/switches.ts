@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, 478 to 480, 485 to 488 and 494, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 to 480, 485 to 488, 494 and 497, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -20,14 +20,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * admin's approval before it goes to NetSuite, so Adjust refuses when it can't
  * read it rather than post one unapproved (src/app/api/inventory/adjust).
  * Receiving payments, taking deposits, bank deposits and paying vendors stay
- * off past January 1, until they move into FleetSuite during 2027, and
- * approving adjustments until the plan adds it in 2027 (`later` says so).
+ * off past January 1, until they move into FleetSuite during 2027,
+ * approving adjustments until the plan adds it in 2027, and FleetSuite's own
+ * numbers until the second quarter of 2027 (`later` says so).
  */
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
   | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments'
-  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals';
+  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals' | 'own_numbers';
 
 export interface SwitchInfo {
   name: string;
@@ -133,6 +134,14 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     turnOn: "Switch on Approving adjustments? From now on an adjustment made with Adjust goes to NetSuite only once a super admin who didn't ask approves it.",
     turnOff: "Switch off Approving adjustments? Adjustments go to NetSuite at once again, as before. Ones already waiting can still be approved or turned down.",
     later: 'Stays off on January 1: the plan adds approving adjustments during 2027, from April.',
+  },
+  own_numbers: {
+    name: "FleetSuite's own numbers",
+    what: "Each sales order, PO, invoice and credit memo FleetSuite makes in NetSuite gets FleetSuite's next number of its kind, from Books → Own numbers, and NetSuite keeps it as the document's number. Until it's on, NetSuite numbers them as it does today.",
+    where: 'Every sales order, PO, invoice and credit memo FleetSuite makes, and Books → Own numbers',
+    turnOn: "Switch on FleetSuite's own numbers? First tick Allow Override for Sales Order, Purchase Order, Invoice and Credit Memo in NetSuite (Setup → Company → Auto-Generated Numbers), or NetSuite keeps its own numbers. From now on each one FleetSuite makes gets FleetSuite's next number.",
+    turnOff: "Switch off FleetSuite's own numbers? NetSuite numbers what FleetSuite makes again, as before. The numbers FleetSuite already gave stay on their documents.",
+    later: "Stays off on January 1: FleetSuite's own numbers start in the second quarter of 2027.",
   },
 };
 

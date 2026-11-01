@@ -121,8 +121,9 @@ describe('migration 488', () => {
       { piece: 'customer_payments', is_on: false, changed_by: null },
       { piece: 'vendor_payments', is_on: false, changed_by: null },
     ]);
-    // Every piece the app named then is one the column takes, and nothing else is (494 adds approving adjustments).
-    const then = SWITCH_PIECES.filter((piece) => piece !== 'adjustment_approvals');
+    // Every piece the app named then is one the column takes, and nothing else is (494 adds approving adjustments, 497
+    // FleetSuite's own numbers).
+    const then = SWITCH_PIECES.filter((piece) => piece !== 'adjustment_approvals' && piece !== 'own_numbers');
     expect(then).toHaveLength(15);
     await pg.exec('BEGIN');
     try {

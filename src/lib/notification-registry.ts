@@ -274,6 +274,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Super admins, the only people who can open the books.' },
+  // FleetSuite's own numbers once switched on (part 67, migration 497).
+  // Emailed like the send alert, only to anyone with "Copy me on new alerts"
+  // (Craig's standing rule, 2026-10-28).
+  { type: 'books_own_number', label: "NetSuite didn't keep FleetSuite's number, or something was made in NetSuite", description: "Once FleetSuite's own numbers is switched on, NetSuite made a sales order, PO, invoice or credit memo FleetSuite sent with a number of its own instead of FleetSuite's (Allow Override is off for that kind in NetSuite), or someone made a sales order or PO in NetSuite instead of FleetSuite. Told once, at the daily check's first look after it. Opens Books → Own numbers.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, the only people who can open the books.' },
   { type: 'books_mistake_found', label: 'Books found likely mistakes in NetSuite', description: "FleetSuite's nightly mistake checks found a bill, check or card charge copied from NetSuite that looks like a mistake (entered twice, far off the vendor's usual, a monthly charge missing, or coded to an account the vendor doesn't use) and nobody has cleared it by the daily check's second look. Opens it on Mistake checks, or the list when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
 
   // ── Contract installers (CNI) ─────────────────────────────────────────

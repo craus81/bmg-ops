@@ -11,6 +11,7 @@ import {
   shippingAddressBody, shipToFromRecord,
 } from '@/lib/drop-ship';
 import { cleanPoSuffix, withPoSuffix } from '@/lib/po-number';
+import { ownNumberFor } from '@/lib/books/own-numbers';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
 import { logAudit } from '@/lib/audit';
 
@@ -259,11 +260,22 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     if (!header.success) {
       warnings.push(`PO ${g.number || g.id} was made, but NetSuite would not take the ${shipToChanged ? 'ship-to address and ' : ''}memo: ${header.error}.${shipToChanged ? ' Fix the ship-to on the PO in NetSuite before it goes to the vendor.' : ''}`);
     }
-    if (suffix && g.number) {
-      const wanted = withPoSuffix(g.number, suffix);
+    // Once FleetSuite's own numbers is on, the PO NetSuite made takes FleetSuite's next PO number
+    // (src/lib/books/own-numbers.ts); otherwise it keeps NetSuite's, with the ending when one was asked for.
+    const own = await ownNumberFor('purchase_order');
+    if (!own.ok) warnings.push(`FleetSuite couldn't give PO ${g.number || g.id} its own number, so it keeps NetSuite's.`);
+    const base = (own.ok && own.number) || g.number;
+    if (base && (suffix || base !== g.number)) {
+      const wanted = suffix ? withPoSuffix(base, suffix) : base;
       const renamed = await setPurchaseOrderNumber(g.id, wanted).catch((e: any) => ({ success: false as const, error: String(e?.message || e) }));
       if (renamed.success) g.number = wanted;
-      else warnings.push(`NetSuite kept the number ${g.number} instead of ${wanted} (${renamed.error}).`);
+      else warnings.push(`NetSuite kept the number ${g.number || g.id} instead of ${wanted} (${renamed.error}).`);
+      if (own.ok) {
+        if (renamed.success) await own.made(g.id, wanted);
+        else if ('actual' in renamed && renamed.actual) await own.made(g.id, renamed.actual);
+        else if (/^NetSuite 4\d\d\b/.test(renamed.error)) await own.refused(renamed.error);
+        else await own.unsure(renamed.error);
+      }
     }
 
     const lines = g.lines.map(l => ({

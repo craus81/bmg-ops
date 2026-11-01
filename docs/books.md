@@ -121,10 +121,13 @@ posted, switched off ("Adjustments approved before they're posted"),
 part 64, each stocked item's value at a month's end tied to the inventory
 accounts ("Inventory value at a month's end"), part 65, Missouri's
 sales tax return worked out month by month, location by location, with
-each return as filed held against it ("Sales tax"), and part 66,
+each return as filed held against it ("Sales tax"), part 66,
 FleetSuite's own copy of each invoice taxed at its location's rate on its
 date, and a warning at billing when an exempt customer's certificate has
-expired ("FleetSuite's own invoices").
+expired ("FleetSuite's own invoices"), and part 67, FleetSuite's own number
+on each sales order, PO, invoice and credit memo it makes in NetSuite, with
+the sales orders and POs made in NetSuite instead listed, built switched
+off ("Own numbers").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -144,7 +147,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, and the 1099s at `/admin/books/1099s`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, the own numbers at `/admin/books/own-numbers`, and the 1099s at `/admin/books/1099s`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
 the accounts page, and Home opens it for a bookkeeper or CPA with no other
 role; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
@@ -216,7 +219,7 @@ admins can open it while fixing invoices is switched off.
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
-| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs`, `books_balance_differs`, `books_own_invoice_differs`, `books_own_fulfillment_differs`, `books_own_bill_differs`, `books_own_receipt_differs`, `books_own_adjustment_differs` and `books_mistake_found` in `src/lib/notification-registry.ts` |
+| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs`, `books_balance_differs`, `books_own_invoice_differs`, `books_own_fulfillment_differs`, `books_own_bill_differs`, `books_own_receipt_differs`, `books_own_adjustment_differs`, `books_mistake_found` and `books_own_number` in `src/lib/notification-registry.ts` |
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
@@ -282,6 +285,7 @@ admins can open it while fixing invoices is switched off.
 | 1084's bank reconciliation: each statement's entries ticked as they clear, month by month | `migrations/493-bank-reconciliation-for-1084.sql`, `src/lib/books/bank-reconciliation.ts`, `src/app/(main)/admin/books/bank-reconciliation/page.tsx`, `src/app/api/admin/books/bank-reconciliation/route.ts`; tests `src/lib/books/bank-reconciliation.test.ts`, `src/lib/books/bank-reconciliation-route.test.ts`, `src/lib/books/bank-rec-sql.test.ts` |
 | Inventory value: each stocked item's value at a month's end, tied to each inventory account | `migrations/495-inventory-value-at-a-months-end.sql`, `src/lib/books/inventory-value.ts`, `src/lib/books/inventory-value-data.ts`, `src/app/(main)/admin/books/inventory-value/page.tsx`, `src/app/api/admin/books/inventory-value/route.ts` and its `download`; tests `src/lib/books/inventory-value.test.ts`, `src/lib/books/inventory-value-route.test.ts`, `src/lib/books/inventory-value-sql.test.ts` |
 | Sales tax: what goes on Missouri's return for a month, location by location, each location's dated rates, and the return as filed held against it | `migrations/496-books-sales-tax.sql`, `src/lib/books/sales-tax-worksheet.ts`, `src/lib/books/sales-tax-data.ts`, `src/lib/books/sales-tax-words.ts`, `salesTaxWorkbook` in `src/lib/books/report-workbook.ts`, `src/app/(main)/admin/books/sales-tax/page.tsx`, `src/app/api/admin/books/sales-tax/route.ts` and its `download`; tests `src/lib/books/sales-tax-worksheet.test.ts`, `src/lib/books/sales-tax-route.test.ts`, `src/lib/books/sales-tax-sql.test.ts` |
+| Own numbers: FleetSuite's number on each sales order, PO, invoice and credit memo it makes in NetSuite, what became of each, and the sales orders and POs made in NetSuite instead | `migrations/497-books-own-numbers.sql`, `src/lib/books/own-numbers.ts`, `ownNumberFor` in `createSalesOrder`, `createPurchaseOrder`, `createDirectInvoice`, `createInvoiceFromSO` and `createCreditMemoFromInvoice` in `src/lib/netsuite.ts`, the drop ship PO's number in `src/app/api/estimates/[id]/drop-ship/route.ts`, `src/app/(main)/admin/books/own-numbers/page.tsx`, `src/app/api/admin/books/own-numbers/route.ts`; tests `src/lib/books/own-numbers.test.ts`, `src/lib/books/own-numbers-route.test.ts`, `src/lib/netsuite-own-numbers.test.ts`, `src/lib/drop-ship-route.test.ts`, and the tables and their functions `src/lib/books/own-numbers-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -1967,6 +1971,18 @@ own notification (`books_record_changed_in_netsuite`, in the app and by
 push, and emailed to a super admin with "Copy me on new alerts" ticked)
 saying what each has, opening it on Changed in NetSuite; more than three at
 once get one, opening the list, which names the kinds of record they're of.
+
+And, while FleetSuite's own numbers is on (part 67, "Own numbers"), each
+number NetSuite didn't keep, and each sales order or PO made in NetSuite
+instead of FleetSuite since it went on, is told about at the first look
+that finds it, once (`told_at` on the number, `own_number_outside_told`
+for the others). Each gets its own notification (`books_own_number`, in
+the app and by push, and emailed to a super admin with "Copy me on new
+alerts" ticked): a number NetSuite didn't keep says which kind to tick
+Allow Override for, opening that kind
+on Own numbers, and one made in NetSuite says who for, its date and who
+made it, opening the list made in NetSuite; more than three at once get
+one naming the first three.
 
 ## Reports
 
@@ -5856,18 +5872,88 @@ Georgia tax is listed apart.
   yet, which is worth doing before the first return is filed from
   FleetSuite.
 
+## Own numbers
+
+The plan has every sales order and PO start in FleetSuite from the second
+quarter of 2027, with FleetSuite's own invoice, order, PO and bill numbers
+going to NetSuite (the NetSuite Exit Checklist's April to June group). Part
+67 builds the numbers, switched off (`own_numbers`, migration 497,
+`src/lib/books/own-numbers.ts`).
+
+Once a super admin switches it on, each sales order, PO, invoice and credit
+memo FleetSuite makes in NetSuite (`createSalesOrder`, `createPurchaseOrder`,
+`createDirectInvoice`, `createInvoiceFromSO` and `createCreditMemoFromInvoice`
+in `src/lib/netsuite.ts`) takes the next number of its kind just before it's
+sent, and sends it as the document's number (`tranId`). The numbers start at
+SO10001, PO10001, INV10001 and CM10001: NetSuite's own letters, well past
+the numbers NetSuite has given. NetSuite keeps FleetSuite's number only when
+Allow Override is ticked for that kind (Setup → Company → Auto-Generated
+Numbers), so FleetSuite reads back the number NetSuite kept, as it always
+has, and keeps it beside its own. A drop ship PO, which NetSuite makes by
+itself for FleetSuite's sales order, is renamed to FleetSuite's next PO
+number, with the customer's ending when one is asked for
+(`src/app/api/estimates/[id]/drop-ship/route.ts`). Bills already carry
+FleetSuite's number: the Reference No. it sends with each one is the
+vendor's invoice number, and that's the bill's number in NetSuite.
+
+No number is given twice. Each one taken is kept (`own_numbers`) with what
+became of it: made, with NetSuite's internal ID and the number it kept;
+refused, with NetSuite's reason, so nothing has that number; or not sure,
+when NetSuite answered with a problem of its own or didn't answer in time,
+so the number may be on a document in NetSuite. One still on its way five
+minutes on never heard back. A number already in FleetSuite's copies of
+NetSuite's sales orders, POs, invoices or credit memos is skipped
+(`own_number_taken`), so each gap in a kind's numbers has its reason here. A
+document refused before it's sent (a credit memo with no lines, an invoice
+with no price) takes no number. When the switch can't be read, it counts as
+off, and NetSuite numbers it as today; when it's on but a number can't be
+taken, nothing is sent, and the person sending is told to try again. When
+what became of a number can't be kept, the document is still made, and the
+NetSuite feed has the send.
+
+Books → Own numbers (`/admin/books/own-numbers`,
+`deepLinks.booksOwnNumbers`) shows each kind's letters and next number,
+which a super admin changes (audited, `change_own_numbers`; each kind keeps
+its own letters, and a lower next number only skips the ones taken), every
+number given, newest first, of one kind or all, with what became of it and
+its page in NetSuite, and the sales orders and POs made in NetSuite instead:
+those in FleetSuite's copies dated from the day it went on that FleetSuite
+didn't make, by its own number, by the NetSuite feed's sends, or as a drop
+ship PO for one of its sales orders, and none before the feed began. While
+it's off, the page counts the last 30 days' instead, without listing them
+unless asked, and the daily check tells nobody. Whoever opens the books sees
+it.
+
+### Before switching on
+
+- Tick Allow Override for Sales Order, Purchase Order, Invoice and Credit
+  Memo in NetSuite (Setup → Company → Auto-Generated Numbers). Without it
+  NetSuite keeps its own numbers, and the daily check says so for each one.
+- Look at each kind's next number on Own numbers, in case NetSuite's own
+  have come near it.
+
+### What isn't done yet
+
+- The invoice PDF going to NetSuite with each invoice is part 68.
+- Sales orders and POs still start in NetSuite for whoever makes them
+  there; the list made in NetSuite shows who, and the switch doesn't stop
+  them.
+- Estimates, customer payments, deposits and journal entries keep
+  NetSuite's numbers.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
 row each in `books_switches` (migrations 466 to 473, 478 to 480, 485 to
-488 and 494, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
+488, 494 and 497, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
 in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
 which whoever opens the books can read. The plan turns them on on January 1,
 2027, asking the owner once in late December, all but `customer_payments`,
 `customer_deposits`, `bank_deposits` and `vendor_payments`, which stay off
 until receiving payments, taking deposits, bank deposits and paying vendors
-move into FleetSuite during 2027, and `adjustment_approvals`, which the plan
-adds during 2027, from April; their cards on the page say so (`later`).
+move into FleetSuite during 2027, `adjustment_approvals`, which the plan
+adds during 2027, from April, and `own_numbers`, which starts in the second
+quarter of 2027; their cards on the page say so (`later`).
 
 While a piece is off, the people who'd use it don't see it at all; super
 admins can open its screen and see what it would send, and its route
@@ -5882,6 +5968,8 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 `adjustment_approvals` is too: on, an adjustment made with Adjust waits for
 approval before it goes to NetSuite, so off leaves Adjust as now, and Adjust
 stops when it can't read it rather than post one unapproved.
+`own_numbers` needs a step in NetSuite first, ticking Allow Override, so the
+page asks with its own words too.
 
 | Piece | What it does once it's on | Where |
 | --- | --- | --- |
@@ -5901,6 +5989,7 @@ stops when it can't read it rather than post one unapproved.
 | `bank_deposits` | Anyone with Invoicing deposits the customer payments and deposits waiting in Undeposited Funds to one of the company's bank accounts, ticked from what NetSuite has waiting, and FleetSuite makes the bank deposit in NetSuite ("Bank deposits made in FleetSuite") | Invoicing → Invoiced → Bank deposit |
 | `vendor_payments` | Anyone with Payments pays the company's open bills in a payment run, ticked from what NetSuite has open, from one of its bank accounts, vendor by vendor by check or ACH, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite ("Vendors paid in FleetSuite"); its checks print on BMG's check stock from the run, each number set in NetSuite ("Checks printed on BMG's stock"), and its ACH payments are paid from a file made for First Bank from the run ("The ACH file for First Bank") | More → Money & Books → Pay Vendors |
 | `adjustment_approvals` | An inventory adjustment made with Adjust waits for approval: a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as an Inventory Adjustment, or turns it down saying why ("Adjustments approved before they're posted") | Adjust on the Inventory page or a part's details, and Adjustments to approve on the Inventory page |
+| `own_numbers` | Each sales order, PO, invoice and credit memo FleetSuite makes in NetSuite gets FleetSuite's next number of its kind, and NetSuite keeps it as the document's number once Allow Override is ticked there ("Own numbers") | Every sales order, PO, invoice and credit memo FleetSuite makes, and Books → Own numbers |
 
 ## Posting
 

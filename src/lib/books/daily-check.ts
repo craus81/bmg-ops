@@ -25,6 +25,7 @@ import { readClosedMonths } from './months';
 import { readNames } from './netsuite-feed';
 import { describeSend, NO_ANSWER_MS, type SendAction } from '@/lib/netsuite-sends';
 import { FIELD_NAMES, isBlank, keepSends, KIND_NAMES, recordsWin, shownValue, type DifferenceRow } from '@/lib/fleetsuite-records';
+import { lookAtOwnNumbers, markOwnNumbersTold, OWN_NUMBER_KINDS, type NumberAlertItem } from './own-numbers';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -109,14 +110,20 @@ import { FIELD_NAMES, isBlank, keepSends, KIND_NAMES, recordsWin, shownValue, ty
  * listed on Books → Changed in NetSuite is told about at the first look that
  * finds it, once, while it's switched on.
  *
+ * And, once FleetSuite's own numbers is on (part 67, src/lib/books/own-numbers.ts),
+ * each number NetSuite didn't keep and each sales order or PO made in
+ * NetSuite instead of FleetSuite, told about at the first look that finds
+ * it, once.
+ *
  * In-app and push only (books_month_differs, books_stock_differs,
  * books_balance_differs, books_own_invoice_differs,
  * books_own_fulfillment_differs, books_own_bill_differs,
  * books_own_receipt_differs, books_mistake_found), but for the Inventory
  * Adjusts (books_own_adjustment_differs), the sends
- * (books_netsuite_send_unsure) and what changed in NetSuite
- * (books_record_changed_in_netsuite), which are emailed too to a super admin with
- * "Copy me on new alerts" ticked (Craig, 2026-10-28). The record in
+ * (books_netsuite_send_unsure), what changed in NetSuite
+ * (books_record_changed_in_netsuite) and own numbers (books_own_number), which
+ * are emailed too to a super admin with "Copy me on new alerts" ticked (Craig,
+ * 2026-10-28). The record in
  * sync_state, 'books_daily_check', holds which months differ and how many of
  * their documents, which items' counts differ and by about how many, whose
  * balances differ and in how many documents, which own invoices,
@@ -309,10 +316,11 @@ export interface CheckAlert {
    * (books_balance_differs), FleetSuite's own invoices (books_own_invoice_differs), its own fulfillments
    * (books_own_fulfillment_differs), Books' own bills (books_own_bill_differs) and receipts
    * (books_own_receipt_differs), the Inventory Adjusts (books_own_adjustment_differs), likely mistakes
-   * (books_mistake_found), sends to NetSuite FleetSuite isn't sure about (books_netsuite_send_unsure) or what changed
-   * in NetSuite (books_record_changed_in_netsuite); one about months has none (books_month_differs).
+   * (books_mistake_found), sends to NetSuite FleetSuite isn't sure about (books_netsuite_send_unsure), what changed
+   * in NetSuite (books_record_changed_in_netsuite) or FleetSuite's own numbers (books_own_number); one about months
+   * has none (books_month_differs).
    */
-  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change';
+  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change' | 'number';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -768,6 +776,63 @@ export function changeAlertsFor(items: ChangeAlertItem[]): CheckAlert[] {
     url: deepLinks.booksChangedInNetsuite(i.id),
     about: 'change',
   }));
+}
+
+/** A day 'YYYY-MM-DD' as a notification says it: 'Apr 12'. */
+const dayText = (day: string) => new Date(`${day}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+
+/** Where to tick Allow Override, as a notification says it. */
+const ALLOW_OVERRIDE = 'Setup → Company → Auto-Generated Numbers';
+
+/**
+ * What the super admins are told about FleetSuite's own numbers while it's on: a number NetSuite didn't keep, and a
+ * sales order or PO made in NetSuite instead of FleetSuite, a notification for each, opening Books → Own numbers, or
+ * with more than ONE_BY_ONE at a look one naming the first few.
+ */
+export function numberAlertsFor(items: NumberAlertItem[]): CheckAlert[] {
+  if (!items.length) return [];
+  const kept = items.filter((i) => i.kind === 'kept');
+  const outside = items.filter((i) => i.kind === 'outside');
+  if (items.length > ONE_BY_ONE) {
+    const whose = (i: NumberAlertItem) => (i.kind === 'kept'
+      ? `${i.number} (NetSuite made it ${i.netsuiteNumber})`
+      : `${i.tranid ?? OWN_NUMBER_KINDS[i.type].a}${i.party ? ` for ${i.party}` : ''} (made in NetSuite)`);
+    const names = listed([...items.slice(0, ONE_BY_ONE).map(whose), `${items.length - ONE_BY_ONE} more`]);
+    const what = listed([
+      kept.length ? plural(kept.length, "number NetSuite didn't keep", "numbers NetSuite didn't keep") : '',
+      outside.length ? plural(outside.length, 'sales order or PO made in NetSuite', 'sales orders and POs made in NetSuite') : '',
+    ].filter(Boolean));
+    const fix = [
+      kept.length ? `Tick Allow Override in NetSuite (${ALLOW_OVERRIDE}) for each kind NetSuite didn't keep.` : '',
+      outside.length ? 'Sales orders and POs start in FleetSuite now.' : '',
+    ].filter(Boolean).join(' ');
+    return [{
+      title: `Own numbers: ${what}`,
+      body: `${names.charAt(0).toUpperCase()}${names.slice(1)}. ${fix}`,
+      url: deepLinks.booksOwnNumbers(outside.length && !kept.length ? 'outside' : null),
+      about: 'number',
+    }];
+  }
+  return items.map((i): CheckAlert => {
+    const kind = OWN_NUMBER_KINDS[i.type];
+    if (i.kind === 'kept') {
+      return {
+        title: `NetSuite kept its own number for ${kind.a}`,
+        body: `FleetSuite numbered it ${i.number}, and NetSuite made it ${i.netsuiteNumber}. Tick Allow Override for `
+          + `${kind.netsuite} in NetSuite (${ALLOW_OVERRIDE}) so it keeps FleetSuite's numbers.`,
+        url: deepLinks.booksOwnNumbers(i.type),
+        about: 'number',
+      };
+    }
+    const one = `${kind.a.charAt(0).toUpperCase()}${kind.a.slice(1)}`;
+    return {
+      title: `${i.tranid ?? one} was made in NetSuite, not FleetSuite`,
+      body: `${one}${i.party ? ` for ${i.party}` : ''}, dated ${dayText(i.date)}${i.by ? `, made by ${i.by}` : ''}. `
+        + 'Sales orders and POs start in FleetSuite now, so it has no FleetSuite number.',
+      url: deepLinks.booksOwnNumbers('outside'),
+      about: 'number',
+    };
+  });
 }
 
 // ── Looking ────────────────────────────────────────────────────────────────
@@ -1272,6 +1337,17 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     errors.push(`Changed in NetSuite: ${reason(err)}`);
   }
 
+  // FleetSuite's own numbers, while it's on: the numbers NetSuite didn't keep, and the sales orders and POs made in
+  // NetSuite instead, each told about at the first look that finds it, once.
+  let numbers: NumberAlertItem[] = [];
+  try {
+    numbers = await lookAtOwnNumbers(service, new Date());
+    alerts.push(...numberAlertsFor(numbers));
+    told += numbers.length;
+  } catch (err) {
+    errors.push(`Own numbers: ${reason(err)}`);
+  }
+
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.
   if (alerts.length) await opts.tell(alerts);
   if (sends.length) {
@@ -1286,6 +1362,13 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
       await markChangesTold(service, changes.map((c) => c.id), new Date());
     } catch (err) {
       errors.push(`Changed in NetSuite: ${reason(err)}`);
+    }
+  }
+  if (numbers.length) {
+    try {
+      await markOwnNumbersTold(service, numbers);
+    } catch (err) {
+      errors.push(`Own numbers: ${reason(err)}`);
     }
   }
   const result: DailyCheckResult = { look: opts.look, told, ...(errors.length ? { error: errors.join(' ') } : {}) };

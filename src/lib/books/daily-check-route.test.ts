@@ -40,13 +40,13 @@ beforeEach(() => {
 });
 
 describe('the books daily check cron', () => {
-  it('tells every super admin of each alert as its kind, emailing only an Inventory Adjust, an unsure send and a change in NetSuite (to whoever is copied)', async () => {
+  it('tells every super admin of each alert as its kind, emailing only an Inventory Adjust, an unsure send, a change in NetSuite and own numbers (to whoever is copied)', async () => {
     alerts = [
       alert(undefined), alert('stock'), alert('balance'), alert('own'), alert('fulfillment'), alert('bill'), alert('receipt'),
-      alert('adjustment'), alert('mistake'), alert('send'), alert('change'),
+      alert('adjustment'), alert('mistake'), alert('send'), alert('change'), alert('number'),
     ];
     const res = await GET(cron());
-    expect(await res.json()).toEqual({ booksDailyCheck: 'ok', look: 'second', told: 11 });
+    expect(await res.json()).toEqual({ booksDailyCheck: 'ok', look: 'second', told: 12 });
     expect(sent.map((s) => [s.payload.type, s.payload.channels])).toEqual([
       ['books_month_differs', ['in_app', 'push']],
       ['books_stock_differs', ['in_app', 'push']],
@@ -59,6 +59,7 @@ describe('the books daily check cron', () => {
       ['books_mistake_found', ['in_app', 'push']],
       ['books_netsuite_send_unsure', ['in_app', 'push', 'email']],
       ['books_record_changed_in_netsuite', ['in_app', 'push', 'email']],
+      ['books_own_number', ['in_app', 'push', 'email']],
     ]);
     expect(sent.every((s) => s.ids.join() === 'craig,harold')).toBe(true);
     expect(sent[7].payload).toMatchObject({ title: 'About adjustment', body: 'Why.', url: '/admin/books' });

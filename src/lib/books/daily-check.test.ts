@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   adjustmentAlertsFor, alertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, fulfillmentAlertsFor, lookOf, mistakeAlertsFor,
-  nextCheck, ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
+  nextCheck, numberAlertsFor, ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
   type BalanceNews, type ChangeAlertItem, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews,
   type SendAlertItem, type StockNews,
 } from './daily-check';
 import type { DiffDocumentData } from './differences';
+import type { NumberAlertItem } from './own-numbers';
 import type { OwnAdjustmentCheck } from './own-adjustment-check';
 import type { OwnBillCheck } from './own-bill-check';
 import type { OwnFulfillmentCheck } from './own-fulfillment-check';
@@ -679,6 +680,73 @@ describe('mistakeAlertsFor', () => {
   it("tells nothing of one it can't name, nor when nothing is new", () => {
     expect(mistakeAlertsFor([news(ids[0])], new Map())).toEqual([]);
     expect(mistakeAlertsFor([], new Map())).toEqual([]);
+  });
+});
+
+describe('numberAlertsFor', () => {
+  const kept = (n: number, over: Partial<Extract<NumberAlertItem, { kind: 'kept' }>> = {}): NumberAlertItem => ({
+    kind: 'kept', id: `num-${n}`, type: 'invoice', number: `INV1000${n}`, netsuiteNumber: `INV270${n}`, ...over,
+  });
+  const outside = (n: number, over: Partial<Extract<NumberAlertItem, { kind: 'outside' }>> = {}): NumberAlertItem => ({
+    kind: 'outside', netsuiteId: `100${n}`, type: 'sales_order', tranid: `SO441${n}`, date: '2027-04-12', party: 'Acme Plumbing', by: 'Pat Example', ...over,
+  });
+
+  it("says which kind NetSuite didn't keep FleetSuite's number for, and opens that kind on Own numbers", () => {
+    expect(numberAlertsFor([kept(1)])).toEqual([{
+      title: 'NetSuite kept its own number for an invoice',
+      body: 'FleetSuite numbered it INV10001, and NetSuite made it INV2701. Tick Allow Override for Invoice in NetSuite '
+        + "(Setup → Company → Auto-Generated Numbers) so it keeps FleetSuite's numbers.",
+      url: '/admin/books/own-numbers?show=invoice',
+      about: 'number',
+    }]);
+    expect(numberAlertsFor([kept(2, { type: 'purchase_order', number: 'PO10002', netsuiteNumber: 'PO2302' })])[0]).toMatchObject({
+      title: 'NetSuite kept its own number for a PO', url: '/admin/books/own-numbers?show=purchase_order',
+    });
+  });
+
+  it('names a sales order or PO made in NetSuite, who for, when and by whom', () => {
+    expect(numberAlertsFor([outside(1)])).toEqual([{
+      title: 'SO4411 was made in NetSuite, not FleetSuite',
+      body: 'A sales order for Acme Plumbing, dated Apr 12, made by Pat Example. Sales orders and POs start in FleetSuite now, so it has no FleetSuite number.',
+      url: '/admin/books/own-numbers?show=outside',
+      about: 'number',
+    }]);
+    expect(numberAlertsFor([outside(2, { type: 'purchase_order', tranid: null, party: null, by: null, date: '2027-05-01' })])[0]).toMatchObject({
+      title: 'A PO was made in NetSuite, not FleetSuite',
+      body: 'A PO, dated May 1. Sales orders and POs start in FleetSuite now, so it has no FleetSuite number.',
+    });
+  });
+
+  it('tells about up to three one by one and more in one notification', () => {
+    expect(numberAlertsFor([kept(1), outside(2), kept(3)]).map((a) => a.title)).toEqual([
+      'NetSuite kept its own number for an invoice',
+      'SO4412 was made in NetSuite, not FleetSuite',
+      'NetSuite kept its own number for an invoice',
+    ]);
+    expect(numberAlertsFor([kept(1), outside(2), kept(3), outside(4, { tranid: null, party: null })])).toEqual([{
+      title: "Own numbers: 2 numbers NetSuite didn't keep and 2 sales orders and POs made in NetSuite",
+      body: 'INV10001 (NetSuite made it INV2701), SO4412 for Acme Plumbing (made in NetSuite), INV10003 (NetSuite made it INV2703) and 1 more. '
+        + "Tick Allow Override in NetSuite (Setup → Company → Auto-Generated Numbers) for each kind NetSuite didn't keep. "
+        + 'Sales orders and POs start in FleetSuite now.',
+      url: '/admin/books/own-numbers',
+      about: 'number',
+    }]);
+    const made = numberAlertsFor([outside(1, { tranid: null }), outside(2), outside(3), outside(4), outside(5)]);
+    expect(made).toEqual([{
+      title: 'Own numbers: 5 sales orders and POs made in NetSuite',
+      body: 'A sales order for Acme Plumbing (made in NetSuite), SO4412 for Acme Plumbing (made in NetSuite), SO4413 for Acme Plumbing '
+        + '(made in NetSuite) and 2 more. Sales orders and POs start in FleetSuite now.',
+      url: '/admin/books/own-numbers?show=outside',
+      about: 'number',
+    }]);
+    expect(numberAlertsFor([kept(1), kept(2), kept(3), kept(4)])[0]).toMatchObject({
+      title: "Own numbers: 4 numbers NetSuite didn't keep",
+      url: '/admin/books/own-numbers',
+    });
+  });
+
+  it('tells nothing when nothing is new', () => {
+    expect(numberAlertsFor([])).toEqual([]);
   });
 });
 
