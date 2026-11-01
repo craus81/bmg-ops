@@ -229,7 +229,7 @@ beforeEach(() => {
   state.rpcs.length = 0;
   state.read = () => SEPTEMBER();
   state.tables = {
-    sync_state: [{ sync_type: 'books_netsuite_lists', last_result: { taxAccounts: [{ tax_code_id: '77', account_id: MO_TAX, lines: 9 }, { tax_code_id: '79', account_id: GA_TAX, lines: 2 }, { tax_code_id: '80', account_id: MO_TAX, lines: 1 }] } }],
+    sync_state: [{ sync_type: 'books_netsuite_lists', last_result: { taxAccounts: [{ tax_code_id: '79', account_id: GA_TAX, lines: 2 }, { tax_code_id: '77', account_id: MO_TAX, lines: 9 }, { tax_code_id: '80', account_id: MO_TAX, lines: 1 }] } }],
     gl_companies: [{ code: 'BMG', name: 'BMG', legal_name: 'Example Fleet Upfitters LLC' }, { code: '1084', name: '1084 Cool Springs', legal_name: null }],
     sales_tax_rates: [
       { location_id: '1', ...SEEDED }, { location_id: '2', ...SEEDED }, { location_id: '3', ...SEEDED },
@@ -314,12 +314,21 @@ describe('Sales tax', () => {
   });
 
   it("gives each location's rates with who added them, the locations a rate can be added for, and the tax accounts by name", async () => {
+    // One added by someone with no name, and one by someone whose profile is gone.
+    const [NAMELESS, GONE] = ['a0000000-0000-4000-8000-000000000003', 'a0000000-0000-4000-8000-000000000004'];
+    state.tables.profiles.push({ id: NAMELESS, full_name: null });
+    state.tables.sales_tax_rates.push(
+      { location_id: '2', starts_on: '2026-10-01', rate_pct: '8.738', note: null, entered_by: NAMELESS, entered_at: '2026-10-03T14:00:00Z' },
+      { location_id: '3', starts_on: '2026-10-01', rate_pct: '8.85', note: null, entered_by: GONE, entered_at: '2026-10-03T15:00:00Z' },
+    );
     const { body } = await get();
     expect(body.rates.map((r: Row) => [r.locationId, r.startsOn, r.pct, r.note, r.enteredBy])).toEqual([
       ['1', '2025-01-01', '8.488%', 'From Settings → Sales Tax, the rate quotes use', null],
       ['1', '2026-10-01', '8.738%', "Quarter's new rate", 'Craig George'],
       ['2', '2025-01-01', '8.488%', 'From Settings → Sales Tax, the rate quotes use', null],
+      ['2', '2026-10-01', '8.738%', null, 'Someone'],
       ['3', '2025-01-01', '8.488%', 'From Settings → Sales Tax, the rate quotes use', null],
+      ['3', '2026-10-01', '8.85%', null, 'Someone'],
     ]);
     // Not Social Circle, Georgia, nor one NetSuite has let go of.
     expect(body.locations).toEqual([
@@ -340,11 +349,11 @@ describe('Sales tax', () => {
   });
 
   it("holds the month's return as filed against the worksheet, with who typed it in", async () => {
-    state.tables.sales_tax_returns.push({ ...FILED });
+    state.tables.sales_tax_returns.push({ ...FILED, updated_by: CRAIG });
     const { body } = await get();
     expect(body.filed).toEqual({
       company: 'BMG', month: '2026-09-01', filedOn: '2026-10-19', gross: 113600, adjustments: -78500, taxable: 35100, tax: 2979, allowance: 60,
-      paid: 2919, note: 'Filed online', enteredBy: 'Pat Ledger', enteredAt: FILED.entered_at, updatedBy: 'Pat Ledger', updatedAt: FILED.updated_at,
+      paid: 2919, note: 'Filed online', enteredBy: 'Pat Ledger', enteredAt: FILED.entered_at, updatedBy: 'Craig George', updatedAt: FILED.updated_at,
     });
     expect(body.held).toMatchObject({ filedOn: '2026-10-19', due: '2026-10-20', late: false, clearedNext: 2979, notes: [] });
     // Typed in a dollar short on the tax.
@@ -488,7 +497,8 @@ describe("Each location's rates", () => {
     expect(audits()).toEqual([{
       actorId: CRAIG, table: 'sales_tax_rates', recordId: '12 2026-10-01', action: 'added', detail: { location_id: '12', starts_on: '2026-10-01', rate_pct: 7.725 },
     }]);
-    // With a rate, Columbia Warehouse is on Missouri's return, each location at the rate it has at the month's end.
+    // With a rate, Columbia Warehouse is in Missouri, and on its return, each location at the rate it has at the month's end.
+    expect((await get()).body.locations).toContainEqual({ id: '12', name: 'Columbia Warehouse', state: 'MO' });
     state.read = () => ({ ...SEPTEMBER(), documents: [] });
     expect((await get('?month=2026-10')).body.worksheet.lines.map((l: Row) => [l.location, l.rate?.pct])).toEqual([
       ["O'Fallon", '8.738%'], ['Wentzville', '8.488%'], ['Kansas City', '8.488%'], ['Columbia Warehouse', '7.725%'],
@@ -540,6 +550,14 @@ const values = (ws: ExcelJS.Worksheet) => Array.from({ length: ws.rowCount }, (_
   });
 });
 const rowOf = (ws: ExcelJS.Worksheet, first: string) => values(ws).find((r) => r[0] === first);
+/** A cell's font color on the first row whose cell `key` holds `value`; undefined when it has none. */
+function colorOf(ws: ExcelJS.Worksheet, value: string, col: number, key = 1): string | undefined {
+  let found: ExcelJS.Row | undefined;
+  ws.eachRow((row) => { if (!found && row.getCell(key).value === value) found = row; });
+  if (!found) throw new Error(`No row with ${value}`);
+  return found.getCell(col).font?.color?.argb;
+}
+const RED = 'FFC00000';
 
 describe("Sales tax's Excel download", () => {
   it("is last month's worksheet as an .xlsx file: what to file, every document and line, exempt sales and the account", async () => {
@@ -559,31 +577,51 @@ describe("Sales tax's Excel download", () => {
     expect(rowOf(ret, 'To pay')?.[6]).toBe(29.19);
     expect(rowOf(ret, 'Social Circle')).toEqual(['Social Circle', 'Georgia', 1, 150, null, null, null, 12]);
 
-    expect(values(docs).filter((r) => typeof r[2] === 'string' && /^(INV|CS)\d/.test(r[2] as string)).map((r) => [r[2], r[5], r[7], r[8], r[11], r[12]])).toEqual([
-      ['INV8101', "At its location's rate", 536, 251, 21.3, 21.3],
-      ['INV8102', "At its location's rate", 200, 100, 16.98, 8.49],
-      ['INV8104', 'Exempt customer', 400, 0, 0, 0],
-      ['CS8107', 'Georgia, not taxed', 150, 0, 12, 0],
+    expect(values(docs).filter((r) => typeof r[2] === 'string' && /^(INV|CS)\d/.test(r[2] as string)).map((r) => [r[2], r[5], r[7], r[8], r[10], r[11], r[12]])).toEqual([
+      ['INV8101', "At its location's rate", 536, 251, null, 21.3, 21.3],
+      ['INV8102', "At its location's rate", 200, 100, null, 16.98, 8.49],
+      ['INV8104', 'Exempt customer', 400, 0, null, 0, 0],
+      ['CS8107', 'Georgia, not taxed', 150, 0, null, 12, 0],
     ]);
+    // FleetSuite's tax in red where NetSuite's differs.
+    expect([colorOf(docs, 'INV8101', 13, 3), colorOf(docs, 'INV8102', 13, 3)]).toEqual([undefined, RED]);
     expect(values(lines).filter((r) => r[2] === 'INV8102').map((r) => [r[4], r[5], r[6], r[7]])).toEqual([['SHELF-1', 100, 'Yes', 'Yes'], ['LABOR', 100, 'No', 'Yes']]);
+    // A cash sale's line, which FleetSuite's copy doesn't have.
+    expect(values(lines).filter((r) => r[2] === 'CS8107').map((r) => [r[4], r[5], r[6], r[7]])).toEqual([['Line 1', 150, 'No', 'No']]);
     expect(rowOf(exempt, 'Bluebird Schools')).toEqual(['Bluebird Schools', 1, 400, 'EX-4471', '2026-06-30', 1, 'Certificate expired Jun 30, 2026, before the sale.']);
+    expect(colorOf(exempt, 'Bluebird Schools', 7)).toBe(RED);
+    expect(values(account).some((r) => String(r[0]).startsWith("2200 Sales Tax Payable, 2210 Georgia Sales Tax Payable in NetSuite's ledger"))).toBe(true);
     expect(rowOf(account, 'At the end of August 2026')?.[5]).toBe(30);
     expect(rowOf(account, 'At the end of September 2026')?.[5]).toBe(50.28);
     expect(values(account).find((r) => r[2] === 'TP-10')).toEqual(['Sales Tax Payment', '2026-10-19', 'TP-10', 'Missouri Department of Revenue', 'September return', -29.79]);
   });
 
   it('holds the return as filed on a sheet of its own, and writes what has to be fixed at the top in red', async () => {
-    state.tables.sales_tax_returns.push({ ...FILED, tax_cents: '2879' });
+    state.tables.sales_tax_returns.push({ ...FILED, gross_cents: '113500', tax_cents: '2879' });
     state.tables.sales_tax_rates = state.tables.sales_tax_rates.filter((r) => r.location_id !== '1');
+    // A sale at Columbia Warehouse, which has no rate; three payments to the state, one listed; FleetSuite's books $10.28 short.
+    const september = SEPTEMBER();
+    state.read = () => ({
+      ...september,
+      documents: [...september.documents, doc('8108', 'CustInvc', '2026-09-28', [['0', AR, 5000, '12', '9001'], ['1', SALES, -5000, '12']], [['1', 'item', '55']])],
+      account: { ...september.account, others: { ...september.account.others, count: 3 }, books: '40.00' },
+    });
     const names = (await sheets(await download(new NextRequest(`${URL}/download?month=2026-09`)))).map((s) => s.name);
     expect(names).toEqual(['Return', 'As filed', 'Documents', 'Lines', 'Exempt sales', 'Sales tax account']);
-    const [ret, filed] = await sheets(await download(new NextRequest(`${URL}/download?month=2026-09`)));
+    const [ret, filed, , , , account] = await sheets(await download(new NextRequest(`${URL}/download?month=2026-09`)));
     const problem = ret.getRow(6);
     expect(problem.getCell(1).value).toBe("No sales tax rate for O'Fallon covers 2 documents this month: add one below.");
-    expect(problem.getCell(1).font?.color?.argb).toBe('FFC00000');
+    expect(problem.getCell(1).font?.color?.argb).toBe(RED);
+    expect(rowOf(ret, "O'Fallon")?.slice(0, 3)).toEqual(["O'Fallon", 'No rate', 2]);
+    expect(rowOf(ret, 'Columbia Warehouse')).toEqual(['Columbia Warehouse', 'Neither state', 1, 50, null, null, null, 0]);
+    expect([colorOf(ret, "O'Fallon", 2), colorOf(ret, 'Columbia Warehouse', 2), colorOf(ret, 'Social Circle', 2)]).toEqual([RED, RED, undefined]);
     expect(rowOf(filed, 'Tax')).toEqual(['Tax', 28.79, null, null]);
-    expect(rowOf(filed, 'Gross receipts')).toEqual(['Gross receipts', 1136, 1136, 0]);
+    // A dollar short on the return's gross receipts.
+    expect(rowOf(filed, 'Gross receipts')).toEqual(['Gross receipts', 1135, 1136, -1]);
+    expect([colorOf(filed, 'Gross receipts', 4), colorOf(filed, 'Adjustments', 4)]).toEqual([RED, undefined]);
     expect(rowOf(filed, 'Note: Filed online')).toBeTruthy();
+    expect(rowOf(account, '2 more documents not listed')).toBeTruthy();
+    expect(rowOf(account, "FleetSuite's books at the end of September 2026")?.[5]).toBe(40);
   });
 
   it('says when its read fails', async () => {

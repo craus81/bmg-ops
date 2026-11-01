@@ -2,10 +2,11 @@
 // each month's Missouri return as it was filed, and one read of what a
 // month's worksheet is worked out from. This runs migrations 314, 359–363 and
 // 407 with 496 in an in-memory Postgres (PGlite) as the app's server login,
-// copies a made-up month of NetSuite invoices, a credit memo, a cash sale and
-// payments to the state with their GL lines and the ledger mirror's lines,
-// and holds what the tables keep and gl_sales_tax_month returns, then the
-// worksheet sales-tax-worksheet.ts works out from it, end to end.
+// copies made-up months of NetSuite invoices, a credit memo, a cash sale, a
+// cash refund and payments to the state with their GL lines and the ledger
+// mirror's lines, and holds what the tables keep and gl_sales_tax_month
+// returns, then the worksheet sales-tax-worksheet.ts works out from it, end
+// to end.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -41,7 +42,7 @@ async function freshDb(settingsRate: string | null = '8.488'): Promise<PGlite> {
     -- What migrations 314, 407 and 496 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
     CREATE TABLE public.customers (
-      id UUID PRIMARY KEY, company_name TEXT, netsuite_id TEXT, tax_exempt BOOLEAN,
+      id UUID PRIMARY KEY, company_name TEXT, netsuite_id TEXT, tax_exempt BOOLEAN NOT NULL DEFAULT false,
       tax_exempt_cert_number TEXT, tax_exempt_expires_at DATE
     );
     CREATE TABLE public.customer_files (id SERIAL PRIMARY KEY, customer_id UUID NOT NULL REFERENCES customers(id), category TEXT NOT NULL);
@@ -223,7 +224,8 @@ describe("migration 496's rates and returns", () => {
     const save = (p: Record<string, unknown>) => one<Answer>(db, 'SELECT sales_tax_return_save($1::jsonb) AS r', [JSON.stringify(p)]);
     const remove = (p: Record<string, unknown>) => one<Answer>(db, 'SELECT sales_tax_return_remove($1::jsonb) AS r', [JSON.stringify(p)]);
     const june = async () => (await db.query<Record<string, unknown>>(
-      `SELECT tax_cents::int AS tax, note, entered_by, updated_by, updated_at FROM sales_tax_returns WHERE company = 'BMG' AND month = '2025-06-01'`,
+      `SELECT tax_cents::int AS tax, paid_cents::int AS paid, note, entered_by, updated_by, updated_at
+       FROM sales_tax_returns WHERE company = 'BMG' AND month = '2025-06-01'`,
     )).rows[0];
 
     // One no one has saved yet, typed in by someone who saw it as not filed.
@@ -235,18 +237,23 @@ describe("migration 496's rates and returns", () => {
 
     // Saved again as it is, nothing changes; corrected, it keeps who typed it in.
     expect(await save({ ...JUNE, seen: first.updated_at, by: BOB })).toEqual({ state: 'saved', updated_at: first.updated_at, unchanged: true });
-    const second = await save({ ...JUNE, tax_cents: 4464, allowance_cents: 89, paid_cents: 4375, note: ' ', seen: first.updated_at, by: BOB });
+    const fixed = { ...JUNE, tax_cents: 4464, allowance_cents: 89, paid_cents: 4375 };
+    const second = await save({ ...fixed, note: ' ', seen: first.updated_at, by: BOB });
     expect(second.state).toBe('saved');
-    expect(await june()).toMatchObject({ tax: 4464, note: null, entered_by: ANN, updated_by: BOB });
+    expect(await june()).toMatchObject({ tax: 4464, paid: 4375, note: null, entered_by: ANN, updated_by: BOB });
     expect(await save({ ...JUNE, seen: first.updated_at, by: ANN })).toEqual({ state: 'changed' });
-    await expect(save({ ...JUNE, filed_on: '2025-06-30', seen: second.updated_at, by: ANN })).rejects.toThrow(/sales_tax_returns_filed_after/);
+    // A note alone is a correction too.
+    const third = await save({ ...fixed, note: 'Paid by ACH', seen: second.updated_at, by: ANN });
+    expect(third).toEqual({ state: 'saved', updated_at: expect.any(String) });
+    expect(await june()).toMatchObject({ tax: 4464, note: 'Paid by ACH', updated_by: ANN });
+    await expect(save({ ...JUNE, filed_on: '2025-06-30', seen: third.updated_at, by: ANN })).rejects.toThrow(/sales_tax_returns_filed_after/);
 
     // Removed only as the page saw it.
-    expect(await remove({ company: 'BMG', month: '2025-06-01', seen: first.updated_at })).toEqual({ state: 'changed' });
-    expect(await remove({ company: 'BMG', month: '2025-06-01', seen: second.updated_at })).toEqual({ state: 'removed' });
+    expect(await remove({ company: 'BMG', month: '2025-06-01', seen: second.updated_at })).toEqual({ state: 'changed' });
+    expect(await remove({ company: 'BMG', month: '2025-06-01', seen: third.updated_at })).toEqual({ state: 'removed' });
     expect(await june()).toBeUndefined();
-    expect(await remove({ company: 'BMG', month: '2025-06-01', seen: second.updated_at })).toEqual({ state: 'gone' });
-    expect(await save({ ...JUNE, seen: second.updated_at, by: ANN })).toEqual({ state: 'changed' });
+    expect(await remove({ company: 'BMG', month: '2025-06-01', seen: third.updated_at })).toEqual({ state: 'gone' });
+    expect(await save({ ...JUNE, seen: third.updated_at, by: ANN })).toEqual({ state: 'changed' });
     // Each company's month is its own.
     expect((await db.query("SELECT company FROM sales_tax_returns WHERE month = '2025-03-01' ORDER BY company")).rows).toEqual([
       { company: '1084' }, { company: 'BMG' },
@@ -256,10 +263,13 @@ describe("migration 496's rates and returns", () => {
   it("is the server login's alone", async () => {
     for (const role of ['anon', 'authenticated']) {
       await db.exec(`RESET ROLE; SET ROLE ${role}`);
-      for (const t of ['sales_tax_rates', 'sales_tax_returns']) await expect(db.query(`SELECT * FROM ${t}`)).rejects.toThrow(/permission denied/);
-      await expect(db.query("SELECT gl_sales_tax_month('BMG', '2025-03-01', ARRAY['250'], 10)")).rejects.toThrow(/permission denied/);
+      for (const t of ['sales_tax_rates', 'sales_tax_returns']) {
+        await expect(db.query(`SELECT * FROM ${t}`)).rejects.toThrow(`permission denied for table ${t}`);
+      }
+      await expect(db.query("SELECT gl_sales_tax_month('BMG', '2025-03-01', ARRAY['250'], 10)"))
+        .rejects.toThrow('permission denied for function gl_sales_tax_month');
       for (const f of ['sales_tax_return_save', 'sales_tax_return_remove']) {
-        await expect(db.query(`SELECT ${f}('{"company":"BMG","month":"2025-03-01"}'::jsonb)`)).rejects.toThrow(/permission denied/);
+        await expect(db.query(`SELECT ${f}('{"company":"BMG","month":"2025-03-01"}'::jsonb)`)).rejects.toThrow(`permission denied for function ${f}`);
       }
     }
     await db.exec('RESET ROLE; SET ROLE service_role');
@@ -523,5 +533,66 @@ describe("migration 496's read of a month's sales tax", () => {
     await expect(one(db, "SELECT gl_sales_tax_month('BMG', '2025-03-01', ARRAY[NULL]::text[], 10) AS r")).rejects.toThrow(/NetSuite account ids/);
     await expect(month(db, MAR, TAX_ACCOUNTS, 100, 'NOPE')).rejects.toThrow(/no company NOPE/);
     await expect(month(db, MAR, TAX_ACCOUNTS, 100, null)).rejects.toThrow(/no company \(none\)/);
+  });
+
+  it("takes in cash refunds, only NetSuite's copy of a document's lines and only the company's GL lines, and names who each other move was with", async () => {
+    const AUG = '2025-08-01';
+    const [DOGWOOD, DOGWOOD_TOO] = ['c0000000-0000-4000-8000-00000000000d', 'c0000000-0000-4000-8000-00000000000e'];
+    await db.exec('RESET ROLE');
+    await db.exec(`
+      -- The state is on NetSuite's customer list too.
+      INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details) VALUES ('customer', '8001', 'State of Missouri', true, '{}');
+      -- A daycare on two FleetSuite customers: the one with its certificate number isn't the first, and the other's expiry is older.
+      INSERT INTO customers (id, company_name, netsuite_id, tax_exempt, tax_exempt_cert_number, tax_exempt_expires_at) VALUES
+        ('${DOGWOOD}', 'Dogwood Daycare', '9004', false, NULL, '2025-12-31'),
+        ('${DOGWOOD_TOO}', 'Dogwood Daycare', '9004', true, 'EX-5120', '2026-06-30');
+    `);
+    await db.exec('SET ROLE service_role');
+
+    // A shelf back on a cash refund at O'Fallon.
+    await gl(db, '7110', 'CashRfnd', 'CR7110', '2025-08-04', AUG, [['0', BANK, -5424, '1', '9001'], ['1', PARTS_SALES, 5000, '1'], ['2', MO_TAX, 424, '1']]);
+    // The daycare's order at Wentzville: QuickBooks's copy under the same id isn't the mirror's, and a line on it in 1084's
+    // books isn't BMG's.
+    await gl(db, '7111', 'CustInvc', 'INV7111', '2025-08-12', AUG, [['0', AR, 10000, '2', '9004'], ['1', PARTS_SALES, -10000, '2']]);
+    await db.query(
+      `INSERT INTO gl_netsuite_lines (transaction_id, line_id, company_id, netsuite_account_id, posting_month, trandate, debit, credit, location_id)
+       SELECT '7111', '2', id, $1, $2, '2025-08-12', 0, 10.00, '2' FROM gl_companies WHERE code = '1084'`,
+      [PARTS_SALES, AUG],
+    );
+    const qb = await db.query<{ id: string }>(
+      `INSERT INTO ledger_invoices (source, external_id, external_ref, doc_type, doc_date, lines_synced_at)
+       VALUES ('quickbooks', 'CustInvc/7111', '7111', 'invoice', '2025-08-12', '2025-08-13T12:00:00Z') RETURNING id`,
+    );
+    await db.query(
+      `INSERT INTO ledger_invoice_lines (document_id, line_external_id, line_no, line_kind, item_external_id, item_number, amount, raw)
+       VALUES ($1, '1', 1, 'item', '55', 'SHELF-1', 100, '{"netamount": "-100.00"}'::jsonb)`,
+      [qb.rows[0].id],
+    );
+    // July's tax paid, the first of its lines on the account naming no one; and a journal entry taking $1.50 of Acme's tax off.
+    await gl(db, '7112', 'TaxPymt', 'TP7112', '2025-08-18', AUG, [
+      ['0', BANK, -1000, null, '8001'], ['1', MO_TAX, 400, null, null], ['2', MO_TAX, 600, null, '8001', 'July 2025'],
+    ]);
+    await gl(db, '7113', 'Journal', 'JE7113', '2025-08-29', AUG, [
+      ['1', MO_TAX, 150, null, '9001', 'Tax charged in error'], ['2', PARTS_SALES, -150, null, '9001'],
+    ]);
+
+    const data = await month(db, AUG);
+    expect(data.documents.map((d) => [d.id, d.type, d.copied, d.lines.length, d.gl.map((l) => l.line_id)])).toEqual([
+      ['7110', 'CashRfnd', false, 0, ['0', '1', '2']],
+      ['7111', 'CustInvc', false, 0, ['0', '1']],
+    ]);
+    expect(data.customers['9004']).toEqual({
+      name: 'Dogwood Daycare', rows: 2, exempt: 1, cert_number: 'EX-5120', cert_expires: '2026-06-30', cert_files: 0, netsuite_taxable: null,
+    });
+    expect(data.account.moves).toEqual([
+      { type: 'CashRfnd', documents: 1, amount: '-4.24' },
+      { type: 'Journal', documents: 1, amount: '-1.50' },
+      { type: 'TaxPymt', documents: 1, amount: '-10.00' },
+    ]);
+    // The payment named by the line that names someone, as the vendor before the customer; the journal entry by its customer.
+    expect(data.account.others.list.map((o) => [o.id, o.memo, o.name, o.amount])).toEqual([
+      ['7112', 'July 2025', 'Missouri Department of Revenue', '-10.00'],
+      ['7113', 'Tax charged in error', 'Acme Fleet Services', '-1.50'],
+    ]);
   });
 });

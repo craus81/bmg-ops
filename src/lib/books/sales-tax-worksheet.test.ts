@@ -10,6 +10,8 @@ const INSTALLS = '410';
 const COGS = '580';
 const MO_TAX = '250';
 const GA_TAX = '251';
+/** A sales tax account the chart has as income. */
+const ODD_TAX = '252';
 const MAR = '2025-03-01';
 
 const RATE_ROWS: SalesTaxRateRow[] = [
@@ -23,7 +25,7 @@ const FACTS = { rates: readRates(RATE_ROWS), taxAccounts: [MO_TAX, GA_TAX] };
 type Gl = [string, string, number, (string | null)?, (string | null)?];
 const TYPES: Record<string, string> = {
   [AR]: 'accounts_receivable', [SALES]: 'income', [INSTALLS]: 'income', [COGS]: 'cost_of_goods_sold',
-  [MO_TAX]: 'other_current_liability', [GA_TAX]: 'other_current_liability', 100: 'bank',
+  [MO_TAX]: 'other_current_liability', [GA_TAX]: 'other_current_liability', [ODD_TAX]: 'income', 100: 'bank',
 };
 const money = (cents: number) => (Math.abs(cents) / 100).toFixed(2);
 /** A mirror line: [line, kind, item, number]. */
@@ -217,6 +219,10 @@ describe("a month's worksheet", () => {
     const waiting = doc('7042', 'CustInvc', '2025-03-16', [['0', AR, 10000, '1', '9001'], ['1', SALES, -10000, '1']], null);
     expect(salesTaxWorksheet(MAR, month([waiting]), FACTS).documents[0].note)
       .toBe("Its lines aren't in FleetSuite's copy of NetSuite yet, so all $100.00 is counted as taxed; NetSuite charged $0.00.");
+
+    // Its one taxed line not copied yet, next to a copied one that isn't taxed.
+    const mixed = doc('7043', 'CustInvc', '2025-03-17', [['0', AR, 6000, '1', '9001'], ['1', INSTALLS, -5000, '1'], ['2', SALES, -1000, '1']], [['1', 'item', '56']]);
+    expect(salesTaxWorksheet(MAR, month([mixed]), FACTS).documents[0].note).toBe("NetSuite didn't tax Line 2 ($10.00), which FleetSuite taxes.");
   });
 
   it('names a NetSuite rate that differs from the location\'s, and a line NetSuite taxed that FleetSuite doesn\'t', () => {
@@ -241,11 +247,12 @@ describe("a month's worksheet", () => {
     const denver = doc('7071', 'CustInvc', '2025-03-23', [['0', AR, 2000, '9', '9001'], ['1', SALES, -2000, '9']], [['1', 'item', '55']]);
     // Its location named only on its income line.
     const lineOnly = doc('7072', 'CustInvc', '2025-03-24', [['0', AR, 3000, null, '9001'], ['1', SALES, -3000, '3']], [['1', 'item', '55']]);
-    const w = salesTaxWorksheet(MAR, month([nowhere, denver, lineOnly]), FACTS);
+    const w = salesTaxWorksheet(MAR, month([nowhere, denver, lineOnly, MARCH[3]]), FACTS);
     expect(w.documents.map((d) => [d.location, d.state, d.basis])).toEqual([
-      ['No location', '—', 'no_location'], ['Denver', '—', 'other_state'], ['Kansas City', 'MO', 'rate'],
+      ['No location', '—', 'no_location'], ['Denver', '—', 'other_state'], ['Kansas City', 'MO', 'rate'], ['Social Circle', 'GA', 'georgia'],
     ]);
-    expect(w.apart.map((a) => [a.location, a.documents, a.gross])).toEqual([['Denver', 1, 2000], ['No location', 1, 1000]]);
+    // Georgia's first.
+    expect(w.apart.map((a) => [a.location, a.documents, a.gross])).toEqual([['Social Circle', 1, 20000], ['Denver', 1, 2000], ['No location', 1, 1000]]);
     expect(w.problems).toEqual([
       "1 document is at Denver, which isn't in Missouri or Georgia ($20.00): if it's in Missouri, add its rate below.",
       "1 document has no location ($10.00), so it isn't on a location's line: set it in NetSuite.",
@@ -258,11 +265,11 @@ describe("a month's worksheet", () => {
 
   it('can\'t work out the tax until every location has a rate on its documents\' dates', () => {
     const rates = readRates([{ location_id: '1', starts_on: '2025-03-15', rate_pct: '8.738', note: null }]);
-    const early = doc('7080', 'CustInvc', '2025-03-10', [['0', AR, 10000, '1', '9001'], ['1', SALES, -10000, '1']], [['1', 'item', '55']]);
+    const early = doc('7080', 'CustInvc', '2025-03-10', [['0', AR, 10849, '1', '9001'], ['1', SALES, -10000, '1'], ['2', MO_TAX, -849, '1']], [['1', 'item', '55'], ['2', 'tax', '77']]);
     const later = doc('7081', 'CustInvc', '2025-03-20', [['0', AR, 10000, '1', '9001'], ['1', SALES, -10000, '1']], [['1', 'item', '55']]);
     const w = salesTaxWorksheet(MAR, month([early, later]), { ...FACTS, rates });
     expect(w.lines.map((l) => [l.location, l.rate?.pct ?? null, l.taxable, l.tax])).toEqual([["O'Fallon", null, 10000, null], ["O'Fallon", '8.738%', 10000, 874]]);
-    expect(w.documents[0]).toMatchObject({ basis: 'no_rate', owed: null, note: null });
+    expect(w.documents[0]).toMatchObject({ basis: 'no_rate', charged: 849, owed: null, note: null });
     expect(w.figures).toMatchObject({ taxable: 20000, tax: null, allowance: null, pay: null });
     expect(w.problems).toEqual(["No sales tax rate for O'Fallon covers 1 document this month: add one below."]);
   });
@@ -300,6 +307,108 @@ describe("a month's worksheet", () => {
     expect(w.documents.map((d) => d.charged)).toEqual([0, 0, 0, 0]);
     expect(w.problems).toEqual(["Where NetSuite posts sales tax hasn't been read yet, so the tax it charged isn't known. Sync now on the NetSuite lists page reads it."]);
   });
+
+  it("takes a document at its receivable line's location and customer, else its income line's and any line's", () => {
+    // Billed from Wentzville for work at O'Fallon: the receivable line's location is the document's.
+    const billed = doc('7090', 'CustInvc', '2025-03-26', [['0', AR, 10849, '2', '9001'], ['1', SALES, -10000, '1'], ['2', MO_TAX, -849, '1']], [['1', 'item', '55'], ['2', 'tax', '77']]);
+    // A cash sale that names its customer only on its income line.
+    const cash = doc('7091', 'CashSale', '2025-03-27', [['0', '100', 5000, '1'], ['1', INSTALLS, -5000, '1', '9003']], null);
+    const [a, b] = salesTaxWorksheet(MAR, month([billed, cash]), FACTS).documents;
+    expect([a.location, a.customer]).toEqual(['Wentzville', 'Acme Fleet']);
+    expect([b.location, b.customer]).toEqual(["O'Fallon", 'Cardinal Plumbing']);
+  });
+
+  it("knows a location's state by its name, else by FleetSuite's own ids, and names one NetSuite's lists don't", () => {
+    // A second Wentzville shop with no rate yet, and Social Circle before NetSuite's lists name it.
+    const shop = doc('7092', 'CustInvc', '2025-03-26', [['0', AR, 10000, '12', '9001'], ['1', SALES, -10000, '12']], [['1', 'item', '55']]);
+    const georgia = doc('7093', 'CustInvc', '2025-03-27', [['0', AR, 5000, '5', '9001'], ['1', INSTALLS, -5000, '5']], [['1', 'item', '56']]);
+    const w = salesTaxWorksheet(MAR, month([shop, georgia], { locations: { 1: "O'Fallon", 2: 'Wentzville', 3: 'Kansas City', 12: 'Wentzville Paint Shop' } }), FACTS);
+    expect(w.documents.map((d) => [d.location, d.state, d.basis])).toEqual([['Wentzville Paint Shop', 'MO', 'no_rate'], ['Location 5', 'GA', 'georgia']]);
+    expect(w.problems).toEqual(['No sales tax rate for Wentzville Paint Shop covers 1 document this month: add one below.']);
+  });
+
+  it("keeps Social Circle off Missouri's return even when it's given a rate", () => {
+    const rates = readRates([...RATE_ROWS, { location_id: '5', starts_on: '2025-01-01', rate_pct: '7', note: null }]);
+    const w = salesTaxWorksheet(MAR, month([MARCH[3]]), { ...FACTS, rates });
+    expect(w.documents[0]).toMatchObject({ state: 'GA', basis: 'georgia', rate: null, owed: 0 });
+    expect(w.lines.map((l) => l.locationId)).toEqual(['1', '2', '3']);
+  });
+
+  it("doesn't tax an exempt customer's sale on a day with no rate, and taxes a customer FleetSuite doesn't have", () => {
+    const rates = readRates([{ location_id: '1', starts_on: '2025-03-15', rate_pct: '8.488', note: null }]);
+    const school = doc('7094', 'CustInvc', '2025-03-10', [['0', AR, 10000, '1', '9002'], ['1', SALES, -10000, '1']], [['1', 'item', '55']]);
+    const stranger = doc('7095', 'CustInvc', '2025-03-20', [['0', AR, 10849, '1', '9005'], ['1', SALES, -10000, '1'], ['2', MO_TAX, -849, '1']], [['1', 'item', '55'], ['2', 'tax', '77']]);
+    const unnamed = doc('7099', 'CustInvc', '2025-03-21', [['0', AR, 10849, '1', '9006'], ['1', SALES, -10000, '1'], ['2', MO_TAX, -849, '1']], [['1', 'item', '55'], ['2', 'tax', '77']]);
+    const data = month([school, stranger, unnamed]);
+    data.customers['9005'] = customer('Elm Street Garage', { rows: 0 });
+    data.customers['9006'] = { ...customer('x'), name: null };
+    const w = salesTaxWorksheet(MAR, data, { ...FACTS, rates });
+    expect(w.documents.map((d) => [d.customer, d.basis, d.owed])).toEqual([
+      ['Bluebird Schools', 'exempt_customer', 0], ['Elm Street Garage', 'rate', 849], ['Customer 9006', 'rate', 849],
+    ]);
+    expect(w.problems).toEqual([]);
+  });
+
+  it("takes back a cash refund, and a credit memo whose lines aren't copied, with no allowance on a month that's a refund", () => {
+    const refund = doc('7096', 'CashRfnd', '2025-03-26', [['0', '100', -5424, '1', '9001'], ['1', SALES, 5000, '1'], ['2', MO_TAX, 424, '1']], [['1', 'item', '55'], ['2', 'tax', '77']]);
+    const credit = doc('7097', 'CustCred', '2025-03-27', [['0', AR, -10400, '1', '9001'], ['1', SALES, 10000, '1'], ['2', MO_TAX, 400, '1']], null);
+    const moves = [{ type: 'CashRfnd', documents: 1, amount: '-4.24' }, { type: 'CustCred', documents: 1, amount: '-4.00' }];
+    const w = salesTaxWorksheet(MAR, month([refund, credit], { account: { ...month([]).account, moves } }), FACTS);
+    expect(w.counts).toEqual({ sales: 0, returns: 2 });
+    expect(w.documents.map((d) => [d.typeName, d.charged, d.owed, d.note])).toEqual([
+      ['Cash Refund', -424, -424, null],
+      ['Credit Memo', -400, -849, "Its lines aren't in FleetSuite's copy of NetSuite yet, so all $100.00 is counted as taxed; NetSuite took back $4.00."],
+    ]);
+    // $150.00 back at 8.488% is $12.73 less tax, and there's no allowance on a refund.
+    expect(w.figures).toMatchObject({ taxable: -15000, tax: -1273, allowance: 0, pay: -1273 });
+    expect(w.accounts?.charged).toBe(-824);
+    expect(w.warnings).toEqual(["-$100.00 on 1 document is counted as taxed because FleetSuite doesn't have the lines' items yet."]);
+  });
+
+  it("doesn't count a sales tax account the chart has as income as a sale", () => {
+    const sale = doc('7098', 'CustInvc', '2025-03-26', [['0', AR, 10849, '1', '9001'], ['1', SALES, -10000, '1'], ['2', ODD_TAX, -849, '1']], [['1', 'item', '55'], ['2', 'tax', '77']]);
+    const [d] = salesTaxWorksheet(MAR, month([sale]), { ...FACTS, taxAccounts: [MO_TAX, GA_TAX, ODD_TAX] }).documents;
+    expect(d).toMatchObject({ gross: 10000, taxable: 10000, charged: 849, owed: 849, note: null });
+  });
+
+  it("says when NetSuite has a customer as not taxable that FleetSuite taxes, and leaves NetSuite's rate out when its tax lines have more than one", () => {
+    const plumber = doc('7100', 'CustInvc', '2025-03-26', [['0', AR, 10000, '1', '9003'], ['1', SALES, -10000, '1']], [['1', 'item', '55']]);
+    const two = doc('7101', 'CustInvc', '2025-03-27', [['0', AR, 10842, '1', '9001'], ['1', SALES, -10000, '1'], ['2', MO_TAX, -442, '1'], ['3', MO_TAX, -400, '1']], [
+      ['1', 'item', '55'], ['2', 'tax', '78'], ['3', 'tax', '77'],
+    ]);
+    const data = month([plumber, two]);
+    data.customers['9003'] = customer('Cardinal Plumbing', { netsuite_taxable: 'F' });
+    const [a, b] = salesTaxWorksheet(MAR, data, FACTS).documents;
+    expect(a.note).toBe('NetSuite has Cardinal Plumbing as not taxable, so it charged no sales tax, and FleetSuite taxes them. '
+      + 'If they are tax-exempt, mark them so on their FleetSuite customer record.');
+    expect(b.note).toBe('NetSuite charged $8.42 and FleetSuite worked out $8.49.');
+  });
+
+  it("puts a location with no sales on the return at its rate on the month's last day", () => {
+    const rates = readRates([...RATE_ROWS, { location_id: '3', starts_on: '2025-03-15', rate_pct: '8.738', note: null }]);
+    const w = salesTaxWorksheet(MAR, month([]), { ...FACTS, rates });
+    expect(w.lines.map((l) => [l.location, l.rate?.pct, l.documents])).toEqual([["O'Fallon", '8.488%', 0], ['Wentzville', '8.488%', 0], ['Kansas City', '8.738%', 0]]);
+  });
+
+  it('takes a certificate as on file with its file alone, and good through the day it expires', () => {
+    const onTheDay = doc('7012', 'CustInvc', '2025-06-30', [['0', AR, 5000, '2', '9002'], ['1', SALES, -5000, '2']], [['1', 'item', '55']]);
+    const fileOnly = doc('7013', 'CustInvc', '2025-06-12', [['0', AR, 7000, '1', '9004'], ['1', SALES, -7000, '1']], [['1', 'item', '55']]);
+    const data = month([onTheDay, fileOnly], {
+      customers: { ...month([]).customers, 9004: customer('Dogwood Church', { exempt: 1, cert_files: 1, netsuite_taxable: 'F' }) },
+    });
+    expect(salesTaxWorksheet('2025-06-01', data, FACTS).exempt.map((e) => [e.customer, e.warning])).toEqual([['Dogwood Church', null], ['Bluebird Schools', null]]);
+  });
+
+  it("names a line's item by its number, else NetSuite's id for it, else the line, and takes its type from NetSuite's lists first", () => {
+    const sale = doc('7102', 'CustInvc', '2025-03-26', [['0', AR, 3000, '1', '9001'], ['1', SALES, -1000, '1'], ['2', SALES, -1000, '1'], ['3', SALES, -1000, '1']], [
+      ['1', 'item', '9998'], ['3', 'item', '60'],
+    ]);
+    const data = month([sale]);
+    data.items['60'] = { number: 'BRKT-2', type: 'InvtPart' };
+    data.parts['60'] = { number: 'BRKT-2', type: 'Service', taxable_override: null };
+    const [d] = salesTaxWorksheet(MAR, data, FACTS).documents;
+    expect(d.lines.map((l) => [l.item, l.taxable, l.known])).toEqual([['Item 9998', true, true], ['BRKT-2', true, true], ['Line 2', true, false]]);
+  });
 });
 
 describe('a return held against its worksheet', () => {
@@ -309,6 +418,10 @@ describe('a return held against its worksheet', () => {
   const row = (over: Partial<SalesTaxReturnRow> = {}): SalesTaxReturnRow => ({
     company: 'BMG', month: MAR, filed_on: '2025-04-18', gross_cents: '81100', adjustments_cents: -68500, taxable_cents: 12600, tax_cents: 1069,
     allowance_cents: 21, paid_cents: 1048, note: null, ...over,
+  });
+
+  it("reads a return's days without their times", () => {
+    expect(readReturn(row({ month: '2025-03-01T00:00:00', filed_on: '2025-04-18T00:00:00' }))).toMatchObject({ month: MAR, filedOn: '2025-04-18', gross: 81100 });
   });
 
   it('matches when the return says what the worksheet does', () => {
@@ -335,6 +448,8 @@ describe('a return held against its worksheet', () => {
   it('holds the allowance to 2% of the return\'s tax, and to none when it was filed late', () => {
     expect(holdReturn(readReturn(row({ allowance_cents: 50, paid_cents: 1019 })), w.figures, w.accounts).notes)
       .toEqual(["The timely payment allowance is 2% of the return's tax, $0.21, and the return took $0.50."]);
+    // Filed on the day it's due is on time.
+    expect(holdReturn(readReturn(row({ filed_on: '2025-04-21' })), w.figures, w.accounts)).toMatchObject({ late: false, notes: [] });
     const late = holdReturn(readReturn(row({ filed_on: '2025-04-22' })), w.figures, w.accounts);
     expect(late).toMatchObject({ late: true });
     expect(late.fields.find((f) => f.field === 'allowance')).toMatchObject({ expected: 0, differs: true });
@@ -351,5 +466,13 @@ describe('a return held against its worksheet', () => {
     expect(holdReturn(readReturn(row()), none.figures, none.accounts).notes).toEqual(["Nothing came off NetSuite's sales tax account in April 2025 for it yet."]);
     // Without the accounts, there's nothing to say about them.
     expect(holdReturn(readReturn(row()), none.figures, null).notes).toEqual([]);
+  });
+
+  it("holds nothing against the return's tax while the worksheet can't work it out", () => {
+    const rates = readRates([{ location_id: '1', starts_on: '2025-03-15', rate_pct: '8.488', note: null }]);
+    const open = salesTaxWorksheet(MAR, month(MARCH), { ...FACTS, rates });
+    const held = holdReturn(readReturn(row()), open.figures, null);
+    expect(held.fields.find((f) => f.field === 'tax')).toMatchObject({ filed: 1069, expected: null, differs: false });
+    expect(held.notes).toEqual([]);
   });
 });
