@@ -386,7 +386,7 @@ const NAMES: Record<string, string> = {
   vendorBill: 'bill', vendorCredit: 'vendor credit', creditMemo: 'credit memo', itemFulfillment: 'fulfillment',
   itemReceipt: 'item receipt', inventoryAdjustment: 'inventory adjustment', inventoryTransfer: 'inventory transfer',
   journalEntry: 'journal entry', customer: 'customer', vendor: 'vendor', contact: 'contact', note: 'note',
-  item: 'item', script: 'item script',
+  item: 'item', script: 'item script', deposit: 'bank deposit',
 };
 
 /** A record type in plain words: 'salesOrder' is 'sales order', and any kind of item is 'item'. */
@@ -414,7 +414,7 @@ const TRANSACTION_PAGES: Record<string, string> = {
   salesOrder: 'salesord', invoice: 'custinvc', estimate: 'estimate', purchaseOrder: 'purchord', vendorBill: 'vendbill',
   vendorCredit: 'vendcred', creditMemo: 'custcred', itemFulfillment: 'itemship', itemReceipt: 'itemrcpt',
   inventoryAdjustment: 'invadjst', inventoryTransfer: 'invtrnfr', journalEntry: 'journal', customerPayment: 'custpymt',
-  customerDeposit: 'custdep',
+  customerDeposit: 'custdep', deposit: 'deposit',
 };
 const ENTITY_PAGES: Record<string, string> = { customer: 'custjob', vendor: 'vendor', contact: 'contact' };
 

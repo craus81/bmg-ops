@@ -97,10 +97,14 @@ entries typed in FleetSuite and switched off with them ("The CPA's
 adjustments journal"), part 54, a customer's check or ACH payment
 received in FleetSuite, put on their open invoices and sent on to NetSuite,
 with Books' own copy of each, built switched off ("Payments received in
-FleetSuite"), and part 55, a customer's check or ACH deposit taken in
+FleetSuite"), part 55, a customer's check or ACH deposit taken in
 FleetSuite on a sales order, or on an estimate once it has its sales order,
 and sent on to NetSuite, with Books' own copy of each, built switched off
-("Deposits taken in FleetSuite").
+("Deposits taken in FleetSuite"), and part 56, the customer payments and
+deposits waiting in Undeposited Funds deposited to one of the company's
+bank accounts in FleetSuite and sent on to NetSuite as one bank deposit,
+with Books' own copy of each, built switched off ("Bank deposits made in
+FleetSuite").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -1569,7 +1573,10 @@ bank account to another. Without them FleetSuite's Undeposited Funds would
 run high and its bank accounts low. Every line of both is already in the
 copy of NetSuite's general ledger, so they post from that copy as journal
 entries do (owner decision 2026-10-17, "Bank deposits", "From the ledger
-copy"), in the same run as invoices.
+copy"), in the same run as invoices. A bank deposit made in FleetSuite
+(part 56) is made in NetSuite and comes back through this copy like any
+other, so it posts the same way; Books' own copy of it isn't used yet
+("Bank deposits made in FleetSuite").
 
 A customer refund (NetSuite's CustRfnd) pays a customer back a credit they
 hold, such as an overpayment, out of Undeposited Funds or a bank account,
@@ -4583,7 +4590,8 @@ each on to NetSuite so nobody types anything twice (owner decisions
 received in FleetSuite and put on that customer's open invoices
 (`src/lib/receive-payment.ts`, migration 485). Card payments wait on
 eBizCharge; deposits on estimates and orders are part 55 ("Deposits taken in
-FleetSuite"), and bank deposits come next.
+FleetSuite"), and bank deposits part 56 ("Bank deposits made in
+FleetSuite").
 It's built switched off ("Switches") and stays off past January 1: until a
 super admin turns it on, only super admins can open the screen, to see what
 it would send, and nothing goes to NetSuite. Once it's on, anyone with
@@ -4668,8 +4676,9 @@ one NetSuite payment of $650.10 in Undeposited Funds, its memo
 
 ### What isn't done yet
 
-- Card payments (eBizCharge), and bank deposits, which move the money from
-  Undeposited Funds to the bank.
+- Card payments (eBizCharge). Bank deposits, which move the money from
+  Undeposited Funds to the bank, are part 56 ("Bank deposits made in
+  FleetSuite").
 - A payment that pays more than the customer's open invoices, takes a
   discount, or applies a credit memo or deposit along with the money.
 - A list of payments received beyond the screen's 60 days. Books' own
@@ -4775,22 +4784,127 @@ next deposit on SO1450 has $9,999.90 left for it.
   invoice by hand.
 - A deposit on an estimate that has no sales order yet: it waits for the
   order.
-- Bank deposits, which move the money from Undeposited Funds to the bank.
 - Books' own copies aren't checked against NetSuite's deposits or posted
   yet; until they are, NetSuite's deposit posts from the copy of NetSuite's
   deposits as any deposit does ("Customer deposits").
 
+## Bank deposits made in FleetSuite
+
+After payments on invoices (part 54) and deposits on orders (part 55), both
+made in NetSuite in Undeposited Funds, comes the bank deposit that moves
+them to the bank (part 56, `src/lib/bank-deposit.ts`, migration 487). It's
+built switched off ("Switches") and stays off past January 1: until a super
+admin turns it on, only super admins can open the screen, to see what it
+would send, and nothing goes to NetSuite. Once it's on, anyone with
+Invoicing who can see prices can.
+
+Invoicing → Invoiced has a Bank deposit button, shown only to those who can
+use it (`/api/invoices/bank-deposit?status=1`), which opens
+`/invoices/bank-deposit` (`deepLinks.bankDeposit`). The screen lists what
+NetSuite has waiting in Undeposited Funds for a company now, as NetSuite's
+own Make Deposits does: the customer payments and customer deposits NetSuite
+shows as not deposited, from the last year, oldest first
+(`getUndepositedFunds`), each with its number, day, customer, check number
+or reference, and amount. One another press is depositing now is marked
+and can't be ticked. Then the person picks (`workOutBankDeposit`):
+
+- **The company**, BMG or 1084, each with what it has waiting.
+- **The bank account it went into**, one of the company's bank accounts in
+  Books' chart from NetSuite: active, not a heading, and limited to the
+  company's subsidiary in NetSuite (or, where NetSuite didn't say, under
+  the company in Books).
+- **The day it went to the bank**, not after today, more than a year back,
+  or before the payments and deposits in it.
+- **The payments and deposits that went together**, ticked, up to 100,
+  with Tick all; the total shows as they're ticked.
+- **A memo**, if any.
+
+Make deposit sends it once, the way Receive payment does. The page makes an
+id when it opens, the press's, and the route (`/api/invoices/bank-deposit`)
+works the bank deposit out again from what NetSuite has waiting now, never
+from what the page sent, and sends nothing that doesn't fit: a payment that
+isn't waiting any more, or ticked ones whose total isn't what the page
+showed, is turned away to reload. Then the route takes a claim on the press
+(`made_bank_deposits`, `made_bank_deposit_claim`), which holds the payments
+and deposits in it: while it's being made, another press with any of them
+is turned away, so none goes into two bank deposits. It looks in NetSuite
+for a bank deposit under the press's External ID (`fleetsuite-bd-<id>`,
+`findBankDeposit`), and only when there's none makes it
+(`createBankDeposit`: one NetSuite Deposit into the account, on the day,
+with the payments and deposits ticked, each marked deposited).
+
+- **Made**: FleetSuite keeps NetSuite's id and number on the press, reads
+  NetSuite's total back, keeps Books' own copy, and audits it. When
+  NetSuite's total isn't what FleetSuite sent, Books keeps no copy and says
+  in red to look at it in NetSuite. Pressed again, it says what the first
+  press made.
+- **Refused**: the claim is let go with NetSuite's reason in red
+  (`made_bank_deposit_let_go`), its payments are free again, and the same
+  form can be sent again.
+- **Not sure** (no answer, a fault on NetSuite's side, or no id in its
+  answer): it's held, and so are its payments. Ask NetSuite, from five
+  minutes on, looks for it by its External ID: found, it's made; not there,
+  it's let go and none was made. The send is in the NetSuite feed too, under
+  Bank deposits ("NetSuite feed").
+
+No alerts go out, and nothing is emailed to anyone.
+
+Books keeps its own copy of each one as it was sent, rather than read back
+from NetSuite (`gl_own_bank_deposits`, saved only by
+`gl_own_bank_deposit_save`, `src/lib/books/own-bank-deposits.ts`): the
+company, the bank account, the day, the memo, the payments and deposits in
+it with each one's amount, and the total. Saving it never stops a bank
+deposit; one that can't be saved is said on the screen in red. NetSuite's
+bank deposit comes back through the copy of NetSuite's general ledger like
+any other and posts from it ("Bank deposits, transfers and refunds").
+
+Made-up example: Rivera Plumbing's payment PYMT-9001 of $1,250.00 and Ozark
+Fleet Co's deposit DEP-77 of $2,500.00 are waiting in Undeposited Funds, and
+both go to the bank on October 30 on one slip. Ticking both shows
+$3,750.00; Make deposit into 10100 Operating Checking makes one NetSuite
+bank deposit of $3,750.00 dated October 30, and neither is waiting any more.
+
+### Before switching on
+
+- FleetSuite's NetSuite role needs to make bank deposits, and to see
+  customer payments, customer deposits and bank deposits in SuiteQL. Until
+  it can see them, FleetSuite can't tell what's waiting, or a bank deposit
+  that isn't there from one it can't see, and sends nothing.
+- What's waiting is read from each payment's and deposit's status as
+  NetSuite names it ("Not Deposited", `BUILTIN.DF(t.status)`), and a
+  check's number from `otherrefnum`; neither is tried on this account yet:
+  check that the screen lists what NetSuite's Make Deposits does for the
+  same company.
+- The field names it sends (`payment.items`, each with `id` and `deposit`)
+  are NetSuite's REST names, not yet tried on this account: check the first
+  real bank deposit in NetSuite, that it's in the account picked with the
+  payments ticked, and that they're no longer in Undeposited Funds.
+- A customer deposit NetSuite has already put on its order's invoice may
+  show as applied rather than not deposited, and so not be listed: check
+  one that's waiting.
+
+### What isn't done yet
+
+- Cash back, other deposits (money that isn't a customer's payment or
+  deposit), and card payments (eBizCharge).
+- A list of the bank deposits made in FleetSuite. Books' own copies aren't
+  checked against NetSuite's bank deposits or posted yet; until they are,
+  NetSuite's bank deposit posts from the copy of NetSuite's ledger as any
+  bank deposit does ("Bank deposits, transfers and refunds").
+- Matching bank deposits to the bank's own lines, which waits on the
+  banking choices.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 473, 478 to 480, 485 and 486,
-`src/lib/books/switches.ts`), and stays off until a super admin turns it on
+row each in `books_switches` (migrations 466 to 473, 478 to 480 and 485 to
+487, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
 in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
 which whoever opens the books can read. The plan turns them on on January 1,
-2027, asking the owner once in late December, all but `customer_payments`
-and `customer_deposits`, which stay off until receiving payments and taking
-deposits move into FleetSuite during 2027; their cards on the page say so
-(`later`).
+2027, asking the owner once in late December, all but `customer_payments`,
+`customer_deposits` and `bank_deposits`, which stay off until receiving
+payments, taking deposits and bank deposits move into FleetSuite during
+2027; their cards on the page say so (`later`).
 
 While a piece is off, the people who'd use it don't see it at all; super
 admins can open its screen and see what it would send, and its route
@@ -4818,6 +4932,7 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 | `fleetsuite_records` | A change made in NetSuite to a customer's name, email, phone or billing address, a vendor's name, email or phone, or an item's number, display name, description, purchase price, vendor or labor hours, doesn't come over FleetSuite's: it's listed to keep FleetSuite's, sent on to NetSuite (but for an item's vendor and labor hours, which stay in FleetSuite), or take NetSuite's ("FleetSuite's record wins") | The NetSuite customer, vendor and parts syncs, and Books → Changed in NetSuite |
 | `customer_payments` | Anyone with Invoicing receives a customer's check or ACH payment and puts it on that customer's open invoices, and FleetSuite makes the payment in NetSuite, in Undeposited Funds ("Payments received in FleetSuite") | Invoicing → Invoiced → Payment on an open invoice |
 | `customer_deposits` | Anyone with Invoicing takes a customer's check or ACH deposit on a sales order, and FleetSuite makes the customer deposit in NetSuite on that order, in Undeposited Funds; NetSuite puts it on the order's invoice when the order's billed ("Deposits taken in FleetSuite") | Deposit on a sales order, or on an estimate once it has its sales order |
+| `bank_deposits` | Anyone with Invoicing deposits the customer payments and deposits waiting in Undeposited Funds to one of the company's bank accounts, ticked from what NetSuite has waiting, and FleetSuite makes the bank deposit in NetSuite ("Bank deposits made in FleetSuite") | Invoicing → Invoiced → Bank deposit |
 
 ## Posting
 

@@ -469,6 +469,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/invoices/fix/route.ts': feature('invoicing', "switchIsOn(service, 'invoice_fixes')"),
   'src/app/api/invoices/payment/route.ts': feature('invoicing', "switchIsOn(service, 'customer_payments')"),
   'src/app/api/sales-orders/deposit/route.ts': feature('invoicing', "switchIsOn(service, 'customer_deposits')"),
+  'src/app/api/invoices/bank-deposit/route.ts': feature('invoicing', "switchIsOn(service, 'bank_deposits')"),
   'src/app/api/invoices/new/route.ts': feature('invoicing'),
   'src/app/api/sales-orders/new/route.ts': authScoped('Estimates OR Invoicing permission (Craig 2026-10-31, New sales order 1A): requireSalesOrderMaker checks each feature', 'profileHasFeature('),
   'src/app/api/customer-contacts/route.ts': staff(),

@@ -4959,6 +4959,178 @@ export async function createCustomerDeposit(p: CustomerDepositPayload): Promise<
   }
 }
 
+// ── Bank deposits made in FleetSuite (Books part 56) ───────────────────────
+
+/** A customer payment or deposit waiting in Undeposited Funds, as getUndepositedFunds reads it. */
+export interface UndepositedItem {
+  netsuiteId: string;
+  kind: 'payment' | 'deposit';
+  number: string;
+  /** 'YYYY-MM-DD'. */
+  date: string;
+  customerName: string;
+  /** The check's number, or the payment's reference, when NetSuite has one. */
+  reference: string | null;
+  cents: number;
+}
+
+/** NetSuite's names for a payment or deposit Make Deposits lists: 'Payment : Not Deposited', or the status alone. */
+const NOT_DEPOSITED = /(?:^|:)\s*not deposited$/i;
+
+/**
+ * What a subsidiary has waiting in Undeposited Funds for a bank deposit, as
+ * NetSuite's Make Deposits lists it: its customer payments and customer
+ * deposits NetSuite has as Not Deposited, dated `since` or later, oldest
+ * first. Throws when NetSuite can't be asked, and when FleetSuite's SuiteQL
+ * role can't see a single customer payment, since none waiting then can't be
+ * told from none seen.
+ */
+export async function getUndepositedFunds(subsidiaryId: string, opts: { since: string }): Promise<UndepositedItem[]> {
+  const sub = textOf(subsidiaryId);
+  if (!/^\d{1,20}$/.test(sub)) throw new Error(`"${sub}" isn't a NetSuite subsidiary id`);
+  const since = textOf(opts.since);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(since)) throw new Error(`"${since}" isn't a day`);
+  const seen = await suiteqlQuery(`SELECT id FROM transaction WHERE type = 'CustPymt' FETCH FIRST 1 ROWS ONLY`, 1, 0);
+  if (!seen?.items?.length) throw new Error("FleetSuite can't see NetSuite's customer payments, so it can't tell what's waiting in Undeposited Funds");
+  const rows = await suiteqlQueryAll(`
+    SELECT t.id, t.type, t.tranid, t.trandate, c.companyname AS customer_name, c.entityid AS customer_entity_id,
+           t.otherrefnum AS reference, BUILTIN.DF(t.status) AS status_name, t.foreigntotal AS total
+    FROM transaction t
+    JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'
+    LEFT JOIN customer c ON c.id = t.entity
+    WHERE t.type IN ('CustPymt', 'CustDep') AND tl.subsidiary = ${sub}
+      AND t.trandate >= TO_DATE('${since.slice(5, 7)}/${since.slice(8, 10)}/${since.slice(0, 4)}', 'MM/DD/YYYY')
+      AND BUILTIN.DF(t.status) LIKE '%Not Deposited'
+    ORDER BY t.trandate, t.id
+  `, 1000, { retries: 1 });
+  const items: UndepositedItem[] = [];
+  for (const row of rows) {
+    const id = textOf(row.id);
+    const date = suiteqlDay(row.trandate);
+    const cents = unsignedCents(row.total);
+    const type = textOf(row.type);
+    // NetSuite's own filter, read again: only what it names Not Deposited, with an amount.
+    if (!/^\d+$/.test(id) || !date || !cents || !NOT_DEPOSITED.test(textOf(row.status_name))) continue;
+    if (type !== 'CustPymt' && type !== 'CustDep') continue;
+    items.push({
+      netsuiteId: id,
+      kind: type === 'CustPymt' ? 'payment' : 'deposit',
+      number: textOf(row.tranid) || `${type === 'CustPymt' ? 'Payment' : 'Deposit'} ${id}`,
+      date,
+      customerName: textOf(row.customer_name) || textOf(row.customer_entity_id) || 'No customer',
+      reference: textOf(row.reference) || null,
+      cents,
+    });
+  }
+  return items;
+}
+
+/**
+ * The bank deposit NetSuite has under FleetSuite's own name for it (its
+ * External ID), with its number and total, or null when it has none, so a
+ * bank deposit sent again is never made twice. Throws when NetSuite can't be
+ * asked, and when FleetSuite's SuiteQL role can't see a single bank deposit,
+ * since none found then can't be told from none seen: the caller fails
+ * closed.
+ */
+export async function findBankDeposit(externalId: string): Promise<{ depositId: string; number: string; totalCents: number | null } | null> {
+  const ref = externalId.trim();
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(ref)) throw new Error(`"${ref}" isn't an external id FleetSuite makes`);
+  const result = await suiteqlQuery(`
+    SELECT id, tranid, foreigntotal AS total
+    FROM transaction
+    WHERE type = 'Deposit' AND externalid = '${ref}'
+    ORDER BY id
+    FETCH FIRST 1 ROWS ONLY
+  `);
+  const row = result?.items?.[0];
+  if (row) return { depositId: row.id?.toString() ?? '', number: row.tranid ?? '', totalCents: unsignedCents(row.total) };
+  const seen = await suiteqlQuery(`SELECT id FROM transaction WHERE type = 'Deposit' FETCH FIRST 1 ROWS ONLY`, 1, 0);
+  if (!seen?.items?.length) throw new Error("FleetSuite can't see NetSuite's bank deposits, so it can't tell whether this one was made");
+  return null;
+}
+
+/** What createBankDeposit sends: src/lib/bank-deposit.ts's netsuiteBankDeposit. */
+export interface BankDepositPayload {
+  /** FleetSuite's own name for it: NetSuite never takes two records of a kind under one. */
+  externalId: string;
+  subsidiaryId: string;
+  /** The bank account it goes into. */
+  accountId: string;
+  /** 'YYYY-MM-DD'. */
+  tranDate: string;
+  memo: string | null;
+  /** NetSuite's ids for the customer payments and deposits in it, waiting in Undeposited Funds. */
+  paymentIds: string[];
+}
+
+/**
+ * Make a bank deposit in NetSuite: POST /services/rest/record/v1/deposit,
+ * NetSuite's Make Deposits, into the bank account named, with exactly the
+ * payments and deposits named ticked on its Payments list. NetSuite works its
+ * total out from them. `unsure` is set when NetSuite may have made it anyway
+ * (no answer, a server error, or no id in its answer): look for it by its
+ * External ID before trying again.
+ */
+export async function createBankDeposit(p: BankDepositPayload): Promise<{ success: boolean; depositId?: string; error?: string; unsure?: boolean }> {
+  if (p.paymentIds.length < 1) return { success: false, error: 'A bank deposit needs a payment or deposit in it' };
+  if (p.paymentIds.some((id) => !/^\d+$/.test(id))) return { success: false, error: "A bank deposit takes payments by NetSuite's id for them" };
+  if (!/^\d+$/.test(p.accountId)) return { success: false, error: 'A bank deposit needs the bank account it goes into' };
+
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/deposit`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    externalId: p.externalId,
+    subsidiary: { id: p.subsidiaryId },
+    account: { id: p.accountId },
+    tranDate: p.tranDate,
+    ...(p.memo ? { memo: p.memo } : {}),
+    payment: { items: p.paymentIds.map((id) => ({ id, deposit: true })) },
+  };
+
+  try {
+    const response = await netsuiteFetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create bank deposit error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      // A 4xx is NetSuite refusing it; after a server error it may have made it anyway.
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}`, ...(response.status >= 500 ? { unsure: true } : {}) };
+    }
+
+    let depositId = response.headers.get('Location')?.match(/\/(\d+)$/)?.[1] || '';
+    if (!depositId) {
+      try {
+        const result = await response.json();
+        depositId = result.id?.toString() || '';
+      } catch {
+        // 204 No Content
+      }
+    }
+    if (!depositId) return { success: false, error: "NetSuite said it made the bank deposit but didn't say its id.", unsure: true };
+    return { success: true, depositId };
+  } catch (e: any) {
+    return { success: false, error: `NetSuite didn't answer (${e.message}).`, unsure: true };
+  }
+}
+
 /**
  * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
  *
