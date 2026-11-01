@@ -555,7 +555,7 @@ export default function EstimatesPage() {
   const router = useRouter();
   const { open: openPopout } = usePopout();
   const searchParams = useSearchParams();
-  const { user, isAdmin, isSales, isGraphicsProduction, profile, hasFeature, hasRole, loading: authLoading } = useAuth();
+  const { user, isAdmin, isSales, isGraphicsProduction, profile, hasFeature, hasRole, canSeeMoney, loading: authLoading } = useAuth();
   // Super admins set a part's labor hours right on its line (Craig, 2026-10-23);
   // any admin can set one line's hours (This line only, 2026-10-30).
   const canSetPartLabor = hasRole('super_admin');
@@ -1219,6 +1219,20 @@ export default function EstimatesPage() {
       .then((json) => setEstimatesStay(json?.estimatesStayInFleetsuite === true))
       .catch(() => {});
   }, [user]);
+
+  // Deposit on a sold estimate's sales order (Books part 55): once taking
+  // deposits is switched on, anyone with Invoicing who can see prices; until
+  // then super admins only.
+  const [canDeposit, setCanDeposit] = useState(false);
+  useEffect(() => {
+    if (!user || !canSeeMoney) return;
+    let cancelled = false;
+    apiFetch('/api/sales-orders/deposit?status=1')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => { if (!cancelled) setCanDeposit(json?.canUse === true); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [user, canSeeMoney]);
 
   // BMG staff directory — the internal-review reviewer dropdown, and the
   // names behind reviewer/requester ids on the review banner. Same audience
@@ -7883,6 +7897,15 @@ export default function EstimatesPage() {
               >
                 Open sales order
               </button>
+              {canDeposit && (
+                <button
+                  onClick={() => router.push(deepLinks.takeDeposit(String(est.netsuite_so_id)))}
+                  title="Take the customer's check or ACH deposit on this estimate's sales order and make it in NetSuite"
+                  style={{ padding: '5px 10px', borderRadius: '7px', border: '1px solid rgba(168,85,247,0.5)', background: 'rgba(168,85,247,0.12)', color: '#a855f7', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  Deposit
+                </button>
+              )}
               <button
                 onClick={() => openJob(est.id, String(est.netsuite_so_id))}
                 disabled={openingJob}

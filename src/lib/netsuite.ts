@@ -4798,6 +4798,167 @@ export async function createCustomerPayment(p: CustomerPaymentPayload): Promise<
   }
 }
 
+// ── Customer deposits taken in FleetSuite (Books part 55) ──────────────────
+
+/** A sales order a deposit is taken on, as NetSuite has it now. */
+export interface DepositSalesOrder {
+  id: string;
+  number: string;
+  customerId: string;
+  customerName: string;
+  subsidiaryId: string | null;
+  /** 'YYYY-MM-DD'. */
+  date: string | null;
+  /** NetSuite's status letter for a sales order: A pending approval, B pending fulfillment … G billed, H closed. */
+  status: string;
+  /** As NetSuite names it: 'Pending Fulfillment'. */
+  statusName: string;
+  totalCents: number;
+}
+
+/**
+ * The sales order a deposit is taken on: its customer, subsidiary, status and
+ * total as NetSuite has them now. Null when NetSuite has no sales order by
+ * that id. Throws when NetSuite can't be asked.
+ */
+export async function getDepositSalesOrder(salesOrderId: string): Promise<DepositSalesOrder | null> {
+  const id = textOf(salesOrderId);
+  if (!/^\d{1,20}$/.test(id)) throw new Error(`"${id}" isn't a NetSuite sales order id`);
+  const result = await suiteqlQuery(`
+    SELECT t.id, t.tranid, t.trandate, t.entity AS customer_id, c.companyname AS customer_name, c.entityid AS customer_entity_id,
+           t.status, BUILTIN.DF(t.status) AS status_name, t.foreigntotal AS total, tl.subsidiary AS subsidiary_id
+    FROM transaction t
+    JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'
+    LEFT JOIN customer c ON c.id = t.entity
+    WHERE t.type = 'SalesOrd' AND t.id = ${id}
+  `, 5, 0, { retries: 1 });
+  const row = result?.items?.[0];
+  const customerId = textOf(row?.customer_id);
+  if (!row || !/^\d+$/.test(customerId)) return null;
+  return {
+    id,
+    number: textOf(row.tranid) || `Sales order ${id}`,
+    customerId,
+    customerName: textOf(row.customer_name) || textOf(row.customer_entity_id) || `Customer ${customerId}`,
+    subsidiaryId: /^\d+$/.test(textOf(row.subsidiary_id)) ? textOf(row.subsidiary_id) : null,
+    date: suiteqlDay(row.trandate),
+    status: textOf(row.status),
+    // BUILTIN.DF names it 'Sales Order : Pending Fulfillment'.
+    statusName: textOf(row.status_name).replace(/^sales order\s*:\s*/i, ''),
+    totalCents: unsignedCents(row.total) ?? 0,
+  };
+}
+
+/**
+ * The customer deposit NetSuite has under FleetSuite's own name for it (its
+ * External ID), or null when it has none, so a deposit sent again is never
+ * taken twice. Throws when NetSuite can't be asked, and when FleetSuite's
+ * SuiteQL role can't see a single customer deposit, since none found then
+ * can't be told from none seen: the caller fails closed.
+ */
+export async function findCustomerDeposit(externalId: string): Promise<{ depositId: string; number: string } | null> {
+  const ref = externalId.trim();
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(ref)) throw new Error(`"${ref}" isn't an external id FleetSuite makes`);
+  const result = await suiteqlQuery(`
+    SELECT id, tranid
+    FROM transaction
+    WHERE type = 'CustDep' AND externalid = '${ref}'
+    ORDER BY id
+    FETCH FIRST 1 ROWS ONLY
+  `);
+  const row = result?.items?.[0];
+  if (row) return { depositId: row.id?.toString() ?? '', number: row.tranid ?? '' };
+  const seen = await suiteqlQuery(`SELECT id FROM transaction WHERE type = 'CustDep' FETCH FIRST 1 ROWS ONLY`, 1, 0);
+  if (!seen?.items?.length) throw new Error("FleetSuite can't see NetSuite's customer deposits, so it can't tell whether this one was made");
+  return null;
+}
+
+/** What createCustomerDeposit sends: src/lib/take-deposit.ts's netsuiteDeposit. */
+export interface CustomerDepositPayload {
+  /** FleetSuite's own name for it: NetSuite never takes two records of a kind under one. */
+  externalId: string;
+  customerId: string;
+  subsidiaryId: string;
+  /** The sales order it's a deposit on. */
+  salesOrderId: string;
+  /** 'YYYY-MM-DD'. */
+  tranDate: string;
+  /** Dollars. */
+  amount: number;
+  /** A check's number, for NetSuite's Check # field. */
+  checkNumber: string | null;
+  memo: string;
+}
+
+/**
+ * Make a customer deposit in NetSuite: POST
+ * /services/rest/record/v1/customerDeposit, NetSuite's Record Deposit on a
+ * sales order, in Undeposited Funds as payments go now, on the order named so
+ * NetSuite puts it on the order's invoice when the order's billed. `unsure` is
+ * set when NetSuite may have made it anyway (no answer, a server error, or no
+ * id in its answer): look for it by its External ID before trying again.
+ */
+export async function createCustomerDeposit(p: CustomerDepositPayload): Promise<{ success: boolean; depositId?: string; error?: string; unsure?: boolean }> {
+  if (!(Math.round(p.amount * 100) > 0)) return { success: false, error: 'A deposit needs to be above $0' };
+  if (!/^\d+$/.test(p.salesOrderId)) return { success: false, error: 'A deposit needs the sales order it goes on' };
+
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/customerDeposit`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    externalId: p.externalId,
+    customer: { id: p.customerId },
+    subsidiary: { id: p.subsidiaryId },
+    salesOrder: { id: p.salesOrderId },
+    tranDate: p.tranDate,
+    payment: p.amount,
+    undepFunds: true,
+    memo: p.memo,
+    ...(p.checkNumber ? { checkNum: p.checkNumber } : {}),
+  };
+
+  try {
+    const response = await netsuiteFetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create customer deposit error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      // A 4xx is NetSuite refusing it; after a server error it may have made it anyway.
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}`, ...(response.status >= 500 ? { unsure: true } : {}) };
+    }
+
+    let depositId = response.headers.get('Location')?.match(/\/(\d+)$/)?.[1] || '';
+    if (!depositId) {
+      try {
+        const result = await response.json();
+        depositId = result.id?.toString() || '';
+      } catch {
+        // 204 No Content
+      }
+    }
+    if (!depositId) return { success: false, error: "NetSuite said it made the deposit but didn't say its id.", unsure: true };
+    return { success: true, depositId };
+  } catch (e: any) {
+    return { success: false, error: `NetSuite didn't answer (${e.message}).`, unsure: true };
+  }
+}
+
 /**
  * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
  *

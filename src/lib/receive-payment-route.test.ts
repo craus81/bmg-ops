@@ -1,11 +1,11 @@
 // /api/invoices/payment (src/lib/receive-payment.ts): who can open it while
 // receiving payments is switched off and once it's on, and what one press of
 // Receive payment does: the payment worked out again from what NetSuite has
-// open now, a check FleetSuite has from the customer already turned away, the
-// payment made once in NetSuite under the press's own External ID however
-// often it's pressed, let go when NetSuite refuses, held when NetSuite can't
-// say and asked about later, checked against what NetSuite shows open after,
-// and Books' own copy kept. Made-up data.
+// open now, a check FleetSuite has from the customer already, as a payment or
+// a deposit, turned away, the payment made once in NetSuite under the press's
+// own External ID however often it's pressed, let go when NetSuite refuses,
+// held when NetSuite can't say and asked about later, checked against what
+// NetSuite shows open after, and Books' own copy kept. Made-up data.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
@@ -419,6 +419,40 @@ describe('once receiving payments is on', () => {
       { status: 'open', netsuite_payment_id: null, netsuite_number: null }, { customer_netsuite_id: '777' }, { method: 'ach' }, { reference: '10442A' },
     ]) {
       state.tables.received_payments = [earlier(over)];
+      state.rpcs.length = 0;
+      netsuite.findCustomerPayment.mockReset().mockResolvedValueOnce(null).mockResolvedValue({ paymentId: '7101', number: 'PYMT-301' });
+      expect((await post(CHECK)).status).toBe(200);
+      expect(rpcNames()[0]).toBe('received_payment_claim');
+    }
+  });
+
+  it('turns away a check FleetSuite took from the customer as a deposit on one of its orders', async () => {
+    const tail = " Nothing was sent. If it's another check with the same number, add a letter to its number.";
+    const deposit = {
+      id: P(8), customer_netsuite_id: '501', method: 'check', reference: '10442', received_date: '2026-10-28', status: 'made',
+      netsuite_number: 'DEP-40', sales_order_number: 'SO1400', created_at: ago(60 * 72),
+    };
+    state.tables.received_deposits = [deposit];
+    const res = await post(CHECK);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: `Check 10442 from Acme Plumbing was received in FleetSuite already, on Oct 28, 2026, as a deposit on SO1400 (DEP-40).${tail}`,
+    });
+    state.tables.received_deposits = [{ ...deposit, status: 'sending', netsuite_number: null, sales_order_number: null }];
+    expect((await (await post(CHECK)).json()).error).toBe(
+      `Check 10442 from Acme Plumbing was received in FleetSuite already, on Oct 28, 2026, as a deposit on a sales order, and is being made in NetSuite.${tail}`,
+    );
+    // A payment under the same number is named first.
+    state.tables.received_payments = [earlier({})];
+    expect((await (await post(CHECK)).json()).error).toBe(
+      `Check 10442 from Acme Plumbing was received in FleetSuite already, on Oct 29, 2026 (PYMT-300).${tail}`,
+    );
+    expect(state.rpcs).toEqual([]);
+
+    // Not one that was let go, an ACH deposit's, another customer's, or another number.
+    for (const over of [{ status: 'open' }, { method: 'ach' }, { customer_netsuite_id: '777' }, { reference: '10442B' }]) {
+      state.tables.received_payments = [];
+      state.tables.received_deposits = [{ ...deposit, ...over }];
       state.rpcs.length = 0;
       netsuite.findCustomerPayment.mockReset().mockResolvedValueOnce(null).mockResolvedValue({ paymentId: '7101', number: 'PYMT-301' });
       expect((await post(CHECK)).status).toBe(200);

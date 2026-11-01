@@ -94,10 +94,13 @@ those totals vendor by vendor and box by box, part 52, the books opened
 to a bookkeeper and a CPA, each a login of their own ("Who can open the
 books"), part 53, the CPA's own adjustments journal, on the journal
 entries typed in FleetSuite and switched off with them ("The CPA's
-adjustments journal"), and part 54, a customer's check or ACH payment
+adjustments journal"), part 54, a customer's check or ACH payment
 received in FleetSuite, put on their open invoices and sent on to NetSuite,
 with Books' own copy of each, built switched off ("Payments received in
-FleetSuite").
+FleetSuite"), and part 55, a customer's check or ACH deposit taken in
+FleetSuite on a sales order, or on an estimate once it has its sales order,
+and sent on to NetSuite, with Books' own copy of each, built switched off
+("Deposits taken in FleetSuite").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -870,7 +873,10 @@ an invoice; a deposit application (DepAppl) applies a deposit to an invoice,
 or to a refund. Both are copied from NetSuite, checked against its GL with
 the deposit rule (owner decision 2026-10-15), and posted to FleetSuite's
 journal in the same run as invoices and payments ("Posting deposits"
-below).
+below). A deposit taken in FleetSuite (part 55) is made in NetSuite and
+comes back through this copy like any other, so it's checked and posted the
+same way; Books' own copy of it isn't used yet ("Deposits taken in
+FleetSuite").
 
 ### Copying deposits
 
@@ -4576,7 +4582,8 @@ each on to NetSuite so nobody types anything twice (owner decisions
 2026-10-31). Part 54 is the first piece: a customer's check or ACH payment
 received in FleetSuite and put on that customer's open invoices
 (`src/lib/receive-payment.ts`, migration 485). Card payments wait on
-eBizCharge; deposits on estimates and orders, and bank deposits, come next.
+eBizCharge; deposits on estimates and orders are part 55 ("Deposits taken in
+FleetSuite"), and bank deposits come next.
 It's built switched off ("Switches") and stays off past January 1: until a
 super admin turns it on, only super admins can open the screen, to see what
 it would send, and nothing goes to NetSuite. Once it's on, anyone with
@@ -4607,8 +4614,9 @@ Receive payment sends it once. The page makes an id when it opens, the
 press's, and the route (`/api/invoices/payment`) works the payment out again
 from what NetSuite has open now, never from what the page sent, and sends
 nothing that doesn't fit. A check whose number FleetSuite already has from
-that customer, made or being made, is turned away; a second check with the
-same number takes a letter after it. Then the route takes a claim on the
+that customer, as a payment or a deposit, made or being made, is turned
+away; a second check with the same number takes a letter after it. Then the
+route takes a claim on the
 press (`received_payments`, `received_payment_claim`), looks in NetSuite for
 a payment under the press's External ID (`fleetsuite-cp-<id>`,
 `findCustomerPayment`), and only when there's none makes it
@@ -4660,8 +4668,8 @@ one NetSuite payment of $650.10 in Undeposited Funds, its memo
 
 ### What isn't done yet
 
-- Card payments (eBizCharge), deposits on estimates and orders, and bank
-  deposits, which move the money from Undeposited Funds to the bank.
+- Card payments (eBizCharge), and bank deposits, which move the money from
+  Undeposited Funds to the bank.
 - A payment that pays more than the customer's open invoices, takes a
   discount, or applies a credit memo or deposit along with the money.
 - A list of payments received beyond the screen's 60 days. Books' own
@@ -4669,16 +4677,120 @@ one NetSuite payment of $650.10 in Undeposited Funds, its memo
   they are, NetSuite's payment posts from the copy of NetSuite's ledger as
   any payment does ("Payments").
 
+## Deposits taken in FleetSuite
+
+After payments on invoices (part 54) come deposits on estimates and orders:
+a customer's check or ACH deposit taken in FleetSuite on a sales order and
+sent on to NetSuite (part 55, `src/lib/take-deposit.ts`, migration 486).
+Card deposits wait on eBizCharge. It's built switched off ("Switches") and
+stays off past January 1: until a super admin turns it on, only super admins
+can open the screen, to see what it would send, and nothing goes to
+NetSuite. Once it's on, anyone with Invoicing who can see prices can.
+
+A deposit goes on a sales order, because that's what NetSuite keeps it
+against: a sales order's page has a Deposit button, and so does an estimate
+once it has its sales order, by its Open sales order button. Both open
+`/sales-orders/deposit?so=<NetSuite id>` (`deepLinks.takeDeposit`), shown
+only to those who can use it (`/api/sales-orders/deposit?status=1`); the
+sales order's is hidden once the order is billed, closed or cancelled. The
+screen reads the order as NetSuite has it now (`getDepositSalesOrder`: its
+customer, company, status and total), and the deposits on it already: the
+ones taken in FleetSuite, made or being made, and the ones the books' copy
+of NetSuite's deposits links to the order, which is copied every two hours
+("Copying deposits"), each once. Then the person fills in
+(`workOutDeposit`):
+
+- **Check or ACH**, with the check's number, which a check must have, or the
+  ACH payment's reference. NetSuite's memo reads "Check 10442" or
+  "ACH 0187", then the memo typed.
+- **The day it was received**, not after today nor more than a year back.
+- **The amount**, no more than what's left of the order after the deposits
+  on it.
+
+It goes only on an order NetSuite still has open: pending approval,
+fulfillment or billing (statuses A, B, D, E and F). A billed order takes the
+payment on its invoice instead ("Payments received in FleetSuite"); a
+closed or cancelled one takes nothing.
+
+Take deposit sends it once, the way Receive payment does. The page makes an
+id when it opens, the press's, and the route (`/api/sales-orders/deposit`)
+works the deposit out again from the order as NetSuite has it now and the
+deposits on it, never from what the page sent, and sends nothing that
+doesn't fit. A check whose number FleetSuite already has from that customer,
+as a deposit or a payment, made or being made, is turned away; a second
+check with the same number takes a letter after it. Then the route takes a
+claim on the press (`received_deposits`, `received_deposit_claim`), looks in
+NetSuite for a deposit under the press's External ID (`fleetsuite-cd-<id>`,
+`findCustomerDeposit`), and only when there's none makes it
+(`createCustomerDeposit`: a customer deposit on the order, in Undeposited
+Funds as payments go now).
+
+- **Made**: FleetSuite keeps NetSuite's id and number on the press, keeps
+  Books' own copy, and audits it. Pressed again, it says what the first
+  press made.
+- **Refused**: the claim is let go with NetSuite's reason in red
+  (`received_deposit_let_go`), and the same form can be sent again.
+- **Not sure** (no answer, a fault on NetSuite's side, or no id in its
+  answer): it's held. Ask NetSuite, from five minutes on, looks for it by
+  its External ID: found, it's made; not there, it's let go and none was
+  taken. The send is in the NetSuite feed too ("NetSuite feed").
+
+NetSuite puts an order's deposits on the order's invoice when the order's
+billed, as it does now; FleetSuite doesn't apply them itself. Nothing is
+emailed to the customer.
+
+Books keeps its own copy of each one as it was taken and sent, rather than
+read back from NetSuite (`gl_own_deposits`, saved only by
+`gl_own_deposit_save`, `src/lib/books/own-deposits.ts`): the company whose
+order it's on, the order, the day, check or ACH with its number or
+reference, NetSuite's memo, the amount, and that it went to Undeposited
+Funds. Saving it never stops a deposit; one that can't be saved is said on
+the screen in red.
+
+Made-up example: Acme Plumbing's SO1450 comes to $12,500.40, and its check
+10442 for $2,500.50, half down, comes in on October 30. Deposit on SO1450
+shows $12,500.40 left; Take deposit makes one NetSuite deposit of $2,500.50
+on SO1450 in Undeposited Funds, its memo "Check 10442 · half down". The
+next deposit on SO1450 has $9,999.90 left for it.
+
+### Before switching on
+
+- FleetSuite's NetSuite role needs to make customer deposits and to see
+  them, and each sales order's status and total, in SuiteQL. Until it can
+  see a customer deposit, FleetSuite can't tell one that isn't there from
+  one it can't see, and sends nothing.
+- The field names it sends (`salesOrder`, `payment`, `undepFunds` and
+  `checkNum`) are NetSuite's REST names, not yet tried on this account:
+  check the first real deposit in NetSuite, that it's on its order and in
+  Undeposited Funds, and that NetSuite puts it on the order's invoice when
+  the order's billed.
+- A deposit made in NetSuite counts against its order only once the books'
+  copy links it to the order, which isn't yet seen in NetSuite's data
+  ("Checking deposits"): check that a deposit made in NetSuite shows on the
+  screen under "Deposits on this order".
+
+### What isn't done yet
+
+- Card deposits (eBizCharge), refunding a deposit, and applying one to an
+  invoice by hand.
+- A deposit on an estimate that has no sales order yet: it waits for the
+  order.
+- Bank deposits, which move the money from Undeposited Funds to the bank.
+- Books' own copies aren't checked against NetSuite's deposits or posted
+  yet; until they are, NetSuite's deposit posts from the copy of NetSuite's
+  deposits as any deposit does ("Customer deposits").
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 473, 478 to 480 and 485,
+row each in `books_switches` (migrations 466 to 473, 478 to 480, 485 and 486,
 `src/lib/books/switches.ts`), and stays off until a super admin turns it on
 in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
 which whoever opens the books can read. The plan turns them on on January 1,
-2027, asking the owner once in late December, all but `customer_payments`,
-which stays off until receiving payments moves into FleetSuite during 2027;
-its card on the page says so (`later`).
+2027, asking the owner once in late December, all but `customer_payments`
+and `customer_deposits`, which stay off until receiving payments and taking
+deposits move into FleetSuite during 2027; their cards on the page say so
+(`later`).
 
 While a piece is off, the people who'd use it don't see it at all; super
 admins can open its screen and see what it would send, and its route
@@ -4705,6 +4817,7 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 | `estimates_in_fleetsuite` | Estimates stay in FleetSuite: nobody pushes or syncs one to NetSuite, and NetSuite gets each job's sales order when it's made ("Estimates in FleetSuite only") | An estimate's buttons, where Push to NetSuite as Estimate goes |
 | `fleetsuite_records` | A change made in NetSuite to a customer's name, email, phone or billing address, a vendor's name, email or phone, or an item's number, display name, description, purchase price, vendor or labor hours, doesn't come over FleetSuite's: it's listed to keep FleetSuite's, sent on to NetSuite (but for an item's vendor and labor hours, which stay in FleetSuite), or take NetSuite's ("FleetSuite's record wins") | The NetSuite customer, vendor and parts syncs, and Books → Changed in NetSuite |
 | `customer_payments` | Anyone with Invoicing receives a customer's check or ACH payment and puts it on that customer's open invoices, and FleetSuite makes the payment in NetSuite, in Undeposited Funds ("Payments received in FleetSuite") | Invoicing → Invoiced → Payment on an open invoice |
+| `customer_deposits` | Anyone with Invoicing takes a customer's check or ACH deposit on a sales order, and FleetSuite makes the customer deposit in NetSuite on that order, in Undeposited Funds; NetSuite puts it on the order's invoice when the order's billed ("Deposits taken in FleetSuite") | Deposit on a sales order, or on an estimate once it has its sales order |
 
 ## Posting
 
