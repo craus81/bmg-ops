@@ -204,6 +204,8 @@ export default function BooksMonthsPage() {
           {' · '}
           <Link href={deepLinks.booksInventoryValue()} style={{ color: 'var(--text-secondary)' }}>Inventory value</Link>
           {' · '}
+          <Link href={deepLinks.booksSalesTax()} style={{ color: 'var(--text-secondary)' }}>Sales tax</Link>
+          {' · '}
           <Link href="/admin/books/going-live" style={{ color: 'var(--text-secondary)' }}>Going live</Link>
           {' · '}
           <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>

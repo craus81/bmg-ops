@@ -114,9 +114,14 @@ encrypted"), part 60, the ACH file First Bank pays a run's ACH
 payments from ("The ACH file for First Bank"), part 61, 1084 Cool
 Springs' months, its rent checked against BMG's books and its lender's
 statement against its own, with the entries that book each month made for
-Journal entries ("1084's rent and mortgage"), and part 62, 1084's bank
+Journal entries ("1084's rent and mortgage"), part 62, 1084's bank
 statements reconciled month by month against its books ("1084's bank
-reconciliation").
+reconciliation"), part 63, inventory adjustments approved before they're
+posted, switched off ("Adjustments approved before they're posted"),
+part 64, each stocked item's value at a month's end tied to the inventory
+accounts ("Inventory value at a month's end"), and part 65, Missouri's
+sales tax return worked out month by month, location by location, with
+each return as filed held against it ("Sales tax").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -136,7 +141,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, and the 1099s at `/admin/books/1099s`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, and the 1099s at `/admin/books/1099s`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
 the accounts page, and Home opens it for a bookkeeper or CPA with no other
 role; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
@@ -271,6 +276,9 @@ admins can open it while fixing invoices is switched off.
 | 1099s: what each vendor marked to get a 1099 was paid in a year on the accounts that count toward one, by category, from the copy of NetSuite | `migrations/481-books-1099s.sql`, `src/lib/books/1099s.ts`, `ACCOUNT_1099_QUERY` and `mapAccount1099s` in `src/lib/books/netsuite-accounts.ts`, the vendors' `is_1099` and `legal_name` in `src/lib/books/netsuite-lists.ts`, `src/app/(main)/admin/books/1099s/page.tsx`, `src/app/api/admin/books/1099s/route.ts`; tests `src/lib/books/1099s.test.ts`, `src/lib/books/1099s-route.test.ts`, `src/lib/books/1099s-sql.test.ts` |
 | 1099s: NetSuite's 1099 report uploaded and held against FleetSuite's totals, vendor by vendor and box by box, never keeping a tax ID | `migrations/482-books-1099-report.sql`, `src/lib/books/1099-report.ts`, the `POST` and the report in `src/app/api/admin/books/1099s/route.ts`, `NetSuiteReport` in `src/app/(main)/admin/books/1099s/page.tsx`; tests `src/lib/books/1099-report.test.ts`, `src/lib/books/1099-report-sql.test.ts`, `src/lib/books/1099s-route.test.ts` |
 | 1084 Cool Springs' rent and mortgage: the rent checked against BMG's books, the lender's statement against 1084's, and the month's two entries made for Journal entries | `migrations/492-rent-and-mortgage-for-1084.sql`, `src/lib/books/rent-and-mortgage.ts`, `src/app/(main)/admin/books/rent-and-mortgage/page.tsx`, `src/app/api/admin/books/rent-and-mortgage/route.ts`; tests `src/lib/books/rent-and-mortgage.test.ts`, `src/lib/books/rent-and-mortgage-route.test.ts`, `src/lib/books/rent-mortgage-sql.test.ts` |
+| 1084's bank reconciliation: each statement's entries ticked as they clear, month by month | `migrations/493-bank-reconciliation-for-1084.sql`, `src/lib/books/bank-reconciliation.ts`, `src/app/(main)/admin/books/bank-reconciliation/page.tsx`, `src/app/api/admin/books/bank-reconciliation/route.ts`; tests `src/lib/books/bank-reconciliation.test.ts`, `src/lib/books/bank-reconciliation-route.test.ts`, `src/lib/books/bank-rec-sql.test.ts` |
+| Inventory value: each stocked item's value at a month's end, tied to each inventory account | `migrations/495-inventory-value-at-a-months-end.sql`, `src/lib/books/inventory-value.ts`, `src/lib/books/inventory-value-data.ts`, `src/app/(main)/admin/books/inventory-value/page.tsx`, `src/app/api/admin/books/inventory-value/route.ts` and its `download`; tests `src/lib/books/inventory-value.test.ts`, `src/lib/books/inventory-value-route.test.ts`, `src/lib/books/inventory-value-sql.test.ts` |
+| Sales tax: what goes on Missouri's return for a month, location by location, each location's dated rates, and the return as filed held against it | `migrations/496-books-sales-tax.sql`, `src/lib/books/sales-tax-worksheet.ts`, `src/lib/books/sales-tax-data.ts`, `src/lib/books/sales-tax-words.ts`, `salesTaxWorkbook` in `src/lib/books/report-workbook.ts`, `src/app/(main)/admin/books/sales-tax/page.tsx`, `src/app/api/admin/books/sales-tax/route.ts` and its `download`; tests `src/lib/books/sales-tax-worksheet.test.ts`, `src/lib/books/sales-tax-route.test.ts`, `src/lib/books/sales-tax-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -5705,6 +5713,129 @@ $2,209.00: $130.00 under the items, every cent of it on a line.
   a month yet, which is worth doing before closing the first month in
   FleetSuite's books.
 
+## Sales tax
+
+`/admin/books/sales-tax` (Books → Sales tax, part 65, the first slice of
+the NetSuite Exit Checklist's "Missouri sales tax") works out what goes on
+Missouri's sales tax return, Form 53-1, for a month, location by location,
+and holds each return as it was filed against it. The return is filed from
+NetSuite's figures today; this works the same out by FleetSuite's own rule,
+so it can be filed from FleetSuite once the team leaves NetSuite, and
+shows each document where NetSuite's tax differs. Nothing here moves
+money, files anything with the state or is sent to NetSuite, and there is
+no switch.
+
+**The read.** Migration 496's `gl_sales_tax_month(p_company, p_month,
+p_tax_accounts, p_limit)` reads each invoice, credit memo, cash sale and
+cash refund NetSuite posted to the month, as the copy of its general ledger
+has them, with their lines from the ledger mirror, their customers, and
+the sales tax accounts: where they stood before the month, what each kind
+of document moved them by in it, and the other documents on them in the
+month and the month after, up to 100 of each. The sales tax accounts are
+the ones NetSuite's tax codes post to, from the last read of NetSuite's
+lists; until that's read, the page says so in red and Sync now on the
+NetSuite lists page reads it. Only BMG makes sales, so the return is BMG's.
+
+**How each document is taxed.** `salesTaxWorksheet` in
+`src/lib/books/sales-tax-worksheet.ts` takes each document at its location:
+
+- at a Missouri location, at its rate on the document's date, line by line
+  by FleetSuite's own rule (`isPartTaxable` in `src/lib/line-taxability.ts`,
+  as quotes and FleetSuite's own invoices tax): a NetSuite service item or
+  an item numbered 06 isn't taxed unless an admin set the part otherwise, a
+  discount follows the line above it, and a line whose item the mirror
+  hasn't copied yet is counted as taxed, which the page says;
+- for an exempt customer, not at all (every FleetSuite customer with its
+  NetSuite id has to be tax exempt), listed with the exemption certificate
+  on file on each sale's date: one that expired before a sale, or none on
+  file, is a warning, not a stop (owner decision 2026-10-22);
+- at Social Circle, Georgia, not at all and not on Missouri's return;
+- at no location, at one in neither state, or at a Missouri location with
+  no rate for its day: in red at the top, to fix before the return is
+  filed.
+
+Where the tax NetSuite charged on a document isn't FleetSuite's, the page
+lists it with why, in the words FleetSuite's own invoice check uses (a line
+NetSuite taxed that FleetSuite doesn't, another rate, Georgia's tax), each
+number opening its line by line check on Invoices vs NetSuite.
+
+**What to file.** A line for each Missouri location at each rate, Form
+53-1's way: gross receipts (a credit memo's less than nothing),
+adjustments (what isn't taxed, less than nothing), taxable sales, and the
+tax at the rate. Each location with a rate on the month's last day is on
+the return, with sales or none. Below them, the 2% timely payment
+allowance on the total tax, which comes off when the return is filed and
+paid by the 20th of the month after (the Monday after when that's a
+weekend; a holiday isn't allowed for), what to pay, what NetSuite charged
+on the same documents, and the sales that aren't on Missouri's return.
+
+**Rates.** `sales_tax_rates` keeps each location's rate from the day it
+starts until the next one does, so a rate that starts October 1 leaves
+September's sales at the one before. The migration starts O'Fallon,
+Wentzville and Kansas City at Settings → Sales Tax's rate from January 1,
+2025. Super admins add and remove rates on the page, for any of NetSuite's
+locations but Georgia's. Estimates and invoices still charge Settings →
+Sales Tax's one rate: these are for the return.
+
+**The return as filed.** The bookkeeper and super admins type in each
+month's return as it was filed (`sales_tax_returns`): the day it was filed,
+its gross receipts, adjustments, taxable sales and tax, the allowance it
+took, what was paid, and a note. Each figure is held against what it
+should be (`holdReturn`): the worksheet's, and for the allowance and what
+was paid, what the return's own tax makes them. A sentence says each way
+it's off: a figure apart from the worksheet's, taxable sales that aren't
+the gross receipts plus the adjustments, an allowance taken on a late
+return, a payment that isn't the tax less the allowance, or a sales tax
+account that didn't come down by the return's tax in the month after. It
+can be corrected or removed; either is refused when someone else saved it
+since the page was opened (`sales_tax_return_save`,
+`sales_tax_return_remove`). The record says who typed it in and when,
+never the amounts.
+
+**The sales tax account.** NetSuite's sales tax accounts in the copy of
+its ledger, owed to the state: at the end of the month before, what each
+kind of document moved them by in the month, at its end, and what
+FleetSuite's books hold; then the payments to the state and other entries
+in the month, and in the month after, when the month's return is paid.
+
+**The page.** Last month at first; any month from January 2025 through
+this one, which shows where it stands so far. Super admins, the bookkeeper
+and the CPA open it, and the CPA only reads. Months links to it.
+
+**Excel.** Download Excel (`/api/admin/books/sales-tax/download`,
+`salesTaxWorkbook` in `src/lib/books/report-workbook.ts`) gives the month
+as a file named like "BMG Sales tax 2026-09.xlsx": the return, the return
+as filed against it once it's typed in, every document and each of its
+lines taxed or not, exempt customers' sales and the sales tax account,
+with what the page warns about at the top.
+
+```ts
+const { data } = await service.rpc('gl_sales_tax_month', { p_company: 'BMG', p_month: '2026-09-01', p_tax_accounts: taxAccounts, p_limit: 100 });
+const w = salesTaxWorksheet('2026-09-01', data, { rates, taxAccounts }); // w.figures.pay === w.figures.tax - w.figures.allowance
+```
+
+Made-up example: in September O'Fallon sold one customer a $251.00 shelf
+with $285.00 of install labor and another $100.00 of each, Wentzville sold
+a school that's tax exempt a $400.00 order, and Social Circle did a $150.00
+job. O'Fallon's line is $736.00 of gross receipts less $385.00 of labor,
+$351.00 taxable and $29.79 of tax at 8.488%; Wentzville's is $400.00 less
+$400.00. Less the $0.60 allowance, $29.19 is due by October 20. NetSuite
+charged $38.28 in Missouri because it taxed the second install too, $8.49
+more, and the page lists that invoice with why. The school's certificate
+ran out June 30, so its sale is a warning, and Social Circle's $12.00 of
+Georgia tax is listed apart.
+
+### What isn't done yet
+
+- The warning at billing when an exempt customer's certificate has
+  expired, and billing at each location's dated rate rather than Settings'
+  one rate: next, switched off.
+- Filing the return and paying the state stay with whoever files today;
+  FleetSuite only works out what to file and holds the return against it.
+- It hasn't been put next to NetSuite's own sales tax report for a month
+  yet, which is worth doing before the first return is filed from
+  FleetSuite.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
@@ -5831,7 +5962,9 @@ before.
 
 Before closing a month, Inventory value shows the stock at its end tied to
 each inventory account, every cent between them named ("Inventory value at
-a month's end"); Months links to it.
+a month's end"), and Sales tax shows what goes on Missouri's return for it,
+held against the return once it's filed ("Sales tax"); Months links to
+both.
 
 ## NetSuite feed
 

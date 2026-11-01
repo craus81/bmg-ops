@@ -658,6 +658,12 @@ export const deepLinks = {
     const query = new URLSearchParams({ ...(company ? { company } : {}), ...(month ? { month: month.slice(0, 7) } : {}) }).toString();
     return `/admin/books/inventory-value${query ? `?${query}` : ''}`;
   },
+  /** Books → Sales tax on one month ('YYYY-MM-01' or 'YYYY-MM'): what goes on
+   *  Missouri's return for it, location by location, and the return as filed
+   *  held against it (src/lib/books/sales-tax-worksheet.ts); last month when
+   *  it's left out. Open to whoever opens the books. */
+  booksSalesTax: (month?: string | null) =>
+    `/admin/books/sales-tax${month ? `?${new URLSearchParams({ month: month.slice(0, 7) })}` : ''}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it

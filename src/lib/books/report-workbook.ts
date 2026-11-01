@@ -2,6 +2,8 @@ import ExcelJS from 'exceljs';
 import type { CompanyValue } from './inventory-value';
 import type { DetailDocument, LedgerRow } from './report-detail';
 import type { Pair, Report, ReportKind, ReportLine } from './reports';
+import type { FiledReturn, OtherMoves, ReturnHeld, SalesTaxWorksheet } from './sales-tax-worksheet';
+import { BASIS_WORDS, RETURN_FIELD_WORDS } from './sales-tax-words';
 
 /**
  * Books → Reports and an account line's detail as Excel files (docs/books.md
@@ -11,9 +13,11 @@ import type { Pair, Report, ReportKind, ReportLine } from './reports';
  * trial balance as Reports shows it, FleetSuite's books next to NetSuite's
  * with the difference, each line indented as on the page; one account's
  * documents by date with each side's running balance
- * (runningBalances in report-detail.ts); and a company's inventory value at
- * a month's end with how it ties to each inventory account (part 64,
- * inventory-value.ts). Built on the server by the download routes; amounts
+ * (runningBalances in report-detail.ts); a company's inventory value at a
+ * month's end with how it ties to each inventory account (part 64,
+ * inventory-value.ts); and a month's Missouri sales tax worksheet with every
+ * document behind it (part 65, sales-tax-worksheet.ts). Built on the server
+ * by the download routes; amounts
  * are dollars in Excel's own Accounting format, read as the report shows
  * them, and anything the page warns about is written at the top, in red
  * when it's a failure.
@@ -63,6 +67,11 @@ const monthEnd = (month: string) => `${monthOf(month)} ${lastDay(month)}, ${mont
 const monthBefore = (month: string) => {
   const d = new Date(`${month.slice(0, 7)}-01T00:00:00Z`);
   d.setUTCMonth(d.getUTCMonth() - 1);
+  return d.toISOString().slice(0, 10);
+};
+const monthAfter = (month: string) => {
+  const d = new Date(`${month.slice(0, 7)}-01T00:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + 1);
   return d.toISOString().slice(0, 10);
 };
 const rangeText = (from: string, to: string) => {
@@ -587,4 +596,253 @@ export async function inventoryWorkbook(input: InventoryWorkbookInput): Promise<
   }
 
   return fileOf(wb, inventoryFileName(input.company.code, month));
+}
+
+// ── Missouri sales tax ─────────────────────────────────────────────────────
+
+/** The sales tax worksheet's file: "BMG Sales tax 2026-10.xlsx". */
+export function salesTaxFileName(company: string, month: string): string {
+  return `${cleanName(`${company} Sales tax ${month.slice(0, 7)}`)}.xlsx`;
+}
+
+/** What Sales tax warns about for a month, as it reads in its file: what to fix first in red, what to know in amber. */
+export function salesTaxNotes(p: { month: string; through: string; worksheet: Pick<SalesTaxWorksheet, 'problems' | 'warnings'> }): WorkbookNote[] {
+  const notes: WorkbookNote[] = [];
+  if (p.month === p.through) {
+    notes.push({ tone: 'amber', text: `${monthName(p.month)} isn't over yet, so this is where it stood when the file was made.` });
+  }
+  notes.push(...p.worksheet.problems.map((text) => ({ tone: 'red' as const, text })));
+  notes.push(...p.worksheet.warnings.map((text) => ({ tone: 'amber' as const, text })));
+  return notes;
+}
+
+export interface SalesTaxWorkbookInput {
+  company: WorkbookCompany;
+  /** 'YYYY-MM-01'. */
+  month: string;
+  /** When its return is due, 'YYYY-MM-DD'. */
+  due: string;
+  worksheet: SalesTaxWorksheet;
+  filed: FiledReturn | null;
+  held: ReturnHeld | null;
+  /** NetSuite's sales tax accounts, as the chart names them. */
+  taxAccounts: Array<{ number: string | null; name: string }>;
+  notes: WorkbookNote[];
+  now: Date;
+}
+
+const dayName = (iso: string) => `${monthOf(iso)} ${Number(iso.slice(8, 10))}, ${iso.slice(0, 4)}`;
+
+/**
+ * A month's Missouri sales tax as Sales tax shows it: what to file, location
+ * by location, with the timely payment allowance and what to pay, and what
+ * isn't on the return; the return as filed held against it; every document
+ * and its lines, each line taxed or not by FleetSuite's rule; exempt
+ * customers' sales and their certificates; and the sales tax accounts
+ * through the month.
+ */
+export async function salesTaxWorkbook(input: SalesTaxWorkbookInput): Promise<WorkbookFile> {
+  const { month, due, worksheet: w } = input;
+  const wb = newWorkbook(input.now);
+  const period = `${monthStart(month)} to ${monthEnd(month)}`;
+  const setup = { pageSetup: { orientation: 'portrait' as const, fitToPage: true, fitToWidth: 1, fitToHeight: 0 } };
+  const wide = { pageSetup: { ...setup.pageSetup, orientation: 'landscape' as const } };
+
+  const ret = wb.addWorksheet('Return', setup);
+  [30, 11, 11].forEach((wd, i) => { ret.getColumn(i + 1).width = wd; });
+  amountColumns(ret, 4, 8);
+  titleRows(ret, {
+    company: input.company,
+    title: 'Missouri sales tax return',
+    period,
+    about: `What goes on Form 53-1 for the month, location by location: the sales NetSuite posted in it, less what isn't taxed by FleetSuite's `
+      + `own rule, at the location's rate. Due ${dayName(due)}; the 2% timely payment allowance comes off only when it's filed and paid by then.`,
+    notes: input.notes,
+    now: input.now,
+    header: ['Location', 'Rate', 'Documents', 'Gross receipts', 'Adjustments', 'Taxable sales', 'Tax', "NetSuite's tax"],
+    amounts: [3, 8],
+  });
+  for (const l of w.lines) {
+    const row = ret.addRow([
+      l.location, l.rate ? l.rate.pct : 'No rate', l.documents, dollars(l.gross), dollars(l.adjustments), dollars(l.taxable),
+      l.tax === null ? null : dollars(l.tax), dollars(l.charged),
+    ]);
+    redIf(row.getCell(2), !l.rate);
+  }
+  const f = w.figures;
+  const total = ret.addRow([
+    'Total', null, w.lines.reduce((n, l) => n + l.documents, 0), dollars(f.gross), dollars(f.adjustments), dollars(f.taxable),
+    f.tax === null ? null : dollars(f.tax), dollars(f.charged),
+  ]);
+  total.font = { bold: true };
+  for (let c = 4; c <= 8; c += 1) total.getCell(c).border = { top: { style: 'thin' } };
+  ret.getColumn(3).numFmt = '#,##0';
+  const figure = (label: string, cents: number | null, bold = false) => {
+    const row = ret.addRow([label, null, null, null, null, null, cents === null ? 'Not yet' : dollars(cents)]);
+    if (bold) row.font = { bold: true };
+  };
+  figure(`Less the timely payment allowance, 2% when filed and paid by ${dayName(due)}`, f.allowance === null ? null : -f.allowance);
+  figure('To pay', f.pay, true);
+  if (w.apart.length) {
+    ret.addRow([]);
+    ret.addRow(["Not on Missouri's return"]).font = { bold: true, size: 12 };
+    for (const a of w.apart) {
+      const row = ret.addRow([
+        a.location, a.state === 'GA' ? 'Georgia' : 'Neither state', a.documents, dollars(a.gross), null, null, null, dollars(a.charged),
+      ]);
+      redIf(row.getCell(2), a.state !== 'GA');
+    }
+  }
+
+  if (input.filed && input.held) {
+    const filed = input.filed;
+    const held = input.held;
+    const as = wb.addWorksheet('As filed', setup);
+    as.getColumn(1).width = 30;
+    amountColumns(as, 2, 4);
+    titleRows(as, {
+      company: input.company,
+      title: `The return as filed ${dayName(filed.filedOn)}`,
+      period,
+      about: "Each figure on the return as it was typed in, next to what it should be: the worksheet's, and for the allowance and "
+        + "what was paid, worked out from the return's own tax.",
+      notes: held.notes.map((text) => ({ tone: 'amber' as const, text })),
+      now: input.now,
+      header: ['Figure', 'On the return', 'Should be', 'Apart'],
+      amounts: [2, 4],
+    });
+    for (const fh of held.fields) {
+      const row = as.addRow([
+        RETURN_FIELD_WORDS[fh.field], dollars(fh.filed), fh.expected === null ? null : dollars(fh.expected),
+        fh.expected === null ? null : dollars(fh.filed - fh.expected),
+      ]);
+      redIf(row.getCell(4), fh.differs);
+    }
+    if (filed.note) as.addRow([`Note: ${filed.note}`]).font = { italic: true };
+  }
+
+  const docs = wb.addWorksheet('Documents', wide);
+  [11, 14, 14, 30, 18, 24, 9].forEach((wd, i) => { docs.getColumn(i + 1).width = wd; });
+  docs.getColumn(1).numFmt = DATE;
+  amountColumns(docs, 8, 13);
+  docs.getColumn(14).width = 80;
+  const docsTop = titleRows(docs, {
+    company: input.company,
+    title: 'Sales tax: every document',
+    period,
+    about: "Each invoice, credit memo and cash sale NetSuite posted to the month, at its location: its sales, what's taxed by FleetSuite's "
+      + "rule, the tax NetSuite charged and FleetSuite's, and why the two differ when they do.",
+    notes: [],
+    now: input.now,
+    header: [
+      'Date', 'Type', 'Number', 'Customer', 'Location', 'How it\'s taxed', 'Rate', 'Sales', 'Taxable', 'Not taxed',
+      'Counted as taxed, items not known', "NetSuite's tax", "FleetSuite's tax", 'Why they differ',
+    ],
+    amounts: [7, 13],
+  });
+  const byDate = [...w.documents].sort((a, b) => a.date.localeCompare(b.date) || (a.number ?? '').localeCompare(b.number ?? '', 'en', { numeric: true }));
+  for (const d of byDate) {
+    const row = docs.addRow([
+      dateCell(d.date), d.typeName, d.number, d.customer, d.location, BASIS_WORDS[d.basis], d.rate?.pct ?? null, dollars(d.gross),
+      dollars(d.taxable), dollars(d.untaxed), d.unsorted ? dollars(d.unsorted) : null, dollars(d.charged),
+      d.owed === null ? null : dollars(d.owed), d.note,
+    ]);
+    redIf(row.getCell(13), d.owed !== null && d.owed !== d.charged);
+    row.getCell(14).alignment = { wrapText: true, vertical: 'top' };
+  }
+  if (byDate.length) docs.autoFilter = { from: { row: docsTop, column: 1 }, to: { row: docsTop + byDate.length, column: 14 } };
+
+  const lines = wb.addWorksheet('Lines', setup);
+  [11, 14, 14, 18, 24, 17, 10, 14].forEach((wd, i) => { lines.getColumn(i + 1).width = wd; });
+  lines.getColumn(1).numFmt = DATE;
+  lines.getColumn(6).numFmt = AMOUNT;
+  const linesTop = titleRows(lines, {
+    company: input.company,
+    title: 'Sales tax: each line',
+    period,
+    about: "Each document's lines on income accounts, taxed or not by FleetSuite's own rule from the line's item: a discount follows "
+      + "the line above it, and a line whose item FleetSuite doesn't have yet is counted as taxed.",
+    notes: [],
+    now: input.now,
+    header: ['Date', 'Type', 'Number', 'Location', 'Item', 'Sales', 'Taxed', 'Item known'],
+    amounts: [6, 6],
+  });
+  let lineCount = 0;
+  for (const d of byDate) {
+    for (const l of d.lines) {
+      lines.addRow([dateCell(d.date), d.typeName, d.number, d.location, l.item, dollars(l.cents), l.taxable ? 'Yes' : 'No', l.known ? 'Yes' : 'No']);
+      lineCount += 1;
+    }
+  }
+  if (lineCount) lines.autoFilter = { from: { row: linesTop, column: 1 }, to: { row: linesTop + lineCount, column: 8 } };
+
+  if (w.exempt.length) {
+    const ex = wb.addWorksheet('Exempt sales', setup);
+    [34, 11, 17, 20, 12, 11, 50].forEach((wd, i) => { ex.getColumn(i + 1).width = wd; });
+    ex.getColumn(3).numFmt = AMOUNT;
+    ex.getColumn(5).numFmt = DATE;
+    titleRows(ex, {
+      company: input.company,
+      title: "Exempt customers' sales",
+      period,
+      about: "Each customer FleetSuite has as tax exempt (every FleetSuite customer with its NetSuite id is), what they bought in the month, "
+        + "and the exemption certificate on file on the sales' dates.",
+      notes: [],
+      now: input.now,
+      header: ['Customer', 'Documents', 'Sales', 'Certificate', 'Expires', 'Files', 'Warning'],
+      amounts: [3, 3],
+    });
+    for (const e of w.exempt) {
+      const row = ex.addRow([e.customer, e.documents, dollars(e.gross), e.certNumber, dateCell(e.certExpires), e.certFiles, e.warning]);
+      if (e.warning) row.getCell(7).font = { color: { argb: RED } };
+    }
+  }
+
+  if (w.accounts) {
+    const a = w.accounts;
+    const acct = wb.addWorksheet('Sales tax account', setup);
+    [56, 11, 14, 28, 40].forEach((wd, i) => { acct.getColumn(i + 1).width = wd; });
+    acct.getColumn(2).numFmt = DATE;
+    amountColumns(acct, 6, 6);
+    const names = input.taxAccounts.map((t) => `${t.number ? `${t.number} ` : ''}${t.name}`).join(', ');
+    titleRows(acct, {
+      company: input.company,
+      title: 'Sales tax account',
+      period,
+      about: `${names || "NetSuite's sales tax accounts"} in NetSuite's ledger as FleetSuite copies it, owed to the state positive: `
+        + "through the month, then what came off it in the month and the month after, when the month's return is paid.",
+      notes: [],
+      now: input.now,
+      header: ['', 'Date', 'Number', 'Name', 'Memo', 'Amount'],
+      amounts: [6, 6],
+    });
+    const line = (label: string, cents: number, style: { bold?: boolean; indent?: number } = {}) => {
+      const row = acct.addRow([label, null, null, null, null, dollars(cents)]);
+      if (style.bold) row.font = { bold: true };
+      if (style.indent) row.getCell(1).alignment = { indent: style.indent };
+    };
+    line(`At the end of ${monthName(monthBefore(month))}`, a.start, { bold: true });
+    for (const m of a.moves) line(`${m.typeName}, ${count(m.documents, 'document', 'documents')}`, m.amount, { indent: 1 });
+    line(`At the end of ${monthName(month)}`, a.end, { bold: true });
+    line(`FleetSuite's books at the end of ${monthName(month)}`, a.books);
+    const list = (title: string, moves: OtherMoves) => {
+      acct.addRow([]);
+      acct.addRow([title]).font = { bold: true, size: 12 };
+      if (!moves.count) {
+        acct.addRow(['None']).font = { italic: true, color: { argb: MUTED } };
+        return;
+      }
+      for (const o of moves.list) acct.addRow([o.typeName, dateCell(o.date), o.number, o.name, o.memo, dollars(o.amount)]);
+      if (moves.count > moves.list.length) {
+        acct.addRow([`${count(moves.count - moves.list.length, 'more document', 'more documents')} not listed`]).font = { italic: true };
+      }
+      const all = acct.addRow(['Total', null, null, null, null, dollars(moves.total)]);
+      all.font = { bold: true };
+      all.getCell(6).border = { top: { style: 'thin' } };
+    };
+    list(`Other documents on it in ${monthName(month)}: payments to the state, journal entries`, a.others);
+    list(`In ${monthName(monthAfter(month))}, when ${monthOf(month)}'s return is paid`, a.next);
+  }
+
+  return fileOf(wb, salesTaxFileName(input.company.code, month));
 }

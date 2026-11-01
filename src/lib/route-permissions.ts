@@ -108,6 +108,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/reports/detail/download/route.ts': books(['read']),
   'src/app/api/admin/books/reports/download/route.ts': books(['read']),
   'src/app/api/admin/books/sales/route.ts': books(['read']),
+  'src/app/api/admin/books/sales-tax/route.ts': books(['read', 'keep'], "booksAllows(auth.access, 'owner')"),
+  'src/app/api/admin/books/sales-tax/download/route.ts': books(['read']),
   'src/app/api/admin/books/snap-a-bill/route.ts': books(['keep']),
   'src/app/api/admin/books/spending/route.ts': books(['keep']),
   'src/app/api/admin/books/stock/route.ts': books(['read', 'keep']),

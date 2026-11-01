@@ -334,26 +334,31 @@ export interface TaxSides {
   customer: string | null;
   /** Whether NetSuite's customer list has the customer as taxable; null when it doesn't say. */
   customerTaxable: boolean | null;
+  /** Where FleetSuite's rate is from, after it in the sentence; "from Settings → Sales Tax" when not given. */
+  rateFrom?: string;
+  /** What NetSuite did with its tax: "charged" when not given, "took back" on a credit memo. */
+  charged?: string;
 }
 
 /** Why FleetSuite's sales tax and NetSuite's differ, as far as can be told; null when they don't. */
 export function explainTax(t: TaxSides): string | null {
   if (t.fleetsuite === t.netsuite) return null;
   const who = t.customer || 'this customer';
+  const charged = t.charged ?? 'charged';
   if (t.basis === 'georgia' && t.netsuite > 0) {
-    return `FleetSuite doesn't tax work at Social Circle, Georgia, and NetSuite charged ${dollars(t.netsuite)}.`;
+    return `FleetSuite doesn't tax work at Social Circle, Georgia, and NetSuite ${charged} ${dollars(t.netsuite)}.`;
   }
   if (t.basis === 'exempt_customer' && t.netsuite > 0) {
-    return `FleetSuite has ${who} as tax-exempt, and NetSuite charged ${dollars(t.netsuite)}.`;
+    return `FleetSuite has ${who} as tax-exempt, and NetSuite ${charged} ${dollars(t.netsuite)}.`;
   }
   if (t.netsuite === 0 && t.customerTaxable === false) {
-    return `NetSuite has ${who} as not taxable, so it charged no sales tax, and FleetSuite taxes them. `
+    return `NetSuite has ${who} as not taxable, so it ${charged} no sales tax, and FleetSuite taxes them. `
       + 'If they are tax-exempt, mark them so on their FleetSuite customer record.';
   }
 
   const parts: string[] = [];
   const rateDiffers = t.basis === 'rate' && t.netsuiteRate !== null && Math.abs(t.netsuiteRate - t.rate) > 5e-7;
-  if (rateDiffers) parts.push(`NetSuite's rate is ${pct(t.netsuiteRate!)} and FleetSuite's ${pct(t.rate)}, from Settings → Sales Tax.`);
+  if (rateDiffers) parts.push(`NetSuite's rate is ${pct(t.netsuiteRate!)} and FleetSuite's ${pct(t.rate)}, ${t.rateFrom ?? 'from Settings → Sales Tax'}.`);
   const rate = t.netsuiteRate ?? t.rate;
   const flips = rate > 0 ? taxFlips(t.lines, rate, t.netsuite) : null;
   if (flips?.length) {
@@ -364,8 +369,8 @@ export function explainTax(t: TaxSides): string | null {
     if (not.length) parts.push(`NetSuite didn't tax ${listed(not.map(named))}, which FleetSuite taxes.`);
   }
   if (!flips || !parts.length) {
-    if (t.netsuite === 0) parts.push('NetSuite charged no sales tax.');
-    else parts.push(`NetSuite charged ${dollars(t.netsuite)} and FleetSuite worked out ${dollars(t.fleetsuite)}.`);
+    if (t.netsuite === 0) parts.push(`NetSuite ${charged} no sales tax.`);
+    else parts.push(`NetSuite ${charged} ${dollars(t.netsuite)} and FleetSuite worked out ${dollars(t.fleetsuite)}.`);
   }
   return parts.join(' ');
 }
