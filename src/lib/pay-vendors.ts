@@ -15,8 +15,10 @@
  * payment under its own External ID, and keeps Books' own copy. A check is
  * made To Be Printed, and prints on BMG's check stock from the run (part 58,
  * src/lib/check-printing.ts), which sets its number in NetSuite and takes it
- * off To Be Printed; an ACH payment isn't To Be Printed. Vendor credits,
- * early-payment discounts, the ACH file and bank numbers aren't done.
+ * off To Be Printed; an ACH payment isn't To Be Printed, and is paid from the
+ * ACH file made for First Bank from the run (part 60, src/lib/ach-file.ts), to
+ * the vendor's bank numbers kept encrypted (part 59, src/lib/vendor-bank.ts).
+ * Vendor credits and early-payment discounts aren't done.
  *
  * The rules here are pure; /api/pay-vendors and the Pay vendors page both use
  * them, the page to show what a run would pay and the route to check it again

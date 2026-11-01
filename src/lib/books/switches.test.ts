@@ -94,7 +94,7 @@ describe('switches', () => {
     });
     expect(SWITCHES.vendor_payments).toEqual({
       name: 'Paying vendors',
-      what: "Anyone with Payments pays a company's open bills in a payment run, ticked from what NetSuite has open, by check or ACH from one of its bank accounts, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite and keeps its own copy for the books. Checks print on BMG's check stock from the run, each number set in NetSuite.",
+      what: "Anyone with Payments pays a company's open bills in a payment run, ticked from what NetSuite has open, by check or ACH from one of its bank accounts, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite and keeps its own copy for the books. Checks print on BMG's check stock from the run, each number set in NetSuite, and ACH payments are paid from a file made for First Bank from the run.",
       where: 'More → Money & Books → Pay Vendors',
       later: 'Stays off on January 1: paying vendors moves into FleetSuite during 2027.',
     });

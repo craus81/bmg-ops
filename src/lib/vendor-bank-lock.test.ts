@@ -2,9 +2,14 @@
 // VENDOR_BANK_KEY, numbers locked so they open only with that key and only
 // for the vendor and row they were entered as, shaped as migration 490 keeps
 // them, and the seal on a confirmation, which holds only for its vendor and
-// row under its key. Made-up keys and numbers.
+// row under its key. Part 60 locks an ACH file and BMG's account for its
+// offsetting debit the same way, each only for what it was locked for.
+// Made-up keys and numbers.
 import { describe, it, expect, afterEach } from 'vitest';
-import { KEY_BAD, KEY_MISSING, bankKey, confirmSeal, confirmSealHolds, lockNumbers, openNumbers, openedProblem, type BankKey } from './vendor-bank-lock';
+import {
+  KEY_BAD, KEY_MISSING, bankKey, confirmSeal, confirmSealHolds, keptSetProblem, lockFile, lockNumbers, lockOffset, openFile, openNumbers, openOffset,
+  openedProblem, type BankKey, type KeptSet,
+} from './vendor-bank-lock';
 import type { BankNumbers } from './vendor-bank';
 
 const RAW = Buffer.alloc(32, 7).toString('base64');
@@ -138,5 +143,72 @@ describe('the seal on a confirmation', () => {
     expect(confirmSealHolds(KEY, '', '31', ROW)).toBe(false);
     // It isn't the lock's key that makes it.
     expect(confirmSeal({ ...KEY, confirm: KEY.lock }, '31', ROW)).not.toBe(seal);
+  });
+});
+
+describe('the ACH file and its offsetting account', () => {
+  const FILE = 'f0000000-0000-4000-8000-000000000001';
+  const TEXT = `101 0819999941431234567\r\n${'9'.repeat(94)}\r\n`;
+
+  it('opens a file only for its id, under its key', () => {
+    const locked = lockFile(KEY, TEXT, FILE);
+    expect(locked).toMatch(/^v1\.[0-9a-f]{8}\.[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]+$/);
+    expect(locked).not.toContain('0819999941431234567');
+    expect(openFile(KEY, locked, FILE)).toEqual({ text: TEXT });
+    expect(openFile(KEY, locked, 'f0000000-0000-4000-8000-000000000002')).toEqual({ problem: 'broken' });
+    expect(openFile(OTHER, locked, FILE)).toEqual({ problem: 'other_key' });
+    // A character of what's locked changed: its first one, so a whole byte changes.
+    const parts = locked.split('.');
+    const changed = [...parts.slice(0, 4), `${parts[4][0] === 'A' ? 'B' : 'A'}${parts[4].slice(1)}`].join('.');
+    expect(openFile(KEY, changed, FILE)).toEqual({ problem: 'broken' });
+    expect(openFile(KEY, 'v2.x.y.z.w', FILE)).toEqual({ problem: 'broken' });
+  });
+
+  it("opens BMG's account only for the bank account it was locked for", () => {
+    const locked = lockOffset(KEY, NUMBERS, '411');
+    expect(openOffset(KEY, locked, '411')).toEqual({ numbers: NUMBERS });
+    expect(openOffset(KEY, locked, '412')).toEqual({ problem: 'broken' });
+    expect(openOffset(OTHER, locked, '411')).toEqual({ problem: 'other_key' });
+    expect(openOffset(KEY, lockOffset(KEY, { ...NUMBERS, account: '12' }, '411'), '411')).toEqual({ problem: 'broken' });
+  });
+
+  it('keeps what each was locked for apart from the others', () => {
+    // A vendor's numbers don't open as an account, a file or another vendor's, nor the other way round.
+    expect(openOffset(KEY, lockNumbers(KEY, NUMBERS, '411', ROW), '411')).toEqual({ problem: 'broken' });
+    expect(openNumbers(KEY, lockOffset(KEY, NUMBERS, '411'), '411', ROW)).toEqual({ problem: 'broken' });
+    expect(openFile(KEY, lockOffset(KEY, NUMBERS, FILE), FILE)).toEqual({ problem: 'broken' });
+    expect(openOffset(KEY, lockFile(KEY, JSON.stringify(NUMBERS), FILE), FILE)).toEqual({ problem: 'broken' });
+  });
+});
+
+describe('keptSetProblem', () => {
+  const set = (over: Partial<KeptSet> = {}): KeptSet => ({
+    id: ROW, vendor_netsuite_id: '31', routing_number: '123456780', account_last4: '9012', account_type: 'checking', status: 'confirmed',
+    account_locked: lockNumbers(KEY, NUMBERS, '31', ROW), confirm_seal: confirmSeal(KEY, '31', ROW), ...over,
+  });
+
+  it('says nothing of a set that holds, or when there is no key or nothing locked', () => {
+    expect(keptSetProblem(set(), KEY)).toBeNull();
+    expect(keptSetProblem(set({ status: 'pending', confirm_seal: null }), KEY)).toBeNull();
+    expect(keptSetProblem(set({ routing_number: '000000000' }), null)).toBeNull();
+    expect(keptSetProblem(set({ account_locked: null }), KEY)).toBeNull();
+  });
+
+  it("says when its numbers don't open", () => {
+    expect(keptSetProblem(set(), OTHER)).toBe(openedProblem('other_key'));
+    expect(keptSetProblem(set({ vendor_netsuite_id: '32' }), KEY)).toBe(openedProblem('broken'));
+  });
+
+  it("says when what it shows isn't what's locked", () => {
+    const shown = "What these show isn't what's locked, so they were changed outside FleetSuite: enter them again.";
+    expect(keptSetProblem(set({ routing_number: '071200004' }), KEY)).toBe(shown);
+    expect(keptSetProblem(set({ account_last4: '9013' }), KEY)).toBe(shown);
+    expect(keptSetProblem(set({ account_type: 'savings' }), KEY)).toBe(shown);
+  });
+
+  it("says when it's confirmed without this server's seal", () => {
+    const unsealed = "FleetSuite didn't confirm these, so they were changed outside it: enter them again and confirm them on a call-back.";
+    expect(keptSetProblem(set({ confirm_seal: null }), KEY)).toBe(unsealed);
+    expect(keptSetProblem(set({ confirm_seal: confirmSeal(KEY, '31', 'e0000000-0000-4000-8000-000000000002') }), KEY)).toBe(unsealed);
   });
 });

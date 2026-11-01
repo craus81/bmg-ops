@@ -361,7 +361,10 @@ the entire first-rollout failure).
    *Changed 2026-10-09, for vendors paid by ACH only:* FleetSuite keeps vendor
    bank numbers encrypted to make the ACH file NetSuite makes today, shown
    masked and confirmed by a second person on a call-back (`docs/books.md`
-   "Vendor bank numbers kept encrypted"). A tax ID is still never kept.
+   "Vendor bank numbers kept encrypted"). A tax ID is still never kept. A
+   payment run made in FleetSuite pays its ACH payments from a file
+   FleetSuite makes for First Bank, not through EBP (`docs/books.md` "The
+   ACH file for First Bank"), built switched off.
 3. **Vendor level follows `cni_jobs.payout_mode`:**
    - `company` mode → one **company vendor**; bank/W-9 captured at the company
      level; Internal ID → `companies.netsuite_vendor_id`.

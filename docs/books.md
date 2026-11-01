@@ -100,11 +100,18 @@ with Books' own copy of each, built switched off ("Payments received in
 FleetSuite"), part 55, a customer's check or ACH deposit taken in
 FleetSuite on a sales order, or on an estimate once it has its sales order,
 and sent on to NetSuite, with Books' own copy of each, built switched off
-("Deposits taken in FleetSuite"), and part 56, the customer payments and
+("Deposits taken in FleetSuite"), part 56, the customer payments and
 deposits waiting in Undeposited Funds deposited to one of the company's
 bank accounts in FleetSuite and sent on to NetSuite as one bank deposit,
 with Books' own copy of each, built switched off ("Bank deposits made in
-FleetSuite").
+FleetSuite"), part 57, the company's open bills paid in a payment run,
+approved by a second person and made in NetSuite as bill payments, with
+Books' own copy of each, built switched off ("Vendors paid in
+FleetSuite"), part 58, a run's checks printed on BMG's check stock
+("Checks printed on BMG's stock"), part 59, vendors' bank numbers for ACH
+kept encrypted and confirmed on a call-back ("Vendor bank numbers kept
+encrypted"), and part 60, the ACH file First Bank pays a run's ACH
+payments from ("The ACH file for First Bank").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -4976,8 +4983,10 @@ what it pays; a check is made To Be Printed).
   too, under Bill payments ("NetSuite feed").
 
 Its checks print on BMG's check stock from the run ("Checks printed on
-BMG's stock"). The alerts also go to anyone with "Copy me on new alerts"
-ticked, never to whoever pressed; nothing is sent to a vendor.
+BMG's stock"), and its ACH payments are paid from a file made for First
+Bank from the run ("The ACH file for First Bank"). The alerts also go to
+anyone with "Copy me on new alerts" ticked, never to whoever pressed;
+nothing is sent to a vendor.
 
 Books keeps its own copy of each bill payment as it was sent
 (`gl_own_bill_payments`, saved only by `gl_own_bill_payment_save`,
@@ -5014,8 +5023,6 @@ has $500.00 still open.
 
 ### What isn't done yet
 
-- The First Bank ACH file (part 60), which pays to the vendor bank numbers
-  kept encrypted ("Vendor bank numbers kept encrypted").
 - Vendor credits and early-payment discounts taken in a run, and bills in a
   currency other than dollars.
 - A list of the bill payments made in FleetSuite. Books' own copies aren't
@@ -5141,8 +5148,8 @@ file NetSuite makes today (part 59, `src/lib/vendor-bank.ts`,
 masked, and has a second person confirm a change on a call-back. That ends,
 for vendors paid by ACH, the 2026-06-29 rule that FleetSuite never keeps
 bank numbers (`docs/cni-redesign.md` §2.4); a vendor's tax ID is still never
-kept. Nothing pays to them yet: the First Bank ACH file (part 60) is the
-first thing that will, and it rides on paying vendors' switch.
+kept. The ACH file for First Bank (part 60) pays to them, and it rides on
+paying vendors' switch.
 
 Super admins only, switched on or off: Pay Vendors → Vendor bank numbers →
 Open bank numbers (`deepLinks.vendorBank`, which an alert's link opens at
@@ -5229,13 +5236,146 @@ and Ozark's numbers are confirmed: the page shows Checking •••• 9012.
 
 ### What isn't done yet
 
-- The First Bank ACH file (part 60), the first thing that pays to them.
 - Bringing vendors' numbers over from NetSuite's Electronic Payments: each
   is entered from the vendor's form and confirmed on a call-back. The
   privacy statement says the Service doesn't keep bank account and routing
   numbers from NetSuite or QuickBooks, which holds while none are brought
   over.
 - Nothing sends them to NetSuite, and NetSuite's own copy isn't changed.
+
+## The ACH file for First Bank
+
+A payment run's ACH payments are paid by First Bank from a file FleetSuite
+makes from the run, the NACHA file NetSuite's Electronic Payments makes
+today (part 60, `src/lib/ach-file.ts`, `/api/pay-vendors/ach`,
+`src/components/PayVendorAch.tsx`, migration 491). It rides on paying
+vendors' switch (`vendor_payments`): until that's on, super admins can set
+up how First Bank takes the file, and no file is made or downloaded. It's
+for super admins only, switched on or off, because the file holds whole
+account numbers.
+
+**How First Bank takes the file.** Pay Vendors → ACH file for First Bank →
+Set up the ACH file, or How First Bank takes it on a run's ACH file, sets
+each bank account's file (`vendor_ach_setups`), as First Bank set BMG up to
+send it:
+
+- First Bank's routing number, where the file goes, and the bank's name in
+  the file.
+- BMG's ACH ID with First Bank (10 characters, or 9 digits) and BMG's name
+  for First Bank.
+- The sending bank: the first 8 digits of First Bank's routing number,
+  filled in from it.
+- The company name (16 characters at most) and BMG's company ID for ACH
+  (often 1 and the EIN).
+- The description vendors see on their statement (10 characters at most,
+  VENDOR PAY to start).
+- Businesses (CCD) or people (PPD).
+- Whether each payment lists the bills it pays, for the vendor.
+- Whether the file has a debit to BMG's account that offsets the payments
+  (a balanced file), and how its lines end.
+
+Read NetSuite's last ACH file, picked or pasted, fills all of it from the
+last file NetSuite made for that bank account. The file is read in the
+browser, and only how it starts leaves it: its payments are only counted.
+Each save is audited, with routing numbers and no account number.
+
+**A balanced file.** When First Bank wants the offsetting debit in the file,
+BMG's account the payments come from is typed from BMG's own records,
+twice, with checking or savings. It's never taken from NetSuite's file. The
+privacy statement says the Service doesn't keep bank account and routing
+numbers from NetSuite or QuickBooks, and that holds: what's kept from
+NetSuite's file is how it starts, whose only routing number is First Bank's
+own, the bank's public number. Reading NetSuite's file says the last four
+digits of the account it debits, so the right one is typed. It's kept locked
+like a vendor's numbers (`offset_locked`, locked to that bank account), and
+the page shows only its last four digits.
+
+**Making the file.** An approved run with ACH payments shows ACH file for
+First Bank to super admins: each ACH payment, the account it pays to (the
+routing number and last four digits), and why one isn't ready (its bill payment isn't made
+in NetSuite yet, no numbers are confirmed on a call-back for the vendor, or
+those kept don't open as they're locked). The ready ones start ticked. Make
+the ACH file asks first, then:
+
+1. Each payment has to be one of this run's ACH payments, made in NetSuite,
+   and in no other file, unless that one was set aside.
+2. Each vendor's numbers confirmed on a call-back now are opened as they're
+   locked; one that doesn't open, or shows anything other than what's
+   locked, stops it, with why.
+3. The file is one batch: a credit to each vendor's account for what its
+   bill payment paid, with NetSuite's number for the bill payment as the
+   reference the vendor sees and, when set, an addenda listing the bills it
+   pays (`RMR*IV*B-4410**812.40\`, as many as fit in 80 characters). A
+   balanced file ends the batch with the debit to BMG's account for the
+   total.
+4. First Bank pays it on the run's day, or the first banking day after it
+   when that's a weekend or a Federal Reserve holiday, and never sooner than
+   the next banking day, by BMG's clock (Central time).
+5. Each file made for a day to First Bank gets a letter telling it apart, A
+   to Z then 0 to 9: 36 a day at most.
+6. It's kept locked to its own id (`file_locked`), with each payment in it
+   (`vendor_ach_file_payments`), and a payment in a file can't go in
+   another. Pressed twice, it's one file.
+
+An alert tells the other super admins and Craig (`books_ach_file_made`):
+the file's name, the run, how many vendors it pays and the day First Bank
+pays it, with no amounts.
+
+**Downloading and uploading.** Download the file downloads it as it was
+made (`ACH-BMG-2026-11-04-A.txt`), counted on the file. It's downloaded only
+while it waits to be uploaded, and not once a vendor's numbers in it were
+replaced or removed after it was made. Upload it in First Bank's online
+banking, then Uploaded to First Bank marks it sent: its locked copy goes, so
+it can't be downloaded again. A file not uploaded by its day to be paid
+says so in red: set it aside and make a new one.
+
+**Setting aside.** Set aside, with why, is for a file that won't be
+uploaded, or one First Bank refused or didn't pay: its locked copy goes, and
+its payments can go in a new file. On a file marked uploaded it
+warns first that a file First Bank paid would pay them twice. An alert tells
+the other super admins and Craig (`books_ach_file_set_aside`).
+
+**What's kept.** For each file (`vendor_ach_files`): its name, when it was
+made and its letter, the day First Bank pays it, how many payments, the
+total, the entry hash First Bank checks it with, who made, downloaded,
+uploaded or set it aside and when, and why it was set aside (never with a
+run of six digits, so no account number sits in words). For each
+payment in it: the vendor, the routing number, the last four digits,
+checking or savings, the name on the account and what it pays. The whole
+account numbers are only in the locked file while it waits to be uploaded,
+and in the vendors' locked numbers. Making, downloading, uploading and
+setting aside are audited, with routing numbers and last four digits at
+most. Nothing is sent to NetSuite: the bill payments are made there already
+("Vendors paid in FleetSuite").
+
+Made-up example: the November 6 run above pays Gateway Steel $2,450.00 by
+ACH. Once its bill payment is made in NetSuite as 1052, and Gateway's
+numbers are confirmed on a call-back (savings ending 1234), a super admin
+makes the file on Wednesday, November 4 at 9:15: `ACH-BMG-2026-11-04-A.txt`,
+one credit to Gateway's savings account for $2,450.00, reference 1052, with
+`RMR*IV*GS-209**2450.00\` for Gateway, paid Friday, November 6. They
+download it, upload it in First Bank's online banking, and mark it
+uploaded.
+
+### Before switching on
+
+- Ask First Bank for its ACH file specifications, and check each bank
+  account's setup against them: its routing number and name, BMG's ACH ID
+  and company ID, CCD, whether it wants a balanced file, and how lines end.
+  Reading NetSuite's last file for the account fills them in.
+- Have First Bank check a test file, or make a first one paying one vendor
+  a small amount, before a whole run.
+- FleetSuite dates each file the next banking day at the soonest: check
+  that's in time for First Bank's cut-off.
+
+### What isn't done yet
+
+- Prenotes, the zero-dollar entry that tries a vendor's new numbers before
+  the first payment.
+- Returns and notices of change from First Bank, which are read in its
+  online banking: a returned payment is voided in NetSuite and paid again.
+- Sending the file to First Bank from FleetSuite: it's downloaded and
+  uploaded by hand.
 
 ## Switches
 
@@ -5276,7 +5416,7 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 | `customer_payments` | Anyone with Invoicing receives a customer's check or ACH payment and puts it on that customer's open invoices, and FleetSuite makes the payment in NetSuite, in Undeposited Funds ("Payments received in FleetSuite") | Invoicing → Invoiced → Payment on an open invoice |
 | `customer_deposits` | Anyone with Invoicing takes a customer's check or ACH deposit on a sales order, and FleetSuite makes the customer deposit in NetSuite on that order, in Undeposited Funds; NetSuite puts it on the order's invoice when the order's billed ("Deposits taken in FleetSuite") | Deposit on a sales order, or on an estimate once it has its sales order |
 | `bank_deposits` | Anyone with Invoicing deposits the customer payments and deposits waiting in Undeposited Funds to one of the company's bank accounts, ticked from what NetSuite has waiting, and FleetSuite makes the bank deposit in NetSuite ("Bank deposits made in FleetSuite") | Invoicing → Invoiced → Bank deposit |
-| `vendor_payments` | Anyone with Payments pays the company's open bills in a payment run, ticked from what NetSuite has open, from one of its bank accounts, vendor by vendor by check or ACH, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite ("Vendors paid in FleetSuite"); its checks print on BMG's check stock from the run, each number set in NetSuite ("Checks printed on BMG's stock") | More → Money & Books → Pay Vendors |
+| `vendor_payments` | Anyone with Payments pays the company's open bills in a payment run, ticked from what NetSuite has open, from one of its bank accounts, vendor by vendor by check or ACH, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite ("Vendors paid in FleetSuite"); its checks print on BMG's check stock from the run, each number set in NetSuite ("Checks printed on BMG's stock"), and its ACH payments are paid from a file made for First Bank from the run ("The ACH file for First Bank") | More → Money & Books → Pay Vendors |
 
 ## Posting
 
