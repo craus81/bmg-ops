@@ -5341,6 +5341,151 @@ export async function createVendorPayment(p: VendorPaymentPayload): Promise<{ su
   }
 }
 
+// ── Checks printed on BMG's stock (Books part 58) ──────────────────────────
+
+/** A bill payment as getChecksNow reads it: src/lib/check-printing.ts's CheckNow. */
+export interface CheckNowItem {
+  /** NetSuite's number for it, its Check #: a number once it's printed or numbered, else whatever NetSuite shows. */
+  number: string;
+  toBePrinted: boolean;
+  voided: boolean;
+  vendorId: string | null;
+  totalCents: number | null;
+}
+
+/** A SuiteQL checkbox: 'T' when it's ticked. */
+const ticked = (v: unknown) => v === true || /^(t|true)$/i.test(textOf(v));
+
+/**
+ * These bill payments as NetSuite has them now, by id, so a run's checks are
+ * checked against NetSuite before FleetSuite numbers and prints them: each
+ * one's number (its Check #), whether it's still To Be Printed, whether it's
+ * voided, whose it is and what it comes to. One NetSuite doesn't have isn't
+ * in the answer. Throws when NetSuite can't be asked.
+ */
+export async function getChecksNow(paymentIds: readonly string[]): Promise<Map<string, CheckNowItem>> {
+  const ids = [...new Set(paymentIds.filter((i) => /^\d{1,20}$/.test(i)))];
+  const now = new Map<string, CheckNowItem>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const rows = await suiteqlQueryAll(
+      `SELECT t.id, t.tranid, t.tobeprinted, t.voided, t.entity AS vendor_id, t.foreigntotal AS total FROM transaction t WHERE t.type = 'VendPymt' AND t.id IN (${ids.slice(i, i + 200).join(', ')}) ORDER BY t.id`,
+      1000, { retries: 1 },
+    );
+    for (const row of rows) {
+      const vendorId = textOf(row.vendor_id);
+      now.set(textOf(row.id), {
+        number: textOf(row.tranid),
+        toBePrinted: ticked(row.tobeprinted),
+        voided: ticked(row.voided),
+        vendorId: /^\d+$/.test(vendorId) ? vendorId : null,
+        totalCents: unsignedCents(row.total),
+      });
+    }
+  }
+  return now;
+}
+
+/**
+ * Which of these check numbers NetSuite has already on a check, bill payment
+ * or refund drawn on this bank account, so FleetSuite never prints a second
+ * check with one. Throws when NetSuite can't be asked.
+ */
+export async function getCheckNumbersUsed(accountId: string, numbers: readonly number[]): Promise<number[]> {
+  const account = textOf(accountId);
+  if (!/^\d{1,20}$/.test(account)) throw new Error(`"${account}" isn't NetSuite's id for a bank account`);
+  const wanted = [...new Set(numbers.filter((n) => Number.isInteger(n) && n >= 1 && n <= 99_999_999))];
+  const used = new Set<number>();
+  for (let i = 0; i < wanted.length; i += 200) {
+    const rows = await suiteqlQueryAll(`
+      SELECT DISTINCT t.tranid
+      FROM transaction t
+      JOIN transactionaccountingline tal ON tal.transaction = t.id
+      WHERE t.type IN ('Check', 'VendPymt', 'CustRfnd') AND tal.account = ${account}
+        AND t.tranid IN (${wanted.slice(i, i + 200).map((n) => `'${n}'`).join(', ')})
+      ORDER BY t.tranid
+    `, 1000, { retries: 1 });
+    for (const row of rows) {
+      const n = textOf(row.tranid);
+      if (/^\d{1,8}$/.test(n)) used.add(Number(n));
+    }
+  }
+  return [...used].sort((a, b) => a - b);
+}
+
+/**
+ * The name NetSuite prints on each vendor's checks (its Print on Check As),
+ * by vendor id, for the vendors that have one; a check to one that doesn't
+ * is made out to its name. Throws when NetSuite can't be asked, so no check
+ * is made out to a name NetSuite wouldn't print.
+ */
+export async function getPrintOnCheckAs(vendorIds: readonly string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(vendorIds.filter((i) => /^\d{1,20}$/.test(i)))];
+  const names = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const rows = await suiteqlQueryAll(
+      `SELECT v.id, v.printoncheckas FROM vendor v WHERE v.id IN (${ids.slice(i, i + 200).join(', ')}) ORDER BY v.id`,
+      1000, { retries: 1 },
+    );
+    for (const row of rows) {
+      const name = textOf(row.printoncheckas);
+      if (name) names.set(textOf(row.id), name);
+    }
+  }
+  return names;
+}
+
+/**
+ * Set a bill payment's check number in NetSuite and take it off To Be
+ * Printed: PATCH /services/rest/record/v1/vendorPayment/{id} with its tranId
+ * (the Check #) and toBePrinted false, so its check prints from FleetSuite
+ * on the stock with that number, and never from NetSuite's Print Checks.
+ * Setting the same number again changes nothing. `unsure` is set when
+ * NetSuite may have taken it anyway (no answer in time, or a server error):
+ * ask NetSuite before giving the check another number.
+ */
+export async function setCheckNumber(paymentId: string, number: number, opts: { timeoutMs?: number } = {}): Promise<{ success: boolean; error?: string; unsure?: boolean }> {
+  if (!/^\d{1,20}$/.test(paymentId)) return { success: false, error: "A check's number is set on its bill payment, by NetSuite's id for it" };
+  if (!Number.isInteger(number) || number < 1 || number > 99_999_999) return { success: false, error: 'A check number is a whole number from 1 to 99,999,999' };
+
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/vendorPayment/${paymentId}`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'PATCH' });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 25000);
+  try {
+    const response = await netsuiteFetch(url, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify({ tranId: String(number), toBePrinted: false }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite set check number error:', text);
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      // A 4xx is NetSuite refusing it; after a server error it may have taken it anyway.
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}`, ...(response.status >= 500 ? { unsure: true } : {}) };
+    }
+    return { success: true };
+  } catch (e: any) {
+    const why = e?.name === 'AbortError' ? 'it took too long' : e?.message || 'no answer';
+    return { success: false, error: `NetSuite didn't answer (${why}).`, unsure: true };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
  *

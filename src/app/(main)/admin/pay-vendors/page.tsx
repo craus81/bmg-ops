@@ -12,12 +12,15 @@
  * or ACH, and change what's paid on a bill to pay part of it. Save it, and
  * ask for approval. A super admin who didn't ask approves it, or sends it
  * back with why, and FleetSuite makes each vendor's bill payment in NetSuite,
- * one at a time from this page. A check is made To Be Printed, so it prints
- * from NetSuite as checks do now. The rules are src/lib/pay-vendors.ts, the
- * same ones /api/pay-vendors checks a run by again, against what NetSuite has
- * open, when it's asked for, approved and made. Built switched off (Books →
+ * one at a time from this page. A check is made To Be Printed, and prints on
+ * BMG's check stock from the run's Checks (Books part 58,
+ * src/components/PayVendorChecks.tsx), which number it from the stock in the
+ * printer and set the number in NetSuite. The rules are src/lib/pay-vendors.ts,
+ * the same ones /api/pay-vendors checks a run by again, against what NetSuite
+ * has open, when it's asked for, approved and made. Built switched off (Books →
  * Switches): until it's on, super admins can make and save runs to see what
- * they'd pay, and none is asked for approval or sent.
+ * they'd pay, and line up the check stock, and none is asked for approval or
+ * sent.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -25,6 +28,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import TopSaveBar, { LEAVE_WITHOUT_SAVING } from '@/components/TopSaveBar';
+import { CheckStockPanel, RunChecks } from '@/components/PayVendorChecks';
 import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
@@ -206,6 +210,7 @@ export default function PayVendorsPage() {
   const [error, setError] = useState<string | null>(null);
   const [problems, setProblems] = useState<string[]>([]);
   const [done, setDone] = useState<{ text: string; warnings?: string[] } | null>(null);
+  const [lining, setLining] = useState(false);
 
   const allowed = !authLoading && hasFeature('vendor_payments') && canSeeMoney;
 
@@ -532,7 +537,7 @@ export default function PayVendorsPage() {
     if (!run || !worked) return;
     const ok = await dialog.confirm(
       `Approve this run and make ${plural(run.vendorCount, 'bill payment')} in NetSuite for ${formatCents(run.totalCents)}, `
-        + `from ${run.accountName || 'its bank account'}, dated ${day(run.date)}? Checks print from NetSuite as they do now.`,
+        + `from ${run.accountName || 'its bank account'}, dated ${day(run.date)}? Its checks print on the check stock from this page once they're made.`,
       { confirmLabel: 'Approve and pay', title: 'Approve a payment run' },
     );
     if (!ok) return;
@@ -828,103 +833,105 @@ export default function PayVendorsPage() {
           </div>
         </>
       ) : run ? (
-        <div style={{ ...card, display: 'grid', gap: '12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'baseline', flexWrap: 'wrap' }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: '17px', fontWeight: 800, color: theme.textPrimary, wordBreak: 'break-word' }}>
-                {companyName(run.company)} · {day(run.date)}
+        <>
+          <div style={{ ...card, display: 'grid', gap: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'baseline', flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '17px', fontWeight: 800, color: theme.textPrimary, wordBreak: 'break-word' }}>
+                  {companyName(run.company)} · {day(run.date)}
+                </div>
+                <div style={muted}>{[run.accountName, run.memo].filter(Boolean).join(' · ')}</div>
               </div>
-              <div style={muted}>{[run.accountName, run.memo].filter(Boolean).join(' · ')}</div>
+              <span style={{ fontSize: '13px', fontWeight: 800, color: STATUS[run.status].color }}>{STATUS[run.status].text}</span>
             </div>
-            <span style={{ fontSize: '13px', fontWeight: 800, color: STATUS[run.status].color }}>{STATUS[run.status].text}</span>
-          </div>
-          <div style={muted}>
-            {[run.createdBy ? `Started by ${run.createdBy}` : '',
-              run.askedBy ? `asked for approval by ${run.askedBy} ${when(run.askedAt)}` : '',
-              run.approvedBy ? `approved by ${run.approvedBy} ${when(run.approvedAt)}` : ''].filter(Boolean).join(' · ')}
-          </div>
+            <div style={muted}>
+              {[run.createdBy ? `Started by ${run.createdBy}` : '',
+                run.askedBy ? `asked for approval by ${run.askedBy} ${when(run.askedAt)}` : '',
+                run.approvedBy ? `approved by ${run.approvedBy} ${when(run.approvedAt)}` : ''].filter(Boolean).join(' · ')}
+            </div>
 
-          {run.status === 'waiting' ? run.payments.map((p) => (
-            <div key={p.vendorId} style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '8px', display: 'grid', gap: '4px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>
-                <span style={{ minWidth: 0 }}>{vendorNameOf(p)} · {PAY_METHODS[p.method]}</span>
-                <span style={num}>{formatCents(p.bills.reduce((s, b) => s + b.cents, 0))}</span>
-              </div>
-              {billLines(p)}
-            </div>
-          )) : run.made.map((p) => {
-            const s = PAYMENT_STATUS[p.status];
-            return (
-              <div key={p.id} style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '8px', display: 'grid', gap: '4px' }}>
+            {run.status === 'waiting' ? run.payments.map((p) => (
+              <div key={p.vendorId} style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '8px', display: 'grid', gap: '4px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>
                   <span style={{ minWidth: 0 }}>{vendorNameOf(p)} · {PAY_METHODS[p.method]}</span>
-                  <span style={num}>{formatCents(p.totalCents)}</span>
+                  <span style={num}>{formatCents(p.bills.reduce((s, b) => s + b.cents, 0))}</span>
                 </div>
                 {billLines(p)}
-                <div style={{ fontSize: '13px', fontWeight: 700, color: s.color }}>
-                  {p.status === 'made' ? `${s.text}: ${p.number || `bill payment ${p.billPaymentId}`}`
-                    : p.status === 'dropped' ? `${s.text}${p.droppedBy ? ` by ${p.droppedBy}` : ''}${p.droppedReason ? `: ${p.droppedReason}` : ''}`
-                      : p.status === 'refused' ? `${s.text}: ${p.error || "NetSuite didn't make it."}`
-                        : p.status === 'sending' && p.error ? `NetSuite didn't say whether it made it: ${p.error}` : s.text}
-                </div>
-                {run.status === 'approved' && data.switchedOn && (p.status === 'refused' || (p.status === 'sending' && (p.stale || !!p.error)) || p.status === 'to_make') && (
-                  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                    {p.status !== 'to_make' && (
-                      <button type="button" onClick={() => make([p.id])} disabled={busy !== null} style={{ ...small, ...(busy !== null ? off : {}) }}>
-                        {p.status === 'sending' ? 'Ask NetSuite' : 'Make it again'}
-                      </button>
-                    )}
-                    {superAdmin && p.status !== 'sending' && (
-                      <button type="button" onClick={() => drop(p)} disabled={busy !== null} style={{ ...small, color: theme.error, borderColor: theme.errorBorder }}>
-                        Drop from the run
-                      </button>
-                    )}
-                  </div>
-                )}
               </div>
-            );
-          })}
+            )) : run.made.map((p) => {
+              const s = PAYMENT_STATUS[p.status];
+              return (
+                <div key={p.id} style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '8px', display: 'grid', gap: '4px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '14px', fontWeight: 800, color: theme.textPrimary }}>
+                    <span style={{ minWidth: 0 }}>{vendorNameOf(p)} · {PAY_METHODS[p.method]}</span>
+                    <span style={num}>{formatCents(p.totalCents)}</span>
+                  </div>
+                  {billLines(p)}
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: s.color }}>
+                    {p.status === 'made' ? `${s.text}: ${p.number || `bill payment ${p.billPaymentId}`}`
+                      : p.status === 'dropped' ? `${s.text}${p.droppedBy ? ` by ${p.droppedBy}` : ''}${p.droppedReason ? `: ${p.droppedReason}` : ''}`
+                        : p.status === 'refused' ? `${s.text}: ${p.error || "NetSuite didn't make it."}`
+                          : p.status === 'sending' && p.error ? `NetSuite didn't say whether it made it: ${p.error}` : s.text}
+                  </div>
+                  {run.status === 'approved' && data.switchedOn && (p.status === 'refused' || (p.status === 'sending' && (p.stale || !!p.error)) || p.status === 'to_make') && (
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      {p.status !== 'to_make' && (
+                        <button type="button" onClick={() => make([p.id])} disabled={busy !== null} style={{ ...small, ...(busy !== null ? off : {}) }}>
+                          {p.status === 'sending' ? 'Ask NetSuite' : 'Make it again'}
+                        </button>
+                      )}
+                      {superAdmin && p.status !== 'sending' && (
+                        <button type="button" onClick={() => drop(p)} disabled={busy !== null} style={{ ...small, color: theme.error, borderColor: theme.errorBorder }}>
+                          Drop from the run
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 800, color: theme.textPrimary, borderTop: `1px solid ${theme.border}`, paddingTop: '8px' }}>
-            <span>{plural(run.vendorCount, 'vendor')} · {plural(run.billCount, 'bill')}</span><span style={num}>{formatCents(run.totalCents)}</span>
-          </div>
-          {run.status === 'waiting' && run.checkError && <div style={red}>{run.checkError}</div>}
-          {run.status === 'waiting' && worked && worked.problems.length > 0 && problems.length === 0 && (
-            <div style={{ display: 'grid', gap: '2px' }}>{worked.problems.map((p, i) => <div key={`${i}-${p}`} style={red}>{p}</div>)}</div>
-          )}
-          {run.status !== 'waiting' && run.made.some((p) => p.method === 'check' && p.status === 'made') && (
-            <div style={muted}>Its checks are made To Be Printed in NetSuite, so they print from NetSuite as checks do now.</div>
-          )}
-          {said}
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {run.status === 'waiting' && (
-              <>
-                {superAdmin && (
-                  <button type="button" onClick={approve} disabled={!canApprove || busy !== null} style={{ ...green, ...(!canApprove || busy !== null ? off : {}) }}>
-                    {busy === 'approve' ? 'Approving…' : 'Approve and pay'}
-                  </button>
-                )}
-                {superAdmin && <button type="button" onClick={sendBack} disabled={busy !== null} style={btn}>Send back</button>}
-                {canTakeBack && (
-                  <button type="button" onClick={() => act('take_back', {}, 'Taken back. Change it, then ask for approval again.')}
-                    disabled={busy !== null} style={btn}>Take back to change it</button>
-                )}
-              </>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 800, color: theme.textPrimary, borderTop: `1px solid ${theme.border}`, paddingTop: '8px' }}>
+              <span>{plural(run.vendorCount, 'vendor')} · {plural(run.billCount, 'bill')}</span><span style={num}>{formatCents(run.totalCents)}</span>
+            </div>
+            {run.status === 'waiting' && run.checkError && <div style={red}>{run.checkError}</div>}
+            {run.status === 'waiting' && worked && worked.problems.length > 0 && problems.length === 0 && (
+              <div style={{ display: 'grid', gap: '2px' }}>{worked.problems.map((p, i) => <div key={`${i}-${p}`} style={red}>{p}</div>)}</div>
             )}
-            {run.status === 'approved' && data.switchedOn && run.made.some((p) => p.status === 'to_make') && (
-              <button type="button" onClick={() => make(run.made.filter((p) => p.status === 'to_make').map((p) => p.id))} disabled={busy !== null}
-                style={{ ...green, ...(busy !== null ? off : {}) }}>
-                {busy === 'make' ? 'Making them…' : 'Make the bill payments in NetSuite'}
-              </button>
+            {said}
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {run.status === 'waiting' && (
+                <>
+                  {superAdmin && (
+                    <button type="button" onClick={approve} disabled={!canApprove || busy !== null} style={{ ...green, ...(!canApprove || busy !== null ? off : {}) }}>
+                      {busy === 'approve' ? 'Approving…' : 'Approve and pay'}
+                    </button>
+                  )}
+                  {superAdmin && <button type="button" onClick={sendBack} disabled={busy !== null} style={btn}>Send back</button>}
+                  {canTakeBack && (
+                    <button type="button" onClick={() => act('take_back', {}, 'Taken back. Change it, then ask for approval again.')}
+                      disabled={busy !== null} style={btn}>Take back to change it</button>
+                  )}
+                </>
+              )}
+              {run.status === 'approved' && data.switchedOn && run.made.some((p) => p.status === 'to_make') && (
+                <button type="button" onClick={() => make(run.made.filter((p) => p.status === 'to_make').map((p) => p.id))} disabled={busy !== null}
+                  style={{ ...green, ...(busy !== null ? off : {}) }}>
+                  {busy === 'make' ? 'Making them…' : 'Make the bill payments in NetSuite'}
+                </button>
+              )}
+            </div>
+            {run.status === 'waiting' && superAdmin && mine && (
+              <div style={muted}>You asked for this one, so a super admin who didn&apos;t ask approves it.</div>
+            )}
+            {run.status === 'waiting' && superAdmin && !data.switchedOn && (
+              <div style={muted}>Approving is switched off until paying vendors is switched on.</div>
             )}
           </div>
-          {run.status === 'waiting' && superAdmin && mine && (
-            <div style={muted}>You asked for this one, so a super admin who didn&apos;t ask approves it.</div>
+          {(run.status === 'approved' || run.status === 'done') && run.made.some((p) => p.method === 'check' && p.status !== 'dropped') && (
+            <RunChecks key={run.id} runId={run.id} madeKey={run.made.map((p) => `${p.id}:${p.status}`).join(',')} />
           )}
-          {run.status === 'waiting' && superAdmin && !data.switchedOn && (
-            <div style={muted}>Approving is switched off until paying vendors is switched on.</div>
-          )}
-        </div>
+        </>
       ) : (
         <>
           {data.companies.length > 1 && (
@@ -948,6 +955,18 @@ export default function PayVendorsPage() {
           {section('Being paid', lists.approved)}
           {section('Drafts', lists.draft, lists.waiting.length + lists.approved.length + lists.done.length === 0 ? `No payment runs for ${companyName(data.company)} yet.` : undefined)}
           {section('Paid', lists.done)}
+          <div style={{ ...card, display: 'grid', gap: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={heading}>Check stock</div>
+                <div style={muted}>Where checks print on BMG&apos;s check stock, for each bank account.</div>
+              </div>
+              <button type="button" onClick={() => setLining((v) => !v)} aria-expanded={lining} style={small}>
+                {lining ? 'Done lining up' : 'Line up the check stock'}
+              </button>
+            </div>
+            {lining && <CheckStockPanel key={data.company} company={data.company} />}
+          </div>
         </>
       )}
     </div>

@@ -13,8 +13,9 @@
  * saved as a draft and asked for approval, and a super admin who didn't ask
  * approves it. Then FleetSuite makes each payment in NetSuite once, as a bill
  * payment under its own External ID, and keeps Books' own copy. A check is
- * made To Be Printed, so it prints from NetSuite's Print Checks until
- * FleetSuite prints checks itself; an ACH payment isn't. Vendor credits,
+ * made To Be Printed, and prints on BMG's check stock from the run (part 58,
+ * src/lib/check-printing.ts), which sets its number in NetSuite and takes it
+ * off To Be Printed; an ACH payment isn't To Be Printed. Vendor credits,
  * early-payment discounts, the ACH file and bank numbers aren't done.
  *
  * The rules here are pure; /api/pay-vendors and the Pay vendors page both use
