@@ -244,6 +244,19 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Super admins, except the one who did it.' },
+  // The ACH file for First Bank (migration 491): a file made from a payment
+  // run, and one set aside. Emailed like the vendor bank number alerts, only
+  // to anyone with "Copy me on new alerts". No amounts.
+  { type: 'books_ach_file_made', label: 'An ACH file for First Bank was made', description: "A super admin made the ACH file for a payment run's ACH payments on the Pay vendors page, each paid to the vendor's bank numbers confirmed on a call-back, to upload to First Bank. Opens the run.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, except the one who made it.' },
+  { type: 'books_ach_file_set_aside', label: 'An ACH file for First Bank was set aside', description: "A super admin set aside an ACH file made from a payment run, because First Bank refused it or it was never sent, with why. Its payments can go in a new file, so one First Bank already took would pay them twice. Opens the run.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, except the one who set it aside.' },
   // A send to NetSuite FleetSuite isn't sure about (part 45, migration 477).
   // Emailed like the Inventory Adjust alert, only to anyone with "Copy me on
   // new alerts" (Craig's standing rule, 2026-10-28).

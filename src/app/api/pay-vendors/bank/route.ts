@@ -9,7 +9,7 @@ import { deepLinks } from '@/lib/deep-links';
 import {
   NOTE_MAX, TRIES, callBackProblems, entryProblems, mismatchText, noteProblem, numbersOf, readBackDiffers, type BankStatus,
 } from '@/lib/vendor-bank';
-import { bankKey, confirmSeal, confirmSealHolds, lockNumbers, openNumbers, openedProblem, type BankKey } from '@/lib/vendor-bank-lock';
+import { bankKey, confirmSeal, keptSetProblem, lockNumbers, openNumbers, openedProblem } from '@/lib/vendor-bank-lock';
 
 export const dynamic = 'force-dynamic';
 
@@ -126,21 +126,6 @@ async function readPhoneChanges(ids: string[]): Promise<Map<string, { at: string
   return changes;
 }
 
-/** Why a set waiting or confirmed can't be trusted as it stands, or null when it can. */
-function liveProblem(r: BankRow, key: BankKey | null): string | null {
-  if (!key || !r.account_locked) return null;
-  const opened = openNumbers(key, r.account_locked, r.vendor_netsuite_id, r.id);
-  if ('problem' in opened) return openedProblem(opened.problem);
-  const n = opened.numbers;
-  if (n.routing !== r.routing_number || !n.account.endsWith(r.account_last4) || n.type !== r.account_type) {
-    return "What these show isn't what's locked, so they were changed outside FleetSuite: enter them again.";
-  }
-  if (r.status === 'confirmed' && !confirmSealHolds(key, r.confirm_seal, r.vendor_netsuite_id, r.id)) {
-    return "FleetSuite didn't confirm these, so they were changed outside it: enter them again and confirm them on a call-back.";
-  }
-  return null;
-}
-
 /**
  * GET /api/pay-vendors/bank — the bank numbers kept for vendors (the numbers themselves never: the four digits an
  * account ends with), whether VENDOR_BANK_KEY is there to lock them, each set waiting for a call-back with the phone on
@@ -195,7 +180,7 @@ export async function GET(req: NextRequest) {
       endedBy: nameOf(r.ended_by),
       endedAt: r.ended_at,
       endedWhy: r.ended_why,
-      problem: liveProblem(r, key),
+      problem: keptSetProblem(r, key),
       phone: r.status === 'pending' ? vendors.get(r.vendor_netsuite_id)?.phone || null : null,
       phoneChanged: r.status === 'pending' ? phoneChanges.get(r.vendor_netsuite_id) ?? null : null,
     });
@@ -329,7 +314,7 @@ async function confirm(body: Extract<Body, { action: 'confirm' }>, me: string) {
   const opened = openNumbers(read.key, row.account_locked ?? '', row.vendor_netsuite_id, row.id);
   if ('problem' in opened) return NextResponse.json({ error: openedProblem(opened.problem) }, { status: 409 });
   // What the page shows has to be what's locked: a set changed outside FleetSuite isn't confirmed.
-  const wrong = liveProblem(row, read.key);
+  const wrong = keptSetProblem(row, read.key);
   if (wrong) return NextResponse.json({ error: wrong }, { status: 409 });
 
   const vendor = vendorOf(row);

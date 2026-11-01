@@ -15,7 +15,11 @@
  * one at a time from this page. A check is made To Be Printed, and prints on
  * BMG's check stock from the run's Checks (Books part 58,
  * src/components/PayVendorChecks.tsx), which number it from the stock in the
- * printer and set the number in NetSuite. The rules are src/lib/pay-vendors.ts,
+ * printer and set the number in NetSuite. An ACH payment is paid by the run's
+ * ACH file for First Bank (part 60, src/components/PayVendorAch.tsx), which a
+ * super admin makes, downloads and uploads to First Bank, each paid to the
+ * vendor's bank numbers confirmed on a call-back (part 59,
+ * src/components/VendorBankNumbers.tsx). The rules are src/lib/pay-vendors.ts,
  * the same ones /api/pay-vendors checks a run by again, against what NetSuite
  * has open, when it's asked for, approved and made. Built switched off (Books →
  * Switches): until it's on, super admins can make and save runs to see what
@@ -29,6 +33,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import TopSaveBar, { LEAVE_WITHOUT_SAVING } from '@/components/TopSaveBar';
 import { CheckStockPanel, RunChecks } from '@/components/PayVendorChecks';
+import { AchSetupPanel, RunAchFile } from '@/components/PayVendorAch';
 import { VendorBankPanel } from '@/components/VendorBankNumbers';
 import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
@@ -212,6 +217,7 @@ export default function PayVendorsPage() {
   const [problems, setProblems] = useState<string[]>([]);
   const [done, setDone] = useState<{ text: string; warnings?: string[] } | null>(null);
   const [lining, setLining] = useState(false);
+  const [achSetup, setAchSetup] = useState(false);
   // Vendor bank numbers, opened by an alert's link (?bank=<vendor>).
   const [banking, setBanking] = useState(() => searchParams.has('bank'));
 
@@ -934,6 +940,9 @@ export default function PayVendorsPage() {
           {(run.status === 'approved' || run.status === 'done') && run.made.some((p) => p.method === 'check' && p.status !== 'dropped') && (
             <RunChecks key={run.id} runId={run.id} madeKey={run.made.map((p) => `${p.id}:${p.status}`).join(',')} />
           )}
+          {superAdmin && (run.status === 'approved' || run.status === 'done') && run.made.some((p) => p.method === 'ach' && p.status !== 'dropped') && (
+            <RunAchFile key={`ach-${run.id}`} runId={run.id} madeKey={run.made.map((p) => `${p.id}:${p.status}`).join(',')} />
+          )}
         </>
       ) : (
         <>
@@ -970,6 +979,20 @@ export default function PayVendorsPage() {
             </div>
             {lining && <CheckStockPanel key={data.company} company={data.company} />}
           </div>
+          {superAdmin && (
+            <div style={{ ...card, display: 'grid', gap: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={heading}>ACH file for First Bank</div>
+                  <div style={muted}>How First Bank takes the ACH file from each bank account, set the way NetSuite&apos;s file is.</div>
+                </div>
+                <button type="button" onClick={() => setAchSetup((v) => !v)} aria-expanded={achSetup} style={small}>
+                  {achSetup ? 'Done setting up' : 'Set up the ACH file'}
+                </button>
+              </div>
+              {achSetup && <AchSetupPanel key={data.company} company={data.company} />}
+            </div>
+          )}
           {superAdmin && (
             <div style={{ ...card, display: 'grid', gap: '10px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
