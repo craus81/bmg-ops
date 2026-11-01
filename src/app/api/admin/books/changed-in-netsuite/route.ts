@@ -14,13 +14,13 @@ const failed = (err: unknown) => NextResponse.json({ error: String((err as any)?
 /**
  * GET /api/admin/books/changed-in-netsuite — Books → Changed in NetSuite
  * (src/lib/fleetsuite-records.ts, docs/books.md "FleetSuite's record wins"):
- * whether FleetSuite's record wins is on, the fields of customers and vendors
- * where NetSuite has something else than FleetSuite, newest first, and the
- * last ones dealt with.
+ * whether FleetSuite's record wins is on, the fields of customers, vendors
+ * and items where NetSuite has something else than FleetSuite, newest first,
+ * and the last ones dealt with.
  *
  * POST { id, act: 'keep' | 'take' } — keeps FleetSuite's, sending it on to
- * NetSuite, or takes NetSuite's into FleetSuite's record. Only while it's on.
- * Audited.
+ * NetSuite (an item's vendor and labor hours stay in FleetSuite), or takes
+ * NetSuite's into FleetSuite's record. Only while it's on. Audited.
  *
  * Super admin only, as the books are.
  */
@@ -76,8 +76,8 @@ export async function POST(req: NextRequest) {
         name: row.name,
         field: row.field,
         outcome: result.status,
-        fleetsuite: shownValue(row.fleetsuite_value),
-        netsuite: shownValue(row.netsuite_value),
+        fleetsuite: shownValue(row.fleetsuite_value, row.field),
+        netsuite: shownValue(row.netsuite_value, row.field),
       },
     });
     return NextResponse.json({ id, status: result.status });

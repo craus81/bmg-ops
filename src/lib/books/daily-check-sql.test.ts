@@ -1175,6 +1175,25 @@ describe('the daily books check', () => {
     }
   });
 
+  it("tells about an item's change in dollars and hours, not saying keeping sends its labor on (part 49)", async () => {
+    const seen = (field: string, fleetsuite: string, netsuite: string) => ({ kind: 'item', netsuite_id: '5001', name: 'C4-RA24-3', field, fleetsuite, netsuite, differs: true });
+    await pg.query('SELECT note_record_differences($1::jsonb)', [JSON.stringify([seen('labor_hours', '1.5', '2'), seen('purchase_price', '12.5', '14.25')])]);
+    await pg.exec(`UPDATE record_differences SET first_seen_at = first_seen_at - interval '1 minute' WHERE field = 'labor_hours'`);
+    await pg.exec(`UPDATE books_switches SET is_on = true WHERE piece = 'fleetsuite_records'`);
+    try {
+      await look('first');
+      expect(toldChanges.map((a) => [a.title, a.body])).toEqual([
+        ['Labor hours changed in NetSuite for C4-RA24-3',
+          'NetSuite has "2 hours" where FleetSuite has "1.5 hours". ' + "FleetSuite's stays until someone keeps it or takes NetSuite's."],
+        ['Purchase price changed in NetSuite for C4-RA24-3',
+          'NetSuite has "$14.25" where FleetSuite has "$12.50". ' + "FleetSuite's stays until someone keeps it, which sends it on to NetSuite, or takes NetSuite's."],
+      ]);
+    } finally {
+      await pg.exec(`UPDATE books_switches SET is_on = false WHERE piece = 'fleetsuite_records'`);
+      await pg.exec('DELETE FROM record_differences WHERE true');
+    }
+  });
+
   // From here on BMG's books are live, which can't be undone (migration 359).
   it("looks only at the months since a company's books went live, the opening entry standing in the month before", async () => {
     // Made-up: BMG's books went live on September 1, 2026, so its December 2025 and August 2026 stay as they were.

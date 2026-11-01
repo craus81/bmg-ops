@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { runCategorySweep } from '@/lib/part-category-sweep';
+import { itemToWrite, netsuiteItemFacts, noteDifferences, readItemRecords, recordsWinForSync, type Seen } from '@/lib/fleetsuite-records';
 
 /**
  * Parts-catalog sync against NetSuite (K11).
@@ -24,6 +25,11 @@ import { runCategorySweep } from '@/lib/part-category-sweep';
  * (`src/lib/inventory-sync.ts`) stays the freshness authority for on-hand/
  * available. The incremental sync still writes quantities for the items it
  * touches (new items need a starting value).
+ *
+ * Once FleetSuite's record wins is switched on (part 49,
+ * src/lib/fleetsuite-records.ts), both keep the number, names, description,
+ * purchase price, vendor and labor hours FleetSuite has for a part, NetSuite's
+ * filling a blank one, and note where NetSuite has something else.
  */
 
 /**
@@ -49,6 +55,34 @@ const chunk = <T,>(arr: T[], size: number): T[][] => {
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
 };
+
+/**
+ * Upserts synced parts, 200 at a time, in groups that name the same columns.
+ * One upsert of rows naming different columns writes every column any of them
+ * names (supabase-js asks PostgREST for all of them), and a row without one
+ * gets null there: a part NetSuite has no labor hours for lost FleetSuite's
+ * whenever another part in its batch had NetSuite's.
+ */
+export async function upsertPartRows(service: SupabaseClient, rows: Array<Record<string, unknown>>): Promise<number> {
+  const shapes = new Map<string, Array<Record<string, unknown>>>();
+  for (const row of rows) {
+    const shape = Object.keys(row).sort().join(',');
+    const group = shapes.get(shape);
+    if (group) group.push(row);
+    else shapes.set(shape, [row]);
+  }
+  let upserted = 0;
+  for (const group of shapes.values()) {
+    for (const batch of chunk(group, 200)) {
+      const { error } = await service
+        .from('netsuite_parts')
+        .upsert(batch, { onConflict: 'netsuite_id', ignoreDuplicates: false });
+      if (error) throw new Error(`Failed to upsert batch: ${error.message}`);
+      upserted += batch.length;
+    }
+  }
+  return upserted;
+}
 
 /**
  * The item types the catalog mirrors. The full rebuild, the incremental cron
@@ -266,6 +300,8 @@ export interface PartsIncrementalResult {
   itemsWithPrice: number;
   /** Parts re-categorized by the tagging rules (migration 209). */
   categorized?: number;
+  /** Once FleetSuite's record wins: parts' fields NetSuite newly has something else for. */
+  changedInNetsuite?: number;
   error?: string;
   /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
   syncStateWrite?: HeartbeatResult;
@@ -414,6 +450,14 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
     }
   }
 
+  // Once FleetSuite's record wins (part 49, src/lib/fleetsuite-records.ts), a
+  // part FleetSuite has keeps its number, names, description, purchase price,
+  // vendor and labor hours, NetSuite's filling a blank one, and what NetSuite
+  // has instead is noted. A read of the switch or of FleetSuite's parts that
+  // fails fails the run rather than write over what it couldn't see.
+  const fleetsuite = (await recordsWinForSync(service)) ? await readItemRecords(service, activeIds) : null;
+  const seen: Seen[] = [];
+
   // ── Upsert, batches of 200, same row shape as the full sync.
   // The fixed column list below is ALSO the protection for FleetSuite-owned
   // columns (image_path, marketing_description, product_url,
@@ -421,55 +465,51 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
   // height_in/weight_lb/mount_type/dims_source) — an upsert only writes the
   // keys it names, so never add those columns here.
   const now = new Date().toISOString();
-  let upserted = 0;
-  for (const batch of chunk(active, 200)) {
-    const upsertData = batch.map((item: any) => {
-      const nsId = item.id?.toString();
-      const itemNumber = item.item_number || '';
-      const className = item.class_name || '';
-      const qty = qtyMap ? (qtyMap[nsId] || { onHand: 0, available: 0 }) : null;
-      return {
-        netsuite_id: nsId,
-        item_number: itemNumber,
-        display_name: item.display_name || itemNumber,
-        description: item.description || item.display_name || '',
-        item_type: item.itemtype || '',
-        catalog: catalogOverrides[nsId] || determineCatalog(itemNumber, className),
-        // FleetSuite's price wins; NetSuite's only fills a part with none.
-        sales_price: resolveSalesPrice(localPrices[nsId], pricingMap[nsId]),
-        purchase_price: parseFloat(item.purchase_price || '0') || 0,
-        ...(qty ? { quantity_on_hand: qty.onHand, quantity_available: qty.available } : {}),
-        // Labor hours only when NetSuite actually carries a value (custitem1).
-        // A blank used to become 0 on every run — clobbering labor entered
-        // in FleetSuite and making "not set" look like "no labor"
-        // (migration 258: NULL = not set, 0 = no labor charged). Generic
-        // parts (migration 462) keep no labor of their own at all.
-        ...(!genericIds.has(nsId) && item.labor_hours != null && String(item.labor_hours).trim() !== ''
-          ? { labor_hours: parseFloat(item.labor_hours) || 0 }
-          : {}),
-        ns_class: className || null,
-        ns_department: item.department_name || null,
-        vendor: item.vendor_name || localVendors[nsId] || null,
-        // Only ever written from NetSuite's own answer. Anything else —
-        // the column missing, an item that didn't report it — stays NULL,
-        // and NULL means taxable downstream.
-        ...(taxabilityAvailable
-          ? { is_taxable: item.istaxable === 'T' ? true : item.istaxable === 'F' ? false : null }
-          : {}),
-        is_active: true,
-        last_synced_at: now,
-        updated_at: now,
-      };
-    });
+  const rows = active.map((item: any) => {
+    const nsId = item.id?.toString();
+    const mine = fleetsuite?.get(nsId);
+    const kept = mine ? itemToWrite(nsId, netsuiteItemFacts(item, item.purchase_price), mine, { costRead: true }) : null;
+    if (kept) seen.push(...kept.seen);
+    const itemNumber = kept ? kept.columns.item_number : item.item_number || '';
+    const className = item.class_name || '';
+    const qty = qtyMap ? (qtyMap[nsId] || { onHand: 0, available: 0 }) : null;
+    return {
+      netsuite_id: nsId,
+      item_number: itemNumber,
+      display_name: item.display_name || itemNumber,
+      description: item.description || item.display_name || '',
+      item_type: item.itemtype || '',
+      catalog: catalogOverrides[nsId] || determineCatalog(itemNumber, className),
+      // FleetSuite's price wins; NetSuite's only fills a part with none.
+      sales_price: resolveSalesPrice(localPrices[nsId], pricingMap[nsId]),
+      purchase_price: parseFloat(item.purchase_price || '0') || 0,
+      ...(qty ? { quantity_on_hand: qty.onHand, quantity_available: qty.available } : {}),
+      // Labor hours only when NetSuite actually carries a value (custitem1).
+      // A blank used to become 0 on every run — clobbering labor entered
+      // in FleetSuite and making "not set" look like "no labor"
+      // (migration 258: NULL = not set, 0 = no labor charged). Generic
+      // parts (migration 462) keep no labor of their own at all.
+      ...(!genericIds.has(nsId) && item.labor_hours != null && String(item.labor_hours).trim() !== ''
+        ? { labor_hours: parseFloat(item.labor_hours) || 0 }
+        : {}),
+      ns_class: className || null,
+      ns_department: item.department_name || null,
+      vendor: item.vendor_name || localVendors[nsId] || null,
+      // Only ever written from NetSuite's own answer. Anything else —
+      // the column missing, an item that didn't report it — stays NULL,
+      // and NULL means taxable downstream.
+      ...(taxabilityAvailable
+        ? { is_taxable: item.istaxable === 'T' ? true : item.istaxable === 'F' ? false : null }
+        : {}),
+      is_active: true,
+      last_synced_at: now,
+      updated_at: now,
+      ...(kept ? kept.columns : {}),
+    };
+  });
+  const upserted = await upsertPartRows(service, rows);
 
-    const { error } = await service
-      .from('netsuite_parts')
-      .upsert(upsertData, { onConflict: 'netsuite_id', ignoreDuplicates: false });
-    if (error) throw new Error(`Failed to upsert batch: ${error.message}`);
-    upserted += upsertData.length;
-  }
-
-  const promoted = await promoteManualTwins(service, active);
+  const promoted = await promoteManualTwins(service, rows);
 
   // Newly synced parts arrive uncategorized, so run the tagging rules
   // (migration 209) behind every sync — otherwise a rule only ever covers
@@ -482,6 +522,10 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
     console.error('[parts-sync] category rule sweep failed:', err?.message || err);
   }
 
+  // Noted before the run's time moves on: when it can't be, the run fails and
+  // these items are read again next run.
+  const changed = await noteDifferences(service, 'item', seen);
+
   const result = {
     modified: nsItems.length,
     upserted,
@@ -489,6 +533,7 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
     promoted,
     categorized,
     itemsWithPrice: Object.keys(pricingMap).length,
+    ...(fleetsuite ? { changedInNetsuite: changed.opened } : {}),
   };
   return { ...result, syncStateWrite: await recordHeartbeat(service, 'netsuite_parts', result) };
 }

@@ -4,7 +4,8 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { determineCatalog, fetchSalesPrices, promoteManualTwins, resolveSalesPrice, SYNCED_ITEM_TYPES } from '@/lib/parts-sync';
+import { determineCatalog, fetchSalesPrices, promoteManualTwins, resolveSalesPrice, SYNCED_ITEM_TYPES, upsertPartRows } from '@/lib/parts-sync';
+import { itemToWrite, netsuiteItemFacts, noteDifferences, readItemRecords, recordsWinForSync, type Seen } from '@/lib/fleetsuite-records';
 
 const ITEM_TYPES_SQL = SYNCED_ITEM_TYPES.map(t => `'${t}'`).join(', ');
 
@@ -83,6 +84,9 @@ export async function POST(req: NextRequest) {
     // Try multiple approaches since NetSuite SuiteQL table names vary
     let pricingMap: Record<string, number> = {};
     let costMap: Record<string, { purchasePrice: number; quantityOnHand: number; quantityAvailable: number }> = {};
+    // Whether NetSuite's costs were read: when not, a part FleetSuite has
+    // keeps its purchase price once FleetSuite's record wins.
+    let costRead = false;
 
     // 1. Get cost and quantity from item table
     try {
@@ -106,6 +110,7 @@ export async function POST(req: NextRequest) {
           };
         }
       }
+      costRead = true;
 
       // Get inventory quantities using totalquantityonhand
       let qtyCount = 0;
@@ -178,63 +183,63 @@ export async function POST(req: NextRequest) {
       if (r.netsuite_id && r.is_generic) genericIds.add(String(r.netsuite_id));
     }
 
+    // Once FleetSuite's record wins (part 49, src/lib/fleetsuite-records.ts),
+    // a part FleetSuite has keeps its number, names, description, purchase
+    // price, vendor and labor hours, NetSuite's filling a blank one, and what
+    // NetSuite has instead is noted. A read of the switch or of FleetSuite's
+    // parts that fails stops the rebuild.
+    const fleetsuite = (await recordsWinForSync(supabase))
+      ? await readItemRecords(supabase, nsItems.map((item: any) => String(item.id ?? '')))
+      : null;
+    const seen: Seen[] = [];
+
     // Build upsert batch
     let added = 0;
     let updated = 0;
     const now = new Date().toISOString();
 
-    // Process in batches of 200
-    const batchSize = 200;
-    for (let i = 0; i < nsItems.length; i += batchSize) {
-      const batch = nsItems.slice(i, i + batchSize);
+    const rows = nsItems.map((item: any) => {
+      const nsId = item.id?.toString();
+      const costInfo = costMap[nsId] || { purchasePrice: 0, quantityOnHand: 0, quantityAvailable: 0 };
+      const mine = fleetsuite?.get(nsId);
+      const kept = mine
+        ? itemToWrite(nsId, netsuiteItemFacts(item, costInfo.purchasePrice), mine, { costRead })
+        : null;
+      if (kept) seen.push(...kept.seen);
+      const itemNumber = kept ? kept.columns.item_number : item.item_number || '';
+      const className = item.class_name || '';
+      const catalog = catalogOverrides[nsId] || determineCatalog(itemNumber, className);
+      // FleetSuite's price wins; NetSuite's only fills a part with none.
+      const pricing = resolveSalesPrice(localPrices[nsId], pricingMap[nsId]);
 
-      const upsertData = batch.map((item: any) => {
-        const nsId = item.id?.toString();
-        const itemNumber = item.item_number || '';
-        const className = item.class_name || '';
-        const catalog = catalogOverrides[nsId] || determineCatalog(itemNumber, className);
-        // FleetSuite's price wins; NetSuite's only fills a part with none.
-        const pricing = resolveSalesPrice(localPrices[nsId], pricingMap[nsId]);
-        const costInfo = costMap[nsId] || { purchasePrice: 0, quantityOnHand: 0, quantityAvailable: 0 };
-
-        return {
-          netsuite_id: nsId,
-          item_number: itemNumber,
-          display_name: item.display_name || itemNumber,
-          description: item.description || item.display_name || '',
-          item_type: item.itemtype || '',
-          catalog,
-          sales_price: pricing,
-          purchase_price: costInfo.purchasePrice,
-          quantity_on_hand: costInfo.quantityOnHand,
-          quantity_available: costInfo.quantityAvailable,
-          // Only when NetSuite carries a value — blank must not become 0
-          // (migration 258: NULL = not set, 0 = no labor charged).
-          ...(!genericIds.has(nsId) && item.labor_hours != null && String(item.labor_hours).trim() !== ''
-            ? { labor_hours: parseFloat(item.labor_hours) || 0 }
-            : {}),
-          ns_class: className || null,
-          ns_category: null,
-          ns_department: item.department_name || null,
-          vendor: item.vendor_name || localVendors[nsId] || null,
-          is_active: true,
-          last_synced_at: now,
-          updated_at: now,
-        };
-      });
-
-      const { error: upsertError } = await supabase
-        .from('netsuite_parts')
-        .upsert(upsertData, {
-          onConflict: 'netsuite_id',
-          ignoreDuplicates: false,
-        });
-
-      if (upsertError) {
-        console.error('Upsert batch error:', upsertError);
-        throw new Error(`Failed to upsert batch: ${upsertError.message}`);
-      }
-    }
+      return {
+        netsuite_id: nsId,
+        item_number: itemNumber,
+        display_name: item.display_name || itemNumber,
+        description: item.description || item.display_name || '',
+        item_type: item.itemtype || '',
+        catalog,
+        sales_price: pricing,
+        purchase_price: costInfo.purchasePrice,
+        quantity_on_hand: costInfo.quantityOnHand,
+        quantity_available: costInfo.quantityAvailable,
+        // Only when NetSuite carries a value — blank must not become 0
+        // (migration 258: NULL = not set, 0 = no labor charged).
+        ...(!genericIds.has(nsId) && item.labor_hours != null && String(item.labor_hours).trim() !== ''
+          ? { labor_hours: parseFloat(item.labor_hours) || 0 }
+          : {}),
+        ns_class: className || null,
+        ns_category: null,
+        ns_department: item.department_name || null,
+        vendor: item.vendor_name || localVendors[nsId] || null,
+        is_active: true,
+        last_synced_at: now,
+        updated_at: now,
+        ...(kept ? kept.columns : {}),
+      };
+    });
+    // Batches of 200, grouped by the columns they name (see upsertPartRows).
+    await upsertPartRows(supabase, rows);
 
     // Count adds vs updates — check which netsuite_ids existed before
     const { count: totalCount } = await supabase
@@ -256,12 +261,25 @@ export async function POST(req: NextRequest) {
     // Shared with the hourly incremental cron — see promoteManualTwins in
     // src/lib/parts-sync.ts for the full story.
     try {
-      const promoted = await promoteManualTwins(supabase, nsItems);
+      const promoted = await promoteManualTwins(supabase, rows);
       if (promoted > 0) {
         console.log(`[parts-sync] promoted ${promoted} manual part(s) into NetSuite twins`);
       }
     } catch (err: any) {
       console.error('[parts-sync] promote step failed:', err.message || err);
+    }
+
+    // What NetSuite has instead. When it can't be noted the parts are still
+    // synced, FleetSuite's kept; the answer says so.
+    let changedInNetsuite: number | null = null;
+    let changedError: string | null = null;
+    if (fleetsuite) {
+      try {
+        changedInNetsuite = (await noteDifferences(supabase, 'item', seen)).opened;
+      } catch (err: any) {
+        changedError = err?.message || String(err);
+        console.error('[parts-sync] Changed in NetSuite not noted:', changedError);
+      }
     }
 
     // Update sync log
@@ -285,6 +303,8 @@ export async function POST(req: NextRequest) {
       itemsWithPrice: finalWithPrice,
       itemsWithQty: finalWithQty,
       itemsWithCost: Object.values(costMap).filter(c => c.purchasePrice > 0).length,
+      ...(changedInNetsuite !== null ? { changedInNetsuite } : {}),
+      ...(changedError ? { changedInNetsuiteError: changedError } : {}),
     });
   } catch (err: any) {
     console.error('Parts sync error:', err);

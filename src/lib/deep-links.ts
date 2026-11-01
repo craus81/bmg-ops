@@ -592,8 +592,9 @@ export const deepLinks = {
   booksNetsuiteFeed: (send?: string | null) => `/admin/books/netsuite-feed${send ? `?${new URLSearchParams({ send })}` : ''}`,
   /** Books → Changed in NetSuite, with one change on it picked out by its
    *  id: the landing for the daily books check's notification about a
-   *  customer's or vendor's details changed in NetSuite once FleetSuite's
-   *  record wins (src/lib/fleetsuite-records.ts). Super admins only. */
+   *  customer's, vendor's or item's details changed in NetSuite once
+   *  FleetSuite's record wins (src/lib/fleetsuite-records.ts). Super admins
+   *  only. */
   booksChangedInNetsuite: (change?: string | null) =>
     `/admin/books/changed-in-netsuite${change ? `?${new URLSearchParams({ change })}` : ''}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
