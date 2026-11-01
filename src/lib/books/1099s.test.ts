@@ -158,7 +158,7 @@ describe('splitting a payment over the accounts it paid for', () => {
 
 describe("a company's year", () => {
   const payees: Year1099Data['payees'] = [
-    { netsuite_id: '50', name: 'V-50 Sample Painting', entity_id: null, legal_name: 'Sample Painting LLC', is_1099: 'T' },
+    { netsuite_id: '50', name: 'V-50 Sample Painting', entity_id: ' V-50 ', legal_name: 'Sample Painting LLC', is_1099: 'T' },
     { netsuite_id: '51', name: 'V-51 Example Rentals', entity_id: null, legal_name: 'V-51 Example Rentals', is_1099: 'T' },
     { netsuite_id: '52', name: 'V-52 Placeholder Labor', entity_id: null, legal_name: null, is_1099: 'F' },
     { netsuite_id: '53', name: 'V-53 Demo Signs', entity_id: null, legal_name: null, is_1099: null },
@@ -202,10 +202,11 @@ describe("a company's year", () => {
     ]);
     expect(year.totals).toEqual({ boxes: { Rents: 240000, 'Nonemployee Compensation': 150000 }, total: 390000 });
     const painting = year.forms[1];
-    expect(painting).toMatchObject({ payee: '50', vendor: true, marked: true, legalName: 'Sample Painting LLC', paid: 155000, unsplit: 5000, byCard: 0 });
+    expect(painting).toMatchObject({ payee: '50', vendor: true, marked: true, legalName: 'Sample Painting LLC', entityId: 'V-50', paid: 155000, unsplit: 5000, byCard: 0 });
     expect(painting.payments.map((p) => p.netsuiteId)).toEqual(['1', '2', '3']);
     // A legal name that's only the name again isn't shown twice.
     expect(year.forms[0].legalName).toBeNull();
+    expect(year.forms[0].entityId).toBeNull();
   });
 
   it('puts the categories in order of how much went in them, counting those not marked too', () => {
