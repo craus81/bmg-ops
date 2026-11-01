@@ -111,10 +111,12 @@ FleetSuite"), part 58, a run's checks printed on BMG's check stock
 ("Checks printed on BMG's stock"), part 59, vendors' bank numbers for ACH
 kept encrypted and confirmed on a call-back ("Vendor bank numbers kept
 encrypted"), part 60, the ACH file First Bank pays a run's ACH
-payments from ("The ACH file for First Bank"), and part 61, 1084 Cool
+payments from ("The ACH file for First Bank"), part 61, 1084 Cool
 Springs' months, its rent checked against BMG's books and its lender's
 statement against its own, with the entries that book each month made for
-Journal entries ("1084's rent and mortgage").
+Journal entries ("1084's rent and mortgage"), and part 62, 1084's bank
+statements reconciled month by month against its books ("1084's bank
+reconciliation").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -134,7 +136,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, and the 1099s at `/admin/books/1099s`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, and the 1099s at `/admin/books/1099s`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
 the accounts page, and Home opens it for a bookkeeper or CPA with no other
 role; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
@@ -5391,7 +5393,7 @@ months from January 2025 through this month, newest first, and makes the
 two entries that book each one (part 61, `src/lib/books/rent-and-mortgage.ts`,
 `/api/admin/books/rent-and-mortgage`, migration 492). It's the first slice
 of the NetSuite Exit Checklist's "1084's monthly entries"; 1084's bank
-reconciliation is the next.
+reconciliation is the second ("1084's bank reconciliation").
 
 **The setup** (`rent_mortgage_setups`) picks each account by NetSuite's id:
 1084's bank account, its rent income, BMG's rent (the account BMG's books
@@ -5456,11 +5458,83 @@ the setup and the figures.
 
 ### What isn't done yet
 
-- 1084's bank reconciliation: each entry ticked against the bank's
-  statement.
 - Reading the lender's statement from its PDF: it's typed.
 - What 1084 pays besides the mortgage, such as insurance or taxes paid
   outside escrow: that's typed on Journal entries.
+
+## 1084's bank reconciliation
+
+Books → 1084's bank reconciliation (`/admin/books/bank-reconciliation`,
+`deepLinks.booksBankReconciliation`) holds 1084 Cool Springs' bank
+statements against its books, month by month: each entry on its bank
+account ticked as it clears the bank, until the statement's starting
+balance and what cleared come to its ending balance (part 62,
+`src/lib/books/bank-reconciliation.ts`, `/api/admin/books/bank-reconciliation`,
+migration 493). It's the second slice of the NetSuite Exit Checklist's
+"1084's monthly entries", after "1084's rent and mortgage". The bank
+account is the one Rent and mortgage's setup picks; until one is picked,
+the page says so.
+
+**The entries** are the documents on the account as Reports' detail names
+them (`gl_books_account_documents`, migrations 400 and 460), each with a day
+and an amount in FleetSuite's books, at what FleetSuite's books have for it,
+money in positive. One that NetSuite's copy has and FleetSuite's books
+haven't posted yet is counted in a grey note and shows once it's posted. An
+account with more than 20,000 entries isn't reconciled here, and the page
+says so in red.
+
+**Where reconciling starts** (`bank_rec_starts`) is typed once: the first
+month whose statement is reconciled here, the bank's balance on the last
+day of the statement before it (a day in the month before; December 31,
+2024 for January 2025, as FleetSuite's books start the day after), and each
+entry the books had by then that hadn't cleared the bank yet. Every other
+entry dated by then counts as cleared already. The page holds it against
+the books: their balance on that day, less what hadn't cleared, next to the
+bank's, green when they tie and red with how far apart they are. A start
+that doesn't tie is still saved, since that's worth knowing rather than a
+reason to refuse it. It changes only while no month is done, and moving it
+to another month lets go of what's saved on the months, which the page
+warns of first.
+
+**Each month** (`bank_recs`, `bank_rec_ticks`) is the statement's last day
+(in the month; its last day until it's changed), its ending balance, and
+each entry ticked as it cleared on it, listed as Money in and Money out.
+A month lists each entry the books have by the statement's last day that
+didn't clear on a month before; of those dated by where reconciling starts,
+only the ones picked as not cleared then. The page shows the starting
+balance (the month before's ending balance, or where reconciling starts),
+what's ticked in and out, the cleared balance, and the difference from the
+ending balance, as each is ticked. Finish reconciling makes the month done
+once the difference is $0.00, which the database checks again to the cent.
+What each entry comes to is what the books have for it when it's saved,
+never the page's. Months are reconciled in order, through this one: only
+the month after the last one done is ticked, and an entry clears once.
+
+A month done keeps what cleared at what each came to then. When the books
+change one since, its amount or gone from them, the month says so in red.
+Each month also says whether the books tie to the bank: their balance on the
+statement's last day, less what hadn't cleared by then, next to the ending
+balance.
+
+**Undo** opens the last month done again, with what was ticked on it, for
+a reason of 300 characters at most, kept with who and when
+(`bank_rec_events`). It's refused while the month after it has entries
+ticked: untick them there first.
+
+A save says when someone else saved since the page was opened. Whoever
+opens the books sees the page; the bookkeeper and super admins reconcile.
+Nothing here moves money or is sent to NetSuite, so it has no switch. The
+audit records carry no amounts: the month, the statement's last day, how
+many entries were ticked, and why a month was undone.
+
+### What isn't done yet
+
+- Reading the bank's statement from its PDF or a download: the ending
+  balance is typed and each entry ticked.
+- BMG's own bank accounts: the tables are by company and bank account, for
+  the banking piece to use, but the page is 1084's only.
+- A bank fee or interest the books don't have yet: it's typed on Journal
+  entries, then ticked here.
 
 ## Switches
 

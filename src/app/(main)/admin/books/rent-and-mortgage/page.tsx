@@ -372,6 +372,8 @@ export default function BooksRentMortgagePage() {
         <div style={{ fontSize: '12px', marginTop: '4px' }}>
           <Link href={deepLinks.journalEntries()} style={{ color: 'var(--text-secondary)' }}>Journal entries</Link>
           {' · '}
+          <Link href={deepLinks.booksBankReconciliation()} style={{ color: 'var(--text-secondary)' }}>Bank reconciliation</Link>
+          {' · '}
           <Link href="/admin/books/months" style={{ color: 'var(--text-secondary)' }}>Months</Link>
           {' · '}
           <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>

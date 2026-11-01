@@ -252,6 +252,8 @@ export default function BooksAccountsPage() {
             {' · '}
             <Link href={deepLinks.booksRentMortgage()} style={{ color: 'var(--text-secondary)' }}>Rent and mortgage</Link>
             {' · '}
+            <Link href={deepLinks.booksBankReconciliation()} style={{ color: 'var(--text-secondary)' }}>1084&apos;s bank reconciliation</Link>
+            {' · '}
             <Link href="/admin/books/netsuite-feed" style={{ color: 'var(--text-secondary)' }}>NetSuite feed</Link>
             {' · '}
             <Link href="/admin/books/changed-in-netsuite" style={{ color: 'var(--text-secondary)' }}>Changed in NetSuite</Link>
