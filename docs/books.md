@@ -110,8 +110,11 @@ Books' own copy of each, built switched off ("Vendors paid in
 FleetSuite"), part 58, a run's checks printed on BMG's check stock
 ("Checks printed on BMG's stock"), part 59, vendors' bank numbers for ACH
 kept encrypted and confirmed on a call-back ("Vendor bank numbers kept
-encrypted"), and part 60, the ACH file First Bank pays a run's ACH
-payments from ("The ACH file for First Bank").
+encrypted"), part 60, the ACH file First Bank pays a run's ACH
+payments from ("The ACH file for First Bank"), and part 61, 1084 Cool
+Springs' months, its rent checked against BMG's books and its lender's
+statement against its own, with the entries that book each month made for
+Journal entries ("1084's rent and mortgage").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -131,7 +134,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, and the 1099s at `/admin/books/1099s`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, and the 1099s at `/admin/books/1099s`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
 the accounts page, and Home opens it for a bookkeeper or CPA with no other
 role; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
@@ -265,6 +268,7 @@ admins can open it while fixing invoices is switched off.
 | Going live: the entry that opens the books at NetSuite's balances (what still differs on the day, customer by customer and vendor by vendor), what would stop it posting, the rehearsal, the tap that sets the books live, and the posting run posting the entry | `migrations/476-books-going-live.sql`, `src/lib/books/opening-balances.ts`, `src/lib/books/going-live.ts`, `postInvoices`, `liveDecision` and `standingDates` in `src/lib/books/invoice-posting.ts`, the daily check's months in `src/lib/books/daily-check.ts`, `src/app/(main)/admin/books/going-live/page.tsx`, `src/app/api/admin/books/going-live/route.ts`; tests `src/lib/books/opening-balances.test.ts`, `src/lib/books/going-live.test.ts`, `src/lib/books/going-live-route.test.ts`, `src/lib/books/going-live-sql.test.ts`, `src/lib/books/invoice-posting.test.ts`, and the live-books tests in `src/lib/books/invoice-posting-sql.test.ts` and `src/lib/books/daily-check-sql.test.ts` |
 | 1099s: what each vendor marked to get a 1099 was paid in a year on the accounts that count toward one, by category, from the copy of NetSuite | `migrations/481-books-1099s.sql`, `src/lib/books/1099s.ts`, `ACCOUNT_1099_QUERY` and `mapAccount1099s` in `src/lib/books/netsuite-accounts.ts`, the vendors' `is_1099` and `legal_name` in `src/lib/books/netsuite-lists.ts`, `src/app/(main)/admin/books/1099s/page.tsx`, `src/app/api/admin/books/1099s/route.ts`; tests `src/lib/books/1099s.test.ts`, `src/lib/books/1099s-route.test.ts`, `src/lib/books/1099s-sql.test.ts` |
 | 1099s: NetSuite's 1099 report uploaded and held against FleetSuite's totals, vendor by vendor and box by box, never keeping a tax ID | `migrations/482-books-1099-report.sql`, `src/lib/books/1099-report.ts`, the `POST` and the report in `src/app/api/admin/books/1099s/route.ts`, `NetSuiteReport` in `src/app/(main)/admin/books/1099s/page.tsx`; tests `src/lib/books/1099-report.test.ts`, `src/lib/books/1099-report-sql.test.ts`, `src/lib/books/1099s-route.test.ts` |
+| 1084 Cool Springs' rent and mortgage: the rent checked against BMG's books, the lender's statement against 1084's, and the month's two entries made for Journal entries | `migrations/492-rent-and-mortgage-for-1084.sql`, `src/lib/books/rent-and-mortgage.ts`, `src/app/(main)/admin/books/rent-and-mortgage/page.tsx`, `src/app/api/admin/books/rent-and-mortgage/route.ts`; tests `src/lib/books/rent-and-mortgage.test.ts`, `src/lib/books/rent-and-mortgage-route.test.ts`, `src/lib/books/rent-mortgage-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -5376,6 +5380,87 @@ uploaded.
   online banking: a returned payment is voided in NetSuite and paid again.
 - Sending the file to First Bank from FleetSuite: it's downloaded and
   uploaded by hand.
+
+## 1084's rent and mortgage
+
+1084 Cool Springs LLC owns the building BMG rents, and its only business is
+BMG's rent coming in and the mortgage going out (owner, 2026-10-10, thread
+"Replacing NetSuite with FleetSuite"). Books → Rent and mortgage
+(`/admin/books/rent-and-mortgage`, `deepLinks.booksRentMortgage`) shows its
+months from January 2025 through this month, newest first, and makes the
+two entries that book each one (part 61, `src/lib/books/rent-and-mortgage.ts`,
+`/api/admin/books/rent-and-mortgage`, migration 492). It's the first slice
+of the NetSuite Exit Checklist's "1084's monthly entries"; 1084's bank
+reconciliation is the next.
+
+**The setup** (`rent_mortgage_setups`) picks each account by NetSuite's id:
+1084's bank account, its rent income, BMG's rent (the account BMG's books
+keep its rent on), 1084's mortgage, the mortgage's interest, and escrow when
+the lender holds some. Each is one its company can use for a typed line, of
+a kind it can be, and picked once. The lender's name goes in the payment's
+memo. A month's checks wait on the accounts they read.
+
+**Each month** (`rent_mortgage_months`) is the rent received from BMG and
+its day, and the lender's statement for the payment made in the month: the
+day it was paid, what went to principal, interest and escrow, and the
+principal left after it. Each is dated in the month the books show it in,
+so a payment made on March 5 is March's. Both are typed: no lease amount is
+kept, and the rent starts at what BMG's books have for the month, else last
+month's. A save says so when someone else saved the month since the page
+was opened.
+
+**The checks.**
+
+- The rent: what BMG's books have on its rent account in the month, debits
+  less credits, next to what 1084's have in rent income, credits less
+  debits. Green when they're the same; grey while BMG's have it and 1084's
+  don't yet, in this month or while the month's rent entry is on its way;
+  red otherwise, with how far apart they are.
+- The mortgage: what 1084's books have paid off the mortgage and in
+  interest in the month, and the principal they leave at its end (NetSuite's
+  balance before 2025 and every month's moves since), next to the
+  statement's. Green when all three are the statement's; red naming each
+  that isn't; grey while no statement is typed, or the books have nothing
+  paid in the month yet. Escrow isn't held against the books: what the
+  lender pays out of it, the taxes and the insurance, moves its account too.
+  The bank reconciliation catches the payment's total.
+- A grey note says when a statement's principal left doesn't follow from
+  last month's: what last month's left, less this month's principal.
+
+**The month's entries.** Make the month's entries makes two typed journal
+entries ("Journal entries typed in FleetSuite") as drafts in the general
+journal, for 1084, worked out from the figures as saved, never the page's:
+
+- the rent received, dated the day it came in: 1084's bank debited and its
+  rent income credited, memo "Rent from BMG Fleet Installations for March
+  2027";
+- the mortgage payment, dated the day it was paid: principal, interest and
+  escrow each debited, a $0 one left out, and the bank credited with what
+  they come to, memo "Mortgage payment to (the lender) for March 2027".
+
+Each is dated its own day because each is its own move in 1084's bank, so
+the bank reconciliation can tick each. They're asked for approval, approved
+by a super admin and sent on to NetSuite on Journal entries like any other,
+so they ride the journal entries switch: until it's on, only super admins
+make them, to see what they'd make, and none is asked for approval or sent.
+Making them needs Payments too, as the general journal does. Made again, a
+draft is brought up to date with the figures and the setup, and the page
+says when one is behind. What an entry books stays as it is once it's asked
+for approval: changing the rent or the statement it books is refused until
+the entry is taken back. Deleting a draft on Journal entries lets go of it,
+and the month's next one is made new; a figure taken off the month leaves
+its draft for someone to delete.
+
+Whoever opens the books sees the page. The bookkeeper and super admins type
+the setup and the figures.
+
+### What isn't done yet
+
+- 1084's bank reconciliation: each entry ticked against the bank's
+  statement.
+- Reading the lender's statement from its PDF: it's typed.
+- What 1084 pays besides the mortgage, such as insurance or taxes paid
+  outside escrow: that's typed on Journal entries.
 
 ## Switches
 
