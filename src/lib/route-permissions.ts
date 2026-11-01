@@ -83,6 +83,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/agings/route.ts': books(['read', 'keep']),
   'src/app/api/admin/books/balances/route.ts': books(['read']),
   'src/app/api/admin/books/balances/party/route.ts': books(['read']),
+  'src/app/api/admin/books/bank-reconciliation/route.ts': books(['read', 'keep']),
   'src/app/api/admin/books/bill-payments/route.ts': books(['keep']),
   'src/app/api/admin/books/bills/route.ts': books(['keep']),
   'src/app/api/admin/books/changed-in-netsuite/route.ts': books(['read', 'owner']),

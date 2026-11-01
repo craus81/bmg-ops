@@ -641,6 +641,10 @@ export const deepLinks = {
    *  books. */
   booksRentMortgage: (month?: string | null) =>
     `/admin/books/rent-and-mortgage${month ? `?${new URLSearchParams({ month: month.slice(0, 7) })}` : ''}`,
+  /** Books → 1084's bank reconciliation: 1084 Cool Springs' bank statements,
+   *  month by month, each entry on its bank account ticked as it clears
+   *  (src/lib/books/bank-reconciliation.ts). Open to whoever opens the books. */
+  booksBankReconciliation: () => '/admin/books/bank-reconciliation',
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it

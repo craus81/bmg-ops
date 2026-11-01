@@ -305,3 +305,9 @@ describe('Books rent and mortgage links', () => {
     expect(deepLinks.booksRentMortgage('2027-03')).toBe('/admin/books/rent-and-mortgage?month=2027-03');
   });
 });
+
+describe("Books 1084's bank reconciliation links", () => {
+  it('opens the statements, month by month', () => {
+    expect(deepLinks.booksBankReconciliation()).toBe('/admin/books/bank-reconciliation');
+  });
+});
