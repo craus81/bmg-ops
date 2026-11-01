@@ -286,6 +286,12 @@ export const deepLinks = {
    *  invoice. Anyone with Invoicing who can see prices once receiving payments
    *  is switched on in Books → Switches; until then super admins only. */
   receivePayment: (invoiceNetsuiteId: string) => `/invoices/payment?${new URLSearchParams({ invoice: invoiceNetsuiteId })}`,
+  /** A customer's check or ACH deposit taken on a sales order
+   *  (src/lib/take-deposit.ts), from the sales order's Deposit, or an
+   *  estimate's once it has its sales order. Anyone with Invoicing who can see
+   *  prices once taking deposits is switched on in Books → Switches; until
+   *  then super admins only. */
+  takeDeposit: (salesOrderNetsuiteId: string) => `/sales-orders/deposit?${new URLSearchParams({ so: salesOrderNetsuiteId })}`,
   /** A vendor's credit, entered and applied to the vendor's open bills
    *  (src/lib/vendor-credit.ts), from More → Purchasing. Admins with Parts
    *  Ordering once vendor credits are switched on in Books → Switches; until

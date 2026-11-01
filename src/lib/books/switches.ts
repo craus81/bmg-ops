@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, 478 to 480 and 485, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 to 480, 485 and 486, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -16,13 +16,14 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * record wins: on, it stops the NetSuite syncs writing over FleetSuite's
  * customers, vendors and items, so a sync that can't read it stops rather
  * than count it as off (readSwitch, src/lib/fleetsuite-records.ts).
- * Receiving payments stays off past January 1, until payments move into
- * FleetSuite during 2027 (`later` says so).
+ * Receiving payments and taking deposits stay off past January 1, until they
+ * move into FleetSuite during 2027 (`later` says so).
  */
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
-  | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments';
+  | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments'
+  | 'customer_deposits';
 
 export interface SwitchInfo {
   name: string;
@@ -102,6 +103,12 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     what: "Anyone with Invoicing receives a customer's check or ACH payment in FleetSuite and puts it on that customer's open invoices, and FleetSuite makes the payment in NetSuite, in Undeposited Funds, and keeps its own copy for the books.",
     where: 'Invoicing → Invoiced → Payment on an open invoice',
     later: 'Stays off on January 1: receiving payments moves into FleetSuite during 2027.',
+  },
+  customer_deposits: {
+    name: 'Taking deposits',
+    what: "Anyone with Invoicing takes a customer's check or ACH deposit on a sales order in FleetSuite, and FleetSuite makes the customer deposit in NetSuite on that order, in Undeposited Funds, and keeps its own copy for the books. NetSuite puts it on the order's invoice when the order's billed.",
+    where: 'Deposit on a sales order, or on an estimate once it has its sales order',
+    later: 'Stays off on January 1: taking deposits moves into FleetSuite during 2027.',
   },
 };
 

@@ -99,14 +99,26 @@ async function readEarlier(customerId: string): Promise<PressRow[]> {
   return (data ?? []) as unknown as PressRow[];
 }
 
-/** A check from the customer FleetSuite received already under the same number, made or being made, other than this press. */
-async function sameCheck(customerId: string, reference: string | null, except: string): Promise<PressRow | null> {
-  const { data, error } = await service
-    .from('received_payments').select(PRESS_COLUMNS)
-    .eq('customer_netsuite_id', customerId).eq('method', 'check').neq('status', 'open').neq('id', except)
-    .order('created_at', { ascending: false }).order('id').limit(500);
-  if (error) throw new Error(error.message);
-  return ((data ?? []) as unknown as PressRow[]).find((r) => sameReference(r.reference, reference)) ?? null;
+/**
+ * A check from the customer FleetSuite received already under the same number, made or being made, other than this
+ * press: as a payment, or as a deposit on a sales order (/api/sales-orders/deposit).
+ */
+async function sameCheck(customerId: string, reference: string | null, except: string) {
+  const [payments, deposits] = await Promise.all([
+    service.from('received_payments').select(PRESS_COLUMNS)
+      .eq('customer_netsuite_id', customerId).eq('method', 'check').neq('status', 'open').neq('id', except)
+      .order('created_at', { ascending: false }).order('id').limit(500),
+    service.from('received_deposits').select('id, reference, received_date, status, netsuite_number, sales_order_number')
+      .eq('customer_netsuite_id', customerId).eq('method', 'check').neq('status', 'open')
+      .order('created_at', { ascending: false }).order('id').limit(500),
+  ]);
+  if (payments.error) throw new Error(payments.error.message);
+  if (deposits.error) throw new Error(deposits.error.message);
+  type Twin = { reference: string | null; received_date: string; status: string; netsuite_number: string | null; sales_order_number?: string | null };
+  const payment = ((payments.data ?? []) as unknown as Twin[]).find((r) => sameReference(r.reference, reference));
+  if (payment) return { ...payment, as: '' };
+  const deposit = ((deposits.data ?? []) as Twin[]).find((r) => sameReference(r.reference, reference));
+  return deposit ? { ...deposit, as: `, as a deposit on ${deposit.sales_order_number || 'a sales order'}` } : null;
 }
 
 const earlierView = (r: PressRow) => ({
@@ -246,7 +258,7 @@ async function receive(body: Body, gate: Gate): Promise<NextResponse> {
     const twin = await sameCheck(invoice.customerId, worked.reference, body.requestId);
     if (twin) {
       return NextResponse.json({
-        error: `Check ${twin.reference} from ${invoice.customerName} was received in FleetSuite already, on ${dayOf(twin.received_date)}`
+        error: `Check ${twin.reference} from ${invoice.customerName} was received in FleetSuite already, on ${dayOf(twin.received_date)}${twin.as}`
           + `${twin.netsuite_number ? ` (${twin.netsuite_number})` : twin.status === 'sending' ? ', and is being made in NetSuite' : ''}. Nothing was sent.`
           + " If it's another check with the same number, add a letter to its number.",
       }, { status: 409 });

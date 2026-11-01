@@ -135,6 +135,24 @@ export default function SalesOrderPage() {
   }, [id]);
   useEffect(() => { load(); }, [load]);
 
+  // Deposit on the order: once taking deposits is switched on, anyone with
+  // Invoicing who can see prices; until then super admins only.
+  const [canDeposit, setCanDeposit] = useState(false);
+  useEffect(() => {
+    if (!canSeeMoney) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/sales-orders/deposit?status=1');
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setCanDeposit(res.ok && !!body.canUse);
+      } catch {
+        if (!cancelled) setCanDeposit(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canSeeMoney]);
+
   const startEdit = () => {
     if (!data) return;
     const h = data.header;
@@ -369,6 +387,12 @@ export default function SalesOrderPage() {
                 <button onClick={() => setFulfilling(true)} title="Ship this sales order's parts from O'Fallon and invoice them in NetSuite (part of the order is fine)"
                   style={{ ...btn, background: 'rgba(245,158,11,0.15)', borderColor: 'rgba(245,158,11,0.6)', color: '#f59e0b' }}>
                   Fulfill &amp; Invoice
+                </button>
+              )}
+              {canDeposit && showMoney && !/^(billed|closed|cancell?ed)$/i.test(h.status.trim()) && (
+                <button onClick={() => router.push(deepLinks.takeDeposit(id))} title="Take the customer's check or ACH deposit on this order and make it in NetSuite"
+                  style={btn}>
+                  Deposit
                 </button>
               )}
               {data.canEdit && <button onClick={startEdit} style={primary}>Edit order</button>}
