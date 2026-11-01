@@ -91,6 +91,7 @@ export const FEED_KINDS: ReadonlyArray<{ key: string; name: string }> = [
   { key: 'customerPayment', name: 'Customer payments' },
   { key: 'customerDeposit', name: 'Customer deposits' },
   { key: 'deposit', name: 'Bank deposits' },
+  { key: 'vendorPayment', name: 'Bill payments' },
   { key: 'customer', name: 'Customers' },
   { key: 'vendor', name: 'Vendors' },
   { key: 'contact', name: 'Contacts' },

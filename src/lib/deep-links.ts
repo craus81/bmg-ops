@@ -342,6 +342,12 @@ export const deepLinks = {
    *  id, that entry open. Anyone with Payments once journal entries are
    *  switched on in Books → Switches; until then super admins only. */
   journalEntries: (id?: string | null) => `/admin/journal-entries${id ? `?${new URLSearchParams({ id })}` : ''}`,
+  /** Vendors paid in payment runs, asked for approval, and made in NetSuite
+   *  as bill payments once a super admin who didn't ask approves them
+   *  (src/lib/pay-vendors.ts), from More → Money & Books; with an id, that
+   *  run open. Anyone with Payments who can see prices once paying vendors is
+   *  switched on in Books → Switches; until then super admins only. */
+  payVendors: (id?: string | null) => `/admin/pay-vendors${id ? `?${new URLSearchParams({ run: id })}` : ''}`,
   /** Inventory transfers made in FleetSuite and sent on to NetSuite
    *  (src/lib/inventory-transfers.ts), from More → Parts & Inventory; with
    *  an id, that transfer open. Admins once inventory transfers are switched

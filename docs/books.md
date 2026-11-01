@@ -4894,17 +4894,144 @@ bank deposit of $3,750.00 dated October 30, and neither is waiting any more.
 - Matching bank deposits to the bank's own lines, which waits on the
   banking choices.
 
+## Vendors paid in FleetSuite
+
+After the money coming in (parts 54 to 56) comes the money going out: open
+bills paid in a payment run, asked for approval, approved by a second
+person, and made in NetSuite as bill payments (part 57,
+`src/lib/pay-vendors.ts`, migration 488). It's built switched off
+("Switches") and stays off past January 1, until paying vendors moves into
+FleetSuite during 2027: until a super admin turns it on, only super admins
+can open the screen, to make and save runs and see what they'd pay, and none
+is asked for approval or sent to NetSuite. Once it's on, anyone with
+Payments who can see prices can.
+
+More → Money & Books → Pay Vendors, shown only to those who can use it
+(`/api/pay-vendors?status=1`), opens `/admin/pay-vendors`
+(`deepLinks.payVendors`). It lists the company's payment runs: waiting for
+approval, being paid, drafts, and the last ones paid. + New payment run
+reads the bills NetSuite has open for the company now (`getOpenBills`:
+NetSuite's Open status and its own open amount on each), vendor by vendor,
+oldest due first, each with its number, due day and what's open, and the
+person picks (`workOutRun`):
+
+- **The company**, BMG or 1084.
+- **The bank account it pays from**, one of the company's bank accounts:
+  the same list a bank deposit picks from (`src/lib/books/bank-accounts.ts`).
+- **The day it's paid**, not more than a month ahead or a year back.
+- **The bills**, ticked under each vendor, with Tick all. A ticked bill
+  pays what's open on it, or a smaller amount typed to pay part of it. Each
+  vendor with a bill ticked gets one payment in the run, by check or ACH.
+  Up to 50 vendors, 100 bills a vendor and 500 bills a run.
+- **A memo**, if any, on each bill payment in NetSuite; an ACH payment's
+  starts "ACH".
+
+A bill another run holds (one asked for approval, or approved with a payment
+of that bill not made or dropped yet) is marked "in another run" and can't
+be ticked. Save keeps the run as a draft (`vendor_payment_runs`,
+`vendor_payment_run_save`). Anyone who can use the screen can open a draft,
+change it and save it again; whoever started it, or a super admin, can
+delete it.
+
+**Asking for approval.** Ask for approval checks the run against NetSuite
+again (`getBillsNow`): each bill still open, still that vendor's, with at
+least what the run pays on it still open, and none held by another run. A
+run that doesn't fit is turned away with every reason, in red.
+`vendor_payment_run_ask` asks for the draft as the asker saw it (one saved
+again since is turned away to reload) and holds its bills, and an alert goes
+to the super admins ("A payment run is waiting for approval", with the
+company, day, bank account, vendors, bills and total). Whoever started it or
+asked for it, or a super admin, can take it back to change it.
+
+**Approving.** A super admin who didn't ask approves it, or sends it back
+with why, which whoever asked and whoever started it read on the run and in
+an alert. Approve and pay checks it against NetSuite once more and approves
+the ask the approver saw (`vendor_payment_run_approve`), which makes one
+payment for each vendor from the run as it was asked
+(`vendor_payment_run_payments`), and an alert tells whoever asked and whoever
+started it. Then the
+page makes them in NetSuite one at a time, each its own press.
+
+**Making each payment.** The route takes the claim on the payment
+(`vendor_payment_claim`), checks its bills against NetSuite just before it
+sends, looks in NetSuite for a bill payment under its External ID
+(`fleetsuite-vp-<id>`, `findVendorPayment`), and only when there's none
+makes it (`createVendorPayment`: NetSuite's Pay Bills for one vendor, from
+the bank account picked, on the day, applied to exactly its bills, each with
+what it pays; a check is made To Be Printed).
+
+- **Made**: FleetSuite keeps NetSuite's id and number on the payment, reads
+  NetSuite's total back, keeps Books' own copy, and audits it. When
+  NetSuite's total isn't what FleetSuite sent, Books keeps no copy and says
+  in red to look at it in NetSuite. The run is paid once each of its
+  payments is made or dropped.
+- **Refused**: NetSuite's reason shows in red on the payment
+  (`vendor_payment_let_go`). Make it again sends it again, or a super admin
+  drops it from the run with why, and its bills stay open in NetSuite
+  (`vendor_payment_drop`).
+- **Not sure** (no answer, a fault on NetSuite's side, or no id in its
+  answer): it's held, and the page stops making the rest. Ask NetSuite, from
+  five minutes on, looks for it by its External ID: found, it's made; not
+  there, it's refused and none was made. The send is in the NetSuite feed
+  too, under Bill payments ("NetSuite feed").
+
+Checks print from NetSuite's Print Checks, as they do now, until FleetSuite
+prints them on BMG's stock. The alerts also go to anyone with "Copy me on
+new alerts" ticked, never to whoever pressed; nothing is sent to a vendor.
+
+Books keeps its own copy of each bill payment as it was sent
+(`gl_own_bill_payments`, saved only by `gl_own_bill_payment_save`,
+`src/lib/books/own-bill-payments.ts`): the company, the vendor, the bank
+account, the day, check or ACH, the memo, each bill it paid and how much,
+the total, and who asked and approved. Saving it never stops a payment; one
+that can't be saved is said on the screen in red. NetSuite's bill payment
+comes back through the copy of NetSuite's general ledger like any other and
+posts from it.
+
+Made-up example: Ozark Hose & Fitting has two open bills, B-4410 for $812.40
+due October 20 and B-4471 for $1,100.00 due November 5, and Gateway Steel
+has GS-209 for $2,450.00. A BMG run from 10100 Operating Checking dated
+November 6 ticks all three, with $600.00 typed on B-4471 to pay part of it,
+Ozark by check and Gateway by ACH: two bill payments, $1,412.40 and
+$2,450.00, $3,862.40 in all. Once a second super admin approves it, NetSuite
+has a check To Be Printed to Ozark and an ACH payment to Gateway, and B-4471
+has $500.00 still open.
+
+### Before switching on
+
+- FleetSuite's NetSuite role needs to make bill payments, and to see bills
+  and bill payments in SuiteQL. Until it can see bill payments, FleetSuite
+  can't tell one that isn't there from one it can't see, and sends nothing.
+- The open bills are read from each bill's status, A (Open), and
+  `foreignamountunpaid`; a bill waiting for approval in NetSuite isn't open
+  and isn't listed. Neither is tried on this account yet: check that the
+  screen lists what NetSuite's Pay Bills does for the same company.
+- The field names it sends (`account`, `toBePrinted`, and `apply.items`,
+  each with `doc`, `apply` and `amount`) are NetSuite's REST names, not yet
+  tried on this account: check the first real bill payment in NetSuite, that
+  it's from the account picked and pays the bills ticked by what was typed,
+  and that a check shows in Print Checks.
+
+### What isn't done yet
+
+- Checks printed on BMG's check stock (part 58), vendor bank numbers kept
+  encrypted (part 59), and the First Bank ACH file (part 60).
+- Vendor credits and early-payment discounts taken in a run, and bills in a
+  currency other than dollars.
+- A list of the bill payments made in FleetSuite. Books' own copies aren't
+  checked against NetSuite's bill payments or posted yet.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
 row each in `books_switches` (migrations 466 to 473, 478 to 480 and 485 to
-487, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
+488, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
 in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
 which whoever opens the books can read. The plan turns them on on January 1,
 2027, asking the owner once in late December, all but `customer_payments`,
-`customer_deposits` and `bank_deposits`, which stay off until receiving
-payments, taking deposits and bank deposits move into FleetSuite during
-2027; their cards on the page say so (`later`).
+`customer_deposits`, `bank_deposits` and `vendor_payments`, which stay off
+until receiving payments, taking deposits, bank deposits and paying vendors
+move into FleetSuite during 2027; their cards on the page say so (`later`).
 
 While a piece is off, the people who'd use it don't see it at all; super
 admins can open its screen and see what it would send, and its route
@@ -4933,6 +5060,7 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 | `customer_payments` | Anyone with Invoicing receives a customer's check or ACH payment and puts it on that customer's open invoices, and FleetSuite makes the payment in NetSuite, in Undeposited Funds ("Payments received in FleetSuite") | Invoicing → Invoiced → Payment on an open invoice |
 | `customer_deposits` | Anyone with Invoicing takes a customer's check or ACH deposit on a sales order, and FleetSuite makes the customer deposit in NetSuite on that order, in Undeposited Funds; NetSuite puts it on the order's invoice when the order's billed ("Deposits taken in FleetSuite") | Deposit on a sales order, or on an estimate once it has its sales order |
 | `bank_deposits` | Anyone with Invoicing deposits the customer payments and deposits waiting in Undeposited Funds to one of the company's bank accounts, ticked from what NetSuite has waiting, and FleetSuite makes the bank deposit in NetSuite ("Bank deposits made in FleetSuite") | Invoicing → Invoiced → Bank deposit |
+| `vendor_payments` | Anyone with Payments pays the company's open bills in a payment run, ticked from what NetSuite has open, from one of its bank accounts, vendor by vendor by check or ACH, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite ("Vendors paid in FleetSuite") | More → Money & Books → Pay Vendors |
 
 ## Posting
 

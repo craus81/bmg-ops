@@ -95,11 +95,12 @@ describe('migration 487', () => {
       { piece: 'customer_deposits', is_on: false, changed_by: null },
       { piece: 'customer_payments', is_on: false, changed_by: null },
     ]);
-    // Every piece the app names is one the column takes, and nothing else is.
-    expect(SWITCH_PIECES).toHaveLength(14);
+    // Every piece the app named then is one the column takes, and nothing else is (488 adds paying vendors).
+    const then = SWITCH_PIECES.filter((piece) => piece !== 'vendor_payments');
+    expect(then).toHaveLength(14);
     await pg.exec('BEGIN');
     try {
-      for (const piece of SWITCH_PIECES) await pg.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);
+      for (const piece of then) await pg.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);
       expect((await pg.query('SELECT count(*)::int AS n FROM books_switches')).rows[0]).toEqual({ n: 14 });
     } finally {
       await pg.exec('ROLLBACK');
