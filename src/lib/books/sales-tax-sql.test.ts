@@ -4,11 +4,13 @@
 // 407 with 496 in an in-memory Postgres (PGlite) as the app's server login,
 // copies a made-up month of NetSuite invoices, a credit memo, a cash sale and
 // payments to the state with their GL lines and the ledger mirror's lines,
-// and holds what the tables keep and gl_sales_tax_month returns.
+// and holds what the tables keep and gl_sales_tax_month returns, then the
+// worksheet sales-tax-worksheet.ts works out from it, end to end.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { holdReturn, readRates, readReturn, salesTaxWorksheet, type SalesTaxRateRow, type SalesTaxReturnRow } from './sales-tax-worksheet';
 
 const AR = '120';
 const BANK = '100';
@@ -427,6 +429,42 @@ describe("migration 496's read of a month's sales tax", () => {
     const data = await month(db, '2025-06-01');
     expect(data).toMatchObject({ documents: [], items: {}, parts: {}, tax_codes: {}, customers: {} });
     expect(data.account).toMatchObject({ opening: '1000.00', before: '-978.51', moves: [], next: { list: [], count: 0, total: '0' } });
+  });
+
+  it("works out the month's return from it, and holds the return as filed against it", async () => {
+    const rates = readRates((await db.query<SalesTaxRateRow>('SELECT location_id, starts_on::text, rate_pct::text, note FROM sales_tax_rates')).rows);
+    const w = salesTaxWorksheet(MAR, await month(db, MAR), { rates, taxAccounts: TAX_ACCOUNTS });
+    // Bluebird is exempt on only one of its two FleetSuite customers, so its order at Wentzville is taxed, all of it
+    // while its lines aren't copied.
+    expect(w.lines.map((l) => [l.location, l.gross, l.adjustments, l.taxable, l.tax, l.charged, l.unsorted])).toEqual([
+      ["O'Fallon", 41100, -28500, 12600, 1069, 1069, 0], ['Wentzville', 40000, 0, 40000, 3395, 0, 40000], ['Kansas City', 0, 0, 0, 0, 0, 0],
+    ]);
+    expect(w.figures).toEqual({ gross: 81100, adjustments: -28500, taxable: 52600, tax: 4464, allowance: 89, pay: 4375, charged: 1069 });
+    expect(w.apart).toEqual([{ state: 'GA', locationId: '5', location: 'Social Circle', documents: 1, gross: 20000, charged: 1200 }]);
+    expect(w.documents.map((d) => d.note)).toEqual([
+      null, null, "Its lines aren't in FleetSuite's copy of NetSuite yet, so all $400.00 is counted as taxed; NetSuite charged $0.00.",
+      "FleetSuite doesn't tax work at Social Circle, Georgia, and NetSuite charged $12.00.",
+    ]);
+    expect(w.warnings).toEqual([
+      "$400.00 on 1 document is counted as taxed because FleetSuite doesn't have the lines' items yet.",
+      'Only 1 of the 2 FleetSuite customers for Bluebird School District are tax exempt, so their sales are counted as taxed.',
+    ]);
+    expect(w.accounts).toMatchObject({ start: 3000, charged: 2269, end: 2219, books: 1069, next: { count: 1, total: -1069 } });
+
+    await db.query(
+      `INSERT INTO sales_tax_returns (company, month, filed_on, gross_cents, adjustments_cents, taxable_cents, tax_cents, allowance_cents, paid_cents)
+       VALUES ('BMG', $1, '2025-04-18', 81100, -28500, 52600, 4464, 89, 4375)`,
+      [MAR],
+    );
+    const filed = (await db.query<SalesTaxReturnRow>(
+      `SELECT company, month::text AS month, filed_on::text AS filed_on, gross_cents, adjustments_cents, taxable_cents, tax_cents, allowance_cents,
+              paid_cents, note
+       FROM sales_tax_returns WHERE company = 'BMG' AND month = $1`,
+      [MAR],
+    )).rows[0];
+    const held = holdReturn(readReturn(filed), w.figures, w.accounts);
+    expect(held.fields.filter((f) => f.differs)).toEqual([]);
+    expect(held.notes).toEqual(["NetSuite's sales tax account came down $10.69 in April 2025, and the return's tax is $44.64."]);
   });
 
   it("refuses a month, accounts, limit or company it can't read", async () => {

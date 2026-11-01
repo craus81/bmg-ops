@@ -394,7 +394,8 @@ export const TRAN_TYPE_NAMES: Record<string, string> = {
   CustPymt: 'Payment', CustRfnd: 'Customer Refund', DepAppl: 'Deposit Application', Deposit: 'Deposit',
   ExpRept: 'Expense Report', FxReval: 'Currency Revaluation', InvAdjst: 'Inventory Adjustment',
   InvTrnfr: 'Inventory Transfer', ItemRcpt: 'Item Receipt', ItemShip: 'Item Fulfillment', Journal: 'Journal',
-  Transfer: 'Transfer', Unbuild: 'Assembly Unbuild', VendBill: 'Bill', VendCred: 'Bill Credit', VendPymt: 'Bill Payment',
+  TaxPymt: 'Sales Tax Payment', Transfer: 'Transfer', Unbuild: 'Assembly Unbuild', VendBill: 'Bill', VendCred: 'Bill Credit',
+  VendPymt: 'Bill Payment',
 };
 
 /** How many transaction types the note names before it lumps the rest together. */
