@@ -222,6 +222,8 @@ export default function BooksAccountsPage() {
             {' · '}
             <Link href="/admin/books/stock" style={{ color: 'var(--text-secondary)' }}>Stock by item</Link>
             {' · '}
+            <Link href={deepLinks.booksInventoryValue()} style={{ color: 'var(--text-secondary)' }}>Inventory value</Link>
+            {' · '}
             <Link href="/admin/books/balances" style={{ color: 'var(--text-secondary)' }}>Customer and vendor balances</Link>
             {' · '}
             <Link href="/admin/books/agings" style={{ color: 'var(--text-secondary)' }}>AR and AP agings</Link>

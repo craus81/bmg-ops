@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
+import { deepLinks } from '@/lib/deep-links';
 
 /**
  * Books → Months (docs/books.md "Closing a month").
@@ -200,6 +201,8 @@ export default function BooksMonthsPage() {
         </div>
         <div style={{ fontSize: '12px', marginTop: '4px' }}>
           <Link href="/admin/books/differences" style={{ color: 'var(--text-secondary)' }}>Differences vs NetSuite</Link>
+          {' · '}
+          <Link href={deepLinks.booksInventoryValue()} style={{ color: 'var(--text-secondary)' }}>Inventory value</Link>
           {' · '}
           <Link href="/admin/books/going-live" style={{ color: 'var(--text-secondary)' }}>Going live</Link>
           {' · '}

@@ -90,6 +90,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/deposits/route.ts': books(['keep']),
   'src/app/api/admin/books/differences/route.ts': books(['read']),
   'src/app/api/admin/books/going-live/route.ts': books(['read', 'owner']),
+  'src/app/api/admin/books/inventory-value/route.ts': books(['read']),
+  'src/app/api/admin/books/inventory-value/download/route.ts': books(['read']),
   'src/app/api/admin/books/invoices/route.ts': books(['read', 'keep']),
   'src/app/api/admin/books/lists/route.ts': books(['read', 'keep']),
   'src/app/api/admin/books/mistake-checks/route.ts': books(['read', 'keep']),
