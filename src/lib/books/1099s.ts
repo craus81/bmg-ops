@@ -113,6 +113,8 @@ export interface Payee1099 {
   name: string;
   /** Its legal name, as on its W-9, when NetSuite has one that differs from its name. */
   legalName: string | null;
+  /** Its id in NetSuite (V-1001, say), when that differs from its name. */
+  entityId: string | null;
   /** In the copy of NetSuite's vendor list: not an employee or anyone else NetSuite lists. */
   vendor: boolean;
   /** NetSuite marks it to get a 1099; null when NetSuite hasn't said, or it isn't a vendor. */
@@ -298,6 +300,7 @@ export function buildYear1099(data: Year1099Data): Year1099 {
         payee: key,
         name,
         legalName: legal && legal !== name ? legal : null,
+        entityId: v?.entity_id?.trim() || null,
         vendor: !!v,
         marked: v?.is_1099 === 'T' ? true : v?.is_1099 === 'F' ? false : null,
         paid: 0, boxes: {}, total: 0, unsplit: 0, byCard: 0, payments: [],

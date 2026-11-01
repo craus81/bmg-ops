@@ -87,9 +87,10 @@ about until someone has looked for them in NetSuite, part 46, items'
 accounts changed in FleetSuite and sent on to NetSuite, part 47,
 estimates kept in FleetSuite only, part 48, FleetSuite's record winning
 over a change made in NetSuite for customers and vendors, and part 49 for
-items, each built switched off, and part 50, what each vendor marked to
+items, each built switched off, part 50, what each vendor marked to
 get a 1099 was paid in a year, by category, worked out from the copy of
-NetSuite.
+NetSuite, and part 51, NetSuite's own 1099 report uploaded and held
+against those totals vendor by vendor and box by box.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -240,6 +241,7 @@ admins can open it while fixing invoices is switched off.
 | Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql`, `migrations/468-card-charges-in-fleetsuite.sql`, `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `migrations/470-inventory-transfers-made-in-fleetsuite.sql` and `migrations/471-invoices-fixed-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
 | Going live: the entry that opens the books at NetSuite's balances (what still differs on the day, customer by customer and vendor by vendor), what would stop it posting, the rehearsal, the tap that sets the books live, and the posting run posting the entry | `migrations/476-books-going-live.sql`, `src/lib/books/opening-balances.ts`, `src/lib/books/going-live.ts`, `postInvoices`, `liveDecision` and `standingDates` in `src/lib/books/invoice-posting.ts`, the daily check's months in `src/lib/books/daily-check.ts`, `src/app/(main)/admin/books/going-live/page.tsx`, `src/app/api/admin/books/going-live/route.ts`; tests `src/lib/books/opening-balances.test.ts`, `src/lib/books/going-live.test.ts`, `src/lib/books/going-live-route.test.ts`, `src/lib/books/going-live-sql.test.ts`, `src/lib/books/invoice-posting.test.ts`, and the live-books tests in `src/lib/books/invoice-posting-sql.test.ts` and `src/lib/books/daily-check-sql.test.ts` |
 | 1099s: what each vendor marked to get a 1099 was paid in a year on the accounts that count toward one, by category, from the copy of NetSuite | `migrations/481-books-1099s.sql`, `src/lib/books/1099s.ts`, `ACCOUNT_1099_QUERY` and `mapAccount1099s` in `src/lib/books/netsuite-accounts.ts`, the vendors' `is_1099` and `legal_name` in `src/lib/books/netsuite-lists.ts`, `src/app/(main)/admin/books/1099s/page.tsx`, `src/app/api/admin/books/1099s/route.ts`; tests `src/lib/books/1099s.test.ts`, `src/lib/books/1099s-route.test.ts`, `src/lib/books/1099s-sql.test.ts` |
+| 1099s: NetSuite's 1099 report uploaded and held against FleetSuite's totals, vendor by vendor and box by box, never keeping a tax ID | `migrations/482-books-1099-report.sql`, `src/lib/books/1099-report.ts`, the `POST` and the report in `src/app/api/admin/books/1099s/route.ts`, `NetSuiteReport` in `src/app/(main)/admin/books/1099s/page.tsx`; tests `src/lib/books/1099-report.test.ts`, `src/lib/books/1099-report-sql.test.ts`, `src/lib/books/1099s-route.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -4851,9 +4853,73 @@ and up to this year in Central time, and has each company
   category; a copy failed; or checks and bill payments in the ledger copy
   for the year aren't in the copies of the payments yet (`not_copied`).
 
+### NetSuite's 1099 report (part 51)
+
+NetSuite's own 1099 report for the year can be dropped on the page, or
+picked with "tap to choose the file", to see it next to FleetSuite's totals.
+In NetSuite, open the 1099 report for the year and use Export – CSV; an
+Excel `.xlsx` works too. NetSuite's Excel export is an old `.xls` FleetSuite
+can't read, and says so.
+
+The file is read on the phone or computer it's picked on
+(`read1099ReportFile`, `src/lib/books/1099-report.ts`) and never sent:
+
+- The headings are the first row, within the first 30, naming the vendor
+  (Vendor, Name, Payee...) and at least one box or a total. Rows above them
+  are the report's title, kept to show which report it was. A box column is
+  matched to a 1099-MISC category by name without case, punctuation, "Box
+  7" or "1099-NEC" (`boxKey`): FleetSuite's own category names first, then
+  the form's. A Legal Name, Print on Check As or Vendor ID column is kept as
+  another name for matching.
+- Everything else is left out and only its heading is kept, to show what was
+  left out: a tax ID (a heading saying Tax ID, TIN, SSN, EIN, Federal ID and
+  so on, `isTaxIdHeader`), an address, a phone. A name column with nine
+  digits in a row in any cell is left out whole. Any run of nine digits, one
+  character apart at most (`123-45-6789`, `12 3456789`), is taken out of
+  whatever is kept (`scrub`), so **a vendor's tax ID never reaches
+  FleetSuite**. The route refuses one too (`checkReport`), and so do the
+  save function and the table (`gl_1099_report_has_nine_digits`). Amounts
+  are numbers, not text, so a million dollars (nine digits of cents) is
+  fine.
+- Amounts read as `$1,234.56`, `(1,234.56)` or `-1234.56`. A cell under a
+  box that isn't an amount stops it, saying which row, and nothing is kept.
+- A total row ("Total", "Grand Total", "Total - Sample Painting") is
+  skipped; a vendor called "Total Signs" isn't. A vendor listed again is
+  added to its first row. A row of amounts with no vendor is left out and
+  counted, as a detail report's rows are, and the page says to use the
+  summary report.
+
+What's kept (`gl_netsuite_1099_reports`, migration 482, one a company's
+year, a new upload replacing it): the file's name, the title lines, the
+columns kept with the box each is for, the headings left out, each vendor's
+names and amounts in cents by column, what was skipped, and who uploaded it
+when (`POST /api/admin/books/1099s` with `{ company, year, report }`;
+`{ company, year, remove: true }` takes it off; both audited without
+amounts, super admins only).
+
+The comparison (`compare1099`) is worked out each time the page opens, so
+it follows the copies as they come up to date:
+
+- A report vendor is FleetSuite's when its name, or failing that one of its
+  other names, is one of a FleetSuite vendor's names: its name, legal name,
+  NetSuite id, or id and name together (`V-50 Sample Painting`), compared
+  without case or punctuation. One that fits more than one is listed with
+  the names it could be, unless another of its names says which. Report
+  rows that are all one vendor are added up.
+- Each box column is compared with FleetSuite's category of the same name,
+  and the total with everything FleetSuite counted; with no total column,
+  NetSuite's total is its boxes added up, so a box the report lacks shows as
+  a difference.
+- The page shows a line of how many match to the cent, differ, are only in
+  NetSuite's report, and are FleetSuite's 1099s not in it; then the vendors
+  that differ (red), each opening to its boxes side by side, and noting
+  when FleetSuite couldn't split some of what it was paid or the vendor
+  isn't marked to get a 1099; the vendors only in NetSuite's report; the
+  ones only in FleetSuite's (NetSuite's report may leave out a vendor paid
+  under $600; FleetSuite applies no minimum); the matches; and what was
+  read and left out. A title naming another year is pointed out.
+
 ### What isn't done yet
 
-- Checking these against NetSuite's own 1099 report, uploaded as a file
-  (part 51).
 - Making the 1099s and e-filing them (the checklist's July to September
   2027), with this rule. FleetSuite keeps no vendor's tax ID.
