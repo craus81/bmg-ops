@@ -263,6 +263,24 @@ export default function InvoicingHubPage() {
     return () => { cancelled = true; };
   }, [canOpen, canSeeMoney]);
 
+  // Bank deposit, the same way: once bank deposits are switched on, anyone
+  // with Invoicing; until then super admins only.
+  const [canBank, setCanBank] = useState(false);
+  useEffect(() => {
+    if (!canOpen || !canSeeMoney) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/invoices/bank-deposit?status=1');
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setCanBank(res.ok && !!body.canUse);
+      } catch {
+        if (!cancelled) setCanBank(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canOpen, canSeeMoney]);
+
   // Deep link: /invoices?tab=sent|scans|graphics (used by the dashboard KPI).
   useEffect(() => {
     const t = searchParams.get('tab');
@@ -703,6 +721,13 @@ export default function InvoicingHubPage() {
             onClick={() => router.push('/invoices/past-due')}
             style={smallBtn('#f87171', 'rgba(239,68,68,0.08)', 'rgba(239,68,68,0.25)')}
           >Past Due →</button>
+          {canBank && (
+            <button
+              onClick={() => router.push(deepLinks.bankDeposit())}
+              title="Deposit the payments waiting in Undeposited Funds to the bank, and make the bank deposit in NetSuite"
+              style={smallBtn('#a78bfa', 'rgba(139,92,246,0.08)', 'rgba(139,92,246,0.25)')}
+            >Bank deposit →</button>
+          )}
           <button
             onClick={() => router.push('/invoices/bulk-download')}
             style={smallBtn('#60a5fa', 'rgba(59,130,246,0.08)', 'rgba(59,130,246,0.25)')}

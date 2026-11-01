@@ -292,6 +292,13 @@ export const deepLinks = {
    *  prices once taking deposits is switched on in Books → Switches; until
    *  then super admins only. */
   takeDeposit: (salesOrderNetsuiteId: string) => `/sales-orders/deposit?${new URLSearchParams({ so: salesOrderNetsuiteId })}`,
+  /** Customer payments and deposits waiting in Undeposited Funds, deposited
+   *  to one of the company's bank accounts in FleetSuite and made in NetSuite
+   *  as one bank deposit (Books part 56, docs/books.md "Bank deposits made in
+   *  FleetSuite"). Anyone with Invoicing who can see prices once bank
+   *  deposits are switched on in Books → Switches; until then super admins
+   *  only. */
+  bankDeposit: () => '/invoices/bank-deposit',
   /** A vendor's credit, entered and applied to the vendor's open bills
    *  (src/lib/vendor-credit.ts), from More → Purchasing. Admins with Parts
    *  Ordering once vendor credits are switched on in Books → Switches; until

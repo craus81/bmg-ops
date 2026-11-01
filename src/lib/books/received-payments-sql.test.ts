@@ -82,8 +82,8 @@ describe('migration 485', () => {
       { piece: 'credit_memos', is_on: false, changed_by: null },
       { piece: 'customer_payments', is_on: false, changed_by: null },
     ]);
-    // Every piece the app named then is one the column takes, and nothing else is (486 adds taking deposits).
-    const then = SWITCH_PIECES.filter((piece) => piece !== 'customer_deposits');
+    // Every piece the app named then is one the column takes, and nothing else is (486 adds taking deposits, 487 bank deposits).
+    const then = SWITCH_PIECES.filter((piece) => piece !== 'customer_deposits' && piece !== 'bank_deposits');
     expect(then).toHaveLength(12);
     await pg.exec('BEGIN');
     try {
