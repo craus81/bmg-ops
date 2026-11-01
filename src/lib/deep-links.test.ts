@@ -296,3 +296,12 @@ describe('Books 1099s links', () => {
     expect(deepLinks.books1099s('1084', '2026')).toBe('/admin/books/1099s?company=1084&year=2026');
   });
 });
+
+describe('Books rent and mortgage links', () => {
+  it('opens the months, or one month on them', () => {
+    expect(deepLinks.booksRentMortgage()).toBe('/admin/books/rent-and-mortgage');
+    expect(deepLinks.booksRentMortgage(null)).toBe('/admin/books/rent-and-mortgage');
+    expect(deepLinks.booksRentMortgage('2027-03-01')).toBe('/admin/books/rent-and-mortgage?month=2027-03');
+    expect(deepLinks.booksRentMortgage('2027-03')).toBe('/admin/books/rent-and-mortgage?month=2027-03');
+  });
+});

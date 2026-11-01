@@ -634,6 +634,13 @@ export const deepLinks = {
    *  Open to whoever opens the books. */
   books1099s: (company: string, year: number | string) =>
     `/admin/books/1099s?${new URLSearchParams({ company, year: String(year) })}`,
+  /** Books → Rent and mortgage, with one month opened ('YYYY-MM-01' or
+   *  'YYYY-MM'): 1084 Cool Springs' rent from BMG checked against BMG's
+   *  books, the lender's statement against 1084's, and the month's two
+   *  entries (src/lib/books/rent-and-mortgage.ts). Open to whoever opens the
+   *  books. */
+  booksRentMortgage: (month?: string | null) =>
+    `/admin/books/rent-and-mortgage${month ? `?${new URLSearchParams({ month: month.slice(0, 7) })}` : ''}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it
