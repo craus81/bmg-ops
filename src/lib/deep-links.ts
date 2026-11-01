@@ -281,6 +281,11 @@ export const deepLinks = {
    *  from the Invoiced tab's Fix. Anyone with Invoicing once fixing invoices
    *  is switched on in Books → Switches; until then super admins only. */
   invoiceFix: (invoiceNetsuiteId: string) => `/invoices/fix?${new URLSearchParams({ invoice: invoiceNetsuiteId })}`,
+  /** A customer's check or ACH payment received against their open invoices
+   *  (src/lib/receive-payment.ts), from the Invoiced tab's Payment on an open
+   *  invoice. Anyone with Invoicing who can see prices once receiving payments
+   *  is switched on in Books → Switches; until then super admins only. */
+  receivePayment: (invoiceNetsuiteId: string) => `/invoices/payment?${new URLSearchParams({ invoice: invoiceNetsuiteId })}`,
   /** A vendor's credit, entered and applied to the vendor's open bills
    *  (src/lib/vendor-credit.ts), from More → Purchasing. Admins with Parts
    *  Ordering once vendor credits are switched on in Books → Switches; until

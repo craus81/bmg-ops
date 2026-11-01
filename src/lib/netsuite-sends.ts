@@ -413,7 +413,7 @@ export function describeSend(s: { action: SendAction; record_type: string; made_
 const TRANSACTION_PAGES: Record<string, string> = {
   salesOrder: 'salesord', invoice: 'custinvc', estimate: 'estimate', purchaseOrder: 'purchord', vendorBill: 'vendbill',
   vendorCredit: 'vendcred', creditMemo: 'custcred', itemFulfillment: 'itemship', itemReceipt: 'itemrcpt',
-  inventoryAdjustment: 'invadjst', inventoryTransfer: 'invtrnfr', journalEntry: 'journal',
+  inventoryAdjustment: 'invadjst', inventoryTransfer: 'invtrnfr', journalEntry: 'journal', customerPayment: 'custpymt',
 };
 const ENTITY_PAGES: Record<string, string> = { customer: 'custjob', vendor: 'vendor', contact: 'contact' };
 
