@@ -11,11 +11,13 @@ vi.mock('@/lib/system-health', () => ({
 
 import {
   ACCOUNTS_QUERY,
+  ACCOUNT_1099_QUERY,
   ACCOUNT_SUBSIDIARIES_QUERY,
   BOOKS_ACCOUNTS_SYNC,
   SUBSIDIARIES_QUERY,
   companyFor,
   findSubsidiaryLinks,
+  mapAccount1099s,
   mapNetSuiteAccounts,
   subsidiariesByAccount,
   syncBooksAccounts,
@@ -115,13 +117,46 @@ describe('mapNetSuiteAccounts', () => {
   });
 });
 
+// The accounts NetSuite gives a 1099-MISC category (migration 481): by its name, or only its id.
+const ACCOUNT_1099_ROWS = [
+  { id: 530, category_id: 7, category: 'Nonemployee Compensation' },
+  { id: '540', category_id: '1', category: 'Rents' },
+  { id: 541, category_id: '1', category: '' },
+  { id: 'x', category_id: '1', category: 'Rents' },
+  { id: 542, category_id: null, category: null },
+  { id: 530, category_id: 7, category: ' Nonemployee Compensation ' },
+];
+
+describe('the accounts that count toward a 1099', () => {
+  it('names each by its category, or by the category\'s id when NetSuite gives no name, one per account', () => {
+    expect(mapAccount1099s(ACCOUNT_1099_ROWS)).toEqual([
+      { netsuite_account_id: '530', category: 'Nonemployee Compensation', category_id: '7' },
+      { netsuite_account_id: '540', category: 'Rents', category_id: '1' },
+      { netsuite_account_id: '541', category: '1099 category 1', category_id: '1' },
+    ]);
+    expect(mapAccount1099s([])).toEqual([]);
+  });
+
+  it('reads them on their own, with only accounts that have one', () => {
+    expect(ACCOUNT_1099_QUERY).toMatch(/BUILTIN\.DF\(a\.category1099misc\) AS category FROM account a WHERE a\.category1099misc IS NOT NULL ORDER BY a\.id$/);
+    expect(ACCOUNTS_QUERY).not.toMatch(/1099/);
+  });
+});
+
 describe('syncBooksAccounts', () => {
   beforeEach(() => { heartbeats.length = 0; });
 
-  const fakeService = (opts: { rpcError?: string } = {}) => {
-    const rpc = vi.fn(async (_fn: string, _args: { p: any }) => (opts.rpcError
-      ? { data: null, error: { message: opts.rpcError } }
-      : { data: { received: 5, added: 5, changed: 0, gone: 0, issues: [] }, error: null }));
+  const fakeService = (opts: { rpcError?: string; applyError?: string; cutShort?: boolean } = {}) => {
+    const rpc = vi.fn(async (fn: string, args: { p: any }) => {
+      if (fn === 'gl_netsuite_1099_accounts_apply') {
+        if (opts.applyError) return { data: null, error: { message: opts.applyError } };
+        const n = args.p.accounts.length;
+        return { data: { received: n, added: n, changed: 0, removed: 1, here: 9, cut_short: !!opts.cutShort }, error: null };
+      }
+      return opts.rpcError
+        ? { data: null, error: { message: opts.rpcError } }
+        : { data: { received: 5, added: 5, changed: 0, gone: 0, issues: [] }, error: null };
+    });
     const service = {
       from: (table: string) => {
         expect(table).toBe('gl_companies');
@@ -137,6 +172,7 @@ describe('syncBooksAccounts', () => {
       [ACCOUNTS_QUERY]: () => ACCOUNT_ROWS,
       [ACCOUNT_SUBSIDIARIES_QUERY]: () => MAP_ROWS,
       [SUBSIDIARIES_QUERY]: () => SUBSIDIARY_ROWS,
+      [ACCOUNT_1099_QUERY]: () => ACCOUNT_1099_ROWS,
       ...overrides,
     };
     if (!table[q]) throw new Error(`unexpected query ${q}`);
@@ -154,6 +190,39 @@ describe('syncBooksAccounts', () => {
     expect(args.p.company_subsidiaries).toEqual([{ company: '1084', subsidiary_id: '5' }]);
     expect(args.p.accounts.find((a: any) => a.netsuite_id === '910').company).toBe('1084');
     expect(heartbeats).toEqual([{ syncType: BOOKS_ACCOUNTS_SYNC, result: expect.objectContaining({ received: 5 }) }]);
+  });
+
+  it('then reads which accounts count toward a 1099 and hands the list over whole', async () => {
+    const { service, rpc } = fakeService();
+    const r = await syncBooksAccounts(service, { query: answers() });
+    expect(rpc.mock.calls.map(([fn]) => fn)).toEqual(['gl_sync_netsuite_accounts', 'gl_netsuite_1099_accounts_apply']);
+    expect(rpc.mock.calls[1][1].p).toEqual({ accounts: mapAccount1099s(ACCOUNT_1099_ROWS) });
+    expect(r.accounts1099).toEqual({ received: 3, added: 3, changed: 0, removed: 1 });
+    expect(heartbeats[0].result.accounts1099).toEqual({ received: 3, added: 3, changed: 0, removed: 1 });
+  });
+
+  it("keeps the chart and the 1099 accounts it had when NetSuite won't say which count, and says so", async () => {
+    const { service, rpc } = fakeService();
+    const r = await syncBooksAccounts(service, {
+      query: answers({ [ACCOUNT_1099_QUERY]: () => { throw new Error("Field 'category1099misc' for record 'account' was not found"); } }),
+    });
+    expect(r).toMatchObject({ received: 5, accounts1099: { error: "Field 'category1099misc' for record 'account' was not found" } });
+    expect(r.error).toBeUndefined();
+    expect(r.notes).toEqual([
+      "NetSuite wouldn't say which accounts count toward a 1099 (Field 'category1099misc' for record 'account' was not found), so the 1099s page keeps what it had.",
+    ]);
+    expect(rpc.mock.calls.map(([fn]) => fn)).toEqual(['gl_sync_netsuite_accounts']);
+
+    const failed = fakeService({ applyError: 'gl: NetSuite account 530 is in the list twice' });
+    const r2 = await syncBooksAccounts(failed.service, { query: answers() });
+    expect(r2.accounts1099).toEqual({ error: 'gl: NetSuite account 530 is in the list twice' });
+    expect(r2.notes).toEqual([expect.stringMatching(/^NetSuite wouldn't say which accounts count toward a 1099 \(gl: NetSuite account 530 is in the list twice\)/)]);
+  });
+
+  it('says when the list of accounts that count looks cut short, so none were taken off', async () => {
+    const { service } = fakeService({ cutShort: true });
+    const r = await syncBooksAccounts(service, { query: answers() });
+    expect(r.notes).toEqual(['NetSuite listed 3 accounts that count toward a 1099 and FleetSuite has 9, so none were taken off.']);
   });
 
   it('carries on without company limits when the subsidiary reads are refused', async () => {
@@ -182,7 +251,8 @@ describe('syncBooksAccounts', () => {
       query: answers({ [ACCOUNTS_QUERY]: () => { throw new Error('INSUFFICIENT_PERMISSION'); } }),
     });
     expect(r1.error).toBe('INSUFFICIENT_PERMISSION');
-    expect(refusedAll.rpc).not.toHaveBeenCalled();
+    // The chart isn't applied; which accounts count toward a 1099 is read on its own.
+    expect(refusedAll.rpc.mock.calls.map(([fn]) => fn)).toEqual(['gl_netsuite_1099_accounts_apply']);
 
     const failed = fakeService({ rpcError: 'gl: NetSuite account 111 is in the list twice' });
     const r2 = await syncBooksAccounts(failed.service, { query: answers() });

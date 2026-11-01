@@ -277,3 +277,10 @@ describe('Inventory transfer links', () => {
     expect(deepLinks.inventoryTransfers('f0000000-0000-4000-8000-000000000001')).toBe('/admin/inventory-transfers?id=f0000000-0000-4000-8000-000000000001');
   });
 });
+
+describe('Books 1099s links', () => {
+  it("opens one company's year of 1099 totals", () => {
+    expect(deepLinks.books1099s('BMG', 2025)).toBe('/admin/books/1099s?company=BMG&year=2025');
+    expect(deepLinks.books1099s('1084', '2026')).toBe('/admin/books/1099s?company=1084&year=2026');
+  });
+});

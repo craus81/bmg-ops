@@ -597,6 +597,11 @@ export const deepLinks = {
    *  only. */
   booksChangedInNetsuite: (change?: string | null) =>
     `/admin/books/changed-in-netsuite${change ? `?${new URLSearchParams({ change })}` : ''}`,
+  /** Books → 1099s on one company's year: what each vendor marked to get a
+   *  1099 was paid on the accounts that count toward one (src/lib/books/1099s.ts).
+   *  Super admins only. */
+  books1099s: (company: string, year: number | string) =>
+    `/admin/books/1099s?${new URLSearchParams({ company, year: String(year) })}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it

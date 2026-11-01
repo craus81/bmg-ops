@@ -80,10 +80,16 @@ switched off, part 42, the entry that opens the books at NetSuite's
 balances, what still differs on the day, with a rehearsal of going live,
 part 43, the tap that sets the books live, with the opening entry the
 posting run then posts, part 44, closing each month in FleetSuite's
-books once it's over, in order, and reopening one for a reason, and part
+books once it's over, in order, and reopening one for a reason, part
 45, the NetSuite feed, which keeps every send FleetSuite makes to NetSuite
 with what NetSuite answered and lists the ones FleetSuite can't be sure
-about until someone has looked for them in NetSuite.
+about until someone has looked for them in NetSuite, part 46, items'
+accounts changed in FleetSuite and sent on to NetSuite, part 47,
+estimates kept in FleetSuite only, part 48, FleetSuite's record winning
+over a change made in NetSuite for customers and vendors, and part 49 for
+items, each built switched off, and part 50, what each vendor marked to
+get a 1099 was paid in a year, by category, worked out from the copy of
+NetSuite.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -103,7 +109,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, and the NetSuite feed at `/admin/books/netsuite-feed`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, and the 1099s at `/admin/books/1099s`, which only super admins can open. Only they see the Books entry on the More page (Admin), which opens
 the accounts page; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
 super admins can open it while credit memos are switched off. The vendor
@@ -233,6 +239,7 @@ admins can open it while fixing invoices is switched off.
 | Invoice fix tests | `src/lib/invoice-fix.test.ts`, `src/lib/invoice-fix-route.test.ts`, `src/lib/netsuite-invoice-fix.test.ts`, `src/lib/books/own-invoices.test.ts`, and the tables and their functions `src/lib/books/invoices-fixed-sql.test.ts` |
 | Switches: each piece that takes the team out of NetSuite, off until a super admin turns it on | `migrations/466-credit-memos-in-fleetsuite.sql`, `migrations/467-vendor-credits-in-fleetsuite.sql`, `migrations/468-card-charges-in-fleetsuite.sql`, `migrations/469-journal-entries-typed-in-fleetsuite.sql`, `migrations/470-inventory-transfers-made-in-fleetsuite.sql` and `migrations/471-invoices-fixed-in-fleetsuite.sql`, `src/lib/books/switches.ts`, `src/app/(main)/admin/books/switches/page.tsx`, `src/app/api/admin/books/switches/route.ts`; tests `src/lib/books/switches.test.ts` |
 | Going live: the entry that opens the books at NetSuite's balances (what still differs on the day, customer by customer and vendor by vendor), what would stop it posting, the rehearsal, the tap that sets the books live, and the posting run posting the entry | `migrations/476-books-going-live.sql`, `src/lib/books/opening-balances.ts`, `src/lib/books/going-live.ts`, `postInvoices`, `liveDecision` and `standingDates` in `src/lib/books/invoice-posting.ts`, the daily check's months in `src/lib/books/daily-check.ts`, `src/app/(main)/admin/books/going-live/page.tsx`, `src/app/api/admin/books/going-live/route.ts`; tests `src/lib/books/opening-balances.test.ts`, `src/lib/books/going-live.test.ts`, `src/lib/books/going-live-route.test.ts`, `src/lib/books/going-live-sql.test.ts`, `src/lib/books/invoice-posting.test.ts`, and the live-books tests in `src/lib/books/invoice-posting-sql.test.ts` and `src/lib/books/daily-check-sql.test.ts` |
+| 1099s: what each vendor marked to get a 1099 was paid in a year on the accounts that count toward one, by category, from the copy of NetSuite | `migrations/481-books-1099s.sql`, `src/lib/books/1099s.ts`, `ACCOUNT_1099_QUERY` and `mapAccount1099s` in `src/lib/books/netsuite-accounts.ts`, the vendors' `is_1099` and `legal_name` in `src/lib/books/netsuite-lists.ts`, `src/app/(main)/admin/books/1099s/page.tsx`, `src/app/api/admin/books/1099s/route.ts`; tests `src/lib/books/1099s.test.ts`, `src/lib/books/1099s-route.test.ts`, `src/lib/books/1099s-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -313,6 +320,12 @@ How a sync works (`syncBooksAccounts`, which hands the list to
   of the active synced accounts). It comes back if NetSuite lists it again.
 - One sync runs at a time, and the whole list applies in one transaction or
   not at all.
+- After the chart, the run reads which accounts count toward a 1099 and the
+  1099-MISC category each one has (`ACCOUNT_1099_QUERY`), for the 1099s
+  page, into `gl_netsuite_1099_accounts` (migration 481). It's a read of its
+  own, so NetSuite refusing it never stops the chart: the page then keeps
+  what it had and says why. An account NetSuite stops listing is taken off,
+  unless the list looks cut short (none, or under half of what's here).
 
 Each run is recorded in `sync_state` as `books_netsuite_accounts`, which the
 accounts page shows. It is deliberately not a System Health monitor: the
@@ -339,9 +352,13 @@ cron, and from **Sync now** on the lists page:
 | Classes | `classification` | full name |
 | Terms | `term` | days until due, early payment discount and its days |
 | Tax codes | `salestaxitem` | description, rate, tax type, tax agency |
-| Vendors | `vendor` | default expense account, payables account, terms |
+| Vendors | `vendor` | default expense account, payables account, terms, whether it gets a 1099, its legal name when that isn't its name |
 | Items | `item` | type, display name, income, asset and expense accounts |
 | Customers | `customer` | terms, whether NetSuite taxes them and with which tax code, the entity id when the name is the company's |
+
+Vendors' 1099 flags and legal names came with migration 481, for the 1099s
+page ("1099s"). Either one NetSuite won't give is left out, as below, and
+the page says so.
 
 Customers came with migration 407, for FleetSuite's own invoices: their
 terms give each invoice FleetSuite makes its due date, and whether NetSuite
@@ -4762,3 +4779,81 @@ December stays document by document.
    since, the posting run posts each company's opening entry, and trues it
    up whenever NetSuite's December numbers change. The Going live page
    shows each one posted.
+
+## 1099s
+
+Books → 1099s (`/admin/books/1099s`, part 50) works out what each vendor
+NetSuite marks to get a 1099 was paid in one company's year, from
+FleetSuite's copy of NetSuite, the way NetSuite counts it. It's the NetSuite
+Exit Checklist's 1099 dry run: in January 2027, 2026's totals are checked
+against the 1099s NetSuite makes, before FleetSuite makes them itself later
+in 2027. It only reads; nothing is filed or sent.
+
+What it reads (`gl_1099_year`, migration 481):
+
+- Which vendors get a 1099: the vendors copy's `is_1099`, `T` or `F`, with
+  the legal name when it isn't the vendor's name ("NetSuite's lists").
+- Which accounts count toward one: `gl_netsuite_1099_accounts`, each account
+  NetSuite gives a 1099-MISC category, read with the chart ("Chart of
+  accounts"). The category is the box of the form: Nonemployee
+  Compensation, Rents and so on.
+- The year's checks and bill payments, by the date paid, from the copies of
+  them ("Bill payments", "Checks and card charges"), with their lines from
+  the copy of NetSuite's ledger and, for a bill payment, the bills and bill
+  credits it paid with theirs. Card charges and refunds come too, to be
+  listed. One NetSuite voided or deleted is left out. Only what's for a
+  vendor marked to get a 1099, or touches an account that counts, is read.
+
+The rule (`buildYear1099`, `src/lib/books/1099s.ts`):
+
+- A check counts on the accounts of its own lines, less the one it was paid
+  from.
+- A bill payment counts on the accounts of the bills it paid. What it paid
+  on each bill, a bill credit it applied counting against them, is spread
+  over that bill's lines by account, less payables, and the whole is brought
+  to what the payment paid, in proportion to the cent, the leftover cents
+  going to the largest remainders (`spread`), so the shares add up to the
+  payment exactly. A discount taken for paying early isn't money paid, so
+  it's in no box.
+- Each account's share goes in its category's box. What's on other
+  accounts goes in none.
+- What's paid by card is left out, as the card company reports it on a
+  1099-K: card charges and refunds, and checks and bill payments paid from a
+  credit card account. It's listed instead.
+- No minimum is applied: every vendor paid on an account that counts is
+  shown, whatever the amount.
+
+A payment that can't be split is listed with why (`unsplitReason`): it isn't
+in the copy of the ledger yet, what it paid hasn't been copied, it paid a
+bill from before 2025 (the ledger copy starts with 2025), it paid something
+that isn't a bill (a journal entry, say), or NetSuite didn't say how much it
+paid on one. One not in the copy of the ledger yet shows for both
+companies, as which one it's for comes from its lines.
+
+The page opens on last year for BMG, so through 2026 it shows 2025, which
+can be checked against the 1099s filed in January 2026. It goes back to 2025
+and up to this year in Central time, and has each company
+(`GET /api/admin/books/1099s?company=&year=`, super admins only). It shows:
+
+- The 1099s: each vendor marked to get one that was paid on an account that
+  counts, a column for each category and a total, largest first. Tap one for
+  its payments, each with what it put in which box.
+- Paid on accounts that count, not marked to get a 1099 (red). One that
+  should get a 1099 needs it ticked on its vendor record; one that
+  shouldn't, an employee say, was likely paid on the wrong account. A payee
+  that isn't in NetSuite's vendors goes by the payment's payee name.
+- Payments FleetSuite can't split (red).
+- Vendors marked to get a 1099 that were paid only on other accounts, and
+  ones paid by card.
+- The accounts that count, with their categories.
+- Above them, why something may be missing: NetSuite wouldn't give the
+  vendors, their 1099 flags or which accounts count; no account has a
+  category; a copy failed; or checks and bill payments in the ledger copy
+  for the year aren't in the copies of the payments yet (`not_copied`).
+
+### What isn't done yet
+
+- Checking these against NetSuite's own 1099 report, uploaded as a file
+  (part 51).
+- Making the 1099s and e-filing them (the checklist's July to September
+  2027), with this rule. FleetSuite keeps no vendor's tax ID.
