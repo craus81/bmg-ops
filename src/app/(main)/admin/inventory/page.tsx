@@ -13,6 +13,7 @@ import Link from 'next/link';
 import { createClient } from '@/lib/supabase-browser';
 import { useAuth, useRequireFeature } from '@/components/AuthProvider';
 import InventoryAdjustModal, { type AdjustPart } from '@/components/InventoryAdjustModal';
+import { deepLinks } from '@/lib/deep-links';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { looseMatcher, partNumberIncludes } from '@/lib/loose-search';
 
@@ -50,6 +51,8 @@ export default function InventoryPage() {
   const [lastSynced, setLastSynced] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState('');
+  // Adjustments waiting for approval (Books → Switches → Approving adjustments), for admins.
+  const [approvals, setApprovals] = useState<{ on: boolean | null; open: number } | null>(null);
   const [, setTick] = useState(0);
   const [rows, setRows] = useState<InvRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -124,6 +127,16 @@ export default function InventoryPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const loadApprovals = useCallback(() => {
+    fetch('/api/inventory/adjust/approvals?status=1')
+      .then(async r => {
+        const d = await r.json().catch(() => ({}));
+        if (r.ok) setApprovals({ on: d.on ?? null, open: Number(d.open) || 0 });
+      })
+      .catch(() => {});
+  }, []);
+  useEffect(() => { if (isAdmin) loadApprovals(); }, [isAdmin, loadApprovals]);
+
   // When stock last came from NetSuite (every 15 minutes, or Refresh).
   useEffect(() => {
     if (!isAdmin) return;
@@ -176,6 +189,11 @@ export default function InventoryPage() {
           <h1 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>Inventory</h1>
           <Link href="/admin/inventory/rack-kits" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>Rack Kits: what can we build? →</Link>
           <Link href="/admin/inventory/hitch-kits" style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>Hitch Kits →</Link>
+          {approvals && (approvals.on || approvals.open > 0) && (
+            <Link href={deepLinks.adjustmentsToApprove()} style={{ fontSize: '11px', fontWeight: 700, color: approvals.open > 0 ? 'var(--warning)' : '#60a5fa' }}>
+              Adjustments to approve{approvals.open > 0 ? ` · ${approvals.open}` : ''} →
+            </Link>
+          )}
           {isAdmin && (
             <button onClick={refresh} disabled={refreshing} title="Pull on hand and available from NetSuite now"
               style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '999px', border: '1px solid var(--border)', background: 'var(--card)', color: 'var(--text-muted)', cursor: refreshing ? 'default' : 'pointer' }}>
@@ -283,6 +301,7 @@ export default function InventoryPage() {
           part={adjusting}
           onClose={() => setAdjusting(null)}
           onPosted={() => { setFlash(adjusting.itemNumber); load(); }}
+          onAsked={loadApprovals}
         />
       )}
     </div>

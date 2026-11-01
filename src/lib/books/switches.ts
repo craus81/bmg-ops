@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, 478 to 480 and 485 to 488, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 to 480, 485 to 488 and 494, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -15,16 +15,19 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * and while it's off estimates push as they do now. So is FleetSuite's
  * record wins: on, it stops the NetSuite syncs writing over FleetSuite's
  * customers, vendors and items, so a sync that can't read it stops rather
- * than count it as off (readSwitch, src/lib/fleetsuite-records.ts).
+ * than count it as off (readSwitch, src/lib/fleetsuite-records.ts). And so is
+ * Approving adjustments: on, an adjustment made with Adjust waits for a super
+ * admin's approval before it goes to NetSuite, so Adjust refuses when it can't
+ * read it rather than post one unapproved (src/app/api/inventory/adjust).
  * Receiving payments, taking deposits, bank deposits and paying vendors stay
- * off past January 1, until they move into FleetSuite during 2027 (`later`
- * says so).
+ * off past January 1, until they move into FleetSuite during 2027, and
+ * approving adjustments until the plan adds it in 2027 (`later` says so).
  */
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
   | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments'
-  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments';
+  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals';
 
 export interface SwitchInfo {
   name: string;
@@ -122,6 +125,14 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     what: "Anyone with Payments pays a company's open bills in a payment run, ticked from what NetSuite has open, by check or ACH from one of its bank accounts, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite and keeps its own copy for the books. Checks print on BMG's check stock from the run, each number set in NetSuite, and ACH payments are paid from a file made for First Bank from the run.",
     where: 'More → Money & Books → Pay Vendors',
     later: 'Stays off on January 1: paying vendors moves into FleetSuite during 2027.',
+  },
+  adjustment_approvals: {
+    name: 'Approving adjustments',
+    what: "An inventory adjustment made with Adjust waits for approval: a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as an Inventory Adjustment, or turns it down saying why. Until it's on, an adjustment goes to NetSuite at once, as today.",
+    where: "Adjust on the Inventory page or a part's details, and Adjustments to approve on the Inventory page",
+    turnOn: "Switch on Approving adjustments? From now on an adjustment made with Adjust goes to NetSuite only once a super admin who didn't ask approves it.",
+    turnOff: "Switch off Approving adjustments? Adjustments go to NetSuite at once again, as before. Ones already waiting can still be approved or turned down.",
+    later: 'Stays off on January 1: the plan adds approving adjustments during 2027, from April.',
   },
 };
 
