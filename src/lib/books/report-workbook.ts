@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import type { CompanyValue } from './inventory-value';
 import type { DetailDocument, LedgerRow } from './report-detail';
 import type { Pair, Report, ReportKind, ReportLine } from './reports';
 
@@ -8,12 +9,14 @@ import type { Pair, Report, ReportKind, ReportLine } from './reports';
  * "Replacing NetSuite with FleetSuite", 2026-10-31), so the owner or the CPA
  * can work with the books in Excel: the profit and loss, balance sheet or
  * trial balance as Reports shows it, FleetSuite's books next to NetSuite's
- * with the difference, each line indented as on the page; and one account's
+ * with the difference, each line indented as on the page; one account's
  * documents by date with each side's running balance
- * (runningBalances in report-detail.ts). Built on the server by the two
- * download routes; amounts are dollars in Excel's own Accounting format,
- * read as the report shows them, and anything the page warns about is
- * written at the top, in red when it's a failure.
+ * (runningBalances in report-detail.ts); and a company's inventory value at
+ * a month's end with how it ties to each inventory account (part 64,
+ * inventory-value.ts). Built on the server by the download routes; amounts
+ * are dollars in Excel's own Accounting format, read as the report shows
+ * them, and anything the page warns about is written at the top, in red
+ * when it's a failure.
  */
 
 export const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -411,4 +414,177 @@ export async function accountWorkbook(input: AccountWorkbookInput): Promise<Work
   if (listed) sheet.autoFilter = { from: { row: header, column: 1 }, to: { row: sheet.rowCount, column: 11 } };
 
   return fileOf(wb, accountFileName(input.company.code, account, from, to));
+}
+
+// ── Inventory value at a month's end ──────────────────────────────────────
+
+/** The inventory value's file: "BMG Inventory value 2026-10-31.xlsx". */
+export function inventoryFileName(company: string, month: string): string {
+  return `${cleanName(`${company} Inventory value ${month.slice(0, 7)}-${String(lastDay(month)).padStart(2, '0')}`)}.xlsx`;
+}
+
+/** What Inventory value warns about for a company, as it reads in its file. */
+export function inventoryNotes(p: {
+  month: string;
+  /** This month, the latest the page offers. */
+  through: string;
+  company: Pick<CompanyValue, 'company' | 'netsuiteThrough' | 'netsuiteShort'>;
+  lastCopy: (Run & { partial: boolean }) | null;
+  lastPosting: (Run & { partial: boolean }) | null;
+}): WorkbookNote[] {
+  const notes: WorkbookNote[] = [];
+  if (p.month === p.through) {
+    notes.push({ tone: 'amber', text: `${monthName(p.month)} isn't over yet, so this is where it stood when the file was made.` });
+  }
+  if (!p.lastCopy) {
+    notes.push({ tone: 'amber', text: "NetSuite's stock moves haven't been copied yet, so no item has a count or value." });
+  } else if (p.lastCopy.error) {
+    notes.push({ tone: 'red', text: `The last copy of NetSuite's stock moves failed (${centralTime(p.lastCopy.at)}): ${p.lastCopy.error}` });
+  } else if (p.lastCopy.partial) {
+    notes.push({
+      tone: 'amber',
+      text: `Still copying NetSuite's stock moves: the last run (${centralTime(p.lastCopy.at)}) stopped for time, so some items' `
+        + "moves aren't in yet. It carries on at the next run.",
+    });
+  }
+  notes.push(...postingNotes(p.lastPosting, "FleetSuite's books"));
+  if (p.company.netsuiteShort) {
+    notes.push({
+      tone: 'amber',
+      text: p.company.netsuiteThrough
+        ? `NetSuite's own totals for ${p.company.company} are read through ${monthName(p.company.netsuiteThrough)}, so NetSuite's balance sheet stops there.`
+        : `NetSuite's own totals for ${p.company.company} haven't been read yet, so NetSuite's balance sheet holds only its starting entry.`,
+    });
+  }
+  return notes;
+}
+
+export interface InventoryWorkbookInput {
+  company: WorkbookCompany;
+  /** 'YYYY-MM-01'. */
+  month: string;
+  value: CompanyValue;
+  notes: WorkbookNote[];
+  now: Date;
+}
+
+const QUANTITY = '#,##0.#####';
+// What one cost on average: dollars to four places, as NetSuite keeps it, in the Accounting format's shape.
+const AVERAGE = '_($* #,##0.00##_);_($* (#,##0.00##);_($* "-"??_);_(@_)';
+
+/**
+ * One company's inventory value at a month's end, as Inventory value shows
+ * it: each item at each location with its count, average cost and value; each
+ * inventory account from the stocked items on it to FleetSuite's balance
+ * sheet, every cent between them on a line of its own; and the documents
+ * with no stocked item behind them, the month's first.
+ */
+export async function inventoryWorkbook(input: InventoryWorkbookInput): Promise<WorkbookFile> {
+  const { month, value } = input;
+  const wb = newWorkbook(input.now);
+  const period = `As of ${monthEnd(month)}`;
+  const setup = { pageSetup: { orientation: 'portrait' as const, fitToPage: true, fitToWidth: 1, fitToHeight: 0 } };
+
+  const items = wb.addWorksheet('Inventory value', setup);
+  [16, 34, 16, 12, 14, 17, 34].forEach((w, i) => { items.getColumn(i + 1).width = w; });
+  items.getColumn(4).numFmt = QUANTITY;
+  items.getColumn(5).numFmt = AVERAGE;
+  items.getColumn(6).numFmt = AMOUNT;
+  const head = titleRows(items, {
+    company: input.company,
+    title: 'Inventory value',
+    period,
+    about: "Each item at each location at the month's end: how many were on hand, what one cost on average and what they were worth, "
+      + "as FleetSuite counts them from NetSuite's documents, each in the month NetSuite posted it to.",
+    notes: input.notes,
+    now: input.now,
+    header: ['Item', 'Description', 'Location', 'On hand', 'Average cost', 'Value', 'Note'],
+    amounts: [4, 6],
+  });
+  for (const l of value.lines) {
+    const row = items.addRow([
+      l.item, l.description, l.location, l.quantity, l.averageCost === null ? null : l.averageCost / 100, dollars(l.value),
+      l.belowZero ? 'Fewer than none on hand' : l.leftover ? 'None on hand, but value on its lines' : null,
+    ]);
+    redIf(row.getCell(4), l.belowZero);
+    if (l.belowZero || l.leftover) row.getCell(7).font = { color: { argb: l.belowZero ? RED : AMBER } };
+  }
+  const total = items.addRow(['Total', null, null, null, null, dollars(value.value), null]);
+  total.font = { bold: true };
+  total.getCell(6).border = { top: { style: 'double' } };
+  if (value.lines.length) items.autoFilter = { from: { row: head, column: 1 }, to: { row: head + value.lines.length, column: 7 } };
+
+  const ties = wb.addWorksheet('Ties to the accounts', setup);
+  ties.getColumn(1).width = 80;
+  amountColumns(ties, 2, 2, 18);
+  titleRows(ties, {
+    company: input.company,
+    title: 'Inventory value: how it ties to the accounts',
+    period,
+    about: "Each inventory account at the month's end, from the stocked items on it to FleetSuite's balance sheet, "
+      + 'everything between them on a line of its own.',
+    notes: input.notes,
+    now: input.now,
+    header: ['Inventory account', 'Amount'],
+    amounts: [2, 2],
+  });
+  const line = (label: string, cents: number, style: { bold?: boolean; indent?: number; red?: boolean } = {}) => {
+    const row = ties.addRow([label, dollars(cents)]);
+    if (style.bold) row.font = { bold: true };
+    if (style.indent) row.getCell(1).alignment = { indent: style.indent };
+    redIf(row.getCell(2), !!style.red && cents !== 0);
+  };
+  value.accounts.forEach((a, i) => {
+    if (i) ties.addRow([]);
+    ties.addRow([`${a.account}${a.fixedAsset ? ', a fixed asset account' : ''}`]).font = { bold: true, size: 12 };
+    line(`Stocked items at the end of ${monthName(monthBefore(month))}`, a.items.before);
+    for (const m of a.items.moves) line(`${m.type}, ${count(m.documents, 'document', 'documents')} in ${monthOf(month)}`, m.total, { indent: 1 });
+    line(`Stocked items at the end of ${monthName(month)}`, a.items.end, { bold: true });
+    if (a.start) line("Where NetSuite's ledger and the items stood apart on December 31, 2024", a.start, { indent: 1 });
+    if (a.entries.count) {
+      const inMonth = a.entries.month.count ? `, ${a.entries.month.count} of them in ${monthOf(month)}` : '';
+      line(`${count(a.entries.count, 'document', 'documents')} since with no stocked item${inMonth}`, a.entries.total, { indent: 1 });
+    }
+    if (a.unexplained) line("Not accounted for: FleetSuite's copy of NetSuite's ledger is off", a.unexplained, { indent: 1, red: true });
+    line("NetSuite's ledger, as FleetSuite copies it", a.ledger, { bold: true });
+    if (a.notCopied) line("In NetSuite's own totals, not in FleetSuite's copy of its ledger yet", a.notCopied, { indent: 1 });
+    line("NetSuite's balance sheet", a.netsuite, { bold: true });
+    if (a.booksApart) line("FleetSuite's books apart from NetSuite's", a.booksApart, { indent: 1, red: true });
+    line("FleetSuite's balance sheet", a.books, { bold: true });
+    line("FleetSuite's books less the stocked items", a.apart, { bold: true });
+  });
+
+  const entries = value.accounts.filter((a) => a.entries.count > 0);
+  if (entries.length) {
+    const docs = wb.addWorksheet('Documents with no item', { pageSetup: { ...setup.pageSetup, orientation: 'landscape' } });
+    [30, 11, 20, 14, 28, 40, 16, 14].forEach((w, i) => { docs.getColumn(i + 1).width = w; });
+    docs.getColumn(2).numFmt = DATE;
+    docs.getColumn(7).numFmt = AMOUNT;
+    const top = titleRows(docs, {
+      company: input.company,
+      title: 'Documents on the inventory accounts with no stocked item',
+      period: `January 1, 2025 to ${monthEnd(month)}`,
+      about: "Each document that posted to an inventory account on no stocked item's stock line, a journal entry say: "
+        + `on each account, ${monthName(month)}'s first, then the biggest.`,
+      notes: [],
+      now: input.now,
+      header: ['Account', 'Date', 'Type', 'Number', 'Name', 'Memo', 'Amount', `In ${monthOf(month)}`],
+      amounts: [7, 7],
+    });
+    for (const a of entries) {
+      for (const r of a.entries.rows) {
+        docs.addRow([a.account, dateCell(r.date), r.type, r.number, r.name, r.memo, dollars(r.amount), r.inMonth ? 'Yes' : null]);
+      }
+      if (a.entries.more.count) {
+        const more = docs.addRow([
+          a.account, null, null, null, `${count(a.entries.more.count, 'smaller document', 'smaller documents')} not listed`, null,
+          dollars(a.entries.more.total), null,
+        ]);
+        more.font = { italic: true };
+      }
+    }
+    docs.autoFilter = { from: { row: top, column: 1 }, to: { row: docs.rowCount, column: 8 } };
+  }
+
+  return fileOf(wb, inventoryFileName(input.company.code, month));
 }

@@ -483,6 +483,8 @@ export default function BooksStockPage() {
             the item stood on December 31, 2024 and every NetSuite document since that moved it, copied every two hours, and values it at
             what NetSuite posted to the inventory accounts on those documents. NetSuite&apos;s count is read as each copy ends. Tap an item
             for its moves. Each morning the daily check tells super admins when a count stops matching.{' '}
+            <Link href={deepLinks.booksInventoryValue()} style={{ color: 'var(--text-secondary)' }}>Inventory value at a month&apos;s end</Link>
+            {' · '}
             <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
             {' · '}
             <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>

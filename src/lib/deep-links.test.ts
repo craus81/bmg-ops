@@ -319,3 +319,13 @@ describe("Books 1084's bank reconciliation links", () => {
     expect(deepLinks.booksBankReconciliation()).toBe('/admin/books/bank-reconciliation');
   });
 });
+
+describe('Books inventory value links', () => {
+  it("opens one company's stock at a month's end, BMG and last month when left out", () => {
+    expect(deepLinks.booksInventoryValue()).toBe('/admin/books/inventory-value');
+    expect(deepLinks.booksInventoryValue(null, null)).toBe('/admin/books/inventory-value');
+    expect(deepLinks.booksInventoryValue('1084', '2026-09-01')).toBe('/admin/books/inventory-value?company=1084&month=2026-09');
+    expect(deepLinks.booksInventoryValue(null, '2026-09')).toBe('/admin/books/inventory-value?month=2026-09');
+    expect(deepLinks.booksInventoryValue('BMG')).toBe('/admin/books/inventory-value?company=BMG');
+  });
+});

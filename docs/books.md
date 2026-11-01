@@ -2323,6 +2323,10 @@ Not yet seen in NetSuite's data, so the page is what will show it:
 - items bought or sold in a different unit than they're stocked in, whose
   lines' quantities may be in that unit.
 
+Inventory value has the same counts and values at the end of any month
+from January 2025, tied to each account on the balance sheet that day
+("Inventory value at a month's end").
+
 ## Customer and vendor balances
 
 `/admin/books/balances` shows what each customer owes and each vendor is
@@ -5607,6 +5611,100 @@ had moved to 10 by then.
   NetSuite's copy, as it does an adjustment made in NetSuite.
 - Before switching on, agree who approves, since only super admins can.
 
+## Inventory value at a month's end
+
+`/admin/books/inventory-value` (Books → Inventory value, part 64, the
+second slice of the NetSuite Exit Checklist's "Inventory moves and value")
+shows what each stocked item was worth at the end of a month, item by item
+at each location, and how that comes to each inventory account on the
+balance sheet that day, every cent between them named, so a month can be
+closed with stock that ties. It's what NetSuite's Inventory Valuation
+report gives as of a period's end, worked out from FleetSuite's own copies.
+Read only: nothing is written to NetSuite or to the books, and there is no
+switch.
+
+**The read.** Migration 495's `gl_stock_month_end(p_month, p_limit)` reads
+the same copies as Stock by item, cut off at the end of the month asked for
+(from January 2025). Each document counts in the month NetSuite posted it
+to, as the copy of its general ledger has it, else in its date's month, so
+an item's count and its value are cut off alike and the value ties to the
+ledger's balance that day: an item receipt dated February 28 that NetSuite
+posted to March is in March on both. An item's count at a month's end is
+its count on December 31, 2024 plus every line that moved it through the
+month; its value, for an item NetSuite keeps in stock, is its starting
+value plus what NetSuite posted to an inventory account on its lines
+through the month. A stock document gone from NetSuite counts for nothing
+on its items; while the copy of NetSuite's ledger still has it, it shows
+among the documents with no stocked item until the next copy drops it.
+
+**Tying it to the balance sheet.** For each company and inventory account
+(`accountTie` in `src/lib/books/inventory-value.ts`), the page starts from
+the stocked items on it at the end of the month before, adds what moved
+them in the month by kind of document, and comes to where they stood at
+its end. From there to FleetSuite's balance sheet, each piece is a line of
+its own:
+
+1. where NetSuite's ledger and the items stood apart on December 31, 2024,
+   before FleetSuite's copies begin;
+2. the documents since that posted to the account on no stocked item's
+   stock line, a journal entry say, the month's listed first and then the
+   biggest, up to 100, each opening its check on Invoices vs NetSuite when
+   FleetSuite posts its kind;
+3. anything else on the copy of NetSuite's ledger, in red as not accounted
+   for: none, unless the copy is off;
+4. what NetSuite's own totals hold that the copy of its ledger doesn't yet,
+   which the next copy catches up;
+5. how far FleetSuite's books are from NetSuite's own totals, in red.
+
+So the stocked items plus those five come to FleetSuite's balance sheet,
+and each total along the way (NetSuite's ledger as FleetSuite copies it,
+NetSuite's balance sheet, FleetSuite's) is the one Reports shows: the
+starting entry is the same on every side, as on Reports. A fixed asset
+account a stocked item names is tied the same way; most of what's on one is
+the company's own equipment or vehicles, so the page says so.
+
+**The page.** Last month at first, any month from January 2025 through this
+one, with a button per company when there's more than one. It warns when
+the month isn't over yet, when the stock copy never ran, failed or stopped
+for time, when the last posting run failed or stopped for time, and when
+NetSuite's own totals aren't read as far as the month. The items list each
+item at each location with how many were on hand, what one cost on average
+and what they were worth, marking fewer than none on hand in red and value
+left with none on hand in amber, each item opening its moves on Stock by
+item. Each account links to its documents on Reports from January 2025
+through the month.
+
+**Excel.** Download Excel (`/api/admin/books/inventory-value/download`,
+`inventoryWorkbook` in `src/lib/books/report-workbook.ts`) gives the
+company and month shown as a file named like "BMG Inventory value
+2026-10-31.xlsx": the items, the tie to each account a line at a time, and
+the documents with no stocked item, with what the page warns about at the
+top.
+
+```ts
+const { data } = await service.rpc('gl_stock_month_end', { p_month: '2026-10-01', p_limit: 100 });
+const value = monthEndValue(data); // value.companies[0].accounts[0].apart === start + entries.total + unexplained + notCopied + booksApart
+```
+
+Made-up example: at the end of March, BMG's ladder racks and bins on 1200
+Inventory come to $2,339.00. NetSuite's ledger stood $100.00 below the
+items on December 31, 2024, and a February journal wrote $30.00 of shrink
+off the account, so the copy of NetSuite's ledger holds $2,209.00.
+NetSuite's own totals hold $20.00 more that the copy hasn't caught up on,
+$2,229.00, and FleetSuite's books, $20.00 short of NetSuite's, hold
+$2,209.00: $130.00 under the items, every cent of it on a line.
+
+### What isn't done yet
+
+- A count of each item at a month's end against a count on the shelf: the
+  Count screen in 2027 ends in one approved adjustment.
+- Each item's value is what NetSuite posted on its lines. Once stock
+  documents are made in FleetSuite alone, their value has to come from
+  FleetSuite's own cost instead.
+- It hasn't been put next to NetSuite's own Inventory Valuation report for
+  a month yet, which is worth doing before closing the first month in
+  FleetSuite's books.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
@@ -5730,6 +5828,10 @@ month too.
 Closing a month here doesn't close it in NetSuite, nor does NetSuite's
 close reach FleetSuite: through 2027 NetSuite's months close there as
 before.
+
+Before closing a month, Inventory value shows the stock at its end tied to
+each inventory account, every cent between them named ("Inventory value at
+a month's end"); Months links to it.
 
 ## NetSuite feed
 

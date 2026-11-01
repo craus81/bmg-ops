@@ -650,6 +650,14 @@ export const deepLinks = {
    *  month by month, each entry on its bank account ticked as it clears
    *  (src/lib/books/bank-reconciliation.ts). Open to whoever opens the books. */
   booksBankReconciliation: () => '/admin/books/bank-reconciliation',
+  /** Books → Inventory value on one company's stock at the end of one month
+   *  ('YYYY-MM-01' or 'YYYY-MM'), each item's value and how it ties to each
+   *  inventory account (src/lib/books/inventory-value.ts); BMG and last
+   *  month when they're left out. Open to whoever opens the books. */
+  booksInventoryValue: (company?: string | null, month?: string | null) => {
+    const query = new URLSearchParams({ ...(company ? { company } : {}), ...(month ? { month: month.slice(0, 7) } : {}) }).toString();
+    return `/admin/books/inventory-value${query ? `?${query}` : ''}`;
+  },
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it
