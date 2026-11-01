@@ -6,7 +6,8 @@ import { createBankDeposit, findBankDeposit, getUndepositedFunds } from '@/lib/n
 import { switchIsOn } from '@/lib/books/switches';
 import { saveOwnBankDeposit } from '@/lib/books/own-bank-deposits';
 import { chicagoDate } from '@/lib/books/own-invoices';
-import { BOOKS_COMPANIES, type BooksCompany } from '@/lib/books/journal';
+import type { BooksCompany } from '@/lib/books/journal';
+import { companyNamed, readBankAccounts, readBankCompanies, type BankCompany } from '@/lib/books/bank-accounts';
 import { logAudit } from '@/lib/audit';
 import { OLDEST_DAYS } from '@/lib/receive-payment';
 import {
@@ -89,53 +90,19 @@ async function readPress(id: string): Promise<PressRow | null> {
   return (data as PressRow | null) ?? null;
 }
 
-interface Company { code: BooksCompany; name: string; id: string; subsidiaryId: string }
-
-/** The companies Books has a NetSuite subsidiary for, in Books' order. */
-async function readCompanies(): Promise<Company[]> {
-  const { data, error } = await service.from('gl_companies').select('id, code, name, netsuite_subsidiary_id').eq('active', true).order('code');
-  if (error) throw new Error(error.message);
-  const rows = (data ?? []) as Array<{ id: string; code: string; name: string; netsuite_subsidiary_id: string | null }>;
-  return BOOKS_COMPANIES.flatMap((code) => {
-    const row = rows.find((r) => r.code === code);
-    return row && /^\d+$/.test(row.netsuite_subsidiary_id ?? '')
-      ? [{ code, name: row.name, id: row.id, subsidiaryId: row.netsuite_subsidiary_id as string }]
-      : [];
-  });
-}
-
-/** The company's bank accounts, as Books' chart of accounts has them from NetSuite: active, posting, in its subsidiary. */
-async function readAccounts(company: Company): Promise<BankAccount[]> {
-  const { data, error } = await service.from('gl_accounts')
-    .select('netsuite_account_id, number, name, company_id, netsuite_subsidiary_ids')
-    .eq('account_type', 'bank').eq('active', true).eq('is_summary', false).not('netsuite_account_id', 'is', null)
-    .order('number').order('netsuite_account_id').limit(500);
-  if (error) throw new Error(error.message);
-  const rows = (data ?? []) as Array<{
-    netsuite_account_id: string; number: string | null; name: string; company_id: string | null; netsuite_subsidiary_ids: string[] | null;
-  }>;
-  return rows
-    .filter((r) => /^\d+$/.test(r.netsuite_account_id)
-      && (r.netsuite_subsidiary_ids ? r.netsuite_subsidiary_ids.includes(company.subsidiaryId) : r.company_id === company.id))
-    .map((r) => ({ netsuiteId: r.netsuite_account_id, number: r.number, name: r.name }));
-}
-
 /** What NetSuite has waiting in Undeposited Funds for the company now. */
-async function readWaiting(company: Company, today: string): Promise<WaitingItem[]> {
+async function readWaiting(company: BankCompany, today: string): Promise<WaitingItem[]> {
   return getUndepositedFunds(company.subsidiaryId, { since: sinceOf(today) });
 }
 
 /** The payments and deposits another press is depositing now, other than the press `except`. */
-async function readHeld(company: Company, except: string | null): Promise<Set<string>> {
+async function readHeld(company: BankCompany, except: string | null): Promise<Set<string>> {
   let q = service.from('made_bank_deposits').select('id, lines').eq('company', company.code).eq('status', 'sending');
   if (except) q = q.neq('id', except);
   const { data, error } = await q.order('created_at').order('id').limit(200);
   if (error) throw new Error(error.message);
   return new Set(((data ?? []) as Array<{ lines: PressLine[] }>).flatMap((r) => (r.lines ?? []).map((l) => l.netsuite_id)));
 }
-
-const companyNamed = (companies: Company[], code: string | null) =>
-  companies.find((c) => c.code === code) ?? (code ? null : companies[0] ?? null);
 
 /**
  * GET /api/invoices/bank-deposit?status=1 — whether bank deposits are on, and whether this person can use them.
@@ -155,11 +122,11 @@ export async function GET(req: NextRequest) {
   if (gate.error) return gate.error;
 
   try {
-    const companies = await readCompanies();
+    const companies = await readBankCompanies(service);
     const company = companyNamed(companies, (req.nextUrl.searchParams.get('company') || '').trim() || null);
     if (!company) return NextResponse.json({ error: "Books has no company by that name with a NetSuite subsidiary." }, { status: 404 });
     const today = chicagoDate();
-    const [accounts, held] = await Promise.all([readAccounts(company), readHeld(company, null)]);
+    const [accounts, held] = await Promise.all([readBankAccounts(service, company), readHeld(company, null)]);
     let waiting: WaitingItem[];
     try {
       waiting = await readWaiting(company, today);
@@ -230,12 +197,12 @@ const alreadyMade = (r: PressRow) => NextResponse.json({
 
 async function make(body: Body, gate: Gate): Promise<NextResponse> {
   const { auth } = gate;
-  const company = companyNamed(await readCompanies(), body.company.trim() || null);
+  const company = companyNamed(await readBankCompanies(service), body.company.trim() || null);
   if (!company || company.code !== body.company.trim()) {
     return NextResponse.json({ error: 'Books has no company by that name with a NetSuite subsidiary. Nothing was sent.' }, { status: 400 });
   }
   const today = chicagoDate();
-  const [accounts, held] = await Promise.all([readAccounts(company), readHeld(company, body.requestId)]);
+  const [accounts, held] = await Promise.all([readBankAccounts(service, company), readHeld(company, body.requestId)]);
   let waiting: WaitingItem[];
   try {
     waiting = await readWaiting(company, today);

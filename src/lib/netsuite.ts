@@ -5131,6 +5131,216 @@ export async function createBankDeposit(p: BankDepositPayload): Promise<{ succes
   }
 }
 
+// ── Vendors paid in FleetSuite (Books part 57) ─────────────────────────────
+
+/** One of a subsidiary's open bills, as getOpenBills reads it. */
+export interface OpenBillItem {
+  id: string;
+  number: string;
+  /** 'YYYY-MM-DD'. */
+  date: string | null;
+  dueDate: string | null;
+  vendorId: string;
+  vendorName: string;
+  openCents: number;
+}
+
+/**
+ * Every bill NetSuite has open for a subsidiary now, for a payment run: its
+ * number, day, due day, vendor and what's still open on it (NetSuite's own
+ * open amount on a bill whose status is A, Open, as getVendorOpenBills and
+ * the agings copy read them), by vendor, oldest due first. A bill paid in
+ * full, or waiting for approval in NetSuite, isn't listed. Throws when
+ * NetSuite can't be asked.
+ */
+export async function getOpenBills(subsidiaryId: string): Promise<OpenBillItem[]> {
+  const sub = textOf(subsidiaryId);
+  if (!/^\d{1,20}$/.test(sub)) throw new Error(`"${sub}" isn't a NetSuite subsidiary id`);
+  const rows = await suiteqlQueryAll(`
+    SELECT t.id, t.tranid, t.trandate, t.duedate, t.foreignamountunpaid AS unpaid, t.entity AS vendor_id,
+           v.companyname AS vendor_name, v.entityid AS vendor_entity_id
+    FROM transaction t
+    JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'
+    LEFT JOIN vendor v ON v.id = t.entity
+    WHERE t.type = 'VendBill' AND t.status = 'A' AND tl.subsidiary = ${sub}
+    ORDER BY t.entity, t.duedate, t.id
+  `, 1000, { retries: 1 });
+  const bills: OpenBillItem[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const id = textOf(row.id);
+    const vendorId = textOf(row.vendor_id);
+    const openCents = unsignedCents(row.unpaid);
+    if (!/^\d+$/.test(id) || !/^\d+$/.test(vendorId) || !openCents || seen.has(id)) continue;
+    seen.add(id);
+    bills.push({
+      id,
+      number: textOf(row.tranid) || `Bill ${id}`,
+      date: suiteqlDay(row.trandate),
+      dueDate: suiteqlDay(row.duedate),
+      vendorId,
+      vendorName: textOf(row.vendor_name) || textOf(row.vendor_entity_id) || `Vendor ${vendorId}`,
+      openCents,
+    });
+  }
+  return bills;
+}
+
+/** A bill as NetSuite has it now: whether it's open (status A), what's open on it, and whose it is. */
+export interface BillNowItem {
+  open: boolean;
+  openCents: number;
+  vendorId: string | null;
+}
+
+/**
+ * These bills as NetSuite has them now, by id, so a payment run is checked
+ * against NetSuite when it's asked for, approved and made. A bill NetSuite
+ * doesn't have isn't in the answer. Throws when NetSuite can't be asked.
+ */
+export async function getBillsNow(billIds: readonly string[]): Promise<Map<string, BillNowItem>> {
+  const ids = [...new Set(billIds.filter((i) => /^\d{1,20}$/.test(i)))];
+  const now = new Map<string, BillNowItem>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const rows = await suiteqlQueryAll(
+      `SELECT t.id, t.status, t.entity AS vendor_id, t.foreignamountunpaid AS unpaid FROM transaction t WHERE t.type = 'VendBill' AND t.id IN (${ids.slice(i, i + 200).join(', ')}) ORDER BY t.id`,
+      1000, { retries: 1 },
+    );
+    for (const row of rows) {
+      const vendorId = textOf(row.vendor_id);
+      now.set(textOf(row.id), {
+        open: textOf(row.status) === 'A',
+        openCents: unsignedCents(row.unpaid) ?? 0,
+        vendorId: /^\d+$/.test(vendorId) ? vendorId : null,
+      });
+    }
+  }
+  return now;
+}
+
+/**
+ * The bill payment NetSuite has under FleetSuite's own name for it (its
+ * External ID), with its number and total, or null when it has none, so a
+ * payment made again never pays twice. Throws when NetSuite can't be asked,
+ * and when FleetSuite's SuiteQL role can't see a single bill payment, since
+ * none found then can't be told from none seen: the caller fails closed.
+ */
+export async function findVendorPayment(externalId: string): Promise<{ paymentId: string; number: string; totalCents: number | null } | null> {
+  const ref = externalId.trim();
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(ref)) throw new Error(`"${ref}" isn't an external id FleetSuite makes`);
+  const result = await suiteqlQuery(`
+    SELECT id, tranid, foreigntotal AS total
+    FROM transaction
+    WHERE type = 'VendPymt' AND externalid = '${ref}'
+    ORDER BY id
+    FETCH FIRST 1 ROWS ONLY
+  `);
+  const row = result?.items?.[0];
+  if (row) return { paymentId: row.id?.toString() ?? '', number: row.tranid ?? '', totalCents: unsignedCents(row.total) };
+  const seen = await suiteqlQuery(`SELECT id FROM transaction WHERE type = 'VendPymt' FETCH FIRST 1 ROWS ONLY`, 1, 0);
+  if (!seen?.items?.length) throw new Error("FleetSuite can't see NetSuite's bill payments, so it can't tell whether this one was made");
+  return null;
+}
+
+/** What createVendorPayment sends: src/lib/pay-vendors.ts's netsuiteVendorPayment. */
+export interface VendorPaymentPayload {
+  /** FleetSuite's own name for it: NetSuite never takes two records of a kind under one. */
+  externalId: string;
+  vendorId: string;
+  subsidiaryId: string;
+  /** The bank account it's paid from. */
+  accountId: string;
+  /** 'YYYY-MM-DD'. */
+  tranDate: string;
+  memo: string;
+  /** A check, To Be Printed from NetSuite's Print Checks. */
+  toBePrinted: boolean;
+  /** Dollars. */
+  amount: number;
+  /** Each bill it pays and how much, adding up to the amount. */
+  apply: { billId: string; amount: number }[];
+}
+
+/**
+ * Make a bill payment in NetSuite: POST
+ * /services/rest/record/v1/vendorPayment, NetSuite's Pay Bills for one
+ * vendor, from the bank account named, applied to exactly the bills named,
+ * each by its id on the apply list with the amount paid on it, in the
+ * vendor's own currency as createVendorBill sends it. Refused here when what
+ * it pays on its bills doesn't add up to its amount to the cent. `unsure` is
+ * set when NetSuite may have made it anyway (no answer, a server error, or no
+ * id in its answer): look for it by its External ID before trying again.
+ */
+export async function createVendorPayment(p: VendorPaymentPayload): Promise<{ success: boolean; paymentId?: string; error?: string; unsure?: boolean }> {
+  const cents = (n: number) => Math.round(n * 100);
+  if (p.apply.length < 1) return { success: false, error: 'A bill payment needs a bill to pay' };
+  if (p.apply.some((a) => !/^\d+$/.test(a.billId))) return { success: false, error: "A bill payment pays bills by NetSuite's id for them" };
+  if (!/^\d+$/.test(p.accountId)) return { success: false, error: 'A bill payment needs the bank account it is paid from' };
+  if (!(cents(p.amount) > 0) || p.apply.some((a) => !(cents(a.amount) > 0))) {
+    return { success: false, error: 'A bill payment, and what it pays on each bill, need to be above $0' };
+  }
+  if (p.apply.reduce((s, a) => s + cents(a.amount), 0) !== cents(p.amount)) {
+    return { success: false, error: "What the payment pays on its bills doesn't add up to its amount" };
+  }
+
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/vendorPayment`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+  const currencyId = await resolveVendorCurrency(p.vendorId);
+
+  const body: any = {
+    externalId: p.externalId,
+    entity: { id: p.vendorId },
+    ...(currencyId ? { currency: { id: currencyId } } : {}),
+    subsidiary: { id: p.subsidiaryId },
+    account: { id: p.accountId },
+    tranDate: p.tranDate,
+    ...(p.memo ? { memo: p.memo } : {}),
+    toBePrinted: p.toBePrinted,
+    apply: { items: p.apply.map((a) => ({ doc: { id: a.billId }, apply: true, amount: a.amount })) },
+  };
+
+  try {
+    const response = await netsuiteFetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create bill payment error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      // A 4xx is NetSuite refusing it; after a server error it may have made it anyway.
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}`, ...(response.status >= 500 ? { unsure: true } : {}) };
+    }
+
+    let paymentId = response.headers.get('Location')?.match(/\/(\d+)$/)?.[1] || '';
+    if (!paymentId) {
+      try {
+        const result = await response.json();
+        paymentId = result.id?.toString() || '';
+      } catch {
+        // 204 No Content
+      }
+    }
+    if (!paymentId) return { success: false, error: "NetSuite said it made the bill payment but didn't say its id.", unsure: true };
+    return { success: true, paymentId };
+  } catch (e: any) {
+    return { success: false, error: `NetSuite didn't answer (${e.message}).`, unsure: true };
+  }
+}
+
 /**
  * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
  *

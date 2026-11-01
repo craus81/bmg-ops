@@ -270,6 +270,14 @@ describe('Journal entry links', () => {
   });
 });
 
+describe('Pay vendors links', () => {
+  it('opens the payment runs, or one run', () => {
+    expect(deepLinks.payVendors()).toBe('/admin/pay-vendors');
+    expect(deepLinks.payVendors(null)).toBe('/admin/pay-vendors');
+    expect(deepLinks.payVendors('a0000000-0000-4000-8000-000000000057')).toBe('/admin/pay-vendors?run=a0000000-0000-4000-8000-000000000057');
+  });
+});
+
 describe('Inventory transfer links', () => {
   it('opens the inventory transfers screen, or one transfer on it', () => {
     expect(deepLinks.inventoryTransfers()).toBe('/admin/inventory-transfers');

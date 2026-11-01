@@ -245,6 +245,7 @@ describe('how a send reads', () => {
     expect(recordName('customerPayment')).toBe('customer payment');
     expect(recordName('customerDeposit')).toBe('customer deposit');
     expect(recordName('deposit')).toBe('bank deposit');
+    expect(recordName('vendorPayment')).toBe('bill payment');
     expect(recordName('check')).toBe('check');
   });
 
@@ -273,6 +274,7 @@ describe('how a send reads', () => {
       expect(recordUrl('inventoryAdjustment', '12')).toBe(`${ui}/accounting/transactions/invadjst.nl?id=12`);
       expect(recordUrl('customerDeposit', '7301')).toBe(`${ui}/accounting/transactions/custdep.nl?id=7301`);
       expect(recordUrl('deposit', '8301')).toBe(`${ui}/accounting/transactions/deposit.nl?id=8301`);
+      expect(recordUrl('vendorPayment', '8302')).toBe(`${ui}/accounting/transactions/vendpymt.nl?id=8302`);
       expect(recordUrl('customer', '5')).toBe(`${ui}/common/entity/custjob.nl?id=5`);
       expect(recordUrl('vendor', '4001')).toBe(`${ui}/common/entity/vendor.nl?id=4001`);
       expect(recordUrl('serviceSaleItem', '812')).toBe(`${ui}/common/item/item.nl?id=812`);

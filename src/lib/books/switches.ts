@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, 478 to 480 and 485 to 487, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 to 480 and 485 to 488, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -16,14 +16,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * record wins: on, it stops the NetSuite syncs writing over FleetSuite's
  * customers, vendors and items, so a sync that can't read it stops rather
  * than count it as off (readSwitch, src/lib/fleetsuite-records.ts).
- * Receiving payments, taking deposits and bank deposits stay off past January
- * 1, until they move into FleetSuite during 2027 (`later` says so).
+ * Receiving payments, taking deposits, bank deposits and paying vendors stay
+ * off past January 1, until they move into FleetSuite during 2027 (`later`
+ * says so).
  */
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
   | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments'
-  | 'customer_deposits' | 'bank_deposits';
+  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments';
 
 export interface SwitchInfo {
   name: string;
@@ -115,6 +116,12 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     what: "Anyone with Invoicing deposits the customer payments and deposits waiting in Undeposited Funds to one of the company's bank accounts in FleetSuite, ticked from what NetSuite has waiting, and FleetSuite makes the bank deposit in NetSuite and keeps its own copy for the books.",
     where: 'Invoicing → Invoiced → Bank deposit',
     later: 'Stays off on January 1: bank deposits move into FleetSuite during 2027.',
+  },
+  vendor_payments: {
+    name: 'Paying vendors',
+    what: "Anyone with Payments pays a company's open bills in a payment run, ticked from what NetSuite has open, by check or ACH from one of its bank accounts, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite and keeps its own copy for the books. Checks print from NetSuite's Print Checks.",
+    where: 'More → Money & Books → Pay Vendors',
+    later: 'Stays off on January 1: paying vendors moves into FleetSuite during 2027.',
   },
 };
 

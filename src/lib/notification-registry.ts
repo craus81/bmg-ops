@@ -218,6 +218,19 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Whoever asked for approval, and whoever started the entry when someone else did.' },
+  // Vendors paid in payment runs (migration 488), once switched on: asked
+  // for approval, and approved or sent back. Emailed like the journal entry
+  // alerts, only to anyone with "Copy me on new alerts".
+  { type: 'books_payment_run_waiting', label: 'A payment run is waiting for approval', description: "Someone ticked bills to pay on the Pay vendors page and asked for approval. A super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite, or sends it back with why. Opens the run.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: "Super admins, who approve payment runs, except the one who asked." },
+  { type: 'books_payment_run_decided', label: 'Your payment run was approved or sent back', description: "A payment run you asked to have approved was approved, and its bill payments are being made in NetSuite, or sent back to be fixed with why. Opens the run.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Whoever asked for approval, and whoever started the run when someone else did.' },
   // A send to NetSuite FleetSuite isn't sure about (part 45, migration 477).
   // Emailed like the Inventory Adjust alert, only to anyone with "Copy me on
   // new alerts" (Craig's standing rule, 2026-10-28).
