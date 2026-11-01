@@ -119,9 +119,12 @@ statements reconciled month by month against its books ("1084's bank
 reconciliation"), part 63, inventory adjustments approved before they're
 posted, switched off ("Adjustments approved before they're posted"),
 part 64, each stocked item's value at a month's end tied to the inventory
-accounts ("Inventory value at a month's end"), and part 65, Missouri's
+accounts ("Inventory value at a month's end"), part 65, Missouri's
 sales tax return worked out month by month, location by location, with
-each return as filed held against it ("Sales tax").
+each return as filed held against it ("Sales tax"), and part 66,
+FleetSuite's own copy of each invoice taxed at its location's rate on its
+date, and a warning at billing when an exempt customer's certificate has
+expired ("FleetSuite's own invoices").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -2601,14 +2604,28 @@ NetSuite by hand have no copy.
   leaves them out.
 - **Amounts.** A line's amount is its quantity times its price, rounded
   half to even to the cent; a discount is negative.
-- **Sales tax** (`tax@1`). FleetSuite's own quoting rule decides which lines
-  are taxed (`src/lib/line-taxability.ts`): service items aren't, an
-  admin's override wins either way, everything else is, and a discount is
-  taxed as the line above it. The rate is the one in Settings → Sales Tax,
-  worked out line by line and rounded half to even, as NetSuite does. A
-  customer FleetSuite has as tax-exempt (every FleetSuite record with its
-  NetSuite id) pays none, and nor does work at Social Circle, Georgia.
-  NetSuite's Taxable box isn't used.
+- **Sales tax** (`tax@2`, part 66). FleetSuite's own quoting rule decides
+  which lines are taxed (`src/lib/line-taxability.ts`): service items
+  aren't, an admin's override wins either way, everything else is, and a
+  discount is taxed as the line above it. The rate is the invoice
+  location's on its date on Books → Sales tax (`sales_tax_rates`, `rateOn`
+  in `src/lib/books/sales-tax-rates.ts`), worked out line by line and
+  rounded half to even, as NetSuite does. Where Books has no rate for the
+  location on that day, or the location isn't known, it's the one in
+  Settings → Sales Tax and the copy says `tax@1`, the rule every copy
+  before part 66 was made by. A customer FleetSuite has as tax-exempt
+  (every FleetSuite record with its NetSuite id) pays none, and nor does
+  work at Social Circle, Georgia. NetSuite's Taxable box isn't used.
+- **An expired certificate.** A tax-exempt customer whose certificate
+  (the latest expiry on their FleetSuite records) ran out before the
+  invoice's day is still billed tax exempt, and the screen that billed them
+  says so after billing, in amber (`billedCertWarning` in
+  `src/lib/customer-tax-exempt.ts`, `taxWarning` from `saveOwnInvoice`):
+  New invoice, Scan Log and Invoicing, In-Shop completion, a PO's Invoice
+  Open Qty, Graphics' invoices and Fulfill & Invoice. It never stops a bill
+  (owner decision 2026-10-22). A certificate that expires soon, or none on
+  file, says nothing at billing; the customer's record and Books → Sales
+  tax show those.
 - **Due date.** The invoice's date, in Central time, plus the customer's
   terms as NetSuite's customer list has them (the lists copy, "NetSuite's
   lists"). A customer with no terms is due the day it's billed, as in
@@ -5774,8 +5791,10 @@ starts until the next one does, so a rate that starts October 1 leaves
 September's sales at the one before. The migration starts O'Fallon,
 Wentzville and Kansas City at Settings → Sales Tax's rate from January 1,
 2025. Super admins add and remove rates on the page, for any of NetSuite's
-locations but Georgia's. Estimates and invoices still charge Settings →
-Sales Tax's one rate: these are for the return.
+locations but Georgia's. Since part 66 FleetSuite's own copy of each invoice
+it makes takes its location's rate on its date from here (`tax@2`,
+"FleetSuite's own invoices"). Estimates and the invoice screens still show
+Settings → Sales Tax's one rate, and NetSuite charges by its own tax codes.
 
 **The return as filed.** The bookkeeper and super admins type in each
 month's return as it was filed (`sales_tax_returns`): the day it was filed,
@@ -5827,9 +5846,10 @@ Georgia tax is listed apart.
 
 ### What isn't done yet
 
-- The warning at billing when an exempt customer's certificate has
-  expired, and billing at each location's dated rate rather than Settings'
-  one rate: next, switched off.
+- Use tax on purchases a vendor didn't charge sales tax on: waiting on
+  the owner's decision.
+- Estimates and the invoice screens still work out tax at Settings' one
+  rate; once invoices are made in FleetSuite, they take Books' rates too.
 - Filing the return and paying the state stay with whoever files today;
   FleetSuite only works out what to file and holds the return against it.
 - It hasn't been put next to NetSuite's own sales tax report for a month

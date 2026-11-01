@@ -4,11 +4,10 @@ import type { TaxAccountCount } from './invoice-check';
 import { valueMonth } from './inventory-value-data';
 import { COPY_FROM } from './netsuite-gl';
 import { BOOKS_LISTS_SYNC } from './netsuite-lists';
-import { pct } from './own-invoice-check';
+import { pct, readRates, type SalesTaxRate, type SalesTaxRateRow } from './sales-tax-rates';
 import {
-  dueDate, holdReturn, locationState, readRates, readReturn, salesTaxWorksheet,
-  type FiledReturn, type ReturnHeld, type SalesTaxMonthData, type SalesTaxRate, type SalesTaxRateRow, type SalesTaxReturnRow,
-  type SalesTaxWorksheet,
+  dueDate, holdReturn, locationState, readReturn, salesTaxWorksheet,
+  type FiledReturn, type ReturnHeld, type SalesTaxMonthData, type SalesTaxReturnRow, type SalesTaxWorksheet,
 } from './sales-tax-worksheet';
 
 /**

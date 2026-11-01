@@ -248,7 +248,7 @@ export default function AdminScansPage() {
 
   // Direct invoice state
   const [invoicing, setInvoicing] = useState(false);
-  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[]; summary: { success: number; errors: number } } | null>(null);
+  const [invoiceResult, setInvoiceResult] = useState<{ results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string; taxWarning?: string }[]; summary: { success: number; errors: number } } | null>(null);
   // Email-invoices flow lives in the shared EmailInvoicesModal.
   const [emailTarget, setEmailTarget] = useState<{ customerName: string; invoices: EmailableInvoice[] } | null>(null);
   // Archive without invoicing: the scans being archived (snapshotted when the
@@ -2047,6 +2047,7 @@ export default function AdminScansPage() {
             <div key={i} style={{ fontSize: '11px', fontWeight: 600, color: r.status === 'success' ? '#22c55e' : '#ef4444', marginBottom: '2px' }}>
               {r.customer}{r.po ? ` · PO #${r.po}` : ''} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
               {r.status === 'success' ? ` → Invoice #${r.invoiceNumber}` : ` — ${r.error}`}
+              {r.taxWarning && <div style={{ color: '#f59e0b' }}>{r.taxWarning}</div>}
             </div>
           ))}
           {invoiceResult.summary.success > 0 && (() => {

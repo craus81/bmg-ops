@@ -2336,7 +2336,7 @@ export default function GraphicsJobRecordPage() {
             } : prev);
             loadHistory();
             const printNow = await dialog.confirm(
-              `Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in FleetSuite.\n\nPrint packing list now?`
+              `Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in FleetSuite.${result.taxWarning ? `\n\n${result.taxWarning}` : ''}\n\nPrint packing list now?`
             );
             // Reuse the verified lines so the packing list matches the invoice.
             if (printNow) {

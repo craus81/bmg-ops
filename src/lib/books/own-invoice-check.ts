@@ -1,6 +1,7 @@
 import { centsOf } from './invoice-check';
 import { isLayoutItem } from './invoice-rule';
-import { lineTax, TAKES_OFF, type MadeFrom, type TaxBasis, type Unknown } from './own-invoices';
+import { lineTax, OWN_TAX_RULE, TAKES_OFF, type MadeFrom, type TaxBasis, type Unknown } from './own-invoices';
+import { parseRate, pct } from './sales-tax-rates';
 
 /**
  * FleetSuite's own invoices next to NetSuite's (migration 407, docs/books.md
@@ -12,7 +13,8 @@ import { lineTax, TAKES_OFF, type MadeFrom, type TaxBasis, type Unknown } from '
  * ledger mirror copied it: who it's for, its date, location and due date,
  * each line it billed, what it comes to before tax, its sales tax and its
  * total. Where they differ the check says how, and for sales tax why where
- * it can tell: NetSuite's rate against the one in Settings → Sales Tax, the
+ * it can tell: NetSuite's rate against FleetSuite's (the location's on Books
+ * → Sales tax since part 66, else the one in Settings → Sales Tax), the
  * lines one taxed and the other didn't, or a customer NetSuite has as not
  * taxable.
  *
@@ -236,19 +238,6 @@ const num = (v: unknown): number | null => {
 export function dayText(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
-}
-
-/** A NetSuite tax code's rate, a percent ('8.238%' or '8.238'), as a fraction; null when there isn't one to read. */
-export function parseRate(text: string | null | undefined): number | null {
-  const cleaned = String(text ?? '').replace(/%/g, '').trim();
-  if (!cleaned) return null;
-  const n = Number(cleaned);
-  return Number.isFinite(n) && n >= 0 ? n / 100 : null;
-}
-
-/** '8.238%' from 0.08238. */
-export function pct(rate: number): string {
-  return `${Number((rate * 100).toFixed(4))}%`;
 }
 
 /** How far NetSuite's amount is from FleetSuite's, in a sentence. */
@@ -506,6 +495,8 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
   const ownTax = centsOf(own.tax) ?? 0;
   const ownTotal = centsOf(own.total) ?? 0;
   const ownRate = num(own.tax_rate) ?? 0;
+  // Since part 66 a copy taxed at a rate took its location's from Books → Sales tax; tax@1 is Settings' where Books had none.
+  const ratedAt = own.tax_rule === OWN_TAX_RULE ? locationName(own.location_id) : null;
 
   // NetSuite's side: its billed lines, each at what it charges on its own, its sales tax and its tax codes' rates.
   const nsBilled: NetSide[] = [];
@@ -668,6 +659,7 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
             lines: ownLines.map((l) => ({ item: itemName(l.itemId, l.itemNumber, l.description), cents: l.cents, taxable: l.taxable, priced: l.priced })),
             fleetsuite: ownTax, rate: ownRate, basis: own.tax_basis,
             netsuite: nsTax, netsuiteRate: nsRate, customer, customerTaxable,
+            rateFrom: ratedAt ? `${ratedAt}'s on Books → Sales tax` : undefined,
           })
           : null,
     });
@@ -730,7 +722,8 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
         : 'Its lines are the ones FleetSuite sent NetSuite, at the prices it sent.',
     own.tax_basis === 'georgia' ? "No sales tax: work at Social Circle, Georgia isn't taxed."
       : own.tax_basis === 'exempt_customer' ? 'No sales tax: the customer is tax-exempt in FleetSuite.'
-        : `Sales tax at ${pct(ownRate)}, the rate in Settings → Sales Tax, on the lines FleetSuite taxes (not service items), each line's rounded to the cent.`,
+        : `Sales tax at ${pct(ownRate)}, ${ratedAt ? `${ratedAt}'s rate on its date on Books → Sales tax` : 'the rate in Settings → Sales Tax'}, `
+          + "on the lines FleetSuite taxes (not service items), each line's rounded to the cent.",
     own.terms_name ? `${own.terms_days ? `Due ${plural(own.terms_days, 'day', 'days')} after its date` : 'Due when billed'}: ${own.terms_name}, the customer's terms in NetSuite.`
       : own.terms_days === 0 ? 'Due when billed: the customer has no terms in NetSuite.'
         : "Its due date isn't known: the customer's terms weren't.",

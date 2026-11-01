@@ -3,9 +3,10 @@ import { isPartTaxable } from '@/lib/line-taxability';
 import { lastDay, monthAfter } from './bank-reconciliation';
 import { monthText } from './differences';
 import { TRAN_TYPE_NAMES, toCents } from './netsuite-gl';
-import { dayText, explainTax, parseRate, pct } from './own-invoice-check';
+import { dayText, explainTax } from './own-invoice-check';
 import { lineTax, TAKES_OFF, type TaxBasis } from './own-invoices';
 import { stateOf } from './sales-report';
+import { parseRate, rateOn, type SalesTaxRate } from './sales-tax-rates';
 import { RETURN_FIELDS, RETURN_FIELD_WORDS, type ReturnField } from './sales-tax-words';
 
 /**
@@ -118,14 +119,6 @@ export interface SalesTaxMonthData {
   };
 }
 
-/** A row of sales_tax_rates. */
-export interface SalesTaxRateRow {
-  location_id: string;
-  starts_on: string;
-  rate_pct: string | number;
-  note: string | null;
-}
-
 /** A row of sales_tax_returns; amounts in cents. */
 export interface SalesTaxReturnRow {
   company: string;
@@ -140,40 +133,12 @@ export interface SalesTaxReturnRow {
   note: string | null;
 }
 
-// ── Rates ──────────────────────────────────────────────────────────────────
+// ── Rates (sales-tax-rates.ts) and the allowance ───────────────────────────
 
 /** Missouri's timely payment allowance: 2% of the tax, when the return is filed and paid by its due date. */
 export const TIMELY_ALLOWANCE = 0.02;
 
-export interface SalesTaxRate {
-  locationId: string;
-  startsOn: string;
-  /** A fraction: 0.08488 is 8.488%. */
-  rate: number;
-  /** As people write it: '8.488%'. */
-  pct: string;
-  note: string | null;
-}
-
 const byId = (a: string, b: string) => a.localeCompare(b, 'en', { numeric: true });
-
-export function readRates(rows: SalesTaxRateRow[]): SalesTaxRate[] {
-  return rows
-    .map((r) => {
-      const rate = parseRate(String(r.rate_pct)) ?? 0;
-      return { locationId: String(r.location_id), startsOn: String(r.starts_on).slice(0, 10), rate, pct: pct(rate), note: r.note };
-    })
-    .sort((a, b) => byId(a.locationId, b.locationId) || a.startsOn.localeCompare(b.startsOn));
-}
-
-/** The rate in force at a location on a day: the one that started last, on or before it; null when none has. */
-export function rateOn(rates: SalesTaxRate[], locationId: string | null, day: string): SalesTaxRate | null {
-  let found: SalesTaxRate | null = null;
-  for (const r of rates) {
-    if (r.locationId === locationId && r.startsOn <= day && (!found || r.startsOn > found.startsOn)) found = r;
-  }
-  return found;
-}
 
 // ── Months and the due date ────────────────────────────────────────────────
 

@@ -191,5 +191,6 @@ export async function POST(req: NextRequest) {
     poNumber,
     totalCents: worked.totalCents,
     ...(books.saved || books.reason === 'already saved' ? {} : { warning: `Books didn't keep its copy (${books.reason}). The invoice is in NetSuite.` }),
+    ...(books.taxWarning ? { taxWarning: books.taxWarning } : {}),
   });
 }

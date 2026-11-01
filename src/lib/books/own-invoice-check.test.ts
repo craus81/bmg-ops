@@ -6,8 +6,6 @@ import {
   explainTax,
   ownLists,
   pairLines,
-  parseRate,
-  pct,
   takeApartSpread,
   taxFlips,
   type NetsuiteInvoiceData,
@@ -17,6 +15,7 @@ import {
   type OwnPairData,
   type TaxSides,
 } from './own-invoice-check';
+import { parseRate, pct } from './sales-tax-rates';
 
 const ACME = 'c0000000-0000-4000-8000-00000000000a';
 
@@ -159,6 +158,23 @@ describe('an own invoice next to NetSuite\'s', () => {
     const c = check({ netsuite: netsuite({ total: '556.68', lines: [SHELF_NS, LABOR_NS, taxNs('20.68', '78')] }) });
     expect(field(c, 'tax').why).toBe("NetSuite's rate is 8.238% and FleetSuite's 8.488%, from Settings → Sales Tax.");
     expect(field(c, 'total').why).toBe("NetSuite's is $0.62 less.");
+  });
+
+  it('names the location\'s rate on Books → Sales tax for a copy made under tax@2', () => {
+    const dated = own({ tax_rule: 'tax@2' });
+    const c = check({ own: dated });
+    expect(c.status).toBe('matches');
+    expect(c.workedOut[2]).toBe(
+      "Sales tax at 8.488%, O'Fallon's rate on its date on Books → Sales tax, on the lines FleetSuite taxes (not service items), each line's rounded to the cent.",
+    );
+    const differs = check({ own: dated, netsuite: netsuite({ total: '556.68', lines: [SHELF_NS, LABOR_NS, taxNs('20.68', '78')] }) });
+    expect(field(differs, 'tax').why).toBe("NetSuite's rate is 8.238% and FleetSuite's 8.488%, O'Fallon's on Books → Sales tax.");
+    // A location the lists don't name, and the copies under tax@2 that took no rate at all.
+    expect(check({ own: own({ tax_rule: 'tax@2', location_id: '3' }) }).workedOut[2]).toMatch(/^Sales tax at 8\.488%, Location 3's rate on its date on Books → Sales tax, /);
+    expect(check({ own: own({ tax_rule: 'tax@2', tax_basis: 'exempt_customer', tax_rate: '0.000000' }) }).workedOut[2])
+      .toBe('No sales tax: the customer is tax-exempt in FleetSuite.');
+    expect(check({ own: own({ tax_rule: 'tax@2', tax_basis: 'georgia', tax_rate: '0.000000', location_id: '5' }) }).workedOut[2])
+      .toBe("No sales tax: work at Social Circle, Georgia isn't taxed.");
   });
 
   it('explains a customer NetSuite doesn\'t tax', () => {
@@ -450,7 +466,7 @@ describe('reading NetSuite\'s words', () => {
     expect(parseRate('8.488%')).toBeCloseTo(0.08488, 10);
     expect(parseRate(' 8.488 ')).toBeCloseTo(0.08488, 10);
     expect(parseRate('0%')).toBe(0);
-    for (const bad of ['', null, undefined, 'n/a', '-1%']) expect(parseRate(bad)).toBeNull();
+    for (const bad of ['', null, undefined, 'n/a', '-1%', 'Infinity']) expect(parseRate(bad)).toBeNull();
   });
 
   it('writes rates and days the way the pages read', () => {

@@ -901,6 +901,8 @@ export default function PoRecordPage() {
           };
         });
         setInvoiceOpenVisible(false);
+        // The customer is billed tax-exempt on a certificate that had expired: only a warning.
+        if (data.taxWarning) await dialog.alert(data.taxWarning);
         if (result.invoiceNumber) {
           setEmailTarget({
             customerName: po.customer,

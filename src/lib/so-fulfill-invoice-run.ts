@@ -144,7 +144,7 @@ export async function runFulfillInvoice(supabase: SupabaseClient, input: {
       actorId,
     });
   }
-  await saveOwnInvoice(supabase, {
+  const books = await saveOwnInvoice(supabase, {
     netsuiteId: invoice.invoiceId,
     netsuiteNumber: invoice.invoiceNumber || null,
     madeFrom: 'sales_order',
@@ -192,7 +192,9 @@ export async function runFulfillInvoice(supabase: SupabaseClient, input: {
       customerName: so.customerName || estimate?.customer_name || '',
       customerNetsuiteId,
       poNumber,
-      ...(invoice.invoiceId ? {} : { warning: 'NetSuite did not return the invoice id — find the new invoice in NetSuite' }),
+      // Without the invoice's id there's no copy, so no certificate warning either.
+      ...(!invoice.invoiceId ? { warning: 'NetSuite did not return the invoice id — find the new invoice in NetSuite' }
+        : books.taxWarning ? { warning: books.taxWarning } : {}),
     },
   };
 }

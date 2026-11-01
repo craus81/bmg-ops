@@ -327,7 +327,7 @@ export async function POST(req: NextRequest) {
     }
 
     // FleetSuite's own copy of the invoice, for the books (never fails the invoice).
-    await saveOwnInvoice(supabase, {
+    const books = await saveOwnInvoice(supabase, {
       netsuiteId: result.invoiceId,
       netsuiteNumber: result.invoiceNumber || null,
       madeFrom: 'vehicle',
@@ -341,7 +341,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      warning,
+      warning: [warning, books.taxWarning].filter(Boolean).join(' ') || undefined,
       invoiceId: result.invoiceId,
       invoiceNumber: result.invoiceNumber || result.invoiceId,
       fulfillmentId: fulfil.fulfillmentId || null,

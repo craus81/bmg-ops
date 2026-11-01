@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const suiteqlAll = vi.fn();
 vi.mock('@/lib/netsuite', () => ({ suiteqlQueryAll: (...a: any[]) => suiteqlAll(...a) }));
 
-import { planTaxExemptSync, certWarning, taxMismatch, staffTaxExemptPatch, type CustomerTaxRow } from './customer-tax-exempt';
+import { planTaxExemptSync, certWarning, billedCertWarning, taxMismatch, staffTaxExemptPatch, type CustomerTaxRow } from './customer-tax-exempt';
 import { syncNetsuiteTaxExempt, NON_TAXABLE_QUERY } from './customer-tax-exempt-sync';
 
 const row = (netsuite_id: string, o: Partial<CustomerTaxRow> = {}): CustomerTaxRow => ({
@@ -107,6 +107,23 @@ describe('certWarning', () => {
   it('says nothing for a far expiry or none', () => {
     expect(certWarning('2027-06-01', '2026-10-22')).toBeNull();
     expect(certWarning(null, '2026-10-22')).toBeNull();
+  });
+});
+
+describe('billedCertWarning', () => {
+  it('warns when the certificate expired before the invoice day, and says they were still billed exempt', () => {
+    expect(billedCertWarning('Sample Fleet Co', '2026-09-30', '2026-10-22')).toBe(
+      "Sample Fleet Co's tax-exempt certificate expired 9/30/2026. Still billed tax exempt; get a new certificate on file.",
+    );
+    // A date read with its time still reads as the day.
+    expect(billedCertWarning('Sample Fleet Co', '2026-06-30T00:00:00Z', '2026-10-22')).toMatch(/ expired 6\/30\/2026\. /);
+    expect(billedCertWarning(null, '2026-09-30', '2026-10-22')).toMatch(/^This customer's tax-exempt certificate expired 9\/30\/2026\. /);
+  });
+  it('says nothing when it expires on the invoice day or later, or there is no date to go by', () => {
+    expect(billedCertWarning('Sample Fleet Co', '2026-10-22', '2026-10-22')).toBeNull();
+    expect(billedCertWarning('Sample Fleet Co', '2026-10-23', '2026-10-22')).toBeNull();
+    expect(billedCertWarning('Sample Fleet Co', null, '2026-10-22')).toBeNull();
+    expect(billedCertWarning('Sample Fleet Co', 'not a date', '2026-10-22')).toBeNull();
   });
 });
 
