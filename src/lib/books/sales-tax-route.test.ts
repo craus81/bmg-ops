@@ -282,16 +282,35 @@ describe('Sales tax', () => {
     expect(w.problems).toEqual([]);
   });
 
-  it("lists only the documents whose tax NetSuite worked out differently, without their lines", async () => {
+  it("lists only the documents whose tax NetSuite worked out differently, without their lines, each opening its check", async () => {
     const { body } = await get();
     // NetSuite taxed an install at O'Fallon, and charged Georgia's tax at Social Circle.
     expect(body.worksheet.documents).toEqual([
       expect.objectContaining({
         id: '8102', number: 'INV8102', charged: 1698, owed: 849, note: "NetSuite also taxed LABOR ($100.00), which FleetSuite doesn't tax.",
+        check: { kind: 'invoice', month: '2026-09-01' },
       }),
-      expect.objectContaining({ id: '8107', number: 'CS8107', basis: 'georgia', charged: 1200, owed: 0, note: expect.stringContaining('$12.00') }),
+      expect.objectContaining({
+        id: '8107', number: 'CS8107', basis: 'georgia', charged: 1200, owed: 0, note: expect.stringContaining('$12.00'), check: null,
+      }),
     ]);
     for (const d of body.worksheet.documents) expect(d).not.toHaveProperty('lines');
+    // The payments to the state are NetSuite's own kind, which Invoices vs NetSuite doesn't check.
+    expect([...body.worksheet.accounts.others.list, ...body.worksheet.accounts.next.list].map((o: Row) => [o.number, o.check])).toEqual([
+      ['TP-9', null], ['TP-10', null],
+    ]);
+
+    // A journal entry is, under the month NetSuite posted it to.
+    const journal = (id: string, date: string) => ({ id, type: 'Journal', number: `JE${id}`, date, memo: 'Tax fix', name: null, amount: '-1.00' });
+    const september = SEPTEMBER();
+    state.read = () => ({
+      ...september,
+      account: { ...september.account, others: others([journal('8191', '2026-09-30')]), next: others([journal('8291', '2026-10-02')]) },
+    });
+    const { body: again } = await get();
+    expect([...again.worksheet.accounts.others.list, ...again.worksheet.accounts.next.list].map((o: Row) => [o.number, o.check])).toEqual([
+      ['JE8191', { kind: 'journal_entry', month: '2026-09-01' }], ['JE8291', { kind: 'journal_entry', month: '2026-10-01' }],
+    ]);
   });
 
   it("gives each location's rates with who added them, the locations a rate can be added for, and the tax accounts by name", async () => {

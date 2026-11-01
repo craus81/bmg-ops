@@ -10,6 +10,7 @@ import { monthText } from '@/lib/books/differences';
 import { centralDate } from '@/lib/books/mistake-checks';
 import { COPY_FROM } from '@/lib/books/netsuite-gl';
 import { dayText } from '@/lib/books/own-invoice-check';
+import { netsuiteCheck } from '@/lib/books/report-detail';
 import { SALES_TAX_COMPANY, loadSalesTax } from '@/lib/books/sales-tax-data';
 import { locationState } from '@/lib/books/sales-tax-worksheet';
 
@@ -26,7 +27,8 @@ const refuse = (status: number, error: string) => NextResponse.json({ error }, {
  * sales, what isn't on the return, the sales tax accounts through the
  * month, each location's rates, and the month's return as filed, held
  * against it all; last month when it's left out. Amounts are whole cents;
- * the Excel download has every document.
+ * the Excel download has every document. Each document listed carries
+ * `check`, where Invoices vs NetSuite checks it, or null.
  *
  * POST { action: 'return', month: 'YYYY-MM', seen, filedOn, grossCents,
  * adjustmentsCents, taxableCents, taxCents, allowanceCents, paidCents, note }
@@ -46,11 +48,22 @@ export async function GET(req: NextRequest) {
 
   const loaded = await loadSalesTax(createServiceClient(), new URL(req.url).searchParams);
   if ('error' in loaded) return NextResponse.json({ error: loaded.error }, { status: 500 });
-  const { documents, ...worksheet } = loaded.worksheet;
+  const { documents, accounts, ...worksheet } = loaded.worksheet;
+  // Each opens its check on Invoices vs NetSuite when FleetSuite posts its kind: they're NetSuite's for the month they're read in.
+  const checked = <T extends { type: string; date: string }>(rows: T[], month: string) =>
+    rows.map((r) => ({ ...r, check: netsuiteCheck(r.type, month, r.date) }));
   return NextResponse.json({
     ...loaded,
-    // Only the documents whose tax NetSuite worked out differently, without their lines: the download has them all.
-    worksheet: { ...worksheet, documents: documents.filter((d) => d.note).map(({ lines: _lines, ...d }) => d) },
+    worksheet: {
+      ...worksheet,
+      // Only the documents whose tax NetSuite worked out differently, without their lines: the download has them all.
+      documents: checked(documents.filter((d) => d.note).map(({ lines: _lines, ...d }) => d), loaded.month),
+      accounts: accounts && {
+        ...accounts,
+        others: { ...accounts.others, list: checked(accounts.others.list, loaded.month) },
+        next: { ...accounts.next, list: checked(accounts.next.list, monthAfter(loaded.month)) },
+      },
+    },
     can: { keep: booksAllows(auth.access, 'keep'), owner: booksAllows(auth.access, 'owner') },
   });
 }

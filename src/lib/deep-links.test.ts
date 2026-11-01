@@ -329,3 +329,12 @@ describe('Books inventory value links', () => {
     expect(deepLinks.booksInventoryValue('BMG')).toBe('/admin/books/inventory-value?company=BMG');
   });
 });
+
+describe('Books sales tax links', () => {
+  it("opens one month's return, last month when left out", () => {
+    expect(deepLinks.booksSalesTax()).toBe('/admin/books/sales-tax');
+    expect(deepLinks.booksSalesTax(null)).toBe('/admin/books/sales-tax');
+    expect(deepLinks.booksSalesTax('2026-09-01')).toBe('/admin/books/sales-tax?month=2026-09');
+    expect(deepLinks.booksSalesTax('2026-09')).toBe('/admin/books/sales-tax?month=2026-09');
+  });
+});
