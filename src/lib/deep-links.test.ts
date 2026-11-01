@@ -276,6 +276,10 @@ describe('Pay vendors links', () => {
     expect(deepLinks.payVendors(null)).toBe('/admin/pay-vendors');
     expect(deepLinks.payVendors('a0000000-0000-4000-8000-000000000057')).toBe('/admin/pay-vendors?run=a0000000-0000-4000-8000-000000000057');
   });
+
+  it("opens a vendor's bank numbers", () => {
+    expect(deepLinks.vendorBank('31')).toBe('/admin/pay-vendors?bank=31');
+  });
 });
 
 describe('Inventory transfer links', () => {

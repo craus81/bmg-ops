@@ -607,6 +607,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/pay-vendors/route.ts': feature('vendor_payments', "switchIsOn(service, 'vendor_payments')"),
   // A payment run's checks printed on BMG's stock (migration 489): the same people once paying vendors is switched on; until then super admins can line up the stock and print a test page, and no check is numbered.
   'src/app/api/pay-vendors/checks/route.ts': feature('vendor_payments', "switchIsOn(service, 'vendor_payments')"),
+  // Vendor bank numbers for ACH (migration 490): super admins only, switched on or off; a second one confirms each set on a call-back.
+  'src/app/api/pay-vendors/bank/route.ts': superAdmin(),
   // Typed journal entries (migrations 469 and 484): once switched on, anyone with Payments in the general journal and the CPA in its own adjustments; until then super admins can type and look, and nothing is asked or sent.
   'src/app/api/journal-entries/route.ts': authScoped(
     "anyone with Payments types in the general journal and the CPA and super admins in the CPA's adjustments (journalsFor, Books part 53); everyone else is refused, and every step on an entry checks its journal is one of the caller's",

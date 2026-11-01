@@ -358,6 +358,10 @@ the entire first-rollout failure).
    `bank_synced_at` flag**. FleetSuite never becomes a store of full account /
    routing / SSN-EIN numbers. (W-9 and insurance *documents* are retained in R2
    with restricted access — those are files, not raw numbers.)
+   *Changed 2026-10-09, for vendors paid by ACH only:* FleetSuite keeps vendor
+   bank numbers encrypted to make the ACH file NetSuite makes today, shown
+   masked and confirmed by a second person on a call-back (`docs/books.md`
+   "Vendor bank numbers kept encrypted"). A tax ID is still never kept.
 3. **Vendor level follows `cni_jobs.payout_mode`:**
    - `company` mode → one **company vendor**; bank/W-9 captured at the company
      level; Internal ID → `companies.netsuite_vendor_id`.

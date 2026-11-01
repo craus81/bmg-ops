@@ -183,6 +183,7 @@ export const ENV_SPECS: EnvSpec[] = [
   { name: 'HEALTH_JOBS_PING_URL', group: 'platform', powers: 'A second external check that goes red when any background job is stale or erroring (HEALTH_PING_URL only covers the app and scheduler)', whenMissing: 'off' },
   { name: 'VERCEL_ENV', group: 'platform', powers: 'Set by Vercel automatically', whenMissing: 'off' },
   { name: 'VITEST', group: 'platform', powers: "Set only while the automated tests run, so they don't fill Books → NetSuite feed. Leave it unset here: set, the feed keeps nothing", whenMissing: 'off' },
+  { name: 'VENDOR_BANK_KEY', group: 'platform', powers: "The key that locks vendor bank numbers for ACH (Pay Vendors → Vendor bank numbers, which makes one): without it none are entered or opened. Keep a copy somewhere safe: lost, every vendor's numbers are entered and confirmed again", whenMissing: 'off', docs: 'docs/books.md' },
   { name: 'NEXT_PUBLIC_TELEMETRY', group: 'platform', powers: 'Browser usage telemetry kill switch — set to "off" to record nothing (build-time: a change needs a redeploy). Unset = on', whenMissing: 'off', docs: 'docs/usage-telemetry.md' },
   { name: 'PROOF_SENDERS', group: 'platform', powers: 'Which senders the proof sweep treats as proof email', whenMissing: 'off' },
   { name: 'PROOF_SUBJECT_KEYWORDS', group: 'platform', powers: 'Subject matching for the proof sweep', whenMissing: 'off' },

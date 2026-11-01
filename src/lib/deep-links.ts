@@ -348,6 +348,11 @@ export const deepLinks = {
    *  run open. Anyone with Payments who can see prices once paying vendors is
    *  switched on in Books → Switches; until then super admins only. */
   payVendors: (id?: string | null) => `/admin/pay-vendors${id ? `?${new URLSearchParams({ run: id })}` : ''}`,
+  /** A vendor's bank numbers for ACH on Pay vendors, kept locked and
+   *  confirmed by a second super admin on a call-back
+   *  (src/lib/vendor-bank.ts), by the vendor's NetSuite id. Super admins
+   *  only. */
+  vendorBank: (vendorId: string) => `/admin/pay-vendors?${new URLSearchParams({ bank: vendorId })}`,
   /** Inventory transfers made in FleetSuite and sent on to NetSuite
    *  (src/lib/inventory-transfers.ts), from More → Parts & Inventory; with
    *  an id, that transfer open. Admins once inventory transfers are switched
