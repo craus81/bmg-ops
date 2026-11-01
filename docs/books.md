@@ -5536,17 +5536,89 @@ many entries were ticked, and why a month was undone.
 - A bank fee or interest the books don't have yet: it's typed on Journal
   entries, then ticked here.
 
+## Adjustments approved before they're posted
+
+Inventory Adjust (`src/lib/inventory-adjust.ts`, migration 454) posts an
+admin's adjustment of a part's stock at O'Fallon to NetSuite at once, as an
+Inventory Adjustment to 52000 Inventory Adjustment. Once approving
+adjustments is switched on (`adjustment_approvals`, "Switches"), each one
+waits for approval first, and a super admin who didn't ask approves it
+before it goes to NetSuite (part 63, the first slice of the NetSuite Exit
+Checklist's "Inventory moves and value", migration 494,
+`src/lib/inventory-adjust-approvals.ts`). The plan adds it during 2027,
+from April, so it stays off on January 1. Switched off, Adjust works as it
+always has.
+
+**Asking.** Switched on, the Adjust pop-up (an Inventory page row, or a
+part's details on the Parts list) says Ask for approval instead of Post to
+NetSuite. The entry is checked as Adjust checks it, and the change it makes
+is worked out then against NetSuite's live count at O'Fallon: the number
+added or taken away, or the count on the shelf less NetSuite's count. That
+change is what's posted once it's approved, so a shelf count stays what the
+count found even if stock moves before it's approved. A count that makes a
+change that isn't a whole number (NetSuite showing 9.5) can't be asked for.
+It's kept in `inventory_adjustment_asks` (`inventory_adjustment_ask`) under
+an id the pop-up makes, so a request sent twice is kept once. One adjustment
+waits per part and location at a time: while one is open, the pop-up shows
+it, and nothing else is asked for or posted for that part, switched on or
+off. A switch or a list of asks that can't be read stops Adjust, rather
+than post one unapproved.
+
+**Deciding.** Adjustments to approve (`/admin/inventory/approvals`,
+`deepLinks.adjustmentsToApprove`, linked from the Inventory page while it's
+switched on or any are open) lists the ones not decided yet, oldest first,
+and the 30 decided last. Admins open it, as Adjust. A super admin who
+didn't ask:
+
+- approves it: FleetSuite posts it as Adjust does, as the change worked out
+  when it was asked (`adjustInventory`, mode `delta`), and NetSuite's memo
+  and Adjust's history say "by" whoever asked, "approved by" the super
+  admin. Approving takes the claim first (`inventory_adjustment_claim`), so
+  a second press finds it being posted. NetSuite's refusal, or Adjust's own
+  (stock moved and it would go below 0), puts it back to wait with why in
+  red (`inventory_adjustment_let_go`). When FleetSuite lost touch with
+  NetSuite, or NetSuite answered with something other than a refusal (the
+  NetSuite feed's rule), NetSuite may have posted it, so it's kept as not
+  known (`inventory_adjustment_unsure`);
+- or turns it down, saying why (300 characters at most), which whoever
+  asked sees on the page and in the pop-up (`inventory_adjustment_turn_down`).
+
+Whoever asked can withdraw it while it waits (`inventory_adjustment_withdraw`).
+One NetSuite didn't say about, or a press still posting it after five
+minutes (longer than a press takes), is settled by a super admin who looks
+in NetSuite: It's in NetSuite, with NetSuite's number if they have it, or
+It isn't in NetSuite, and it waits to be approved again
+(`inventory_adjustment_settle`). Ones asked while it was on can be approved
+or turned down after it's switched off too. Nobody is alerted, as Adjust
+alerts nobody (Craig, 2026-10-30). The audit records name the part, the
+change and the reason, with no amounts.
+
+Made-up example: Jessie counts 12 LR-48 ladder racks on the shelf while
+NetSuite shows 9, so she asks for +3 (Count correction). Craig approves it,
+and NetSuite gets an adjustment of +3 with the memo "FleetSuite: Count
+correction · by Jessie, approved by Craig", even though NetSuite's count
+had moved to 10 by then.
+
+### What isn't done yet
+
+- A threshold: once it's on, every adjustment waits, however small.
+- An adjustment settled as in NetSuite by hand isn't in Adjust's history,
+  since FleetSuite never heard NetSuite's id for it, so Books posts it from
+  NetSuite's copy, as it does an adjustment made in NetSuite.
+- Before switching on, agree who approves, since only super admins can.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 473, 478 to 480 and 485 to
-488, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
+row each in `books_switches` (migrations 466 to 473, 478 to 480, 485 to
+488 and 494, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
 in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
 which whoever opens the books can read. The plan turns them on on January 1,
 2027, asking the owner once in late December, all but `customer_payments`,
 `customer_deposits`, `bank_deposits` and `vendor_payments`, which stay off
 until receiving payments, taking deposits, bank deposits and paying vendors
-move into FleetSuite during 2027; their cards on the page say so (`later`).
+move into FleetSuite during 2027, and `adjustment_approvals`, which the plan
+adds during 2027, from April; their cards on the page say so (`later`).
 
 While a piece is off, the people who'd use it don't see it at all; super
 admins can open its screen and see what it would send, and its route
@@ -5558,6 +5630,9 @@ going to NetSuite and the second stops NetSuite's changes coming over
 FleetSuite's records, so off leaves things as now, and the page asks with
 their own words (`turnOn`, `turnOff`). A sync that can't read
 `fleetsuite_records` stops instead of counting it as off (`readSwitch`).
+`adjustment_approvals` is too: on, an adjustment made with Adjust waits for
+approval before it goes to NetSuite, so off leaves Adjust as now, and Adjust
+stops when it can't read it rather than post one unapproved.
 
 | Piece | What it does once it's on | Where |
 | --- | --- | --- |
@@ -5576,6 +5651,7 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 | `customer_deposits` | Anyone with Invoicing takes a customer's check or ACH deposit on a sales order, and FleetSuite makes the customer deposit in NetSuite on that order, in Undeposited Funds; NetSuite puts it on the order's invoice when the order's billed ("Deposits taken in FleetSuite") | Deposit on a sales order, or on an estimate once it has its sales order |
 | `bank_deposits` | Anyone with Invoicing deposits the customer payments and deposits waiting in Undeposited Funds to one of the company's bank accounts, ticked from what NetSuite has waiting, and FleetSuite makes the bank deposit in NetSuite ("Bank deposits made in FleetSuite") | Invoicing → Invoiced → Bank deposit |
 | `vendor_payments` | Anyone with Payments pays the company's open bills in a payment run, ticked from what NetSuite has open, from one of its bank accounts, vendor by vendor by check or ACH, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite ("Vendors paid in FleetSuite"); its checks print on BMG's check stock from the run, each number set in NetSuite ("Checks printed on BMG's stock"), and its ACH payments are paid from a file made for First Bank from the run ("The ACH file for First Bank") | More → Money & Books → Pay Vendors |
+| `adjustment_approvals` | An inventory adjustment made with Adjust waits for approval: a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as an Inventory Adjustment, or turns it down saying why ("Adjustments approved before they're posted") | Adjust on the Inventory page or a part's details, and Adjustments to approve on the Inventory page |
 
 ## Posting
 

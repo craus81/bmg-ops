@@ -1,9 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { closeOnEscape } from '@/lib/modal-escape';
 import { theme } from '@/lib/theme';
+import { deepLinks } from '@/lib/deep-links';
 import { ADJUST_REASONS, adjustmentChange, type AdjustMode } from '@/lib/inventory-adjust-shared';
+import { OPEN_STATUSES, STATUS_TEXT, describeAsk, workOutAsk, type AdjustmentAsk } from '@/lib/inventory-adjust-approvals';
 
 export interface AdjustPart {
   netsuiteId: string;
@@ -21,24 +24,39 @@ interface HistoryRow {
   created_at: string;
 }
 
+type Ask = AdjustmentAsk & { mine?: boolean };
+
 const signed = (n: number) => `${n > 0 ? '+' : '−'}${Math.abs(n)}`;
 const day = (iso: string) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
+const newAskId = () => (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : undefined);
 
 /**
  * The Adjust pop-up (Inventory page rows, Parts list details): add/remove a
  * number or type the shelf count, pick a reason, and FleetSuite posts a
  * NetSuite Inventory Adjustment at O'Fallon. Numbers shown are NetSuite's
  * live O'Fallon count, read when the pop-up opens. Full screen on phones.
+ * Once approving adjustments is switched on (Books → Switches,
+ * src/lib/inventory-adjust-approvals.ts), it asks for approval instead, and
+ * a part with one waiting shows it, to withdraw when it's yours.
  */
-export default function InventoryAdjustModal({ part, onClose, onPosted }: {
+export default function InventoryAdjustModal({ part, onClose, onPosted, onAsked }: {
   part: AdjustPart;
   onClose: () => void;
   /** After a successful post, with NetSuite's new O'Fallon numbers. */
   onPosted?: (r: { onHand: number; available: number; change: number }) => void;
+  /** After it's asked for approval, or withdrawn: nothing's posted yet. */
+  onAsked?: () => void;
 }) {
   const [stock, setStock] = useState<{ onHand: number; available: number } | null>(null);
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [loadErr, setLoadErr] = useState('');
+  // Whether it's asked for approval instead of posted; null when FleetSuite can't tell, and then nothing is made.
+  const [approvals, setApprovals] = useState<boolean | null>(false);
+  const [approvalsErr, setApprovalsErr] = useState('');
+  const [asks, setAsks] = useState<Ask[]>([]);
+  // One per ask, so a request sent twice is kept once.
+  const [askId, setAskId] = useState(newAskId);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [mode, setMode] = useState<AdjustMode>('delta');
   const [qty, setQty] = useState('-1');
   const [reason, setReason] = useState<string>(ADJUST_REASONS[0]);
@@ -54,6 +72,10 @@ export default function InventoryAdjustModal({ part, onClose, onPosted }: {
         const data = await res.json().catch(() => ({}));
         if (!alive) return;
         setHistory(data.history || []);
+        const told = data.approvals === true || data.approvals === false;
+        setApprovals(told ? data.approvals : null);
+        if ('approvals' in data && !told) setApprovalsErr(data.approvalsError || "Couldn't tell whether adjustments need approval, so none can be made now.");
+        setAsks(data.asks || []);
         if (!res.ok) { setLoadErr(data.error || "Couldn't read the count from NetSuite."); return; }
         setStock({ onHand: Number(data.onHand) || 0, available: Number(data.available) || 0 });
       })
@@ -69,8 +91,16 @@ export default function InventoryAdjustModal({ part, onClose, onPosted }: {
   const step = (by: number) => setQty(q => String((parseInt(q, 10) || 0) + by));
 
   const parsed = qty.trim() === '' ? NaN : Number(qty);
-  const calc = stock ? adjustmentChange(mode, parsed, stock.onHand) : null;
-  const ready = !!calc && !('error' in calc) && !posting && !done;
+  const calc = stock ? (approvals ? workOutAsk(mode, parsed, stock.onHand) : adjustmentChange(mode, parsed, stock.onHand)) : null;
+  const open = asks.find(a => OPEN_STATUSES.includes(a.status)) ?? null;
+  const ready = !!calc && !('error' in calc) && !posting && !done && approvals !== null && !open;
+  // Turned down lately, with why, among the adjustments posted.
+  const recent = [
+    ...history.map(h => ({ key: h.id, when: h.created_at, text: `${signed(Number(h.change))} · ${h.reason}${h.created_by_name ? ` · ${h.created_by_name}` : ''}`, right: h.netsuite_adjustment_number || '' })),
+    ...asks.filter(a => a.status === 'turned_down' && a.decidedAt).map(a => ({
+      key: a.id, when: a.decidedAt as string, text: `${signed(a.change)} · ${a.reason} · turned down by ${a.decidedByName || 'a super admin'}: ${a.why}`, right: '',
+    })),
+  ].sort((a, b) => b.when.localeCompare(a.when)).slice(0, 10);
 
   const post = async () => {
     if (!ready) return;
@@ -80,17 +110,48 @@ export default function InventoryAdjustModal({ part, onClose, onPosted }: {
       const res = await fetch('/api/inventory/adjust', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ netsuiteId: part.netsuiteId, mode, qty: parsed, reason, note }),
+        body: JSON.stringify({ netsuiteId: part.netsuiteId, mode, qty: parsed, reason, note, askId }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setError(data.error || 'NetSuite refused the adjustment.'); return; }
+      if (data.open) setAsks(prev => [data.open, ...prev.filter(a => a.id !== data.open.id)]);
+      if (!res.ok) { setError(data.error || (approvals ? "Couldn't ask for approval." : 'NetSuite refused the adjustment.')); return; }
+      if (data.asked) {
+        setAsks(prev => [{ ...data.ask, mine: true }, ...prev.filter(a => a.id !== data.ask.id)]);
+        setAskId(newAskId());
+        setDone(`Asked for approval: ${describeAsk(data.ask)}. It goes to NetSuite once a super admin who didn't ask approves it.`);
+        onAsked?.();
+        return;
+      }
       setStock({ onHand: data.onHand, available: data.available });
       setDone(`Posted ${data.adjustmentNumber || 'the adjustment'} in NetSuite. ${part.itemNumber} now shows ${data.onHand} on hand at O'Fallon.${data.warning ? ` ${data.warning}` : ''}`);
       onPosted?.({ onHand: data.onHand, available: data.available, change: data.change });
     } catch {
-      setError("Couldn't reach FleetSuite. Nothing was posted. Check your connection and try again.");
+      setError(approvals
+        ? "Couldn't reach FleetSuite. Check your connection and try again."
+        : "Couldn't reach FleetSuite. Nothing was posted. Check your connection and try again.");
     } finally {
       setPosting(false);
+    }
+  };
+
+  const withdraw = async (a: Ask) => {
+    setWithdrawing(true);
+    setError('');
+    try {
+      const res = await fetch('/api/inventory/adjust/approvals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'withdraw', id: a.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(data.error || "Couldn't withdraw it."); return; }
+      setAsks(prev => prev.map(x => (x.id === a.id ? { ...data.ask, mine: true } : x)));
+      setDone('');
+      onAsked?.();
+    } catch {
+      setError("Couldn't reach FleetSuite. Check your connection and try again.");
+    } finally {
+      setWithdrawing(false);
     }
   };
 
@@ -133,6 +194,23 @@ export default function InventoryAdjustModal({ part, onClose, onPosted }: {
 
         {!stock && !loadErr && <div style={{ fontSize: '12px', color: theme.textMuted }}>Reading the count from NetSuite…</div>}
         {loadErr && <div style={{ color: theme.error, fontSize: '12px', fontWeight: 700, background: theme.errorBg, padding: '8px 10px', borderRadius: '8px' }}>{loadErr}</div>}
+        {approvalsErr && <div style={{ color: theme.error, fontSize: '12px', fontWeight: 700, background: theme.errorBg, padding: '8px 10px', borderRadius: '8px' }}>{approvalsErr}</div>}
+        {open && (
+          <div style={{ fontSize: '12px', padding: '10px 12px', borderRadius: '10px', background: theme.warningBg, border: `1px solid ${theme.warningBorder}`, color: theme.textSecondary, display: 'grid', gap: '6px' }}>
+            <div>
+              <b style={{ color: theme.textPrimary }}>{STATUS_TEXT[open.status]}:</b> {describeAsk(open)} · {open.reason}{open.note ? ` · ${open.note}` : ''} · asked by {open.mine ? 'you' : open.askedByName || 'someone'}, {day(open.askedAt)}
+            </div>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <Link href={deepLinks.adjustmentsToApprove(open.id)} style={{ fontSize: '12px', fontWeight: 700, color: '#60a5fa' }}>Adjustments to approve →</Link>
+              {open.mine && open.status === 'waiting' && (
+                <button onClick={() => withdraw(open)} disabled={withdrawing}
+                  style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 800, border: `1px solid ${theme.border}`, background: theme.card, color: theme.textSecondary, cursor: withdrawing ? 'wait' : 'pointer' }}>
+                  {withdrawing ? 'Withdrawing…' : 'Withdraw it'}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {stock && (
           <>
@@ -170,7 +248,9 @@ export default function InventoryAdjustModal({ part, onClose, onPosted }: {
                 placeholder="e.g. Box crushed on delivery" style={{ ...field, resize: 'vertical' }} />
             </label>
             <div style={{ fontSize: '11px', color: theme.textMuted }}>
-              Posts an Inventory Adjustment in NetSuite at O&apos;Fallon, account 52000 Inventory Adjustment. Added units use the part&apos;s average cost.
+              {approvals
+                ? <>Waits for a super admin who didn&apos;t ask to approve it, then posts in NetSuite at O&apos;Fallon to account 52000 Inventory Adjustment.</>
+                : <>Posts an Inventory Adjustment in NetSuite at O&apos;Fallon, account 52000 Inventory Adjustment. Added units use the part&apos;s average cost.</>}
             </div>
           </>
         )}
@@ -180,23 +260,23 @@ export default function InventoryAdjustModal({ part, onClose, onPosted }: {
 
         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
           <button onClick={onClose} style={{ padding: '10px 16px', borderRadius: '9px', fontSize: '13px', fontWeight: 800, border: `1px solid ${theme.border}`, background: theme.card, color: theme.textSecondary, cursor: 'pointer' }}>
-            {done ? 'Done' : 'Cancel'}
+            {done ? 'Done' : 'Leave without saving'}
           </button>
           {!done && (
             <button onClick={post} disabled={!ready}
               style={{ padding: '10px 16px', borderRadius: '9px', fontSize: '13px', fontWeight: 800, border: 'none', background: theme.success, color: '#fff', cursor: ready ? 'pointer' : 'not-allowed', opacity: ready ? 1 : 0.45 }}>
-              {posting ? 'Posting…' : 'Post to NetSuite'}
+              {approvals ? (posting ? 'Asking…' : 'Ask for approval') : (posting ? 'Posting…' : 'Post to NetSuite')}
             </button>
           )}
         </div>
 
-        {history.length > 0 && (
+        {recent.length > 0 && (
           <div style={{ borderTop: `1px solid ${theme.border}`, paddingTop: '8px' }}>
             <div style={{ fontSize: '11px', fontWeight: 700, color: theme.textMuted, marginBottom: '4px' }}>Recent adjustments</div>
-            {history.map(h => (
-              <div key={h.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '11px', color: theme.textSecondary, padding: '3px 0' }}>
-                <span>{day(h.created_at)} · {signed(Number(h.change))} · {h.reason}{h.created_by_name ? ` · ${h.created_by_name}` : ''}</span>
-                <span style={{ color: theme.textMuted }}>{h.netsuite_adjustment_number || ''}</span>
+            {recent.map(r => (
+              <div key={r.key} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', fontSize: '11px', color: theme.textSecondary, padding: '3px 0' }}>
+                <span>{day(r.when)} · {r.text}</span>
+                <span style={{ color: theme.textMuted }}>{r.right}</span>
               </div>
             ))}
           </div>

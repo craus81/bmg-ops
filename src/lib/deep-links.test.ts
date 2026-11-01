@@ -290,6 +290,14 @@ describe('Inventory transfer links', () => {
   });
 });
 
+describe('Adjustments to approve links', () => {
+  it('opens the adjustments waiting for approval, or flashes one', () => {
+    expect(deepLinks.adjustmentsToApprove()).toBe('/admin/inventory/approvals');
+    expect(deepLinks.adjustmentsToApprove(null)).toBe('/admin/inventory/approvals');
+    expect(deepLinks.adjustmentsToApprove('c0000000-0000-4000-8000-000000000001')).toBe('/admin/inventory/approvals?id=c0000000-0000-4000-8000-000000000001');
+  });
+});
+
 describe('Books 1099s links', () => {
   it("opens one company's year of 1099 totals", () => {
     expect(deepLinks.books1099s('BMG', 2025)).toBe('/admin/books/1099s?company=BMG&year=2025');

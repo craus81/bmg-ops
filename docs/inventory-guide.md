@@ -209,6 +209,16 @@ Pick a reason (Count correction, Damaged, Used in shop, Found, Other) and an
 optional note; both land on the NetSuite memo. The pop-up lists the part's
 recent adjustments (`inventory_adjustments`, migration 454). No alerts.
 
+Once **Approving adjustments** is switched on in Books → Switches (off
+until the plan adds it in 2027), the button says **Ask for approval**: the
+change is worked out against NetSuite's live count then and waits on
+**Adjustments to approve** (linked at the top of the Inventory page) until
+a super admin who didn't ask approves it, which posts it to NetSuite, or
+turns it down saying why. Whoever asked can withdraw it while it waits. A
+part with one waiting shows it in the pop-up, and nothing else is posted
+for it until it's decided (docs/books.md, "Adjustments approved before
+they're posted").
+
 The **From NetSuite · Refresh** chip shows when stock last came over and
 pulls it now.
 

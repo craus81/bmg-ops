@@ -358,6 +358,11 @@ export const deepLinks = {
    *  an id, that transfer open. Admins once inventory transfers are switched
    *  on in Books → Switches; until then super admins only. */
   inventoryTransfers: (id?: string | null) => `/admin/inventory-transfers${id ? `?${new URLSearchParams({ id })}` : ''}`,
+  /** Adjustments to approve (src/lib/inventory-adjust-approvals.ts), linked
+   *  from the Inventory page: once approving adjustments is switched on in
+   *  Books → Switches, each adjustment made with Adjust waits there for a
+   *  super admin who didn't ask; with an id, that one flashed. */
+  adjustmentsToApprove: (id?: string | null) => `/admin/inventory/approvals${id ? `?${new URLSearchParams({ id })}` : ''}`,
   /** Invoices hub — opens the create-invoice dialog for a shipped graphics job.
    *  NOTE: this exact string doubles as the match key that marks the prompt
    *  read once the invoice exists (graphics-invoice-notify.ts) — change both
