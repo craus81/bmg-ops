@@ -327,6 +327,7 @@ describe('a return held against its worksheet', () => {
       'Gross receipts on the return are $11.00 less than the worksheet\'s.',
       'Taxable sales on the return are $10.00 more than the worksheet\'s.',
       'Tax on the return is $0.85 more than the worksheet\'s.',
+      "The return's gross receipts and adjustments come to $115.00, not its taxable sales of $136.00.",
       "NetSuite's sales tax account came down $10.69 in April 2025, and the return's tax is $11.54.",
     ]);
   });

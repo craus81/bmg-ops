@@ -6,6 +6,7 @@ import { TRAN_TYPE_NAMES, toCents } from './netsuite-gl';
 import { dayText, explainTax, parseRate, pct } from './own-invoice-check';
 import { lineTax, TAKES_OFF, type TaxBasis } from './own-invoices';
 import { stateOf } from './sales-report';
+import { RETURN_FIELDS, RETURN_FIELD_WORDS, type ReturnField } from './sales-tax-words';
 
 /**
  * Missouri sales tax (part 65, migration 496, docs/books.md "Sales tax"; the
@@ -269,15 +270,17 @@ interface Lists {
   rated: Set<string>;
 }
 
-/** The state a location is in: by its name, else by FleetSuite's known ids; a location given a rate is in Missouri. */
-function stateAt(locationId: string | null, lists: Lists): string {
-  if (!locationId) return '—';
-  const byName = stateOf(lists.locations.get(locationId) ?? null);
+/** The state a location is in, 'MO', 'GA' or '—': by its name, else by FleetSuite's known ids; one given a rate is in Missouri. */
+export function locationState(locationId: string, name: string | null, rated: boolean): string {
+  const byName = stateOf(name);
   if (byName !== '—') return byName;
   const known = Object.entries(KNOWN_LOCATION_IDS).find(([, id]) => id === locationId);
   if (known) return stateOf(known[0]);
-  return lists.rated.has(locationId) ? 'MO' : '—';
+  return rated ? 'MO' : '—';
 }
+
+const stateAt = (locationId: string | null, lists: Lists) =>
+  (locationId ? locationState(locationId, lists.locations.get(locationId) ?? null, lists.rated.has(locationId)) : '—');
 
 const locationName = (locationId: string | null, lists: Lists) =>
   (locationId ? lists.locations.get(locationId) ?? `Location ${locationId}` : 'No location');
@@ -536,17 +539,6 @@ export function readReturn(row: SalesTaxReturnRow): FiledReturn {
   };
 }
 
-export type ReturnField = 'gross' | 'adjustments' | 'taxable' | 'tax' | 'allowance' | 'paid';
-export const RETURN_FIELDS: readonly ReturnField[] = ['gross', 'adjustments', 'taxable', 'tax', 'allowance', 'paid'];
-export const RETURN_FIELD_WORDS: Readonly<Record<ReturnField, string>> = {
-  gross: 'Gross receipts',
-  adjustments: 'Adjustments',
-  taxable: 'Taxable sales',
-  tax: 'Tax',
-  allowance: 'Timely payment allowance',
-  paid: 'Paid',
-};
-
 export interface FieldHeld {
   field: ReturnField;
   filed: number;
@@ -588,6 +580,10 @@ export function holdReturn(filed: FiledReturn, figures: ReturnFigures, accounts:
     const apart = f.filed - f.expected!;
     const verb = f.field === 'tax' ? 'is' : 'are';
     notes.push(`${RETURN_FIELD_WORDS[f.field]} on the return ${verb} ${dollars(Math.abs(apart))} ${apart > 0 ? 'more' : 'less'} than the worksheet's.`);
+  }
+  // Form 53-1's taxable sales are its gross receipts plus its adjustments.
+  if (filed.gross + filed.adjustments !== filed.taxable) {
+    notes.push(`The return's gross receipts and adjustments come to ${dollars(filed.gross + filed.adjustments)}, not its taxable sales of ${dollars(filed.taxable)}.`);
   }
   if (fields.find((f) => f.field === 'allowance')!.differs) {
     notes.push(late

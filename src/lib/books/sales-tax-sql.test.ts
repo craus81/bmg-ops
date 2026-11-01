@@ -212,18 +212,64 @@ describe("migration 496's rates and returns", () => {
     await save({ company: '1084' });
   });
 
+  it('types a return in, corrects it and removes it, refusing whenever someone else saved it since the page saw it', async () => {
+    const [ANN, BOB] = ['a0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000002'];
+    await db.query('INSERT INTO profiles (id) VALUES ($1), ($2) ON CONFLICT DO NOTHING', [ANN, BOB]);
+    type Answer = { state: string; updated_at?: string; unchanged?: boolean };
+    const JUNE = {
+      company: 'BMG', month: '2025-06-01', filed_on: '2025-07-18', gross_cents: 81100, adjustments_cents: -28500, taxable_cents: 52600,
+      tax_cents: 4465, allowance_cents: 89, paid_cents: 4376, note: '  Filed online  ',
+    };
+    const save = (p: Record<string, unknown>) => one<Answer>(db, 'SELECT sales_tax_return_save($1::jsonb) AS r', [JSON.stringify(p)]);
+    const remove = (p: Record<string, unknown>) => one<Answer>(db, 'SELECT sales_tax_return_remove($1::jsonb) AS r', [JSON.stringify(p)]);
+    const june = async () => (await db.query<Record<string, unknown>>(
+      `SELECT tax_cents::int AS tax, note, entered_by, updated_by, updated_at FROM sales_tax_returns WHERE company = 'BMG' AND month = '2025-06-01'`,
+    )).rows[0];
+
+    // One no one has saved yet, typed in by someone who saw it as not filed.
+    expect(await save({ ...JUNE, seen: 'x', by: ANN })).toEqual({ state: 'changed' });
+    const first = await save({ ...JUNE, seen: null, by: ANN });
+    expect(first).toEqual({ state: 'saved', updated_at: expect.any(String) });
+    expect(await june()).toMatchObject({ tax: 4465, note: 'Filed online', entered_by: ANN, updated_by: ANN });
+    expect(await save({ ...JUNE, seen: null, by: BOB })).toEqual({ state: 'changed' });
+
+    // Saved again as it is, nothing changes; corrected, it keeps who typed it in.
+    expect(await save({ ...JUNE, seen: first.updated_at, by: BOB })).toEqual({ state: 'saved', updated_at: first.updated_at, unchanged: true });
+    const second = await save({ ...JUNE, tax_cents: 4464, allowance_cents: 89, paid_cents: 4375, note: ' ', seen: first.updated_at, by: BOB });
+    expect(second.state).toBe('saved');
+    expect(await june()).toMatchObject({ tax: 4464, note: null, entered_by: ANN, updated_by: BOB });
+    expect(await save({ ...JUNE, seen: first.updated_at, by: ANN })).toEqual({ state: 'changed' });
+    await expect(save({ ...JUNE, filed_on: '2025-06-30', seen: second.updated_at, by: ANN })).rejects.toThrow(/sales_tax_returns_filed_after/);
+
+    // Removed only as the page saw it.
+    expect(await remove({ company: 'BMG', month: '2025-06-01', seen: first.updated_at })).toEqual({ state: 'changed' });
+    expect(await remove({ company: 'BMG', month: '2025-06-01', seen: second.updated_at })).toEqual({ state: 'removed' });
+    expect(await june()).toBeUndefined();
+    expect(await remove({ company: 'BMG', month: '2025-06-01', seen: second.updated_at })).toEqual({ state: 'gone' });
+    expect(await save({ ...JUNE, seen: second.updated_at, by: ANN })).toEqual({ state: 'changed' });
+    // Each company's month is its own.
+    expect((await db.query("SELECT company FROM sales_tax_returns WHERE month = '2025-03-01' ORDER BY company")).rows).toEqual([
+      { company: '1084' }, { company: 'BMG' },
+    ]);
+  });
+
   it("is the server login's alone", async () => {
     for (const role of ['anon', 'authenticated']) {
       await db.exec(`RESET ROLE; SET ROLE ${role}`);
       for (const t of ['sales_tax_rates', 'sales_tax_returns']) await expect(db.query(`SELECT * FROM ${t}`)).rejects.toThrow(/permission denied/);
       await expect(db.query("SELECT gl_sales_tax_month('BMG', '2025-03-01', ARRAY['250'], 10)")).rejects.toThrow(/permission denied/);
+      for (const f of ['sales_tax_return_save', 'sales_tax_return_remove']) {
+        await expect(db.query(`SELECT ${f}('{"company":"BMG","month":"2025-03-01"}'::jsonb)`)).rejects.toThrow(/permission denied/);
+      }
     }
     await db.exec('RESET ROLE; SET ROLE service_role');
     const rls = await db.query<{ relname: string; relrowsecurity: boolean }>(
       "SELECT relname, relrowsecurity FROM pg_class WHERE relname IN ('sales_tax_rates', 'sales_tax_returns') ORDER BY relname",
     );
     expect(rls.rows).toEqual([{ relname: 'sales_tax_rates', relrowsecurity: true }, { relname: 'sales_tax_returns', relrowsecurity: true }]);
-    expect(await one<boolean>(db, "SELECT has_function_privilege('service_role', 'public.gl_sales_tax_month(text, date, text[], integer)', 'EXECUTE') AS r")).toBe(true);
+    for (const f of ['gl_sales_tax_month(text, date, text[], integer)', 'sales_tax_return_save(jsonb)', 'sales_tax_return_remove(jsonb)']) {
+      expect(await one<boolean>(db, `SELECT has_function_privilege('service_role', 'public.${f}', 'EXECUTE') AS r`)).toBe(true);
+    }
   });
 });
 

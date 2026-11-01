@@ -23,7 +23,9 @@
 --     typed in after filing (gross receipts, adjustments, taxable sales, tax,
 --     the timely payment allowance and what was paid), by the bookkeeper or a
 --     super admin, to be held against the month's worksheet. Corrected in
---     place; every change is in the audit log.
+--     place; every change is in the audit log. sales_tax_return_save(p) and
+--     sales_tax_return_remove(p) type one in, correct it and remove it, each
+--     refused when someone else saved it since the page saw it.
 --   * gl_sales_tax_month(p_company, p_month, p_tax_accounts, p_limit), one
 --     read of what the worksheet is worked out from:
 --       - documents: each invoice, credit memo, cash sale and cash refund the
@@ -338,12 +340,97 @@ BEGIN
 END;
 $$;
 
+-- ── Typing in a return as filed ────────────────────────────────────────────
+
+-- Saves a month's return as it was filed. p:
+--   { company, month: 'YYYY-MM-01', seen: its updated_at as the page saw it, or null for a return not typed in yet,
+--     filed_on, gross_cents, adjustments_cents, taxable_cents, tax_cents, allowance_cents, paid_cents, note, by }
+-- Answers { state: 'saved', updated_at }, with unchanged: true when it was saved that way already, or 'changed'
+-- when it was saved or removed since the page saw it.
+CREATE OR REPLACE FUNCTION public.sales_tax_return_save(p JSONB)
+RETURNS JSONB
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+DECLARE
+  v_company TEXT := btrim(p->>'company');
+  v_month DATE := (p->>'month')::date;
+  v_filed DATE := (p->>'filed_on')::date;
+  v_gross BIGINT := (p->>'gross_cents')::bigint;
+  v_adjustments BIGINT := (p->>'adjustments_cents')::bigint;
+  v_taxable BIGINT := (p->>'taxable_cents')::bigint;
+  v_tax BIGINT := (p->>'tax_cents')::bigint;
+  v_allowance BIGINT := (p->>'allowance_cents')::bigint;
+  v_paid BIGINT := (p->>'paid_cents')::bigint;
+  v_note TEXT := nullif(btrim(p->>'note'), '');
+  v_by UUID := nullif(p->>'by', '')::uuid;
+  v_row public.sales_tax_returns;
+BEGIN
+  SELECT * INTO v_row FROM public.sales_tax_returns WHERE company = v_company AND month = v_month FOR UPDATE;
+  IF NOT FOUND THEN
+    IF p->>'seen' IS NOT NULL THEN
+      -- Removed since the page saw it.
+      RETURN jsonb_build_object('state', 'changed');
+    END IF;
+    INSERT INTO public.sales_tax_returns (company, month, filed_on, gross_cents, adjustments_cents, taxable_cents, tax_cents,
+                                          allowance_cents, paid_cents, note, entered_by, updated_by)
+    VALUES (v_company, v_month, v_filed, v_gross, v_adjustments, v_taxable, v_tax, v_allowance, v_paid, v_note, v_by, v_by)
+    ON CONFLICT (company, month) DO NOTHING
+    RETURNING * INTO v_row;
+    IF NOT FOUND THEN
+      -- Typed in by someone else at the same moment.
+      RETURN jsonb_build_object('state', 'changed');
+    END IF;
+    RETURN jsonb_build_object('state', 'saved', 'updated_at', v_row.updated_at);
+  END IF;
+  IF v_row.updated_at IS DISTINCT FROM (p->>'seen')::timestamptz THEN
+    RETURN jsonb_build_object('state', 'changed');
+  END IF;
+
+  IF ROW(v_row.filed_on, v_row.gross_cents, v_row.adjustments_cents, v_row.taxable_cents, v_row.tax_cents, v_row.allowance_cents,
+         v_row.paid_cents, v_row.note)
+     IS NOT DISTINCT FROM ROW(v_filed, v_gross, v_adjustments, v_taxable, v_tax, v_allowance, v_paid, v_note) THEN
+    RETURN jsonb_build_object('state', 'saved', 'updated_at', v_row.updated_at, 'unchanged', true);
+  END IF;
+  UPDATE public.sales_tax_returns
+  SET filed_on = v_filed, gross_cents = v_gross, adjustments_cents = v_adjustments, taxable_cents = v_taxable, tax_cents = v_tax,
+      allowance_cents = v_allowance, paid_cents = v_paid, note = v_note, updated_by = v_by, updated_at = now()
+  WHERE company = v_company AND month = v_month
+  RETURNING * INTO v_row;
+  RETURN jsonb_build_object('state', 'saved', 'updated_at', v_row.updated_at);
+END;
+$$;
+
+-- Removes a month's return, one typed in for the wrong month say. p: { company, month: 'YYYY-MM-01', seen }.
+-- Answers { state: 'removed' }, 'changed' when it was saved since the page saw it, or 'gone' when there's none.
+CREATE OR REPLACE FUNCTION public.sales_tax_return_remove(p JSONB)
+RETURNS JSONB
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+DECLARE
+  v_company TEXT := btrim(p->>'company');
+  v_month DATE := (p->>'month')::date;
+  v_row public.sales_tax_returns;
+BEGIN
+  SELECT * INTO v_row FROM public.sales_tax_returns WHERE company = v_company AND month = v_month FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('state', 'gone');
+  END IF;
+  IF v_row.updated_at IS DISTINCT FROM (p->>'seen')::timestamptz THEN
+    RETURN jsonb_build_object('state', 'changed');
+  END IF;
+  DELETE FROM public.sales_tax_returns WHERE company = v_company AND month = v_month;
+  RETURN jsonb_build_object('state', 'removed');
+END;
+$$;
+
 -- ── Access: service role only ──────────────────────────────────────────────
 
 DO $$
 DECLARE
   t TEXT;
-  f TEXT := 'public.gl_sales_tax_month(text, date, text[], integer)';
+  f TEXT;
   r TEXT;
 BEGIN
   FOREACH t IN ARRAY ARRAY['public.sales_tax_rates', 'public.sales_tax_returns'] LOOP
@@ -355,17 +442,23 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
-  FOREACH r IN ARRAY ARRAY['anon', 'authenticated'] LOOP
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
-      EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %I', f, r);
+  FOREACH f IN ARRAY ARRAY[
+    'public.gl_sales_tax_month(text, date, text[], integer)', 'public.sales_tax_return_save(jsonb)', 'public.sales_tax_return_remove(jsonb)'
+  ] LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
+    FOREACH r IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+        EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %I', f, r);
+      END IF;
+    END LOOP;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+      EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO service_role', f);
     END IF;
   END LOOP;
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
-    EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO service_role', f);
-  END IF;
 END $$;
 
 COMMENT ON TABLE sales_tax_rates IS 'Migration 496: each NetSuite location''s sales tax rate, a percent, from the day it starts until the next one (src/lib/books/sales-tax-worksheet.ts). Started from Settings → Sales Tax for O''Fallon, Wentzville and Kansas City from January 1, 2025; Social Circle, Georgia has none. Super admins add and remove rates. Service-role write and read.';
 COMMENT ON TABLE sales_tax_returns IS 'Migration 496: a company''s sales tax return for a month as it was filed (gross receipts, adjustments, taxable sales, tax, the timely payment allowance taken and what was paid, in cents), typed in by the bookkeeper or a super admin to be held against the month''s worksheet. Corrected in place; changes are in the audit log. Service-role write and read.';
 COMMENT ON FUNCTION public.gl_sales_tax_month(text, date, text[], integer) IS 'Migration 496: one company''s invoices, credit memos and cash sales NetSuite posted in a month, each with its GL lines and the ledger mirror''s lines, the items, tax codes, locations and customers on them, and the sales tax accounts in NetSuite''s ledger and FleetSuite''s books, for Books → Sales tax. Reads only. Service role only.';
+COMMENT ON FUNCTION public.sales_tax_return_save(jsonb) IS 'Migration 496: saves a month''s sales tax return as filed, refusing when it was saved or removed since the page saw it. Service role only.';
+COMMENT ON FUNCTION public.sales_tax_return_remove(jsonb) IS 'Migration 496: removes a month''s sales tax return, refusing when it was saved since the page saw it. Service role only.';
