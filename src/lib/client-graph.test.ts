@@ -77,6 +77,14 @@ describe('code the browser loads', () => {
     expect(bad, "load it inside the function that needs it instead, as src/lib/netsuite-sends.ts's whoSent does").toEqual([]);
   });
 
+  it('never reads the key that locks vendor bank numbers', () => {
+    // Books part 59: the key, and every number it opens, stays on the server (src/lib/vendor-bank-lock.ts).
+    const bad = [...reached].filter(([file]) => texts.get(file)!.includes('process.env.VENDOR_BANK_KEY'))
+      .map(([, trail]) => trail.map((f) => relative(repoRoot, f).replace(/\\/g, '/')).join(' -> '));
+    expect(texts.get(join(repoRoot, 'src', 'lib', 'vendor-bank-lock.ts'))).toContain('process.env.VENDOR_BANK_KEY');
+    expect(bad).toEqual([]);
+  });
+
   it('still finds a top-level next/headers import', () => {
     expect(importsOf("import { cookies } from 'next/headers';\nconst x = 1;").top).toEqual(['next/headers']);
     expect(importsOf("import {\n  cookies,\n  headers,\n} from 'next/headers';").top).toEqual(['next/headers']);

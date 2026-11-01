@@ -231,6 +231,19 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Whoever asked for approval, and whoever started the run when someone else did.' },
+  // Vendor bank numbers for ACH (migration 490): a set entered and waiting
+  // for a call-back, and a set confirmed, refused or removed. Emailed like
+  // the payment run alerts, only to anyone with "Copy me on new alerts".
+  { type: 'books_vendor_bank_waiting', label: "A vendor's bank numbers are waiting for a call-back", description: "A super admin entered new bank numbers for a vendor on the Pay vendors page. Before anything is paid to them, another super admin calls the vendor on a number BMG already had, has them read the numbers out and types what they read, and they're confirmed only when it matches. Opens the vendor's bank numbers.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, who confirm bank numbers, except the one who entered them.' },
+  { type: 'books_vendor_bank_decided', label: "A vendor's bank numbers were confirmed, refused or removed", description: "A vendor's new bank numbers were confirmed on a call-back, or refused, by hand or after three call-backs that didn't match (which can mean someone is trying to have BMG pay them instead), or confirmed ones were removed, with why. Opens the vendor's bank numbers.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, except the one who did it.' },
   // A send to NetSuite FleetSuite isn't sure about (part 45, migration 477).
   // Emailed like the Inventory Adjust alert, only to anyone with "Copy me on
   // new alerts" (Craig's standing rule, 2026-10-28).

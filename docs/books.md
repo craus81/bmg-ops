@@ -5014,8 +5014,8 @@ has $500.00 still open.
 
 ### What isn't done yet
 
-- Vendor bank numbers kept encrypted (part 59), and the First Bank ACH
-  file (part 60).
+- The First Bank ACH file (part 60), which pays to the vendor bank numbers
+  kept encrypted ("Vendor bank numbers kept encrypted").
 - Vendor credits and early-payment discounts taken in a run, and bills in a
   currency other than dollars.
 - A list of the bill payments made in FleetSuite. Books' own copies aren't
@@ -5130,6 +5130,112 @@ and 1050 is kept as spoiled.
 - A positive pay file for the bank, and voiding a check in FleetSuite.
 - Checks written outside a payment run, which still print from NetSuite's
   Print Checks.
+
+## Vendor bank numbers kept encrypted
+
+A vendor's bank numbers for ACH, kept in FleetSuite so it can make the ACH
+file NetSuite makes today (part 59, `src/lib/vendor-bank.ts`,
+`src/lib/vendor-bank-lock.ts`, `/api/pay-vendors/bank`,
+`src/components/VendorBankNumbers.tsx`, migration 490). Owner decision
+2026-10-09: FleetSuite keeps vendor bank numbers encrypted, shows them
+masked, and has a second person confirm a change on a call-back. That ends,
+for vendors paid by ACH, the 2026-06-29 rule that FleetSuite never keeps
+bank numbers (`docs/cni-redesign.md` §2.4); a vendor's tax ID is still never
+kept. Nothing pays to them yet: the First Bank ACH file (part 60) is the
+first thing that will, and it rides on paying vendors' switch.
+
+Super admins only, switched on or off: Pay Vendors → Vendor bank numbers →
+Open bank numbers (`deepLinks.vendorBank`, which an alert's link opens at
+the vendor).
+
+**Entering them.** + Bank numbers for a vendor, find the vendor in
+FleetSuite's copy of NetSuite's vendor list, and type from the vendor's ACH
+form: the routing number, the account number twice, checking or savings,
+the name on the account (22 characters at most, as the ACH file has it,
+started from the vendor's name), and where the numbers came from (whose
+form, and how it reached BMG). The routing number has to be one: 9 digits,
+starting 01 to 12, 21 to 32 or 61 to 72, with its check digit right. The
+account number is 4 to 17 digits, spaces and dashes left out. Save for a
+call-back keeps them waiting for a call-back, and every other super admin,
+and Craig, gets an alert (`books_vendor_bank_waiting`). A vendor has one
+set waiting at most; new numbers for a vendor with confirmed ones replace
+those once they're confirmed.
+
+**Confirming them on a call-back.** A super admin who didn't enter them
+calls the vendor on a number BMG already had, not one from the form or the
+email that sent it. The page shows the vendor's phone on file and, in red,
+when it was changed in FleetSuite (Vendor Details) in the last 90 days, so
+the call goes to a number from before that. Confirm on a call-back, type the
+phone called and who read the numbers out, and type the routing number,
+account number and checking or savings as the vendor reads them: they're
+never read to the vendor. When it matches what was entered, they're
+confirmed, sealed by the server, and replace the vendor's confirmed numbers
+before. When it doesn't, nothing changes and it says which didn't match;
+the third call-back that doesn't match refuses them. Confirming and a
+refusal after three tell the other super admins and Craig
+(`books_vendor_bank_decided`).
+
+**Refusing and removing.** Refuse on numbers waiting, or Remove on
+confirmed ones, with why. Nothing is paid to numbers refused, and nothing
+is paid to a vendor by ACH once theirs are removed, until new ones are
+entered and confirmed. Both tell the other super admins and Craig. Past
+ones lists the last 50 replaced, refused or removed, with why.
+
+**What's kept.** `vendor_bank_accounts` keeps, to show, the routing number,
+the four digits the account number ends with, checking or savings and the
+name on the account. The numbers themselves are kept only locked
+(`account_locked`, AES-256-GCM with a key from VENDOR_BANK_KEY, locked to
+the vendor and the set they were entered as), and what's locked is what's
+paid to. Only a set waiting or confirmed keeps its locked numbers. The page
+never gets more than the last four digits back, and no audit, alert or log
+has more than that. No note holds a run of six digits or the account
+number, so a number never sits in words. Entering, each call-back that
+didn't match, confirming, refusing and removing are audited
+(`vendor_bank_accounts`), with the vendor, routing number, last four digits
+and checking or savings.
+
+What it guards against:
+
+- **A copy of the database** has only the locked numbers, which don't open
+  without the key, and the key is only in Vercel.
+- **The database changed by hand.** Locked numbers moved to another vendor
+  or set don't open; a set made confirmed without the server's seal, or
+  shown with a routing number, last four digits or checking or savings
+  other than what's locked, shows in red, and one waiting can't be
+  confirmed.
+- **One person.** Whoever enters them never confirms them, in the page,
+  the route and the table.
+- **An email asking BMG to pay new numbers.** The call-back goes to a phone
+  BMG already had, a phone changed lately is called out, and the vendor
+  reads the numbers, not BMG.
+- **Guessing.** Three call-backs that don't match refuse them.
+
+**The key.** VENDOR_BANK_KEY is 32 random bytes as base64. Until it's set,
+none can be entered, and the card says so with Make a key, which makes one
+in the browser and sends it nowhere. Add it in Vercel → Settings →
+Environment Variables as VENDOR_BANK_KEY for Production, redeploy, and keep
+a copy in a password manager: without it the numbers can't be opened, and
+every vendor's are entered and confirmed again. Changing the key does the
+same; numbers locked with another key say so in red. System Health lists it
+with the other keys.
+
+Made-up example: Dana at Ozark Hose & Fitting emails an ACH form on October
+30. A super admin enters routing number 123456780, a checking account
+ending 9012, "OZARK HOSE & FITTING", from "ACH form emailed by Dana at
+Ozark, 10/30", and the other super admins get the alert. One of them calls
+Ozark on 636-555-0142, the number on file from before, and Dana reads out
+the routing number and the account number. They match what was entered,
+and Ozark's numbers are confirmed: the page shows Checking •••• 9012.
+
+### What isn't done yet
+
+- The First Bank ACH file (part 60), the first thing that pays to them.
+- Bringing vendors' numbers over from NetSuite's Electronic Payments: each
+  is entered from the vendor's form and confirmed on a call-back. The
+  privacy statement says the Service doesn't keep bank account and routing
+  numbers from NetSuite or QuickBooks, which holds while none are brought
+  over.
+- Nothing sends them to NetSuite, and NetSuite's own copy isn't changed.
 
 ## Switches
 

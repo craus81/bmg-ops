@@ -29,6 +29,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import TopSaveBar, { LEAVE_WITHOUT_SAVING } from '@/components/TopSaveBar';
 import { CheckStockPanel, RunChecks } from '@/components/PayVendorChecks';
+import { VendorBankPanel } from '@/components/VendorBankNumbers';
 import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
@@ -211,6 +212,8 @@ export default function PayVendorsPage() {
   const [problems, setProblems] = useState<string[]>([]);
   const [done, setDone] = useState<{ text: string; warnings?: string[] } | null>(null);
   const [lining, setLining] = useState(false);
+  // Vendor bank numbers, opened by an alert's link (?bank=<vendor>).
+  const [banking, setBanking] = useState(() => searchParams.has('bank'));
 
   const allowed = !authLoading && hasFeature('vendor_payments') && canSeeMoney;
 
@@ -967,6 +970,20 @@ export default function PayVendorsPage() {
             </div>
             {lining && <CheckStockPanel key={data.company} company={data.company} />}
           </div>
+          {superAdmin && (
+            <div style={{ ...card, display: 'grid', gap: '10px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={heading}>Vendor bank numbers</div>
+                  <div style={muted}>For ACH: kept locked, and confirmed on a call-back by a super admin who didn&apos;t enter them.</div>
+                </div>
+                <button type="button" onClick={() => setBanking((v) => !v)} aria-expanded={banking} style={small}>
+                  {banking ? 'Done with bank numbers' : 'Open bank numbers'}
+                </button>
+              </div>
+              {banking && <VendorBankPanel focus={searchParams.get('bank')} />}
+            </div>
+          )}
         </>
       )}
     </div>
