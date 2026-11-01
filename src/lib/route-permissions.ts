@@ -101,6 +101,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/own-bills/route.ts': books(['read']),
   'src/app/api/admin/books/own-fulfillments/route.ts': books(['read']),
   'src/app/api/admin/books/own-invoices/route.ts': books(['read']),
+  'src/app/api/admin/books/own-numbers/route.ts': books(['read', 'owner']),
   'src/app/api/admin/books/own-receipts/route.ts': books(['read']),
   'src/app/api/admin/books/rent-and-mortgage/route.ts': books(['read', 'keep'], "profileHasFeature(auth.user.id, auth.profile, 'vendor_payments')", "switchIsOn(service, 'journal_entries')"),
   'src/app/api/admin/books/reports/route.ts': books(['read']),

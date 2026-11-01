@@ -10,6 +10,7 @@ import OAuth from 'oauth-1.0a';
 import CryptoJS from 'crypto-js';
 import { safeStringLiteral } from './sql-safe';
 import { netsuiteFetch } from './netsuite-sends';
+import { ownNumberFor } from './books/own-numbers';
 import type { ItemRecordType } from './item-accounts';
 
 interface NetSuiteConfig {
@@ -2026,6 +2027,11 @@ export async function createSalesOrder(payload: {
     };
   }
 
+  // FleetSuite's own number once it's switched on (src/lib/books/own-numbers.ts); NetSuite numbers it otherwise.
+  const own = await ownNumberFor('sales_order');
+  if (!own.ok) return { success: false, error: own.error };
+  if (own.number) body.tranId = own.number;
+
   try {
     const response = await netsuiteFetch(url, {
       method: 'POST',
@@ -2040,6 +2046,7 @@ export async function createSalesOrder(payload: {
     if (!response.ok) {
       const text = await response.text();
       console.error('NetSuite create SO error:', text);
+      await own.failed(response.status, text);
       return { success: false, error: `NetSuite error (${response.status}): ${text}` };
     }
 
@@ -2072,6 +2079,7 @@ export async function createSalesOrder(payload: {
         // Non-critical
       }
     }
+    await own.made(soId, soNumber);
 
     return {
       success: true,
@@ -2079,6 +2087,7 @@ export async function createSalesOrder(payload: {
       salesOrderNumber: soNumber,
     };
   } catch (e: any) {
+    await own.lost(e);
     return { success: false, error: `Failed to create sales order: ${e.message}` };
   }
 }
@@ -2130,6 +2139,9 @@ export async function createPurchaseOrder(payload: {
     ...(payload.tranDate ? { tranDate: payload.tranDate } : {}),
     ...(payload.memo ? { memo: payload.memo } : {}),
   };
+  const own = await ownNumberFor('purchase_order');
+  if (!own.ok) return { success: false, error: own.error };
+  if (own.number) body.tranId = own.number;
 
   try {
     const response = await netsuiteFetch(url, {
@@ -2145,6 +2157,7 @@ export async function createPurchaseOrder(payload: {
     if (!response.ok) {
       const text = await response.text();
       console.error('NetSuite create PO error:', text, '\nrequest body:', JSON.stringify(body));
+      await own.failed(response.status, text);
       return { success: false, error: `NetSuite error (${response.status}): ${text}` };
     }
 
@@ -2170,8 +2183,10 @@ export async function createPurchaseOrder(payload: {
         // Non-critical — the internal id is enough
       }
     }
+    await own.made(poId, poNumber);
     return { success: true, purchaseOrderId: poId, purchaseOrderNumber: poNumber };
   } catch (e: any) {
+    await own.lost(e);
     return { success: false, error: `Failed to create purchase order: ${e.message}` };
   }
 }
@@ -2742,6 +2757,9 @@ export async function createDirectInvoice(payload: {
     ...(payload.otherrefnum ? { otherrefnum: payload.otherrefnum } : {}),
     ...(payload.vin ? { custbody_vin_number_: payload.vin } : {}),
   };
+  const own = await ownNumberFor('invoice');
+  if (!own.ok) return { success: false, error: own.error };
+  if (own.number) body.tranId = own.number;
 
   try {
     const response = await netsuiteFetch(url, {
@@ -2757,6 +2775,7 @@ export async function createDirectInvoice(payload: {
     if (!response.ok) {
       const text = await response.text();
       console.error('NetSuite create direct invoice error:', text);
+      await own.failed(response.status, text);
       // "Invalid Field Value <id> for the following field: item" almost always
       // means the item isn't shared with the invoice's subsidiary. Lead with
       // the rejected part so it isn't lost in the raw NetSuite error.
@@ -2788,6 +2807,7 @@ export async function createDirectInvoice(payload: {
         // Non-critical
       }
     }
+    await own.made(invoiceId, invoiceNumber);
 
     const billed: BilledInvoiceLine[] = payload.lineItems.map((li, i) => ({
       itemId: String(li.itemId),
@@ -2798,6 +2818,7 @@ export async function createDirectInvoice(payload: {
     }));
     return { success: true, invoiceId, invoiceNumber, billed, locationId: locationId ? String(locationId) : null };
   } catch (e: any) {
+    await own.lost(e);
     return { success: false, error: `Failed to create invoice: ${e.message}` };
   }
 }
@@ -3853,6 +3874,9 @@ export async function createInvoiceFromSO(payload: {
   if (lineOverrides && lineOverrides.length > 0) {
     body.item = { items: lineOverrides };
   }
+  const own = await ownNumberFor('invoice');
+  if (!own.ok) return { success: false, error: own.error };
+  if (own.number) body.tranId = own.number;
 
   try {
     const response = await netsuiteFetch(transformUrl, {
@@ -3868,6 +3892,7 @@ export async function createInvoiceFromSO(payload: {
     if (!response.ok) {
       const text = await response.text();
       console.error('NetSuite create invoice error:', text);
+      await own.failed(response.status, text);
       return { success: false, error: `NetSuite error (${response.status}): ${text}` };
     }
 
@@ -3896,6 +3921,7 @@ export async function createInvoiceFromSO(payload: {
         // Non-critical
       }
     }
+    await own.made(invoiceId, invoiceNumber);
 
     return {
       success: true,
@@ -3904,6 +3930,7 @@ export async function createInvoiceFromSO(payload: {
       ...(lineOverrides && lineOverrides.length > 0 ? { billed } : {}),
     };
   } catch (e: any) {
+    await own.lost(e);
     return { success: false, error: `Failed to create invoice: ${e.message}` };
   }
 }
@@ -4079,7 +4106,10 @@ export async function createCreditMemoFromInvoice(payload: {
   const { oauth, token } = createOAuth(config);
   const authHeader = getAuthHeader(oauth, token, { url: transformUrl, method: 'POST' });
 
-  const body = { memo: payload.memo, item: { items: payload.lines } };
+  const body: Record<string, unknown> = { memo: payload.memo, item: { items: payload.lines } };
+  const own = await ownNumberFor('credit_memo');
+  if (!own.ok) return { success: false, error: own.error };
+  if (own.number) body.tranId = own.number;
   try {
     const response = await netsuiteFetch(transformUrl, {
       method: 'POST',
@@ -4094,6 +4124,7 @@ export async function createCreditMemoFromInvoice(payload: {
     if (!response.ok) {
       const text = await response.text();
       console.error('NetSuite create credit memo error:', text, '\nrequest body:', JSON.stringify(body));
+      await own.failed(response.status, text);
       let detail = text.slice(0, 600);
       try {
         const parsed = JSON.parse(text);
@@ -4123,9 +4154,11 @@ export async function createCreditMemoFromInvoice(payload: {
         // Non-critical
       }
     }
+    await own.made(creditMemoId, creditMemoNumber);
 
     return { success: true, creditMemoId, creditMemoNumber };
   } catch (e: any) {
+    await own.lost(e);
     return { success: false, error: `Failed to create the credit memo: ${e.message}` };
   }
 }

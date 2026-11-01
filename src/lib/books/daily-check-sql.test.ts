@@ -8,9 +8,10 @@
 // Inventory Adjusts the way Own adjustments does, through migration 457's, and
 // at the likely mistakes the night's look kept, through migration 431's, and at
 // what NetSuite has instead of FleetSuite's record of a customer or vendor,
-// through migration 480's. This runs the same migrations as
-// differences-sql.test.ts, with 401, 406, 407, 416, 431, 435, 454, 457, 477
-// and 480, in an in-memory Postgres (PGlite) as the app's
+// through migration 480's, and at the numbers NetSuite didn't keep and the
+// sales orders and POs made in NetSuite instead, through migration 497's. This
+// runs the same migrations as differences-sql.test.ts, with 401, 406, 407,
+// 416, 431, 435, 454, 457, 477, 480 and 497, in an in-memory Postgres (PGlite) as the app's
 // server login, copies a made-up handful of NetSuite documents for BMG and
 // 1084, posts FleetSuite's entries for some of them, copies a few stock moves
 // and NetSuite's counts, saves an own invoice, an own fulfillment, a few
@@ -51,15 +52,20 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migrations 314, 416, 435 and 454 point at in the app's own schema.
+    -- What migrations 314, 416, 435, 454 and 497 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY, full_name TEXT);
     CREATE TABLE public.netsuite_parts (id UUID PRIMARY KEY);
     CREATE FUNCTION public.is_admin() RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT false $$;
     CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT);
     CREATE TABLE public.netsuite_sales_orders (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(), netsuite_id TEXT NOT NULL UNIQUE, tranid TEXT,
-      customer_netsuite_id TEXT, customer_name TEXT
+      customer_netsuite_id TEXT, customer_name TEXT, trandate DATE, created_by_name TEXT
     );
+    CREATE TABLE public.netsuite_vendor_pos (
+      netsuite_id TEXT NOT NULL UNIQUE, tranid TEXT, vendor_name TEXT, trandate DATE, created_by_name TEXT
+    );
+    CREATE TABLE public.drop_ship_orders (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), purchase_order_id TEXT);
+    CREATE TABLE public.gl_own_credit_memos (netsuite_id TEXT PRIMARY KEY, netsuite_number TEXT);
     CREATE TABLE public.vendor_invoices (id UUID PRIMARY KEY);
     CREATE TABLE public.payouts (id UUID PRIMARY KEY);
     CREATE TABLE public.po_receipts (id UUID PRIMARY KEY, ns_status TEXT);
@@ -80,7 +86,7 @@ async function freshDb(): Promise<PGlite> {
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
     '402-books-stock-values.sql', '406-books-party-balances.sql', '407-books-own-invoices.sql', '416-books-own-fulfillments.sql',
     '431-books-mistake-checks.sql', '435-books-own-bills.sql', '454-inventory-adjustments.sql', '457-books-own-adjustments.sql',
-    '477-netsuite-sends.sql', '480-fleetsuite-record-wins.sql',
+    '477-netsuite-sends.sql', '480-fleetsuite-record-wins.sql', '497-books-own-numbers.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -155,7 +161,7 @@ describe('the daily books check', () => {
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
   /**
    * What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes,
-   * sends to NetSuite and changes in NetSuite, apart.
+   * sends to NetSuite, changes in NetSuite and FleetSuite's own numbers, apart.
    */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
@@ -167,6 +173,7 @@ describe('the daily books check', () => {
   let toldMistakes: CheckAlert[] = [];
   let toldSends: CheckAlert[] = [];
   let toldChanges: CheckAlert[] = [];
+  let toldNumbers: CheckAlert[] = [];
 
   /** A read of one of the books' tables, or a change to one, built the way supabase-js builds it, run against the database. */
   const read = (table: string) => {
@@ -239,7 +246,8 @@ describe('the daily books check', () => {
       try {
         const r = await pg.query<{ r: unknown }>(
           `SELECT ${fn}(${names.map((n, i) => `${n} => $${i + 1}`).join(', ')}) AS r`,
-          names.map((n) => (args[n] !== null && typeof args[n] === 'object' ? JSON.stringify(args[n]) : args[n])),
+          // An array as a Postgres array, any other object as JSON.
+          names.map((n) => (Array.isArray(args[n]) || args[n] === null || typeof args[n] !== 'object' ? args[n] : JSON.stringify(args[n]))),
         );
         return { data: r.rows[0].r, error: null };
       } catch (e: any) {
@@ -259,10 +267,11 @@ describe('the daily books check', () => {
     toldMistakes = [];
     toldSends = [];
     toldChanges = [];
+    toldNumbers = [];
     const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
       : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
         : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : alert.about === 'send' ? toldSends
-          : alert.about === 'change' ? toldChanges : told);
+          : alert.about === 'change' ? toldChanges : alert.about === 'number' ? toldNumbers : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
@@ -1191,6 +1200,103 @@ describe('the daily books check', () => {
     } finally {
       await pg.exec(`UPDATE books_switches SET is_on = false WHERE piece = 'fleetsuite_records'`);
       await pg.exec('DELETE FROM record_differences WHERE true');
+    }
+  });
+
+  it("tells once about each number NetSuite didn't keep and each sales order or PO made in NetSuite while FleetSuite's own numbers is on", async () => {
+    // Numbers FleetSuite took (migration 497): NetSuite made INV10001 but kept its own INV2702, and made SO10001 as FleetSuite's.
+    const take = async (type: string) => (await pg.query<{ reserved_id: string; reserved_number: string }>(
+      'SELECT * FROM own_number_reserve($1, NULL)', [type])).rows[0];
+    const settle = (id: string, netsuiteId: string, number: string) => pg.query(
+      "SELECT own_number_settle($1, 'made', $2, $3, NULL)", [id, netsuiteId, number]);
+    const invoiceNumber = await take('invoice');
+    const orderNumber = await take('sales_order');
+    expect([invoiceNumber.reserved_number, orderNumber.reserved_number]).toEqual(['INV10001', 'SO10001']);
+    await settle(invoiceNumber.reserved_id, '8301', 'INV2702');
+    await settle(orderNumber.reserved_id, '8103', 'SO10001');
+    // Made-up copies of NetSuite's sales orders and POs (migrations 196, 161 and 348): the sales order FleetSuite made,
+    // and a drop ship PO NetSuite made for FleetSuite's sales order (migration 429).
+    await pg.exec(`
+      INSERT INTO netsuite_sales_orders (netsuite_id, tranid, customer_name, trandate, created_by_name) VALUES
+        ('8101', 'SO4410', 'Acme Fleet', '2026-01-08', 'Pat Example'),
+        ('8102', 'SO4409', 'Acme Fleet', '2026-01-02', 'Pat Example'),
+        ('8103', 'SO10001', 'Acme Fleet', '2026-01-08', NULL);
+      INSERT INTO netsuite_vendor_pos (netsuite_id, tranid, vendor_name, trandate) VALUES
+        ('8201', 'PO2301', 'Ranger Design', '2026-01-07'),
+        ('8202', 'PO2302', 'Ranger Design', '2026-01-09');
+      INSERT INTO drop_ship_orders (purchase_order_id) VALUES ('8202');
+    `);
+    const toldOutside = async () => (await pg.query<{ netsuite_id: string }>('SELECT netsuite_id FROM own_number_outside_told ORDER BY netsuite_id'))
+      .rows.map((r) => r.netsuite_id);
+
+    // While it's off, nothing is told.
+    await look('first');
+    expect(toldNumbers).toEqual([]);
+    expect((await pg.query('SELECT 1 FROM own_numbers WHERE told_at IS NOT NULL')).rows).toEqual([]);
+    expect(await toldOutside()).toEqual([]);
+
+    // Switched on January 5: what was made in NetSuite from then on, not the sales order FleetSuite made nor the drop ship PO.
+    await pg.exec(`UPDATE books_switches SET is_on = true, changed_at = '2026-01-05T15:00:00Z' WHERE piece = 'own_numbers'`);
+    try {
+      expect(await look('first')).toMatchObject({ told: 3 });
+      expect(toldNumbers).toEqual([
+        {
+          title: 'NetSuite kept its own number for an invoice',
+          body: 'FleetSuite numbered it INV10001, and NetSuite made it INV2702. Tick Allow Override for Invoice in NetSuite '
+            + "(Setup → Company → Auto-Generated Numbers) so it keeps FleetSuite's numbers.",
+          url: '/admin/books/own-numbers?show=invoice',
+          about: 'number',
+        },
+        {
+          title: 'PO2301 was made in NetSuite, not FleetSuite',
+          body: 'A PO for Ranger Design, dated Jan 7. Sales orders and POs start in FleetSuite now, so it has no FleetSuite number.',
+          url: '/admin/books/own-numbers?show=outside',
+          about: 'number',
+        },
+        {
+          title: 'SO4410 was made in NetSuite, not FleetSuite',
+          body: 'A sales order for Acme Fleet, dated Jan 8, made by Pat Example. Sales orders and POs start in FleetSuite now, so it has no FleetSuite number.',
+          url: '/admin/books/own-numbers?show=outside',
+          about: 'number',
+        },
+      ]);
+      const marked = await pg.query<{ number: string }>('SELECT number FROM own_numbers WHERE told_at IS NOT NULL');
+      expect(marked.rows.map((r) => r.number)).toEqual(['INV10001']);
+      expect(await toldOutside()).toEqual(['8101', '8201']);
+
+      // Told once: the next look says nothing of them.
+      await look('second');
+      expect(toldNumbers).toEqual([]);
+
+      // One it can't mark is told again next time; one it can't read is said, and the rest of the check goes on.
+      await pg.exec(`INSERT INTO netsuite_sales_orders (netsuite_id, tranid, customer_name, trandate) VALUES ('8104', 'SO4411', 'Acme Fleet', '2026-01-10')`);
+      failing = (name) => name === 'own_numbers_mark_told';
+      try {
+        const result = await look('first');
+        expect(toldNumbers.map((a) => a.title)).toEqual(['SO4411 was made in NetSuite, not FleetSuite']);
+        expect(result.error).toContain("Own numbers: couldn't mark the numbers told about (own_numbers_mark_told failed)");
+        failing = (name) => name === 'own_numbers_to_tell';
+        const unread = await look('first');
+        expect(unread.error).toContain("Own numbers: couldn't read the numbers to tell about (own_numbers_to_tell failed)");
+        expect(unread.heartbeat).toBeDefined();
+        expect(toldNumbers).toEqual([]);
+      } finally {
+        failing = null;
+      }
+      await look('first');
+      expect(toldNumbers.map((a) => a.title)).toEqual(['SO4411 was made in NetSuite, not FleetSuite']);
+      expect(await toldOutside()).toEqual(['8101', '8104', '8201']);
+      await look('second');
+      expect(toldNumbers).toEqual([]);
+    } finally {
+      await pg.exec(`UPDATE books_switches SET is_on = false WHERE piece = 'own_numbers'`);
+      await pg.exec(`
+        DELETE FROM own_numbers WHERE true;
+        DELETE FROM own_number_outside_told WHERE true;
+        DELETE FROM drop_ship_orders WHERE true;
+        DELETE FROM netsuite_vendor_pos WHERE true;
+        DELETE FROM netsuite_sales_orders WHERE netsuite_id LIKE '81%';
+      `);
     }
   });
 

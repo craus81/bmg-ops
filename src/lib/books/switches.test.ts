@@ -37,7 +37,7 @@ describe('switches', () => {
     expect(SWITCH_PIECES).toEqual([
       'credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes', 'bill_fixes',
       'customer_vendor_details', 'item_accounts', 'estimates_in_fleetsuite', 'fleetsuite_records', 'customer_payments',
-      'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals',
+      'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers',
     ]);
     expect(SWITCHES.credit_memos.where).toBe('Invoicing → Invoiced → Credit on an invoice');
     expect(SWITCHES.vendor_credits.where).toBe('More → Purchasing → Vendor Credits');
@@ -106,12 +106,20 @@ describe('switches', () => {
       turnOff: "Switch off Approving adjustments? Adjustments go to NetSuite at once again, as before. Ones already waiting can still be approved or turned down.",
       later: 'Stays off on January 1: the plan adds approving adjustments during 2027, from April.',
     });
-    // Only receiving payments, taking deposits, bank deposits, paying vendors and approving adjustments wait past January 1.
+    expect(SWITCHES.own_numbers).toEqual({
+      name: "FleetSuite's own numbers",
+      what: "Each sales order, PO, invoice and credit memo FleetSuite makes in NetSuite gets FleetSuite's next number of its kind, from Books → Own numbers, and NetSuite keeps it as the document's number. Until it's on, NetSuite numbers them as it does today.",
+      where: 'Every sales order, PO, invoice and credit memo FleetSuite makes, and Books → Own numbers',
+      turnOn: "Switch on FleetSuite's own numbers? First tick Allow Override for Sales Order, Purchase Order, Invoice and Credit Memo in NetSuite (Setup → Company → Auto-Generated Numbers), or NetSuite keeps its own numbers. From now on each one FleetSuite makes gets FleetSuite's next number.",
+      turnOff: "Switch off FleetSuite's own numbers? NetSuite numbers what FleetSuite makes again, as before. The numbers FleetSuite already gave stay on their documents.",
+      later: "Stays off on January 1: FleetSuite's own numbers start in the second quarter of 2027.",
+    });
+    // Only receiving payments, taking deposits, bank deposits, paying vendors, approving adjustments and own numbers wait past January 1.
     expect(SWITCH_PIECES.filter((p) => SWITCHES[p].later !== undefined))
-      .toEqual(['customer_payments', 'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals']);
-    // Only the pieces that are the other way round ask in their own words.
+      .toEqual(['customer_payments', 'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers']);
+    // Only the pieces that are the other way round, or need a step in NetSuite first, ask in their own words.
     expect(SWITCH_PIECES.filter((p) => SWITCHES[p].turnOn !== undefined || SWITCHES[p].turnOff !== undefined))
-      .toEqual(['estimates_in_fleetsuite', 'fleetsuite_records', 'adjustment_approvals']);
+      .toEqual(['estimates_in_fleetsuite', 'fleetsuite_records', 'adjustment_approvals', 'own_numbers']);
     expect(isSwitchPiece('credit_memos')).toBe(true);
     expect(isSwitchPiece('vendor_credits')).toBe(true);
     expect(isSwitchPiece('card_charges')).toBe(true);
@@ -128,6 +136,7 @@ describe('switches', () => {
     expect(isSwitchPiece('bank_deposits')).toBe(true);
     expect(isSwitchPiece('vendor_payments')).toBe(true);
     expect(isSwitchPiece('adjustment_approvals')).toBe(true);
+    expect(isSwitchPiece('own_numbers')).toBe(true);
     expect(isSwitchPiece('payroll')).toBe(false);
     expect(isSwitchPiece('toString')).toBe(false);
     expect(isSwitchPiece(null)).toBe(false);
@@ -151,6 +160,7 @@ describe('switches', () => {
       { piece: 'bank_deposits', on: false, changedBy: null, changedAt: null },
       { piece: 'vendor_payments', on: false, changedBy: null, changedAt: null },
       { piece: 'adjustment_approvals', on: false, changedBy: null, changedAt: null },
+      { piece: 'own_numbers', on: false, changedBy: null, changedAt: null },
     ]);
     expect(await readSwitches(fakeService().service)).toEqual([
       { piece: 'credit_memos', on: false, changedBy: null, changedAt: null },
@@ -169,6 +179,7 @@ describe('switches', () => {
       { piece: 'bank_deposits', on: false, changedBy: null, changedAt: null },
       { piece: 'vendor_payments', on: false, changedBy: null, changedAt: null },
       { piece: 'adjustment_approvals', on: false, changedBy: null, changedAt: null },
+      { piece: 'own_numbers', on: false, changedBy: null, changedAt: null },
     ]);
     await expect(readSwitches(fakeService({ error: 'denied' }).service)).rejects.toThrow('denied');
   });

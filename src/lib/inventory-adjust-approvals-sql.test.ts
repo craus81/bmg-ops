@@ -83,11 +83,12 @@ describe('migration 494', () => {
   it('starts approving adjustments switched off, a sixteenth piece', async () => {
     expect((await pg.query(`SELECT piece, is_on, changed_by FROM books_switches WHERE piece = 'adjustment_approvals'`)).rows)
       .toEqual([{ piece: 'adjustment_approvals', is_on: false, changed_by: null }]);
-    // Every piece the app names is one the column takes, and nothing else is.
-    expect(SWITCH_PIECES).toHaveLength(16);
+    // Every piece the app named then is one the column takes, and nothing else is (497 adds FleetSuite's own numbers).
+    const then = SWITCH_PIECES.filter((piece) => piece !== 'own_numbers');
+    expect(then).toHaveLength(16);
     await pg.exec('BEGIN');
     try {
-      for (const piece of SWITCH_PIECES) await pg.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);
+      for (const piece of then) await pg.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);
       expect((await pg.query('SELECT count(*)::int AS n FROM books_switches')).rows[0]).toEqual({ n: 16 });
     } finally {
       await pg.exec('ROLLBACK');

@@ -338,3 +338,12 @@ describe('Books sales tax links', () => {
     expect(deepLinks.booksSalesTax('2026-09')).toBe('/admin/books/sales-tax?month=2026-09');
   });
 });
+
+describe('Books own numbers links', () => {
+  it('opens every number, one kind, or what was made in NetSuite instead', () => {
+    expect(deepLinks.booksOwnNumbers()).toBe('/admin/books/own-numbers');
+    expect(deepLinks.booksOwnNumbers(null)).toBe('/admin/books/own-numbers');
+    expect(deepLinks.booksOwnNumbers('invoice')).toBe('/admin/books/own-numbers?show=invoice');
+    expect(deepLinks.booksOwnNumbers('outside')).toBe('/admin/books/own-numbers?show=outside');
+  });
+});

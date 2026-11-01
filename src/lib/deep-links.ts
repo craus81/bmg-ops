@@ -664,6 +664,14 @@ export const deepLinks = {
    *  it's left out. Open to whoever opens the books. */
   booksSalesTax: (month?: string | null) =>
     `/admin/books/sales-tax${month ? `?${new URLSearchParams({ month: month.slice(0, 7) })}` : ''}`,
+  /** Books → Own numbers: the numbers FleetSuite gives each sales order, PO,
+   *  invoice and credit memo it makes in NetSuite once FleetSuite's own
+   *  numbers is on (src/lib/books/own-numbers.ts), the numbers of one kind
+   *  ('sales_order', 'purchase_order', 'invoice', 'credit_memo') when it's
+   *  given, or with 'outside' the sales orders and POs made in NetSuite
+   *  instead. The landing for the daily books check's notifications about
+   *  them. Open to whoever opens the books. */
+  booksOwnNumbers: (show?: string | null) => `/admin/books/own-numbers${show ? `?${new URLSearchParams({ show })}` : ''}`,
   /** Bytes of one imported ledger document (QuickBooks/NetSuite PDF or
    *  attachment, migration 314). Same-origin and role-gated
    *  (finance/executive) — `allowedPdfSrc` therefore accepts it, so feed it
