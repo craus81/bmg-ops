@@ -71,6 +71,8 @@ interface Props {
     invoiceNumber?: string;
     invoiceAmount?: number;
     lines: PackingListLine[];
+    /** The customer is billed tax-exempt on a certificate that had expired. */
+    taxWarning?: string;
   }) => void;
 }
 
@@ -337,6 +339,7 @@ export default function GraphicsInvoiceReviewModal({ job, onClose, onComplete }:
         invoiceNumber: data.invoiceNumber,
         invoiceAmount: data.invoiceAmount,
         lines: packingLines(),
+        taxWarning: data.taxWarning,
       });
     } catch (e: any) {
       setError(e?.message || 'Network error');

@@ -64,10 +64,11 @@ const FACTS: OwnInvoiceFacts = {
     ['56', { number: 'LABOR', type: 'Service', taxableOverride: null }],
     ['58', { number: 'DISCOUNT', type: 'Discount', taxableOverride: null }],
   ]),
-  customer: { id: ACME, taxExempt: false },
+  customer: { id: ACME, taxExempt: false, name: null, certExpires: null },
   customerListed: true,
   terms: { id: '4', name: 'Net 30', days: 30 },
   rate: 0.08488,
+  rates: [],
   locations: new Map([['1', "O'Fallon"], ['2', 'Wentzville']]),
 };
 

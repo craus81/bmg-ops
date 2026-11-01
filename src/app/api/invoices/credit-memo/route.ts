@@ -6,7 +6,7 @@ import { createCreditMemoFromInvoice, getInvoiceCreditMemos, getInvoiceRecord } 
 import { configuredCreditItem } from '@/lib/credit-item';
 import { SWITCH_ON_DATE_TEXT, switchIsOn } from '@/lib/books/switches';
 import { saveOwnCreditMemo } from '@/lib/books/own-credit-memos';
-import { parseRate } from '@/lib/books/own-invoice-check';
+import { parseRate } from '@/lib/books/sales-tax-rates';
 import { logAudit } from '@/lib/audit';
 import {
   MAX_ADDED_AMOUNTS, MAX_CREDIT_LINES, earlierCredits, formatCents, keptCreditLines, netsuiteCreditLines, parseInvoiceRecord,

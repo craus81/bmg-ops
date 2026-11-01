@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
+import { rateOn, readRates, type SalesTaxRateRow } from './sales-tax-rates';
 import {
-  dueDate, holdReturn, rateOn, readRates, readReturn, salesTaxWorksheet,
-  type SalesTaxDocumentData, type SalesTaxMonthData, type SalesTaxRateRow, type SalesTaxReturnRow,
+  dueDate, holdReturn, readReturn, salesTaxWorksheet,
+  type SalesTaxDocumentData, type SalesTaxMonthData, type SalesTaxReturnRow,
 } from './sales-tax-worksheet';
 
 const AR = '120';
@@ -105,6 +106,8 @@ describe('rates', () => {
     expect(rateOn(rates, '1', '2024-12-31')).toBeNull();
     expect(rateOn(rates, '5', '2025-04-01')).toBeNull();
     expect(rateOn(rates, null, '2025-04-01')).toBeNull();
+    // Whatever order they come in.
+    expect(rateOn([...rates].reverse(), '1', '2026-12-31')?.pct).toBe('8.738%');
   });
 });
 

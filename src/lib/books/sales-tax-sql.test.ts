@@ -11,7 +11,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { holdReturn, readRates, readReturn, salesTaxWorksheet, type SalesTaxRateRow, type SalesTaxReturnRow } from './sales-tax-worksheet';
+import { readRates, type SalesTaxRateRow } from './sales-tax-rates';
+import { holdReturn, readReturn, salesTaxWorksheet, type SalesTaxReturnRow } from './sales-tax-worksheet';
 
 const AR = '120';
 const BANK = '100';

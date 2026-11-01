@@ -209,7 +209,7 @@ export async function POST(req: NextRequest) {
     await recomputePoFulfillment(service, [po.id]);
 
     // FleetSuite's own copy of the invoice, for the books (never fails the invoice).
-    await saveOwnInvoice(service, {
+    const books = await saveOwnInvoice(service, {
       netsuiteId: invoiceResult.invoiceId,
       netsuiteNumber: invoiceResult.invoiceNumber || null,
       madeFrom: 'po',
@@ -228,6 +228,7 @@ export async function POST(req: NextRequest) {
       invoiceNumber: invoiceResult.invoiceNumber,
       totalQty,
       lineCount: invoiceLineCount,
+      ...(books.taxWarning ? { taxWarning: books.taxWarning } : {}),
     });
   } catch (err: any) {
     console.error('Invoice open quantities error:', err);

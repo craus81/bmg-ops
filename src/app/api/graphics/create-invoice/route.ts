@@ -356,7 +356,7 @@ export async function POST(req: NextRequest) {
     });
 
     // FleetSuite's own copy of the invoice, for the books (never fails the invoice).
-    await saveOwnInvoice(supabase, {
+    const books = await saveOwnInvoice(supabase, {
       netsuiteId: result.invoiceId,
       netsuiteNumber: result.invoiceNumber || null,
       madeFrom: 'graphics',
@@ -416,6 +416,7 @@ export async function POST(req: NextRequest) {
       skippedParts: skippedParts.length > 0 ? skippedParts : undefined,
       savedPrices: savedPrices > 0 ? savedPrices : undefined,
       warning: stampWarnings.length > 0 ? stampWarnings.join('; ') : undefined,
+      ...(books.taxWarning ? { taxWarning: books.taxWarning } : {}),
     });
   } catch (err: any) {
     console.error('Graphics create-invoice error:', err);

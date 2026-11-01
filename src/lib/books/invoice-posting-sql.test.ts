@@ -949,10 +949,11 @@ describe('the posting job against the real functions', () => {
         ['11', { number: 'PART-A', type: 'InvtPart', taxableOverride: null }],
         ['13', { number: 'INSTALL LABOR', type: 'Service', taxableOverride: null }],
       ]),
-      customer: { id: CUSTOMER, taxExempt: false },
+      customer: { id: CUSTOMER, taxExempt: false, name: null, certExpires: null },
       customerListed: true,
       terms: { id: '4', name: 'Net 30', days: 30 },
       rate: 0.075,
+      rates: [],
       locations: new Map([['1', "O'Fallon"]]),
     };
     /** FleetSuite saves its own copy of an invoice it made, billing `lines` (each item once, at its price). */

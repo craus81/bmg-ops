@@ -26,10 +26,11 @@ const FACTS: OwnInvoiceFacts = {
     ['58', { number: 'DISCOUNT', type: 'Discount', taxableOverride: null }],
     ['501', { number: 'BRK-100', type: 'InvtPart', taxableOverride: null }],
   ]),
-  customer: { id: ACME, taxExempt: false },
+  customer: { id: ACME, taxExempt: false, name: null, certExpires: null },
   customerListed: true,
   terms: { id: '2', name: 'Net 30', days: 30 },
   rate: 0.08488,
+  rates: [],
   locations: new Map([['1', "O'Fallon"]]),
 };
 

@@ -648,7 +648,7 @@ function RatesCard({ data, acts }: { data: Payload; acts: Acts }) {
   return (
     <div style={card}>
       <div style={title}>Each location&apos;s rate</div>
-      <div style={about}>For the return: estimates and invoices still charge the one rate on Settings → Sales Tax, {data.settingsPct}.</div>
+      <div style={about}>For the return and FleetSuite&apos;s own invoice copies; quotes still use Settings → Sales Tax, {data.settingsPct}.</div>
       {!groups.length && <div style={line(GREY)}>No location has a rate yet.</div>}
       {groups.map(([id, rates]) => (
         <div key={id} style={{ marginTop: '8px' }}>

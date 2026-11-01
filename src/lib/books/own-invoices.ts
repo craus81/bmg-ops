@@ -1,10 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { billedCertWarning } from '@/lib/customer-tax-exempt';
 import { roundCentsHalfEven } from '@/lib/estimate-totals';
 import { KNOWN_LOCATION_IDS, pickInvoiceLocation } from '@/lib/invoice-location';
 import { isPartTaxable } from '@/lib/line-taxability';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import { isLayoutItem } from './invoice-rule';
 import type { BooksCompany } from './journal';
+import { rateOn, readRates, type SalesTaxRate, type SalesTaxRateRow } from './sales-tax-rates';
 
 /**
  * FleetSuite's own copy of each invoice it makes (migration 407; owner
@@ -20,14 +22,20 @@ import type { BooksCompany } from './journal';
  *     whole, what FleetSuite's copy of the sales order still had to bill
  *     (netsuite_sales_order_lines, copied every two hours);
  *   - each line's amount is its quantity times its price, to the cent;
- *   - sales tax is tax@1, FleetSuite's quoting rule: a line is taxed by
- *     src/lib/line-taxability.ts (Service items not, an admin's override
- *     either way, everything else taxed; a discount as the line above it),
- *     at the one rate in Settings -> Sales Tax, worked out line by line and rounded half to even the way
- *     NetSuite does (src/lib/estimate-totals.ts). A FleetSuite customer
- *     marked tax-exempt pays none, and nor does work at Social Circle,
- *     Georgia (owner, 2026-10-09: Masterack's Georgia plant work isn't
- *     taxed);
+ *   - sales tax is tax@2 (part 66), FleetSuite's quoting rule at each
+ *     location's own rate: a line is taxed by src/lib/line-taxability.ts
+ *     (Service items not, an admin's override either way, everything else
+ *     taxed; a discount as the line above it), at the rate in force at the
+ *     invoice's location on its day on Books -> Sales tax
+ *     (sales-tax-rates.ts), worked out line by line and rounded half to even
+ *     the way NetSuite does (src/lib/estimate-totals.ts). Where Books has no
+ *     rate for the location, or the location isn't known, it's the one rate
+ *     in Settings -> Sales Tax, as every copy before part 66 was (tax@1). A
+ *     FleetSuite customer marked tax-exempt pays none, and nor does work at
+ *     Social Circle, Georgia (owner, 2026-10-09: Masterack's Georgia plant
+ *     work isn't taxed). Billing such a customer after their exemption
+ *     certificate expired only warns (owner, 2026-10-22): saveOwnInvoice
+ *     says so for the billing screen to show;
  *   - the due date is the invoice's date plus the customer's terms, as
  *     NetSuite's customer list has them (src/lib/books/netsuite-lists.ts).
  *     A customer with no terms is due the day it's billed, as in NetSuite.
@@ -44,7 +52,10 @@ import type { BooksCompany } from './journal';
  * the copy is made, so a copy that can't be saved is logged and left.
  */
 
-export const OWN_TAX_RULE = 'tax@1';
+/** FleetSuite's sales tax rule since part 66: the lines and exemptions as tax@1, at the location's rate on the day. */
+export const OWN_TAX_RULE = 'tax@2';
+/** The rule before part 66, kept where Books -> Sales tax has no rate for the location: Settings -> Sales Tax's one rate. */
+export const SETTINGS_TAX_RULE = 'tax@1';
 
 /** The company FleetSuite makes its invoices for, so the one its own copies are of. */
 export const OWN_COMPANY: BooksCompany = 'BMG';
@@ -74,14 +85,19 @@ export interface BilledLine {
 export interface OwnInvoiceFacts {
   /** NetSuite item id → its NetSuite item type and an admin's tax override (netsuite_parts.taxable_override). */
   items: Map<string, { number: string | null; type: string | null; taxableOverride: boolean | null }>;
-  /** The FleetSuite customer: its id, when exactly one has the NetSuite id, and whether it's tax-exempt. */
-  customer: { id: string | null; taxExempt: boolean } | null;
+  /**
+   * The FleetSuite customer: its id, when exactly one has the NetSuite id, whether it's tax-exempt, its name and the
+   * day its exemption certificate expires (the latest of them, as Books -> Sales tax takes it).
+   */
+  customer: { id: string | null; taxExempt: boolean; name: string | null; certExpires: string | null } | null;
   /** Whether NetSuite's customer list (the lists copy) has the customer. */
   customerListed: boolean;
   /** The customer's terms there, null when it has none. */
   terms: { id: string; name: string; days: number | null } | null;
-  /** Settings → Sales Tax, a fraction. */
+  /** Settings → Sales Tax, a fraction: the rate where Books → Sales tax has none for the location. */
   rate: number;
+  /** Each location's rates from the day each starts (Books → Sales tax). */
+  rates: SalesTaxRate[];
   /** NetSuite location id → name. */
   locations: Map<string, string>;
 }
@@ -128,6 +144,8 @@ export interface OwnInvoice extends Omit<OwnInvoiceInput, 'lines'> {
   termsName: string | null;
   termsDays: number | null;
   dueDate: string | null;
+  /** OWN_TAX_RULE, or SETTINGS_TAX_RULE when the rate is Settings → Sales Tax's. */
+  taxRule: string;
   taxBasis: TaxBasis;
   /** A fraction; 0 when not taxed. */
   taxRate: number;
@@ -198,7 +216,10 @@ export function workOutOwnInvoice(input: OwnInvoiceInput, facts: OwnInvoiceFacts
   const taxBasis: TaxBasis = isGeorgia(input.locationId, facts.locations) ? 'georgia'
     : facts.customer?.taxExempt ? 'exempt_customer'
       : 'rate';
-  const taxRate = taxBasis === 'rate' ? facts.rate : 0;
+  // The location's rate on the invoice's day, from Books → Sales tax; Settings' one rate where Books has none.
+  const dated = rateOn(facts.rates, input.locationId, input.invoiceDate);
+  const taxRate = taxBasis !== 'rate' ? 0 : dated ? dated.rate : facts.rate;
+  const taxRule = taxBasis === 'rate' && !dated ? SETTINGS_TAX_RULE : OWN_TAX_RULE;
 
   const lines: OwnInvoiceLine[] = [];
   for (const billed of input.lines ?? []) {
@@ -266,6 +287,7 @@ export function workOutOwnInvoice(input: OwnInvoiceInput, facts: OwnInvoiceFacts
     termsName,
     termsDays,
     dueDate,
+    taxRule,
     taxBasis,
     taxRate,
     subtotalCents,
@@ -296,7 +318,7 @@ export function savePayload(own: OwnInvoice): Record<string, unknown> {
     terms_name: own.termsName,
     terms_days: own.termsDays,
     due_date: own.dueDate,
-    tax_rule: OWN_TAX_RULE,
+    tax_rule: own.taxRule,
     tax_basis: own.taxBasis,
     tax_rate: own.taxRate.toFixed(6),
     subtotal: signedAmount(own.subtotalCents),
@@ -337,7 +359,7 @@ export async function readOwnInvoiceFacts(
   itemIds: string[],
 ): Promise<OwnInvoiceFacts> {
   const ids = [...new Set(itemIds.filter((id) => /^\d+$/.test(id)))];
-  const [parts, listed, customers, listedCustomer, locations, rate] = await Promise.all([
+  const [parts, listed, customers, listedCustomer, locations, rates, rate] = await Promise.all([
     ids.length
       ? service.from('netsuite_parts').select('netsuite_id, item_number, item_type, taxable_override').in('netsuite_id', ids)
       : Promise.resolve({ data: [], error: null }),
@@ -345,15 +367,16 @@ export async function readOwnInvoiceFacts(
       ? service.from('gl_netsuite_lists').select('netsuite_id, name, details').eq('kind', 'item').in('netsuite_id', ids)
       : Promise.resolve({ data: [], error: null }),
     customerNetsuiteId
-      ? service.from('customers').select('id, tax_exempt').eq('netsuite_id', customerNetsuiteId)
+      ? service.from('customers').select('id, tax_exempt, company_name, tax_exempt_expires_at').eq('netsuite_id', customerNetsuiteId)
       : Promise.resolve({ data: [], error: null }),
     customerNetsuiteId
       ? service.from('gl_netsuite_lists').select('details').eq('kind', 'customer').eq('netsuite_id', customerNetsuiteId).is('gone_at', null).maybeSingle()
       : Promise.resolve({ data: null, error: null }),
     service.from('gl_netsuite_lists').select('netsuite_id, name').eq('kind', 'location'),
+    service.from('sales_tax_rates').select('location_id, starts_on, rate_pct, note'),
     getSalesTaxRate(service),
   ]);
-  for (const res of [parts, listed, customers, listedCustomer, locations]) {
+  for (const res of [parts, listed, customers, listedCustomer, locations, rates]) {
     if (res.error) throw new Error(res.error.message);
   }
 
@@ -371,9 +394,15 @@ export async function readOwnInvoiceFacts(
     });
   }
 
-  const matched = (customers.data ?? []) as Array<{ id: string; tax_exempt: boolean | null }>;
+  const matched = (customers.data ?? []) as Array<{ id: string; tax_exempt: boolean | null; company_name: string | null; tax_exempt_expires_at: string | null }>;
+  const expiries = matched.map((c) => c.tax_exempt_expires_at ?? '').filter(Boolean).sort();
   const customer = matched.length
-    ? { id: matched.length === 1 ? matched[0].id : null, taxExempt: matched.every((c) => c.tax_exempt === true) }
+    ? {
+      id: matched.length === 1 ? matched[0].id : null,
+      taxExempt: matched.every((c) => c.tax_exempt === true),
+      name: matched.map((c) => c.company_name?.trim()).find(Boolean) ?? null,
+      certExpires: expiries[expiries.length - 1] ?? null,
+    }
     : null;
 
   const details = (listedCustomer.data as { details?: Record<string, unknown> } | null)?.details ?? null;
@@ -392,6 +421,7 @@ export async function readOwnInvoiceFacts(
     customerListed: details !== null,
     terms,
     rate,
+    rates: readRates((rates.data ?? []) as SalesTaxRateRow[]),
     locations: new Map(((locations.data ?? []) as Array<{ netsuite_id: string; name: string }>).map((l) => [String(l.netsuite_id), l.name])),
   };
 }
@@ -646,6 +676,11 @@ export interface SaveResult {
   saved: boolean;
   /** Why not, in a few words. */
   reason?: string;
+  /**
+   * For the billing screen to show, whether or not the copy was saved: the customer is billed tax-exempt, but their
+   * exemption certificate had expired by the invoice's day. It only warns (owner, 2026-10-22).
+   */
+  taxWarning?: string;
 }
 
 /**
@@ -655,6 +690,7 @@ export interface SaveResult {
 export async function saveOwnInvoice(service: SupabaseClient, made: MadeInvoice, at: Date = new Date()): Promise<SaveResult> {
   const netsuiteId = made.netsuiteId ? String(made.netsuiteId).trim() : '';
   if (!/^\d+$/.test(netsuiteId)) return { saved: false, reason: "NetSuite didn't say which invoice it made" };
+  let taxWarning: string | null = null;
   try {
     const fromSalesOrder = !!made.salesOrderId && /^\d+$/.test(String(made.salesOrderId));
     const sentLines = made.billed ?? null;
@@ -689,14 +725,16 @@ export async function saveOwnInvoice(service: SupabaseClient, made: MadeInvoice,
       linesFrom: sentLines || !fromSalesOrder ? 'sent' : 'sales_order_copy',
       madeBy: made.madeBy ?? null,
     }, facts);
+    if (own.taxBasis === 'exempt_customer') taxWarning = billedCertWarning(facts.customer?.name ?? null, facts.customer?.certExpires, own.invoiceDate);
+    const warned = taxWarning ? { taxWarning } : {};
 
     const { data, error } = await service.rpc('gl_own_invoice_save', { p: savePayload(own) });
     if (error) throw new Error(error.message);
     const saved = !!(data as { saved?: boolean } | null)?.saved;
-    return saved ? { saved } : { saved, reason: 'already saved' };
+    return saved ? { saved, ...warned } : { saved, reason: 'already saved', ...warned };
   } catch (err) {
     const reason = String((err as any)?.message || err).slice(0, 300);
     console.error(`[books] own copy of NetSuite invoice ${netsuiteId} not saved: ${reason}`);
-    return { saved: false, reason };
+    return { saved: false, reason, ...(taxWarning ? { taxWarning } : {}) };
   }
 }

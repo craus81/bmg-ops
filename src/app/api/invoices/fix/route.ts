@@ -6,7 +6,7 @@ import { validateBody, z } from '@/lib/validate';
 import { getInvoiceRecord, patchInvoice } from '@/lib/netsuite';
 import { SWITCH_ON_DATE_TEXT, switchIsOn } from '@/lib/books/switches';
 import { saveFixedOwnInvoice, type FixedSaveResult } from '@/lib/books/own-invoices';
-import { parseRate } from '@/lib/books/own-invoice-check';
+import { parseRate } from '@/lib/books/sales-tax-rates';
 import { KNOWN_LOCATION_IDS } from '@/lib/invoice-location';
 import { formatCents } from '@/lib/credit-memo';
 import { logAudit } from '@/lib/audit';

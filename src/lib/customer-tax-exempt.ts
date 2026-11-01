@@ -70,6 +70,17 @@ export function certWarning(expiresAt: string | null | undefined, today: string)
   return null;
 }
 
+/**
+ * What billing an exempt customer warns once their certificate expired before the invoice's day (part 66,
+ * src/lib/books/own-invoices.ts saveOwnInvoice). They're still billed tax exempt, so it only warns; null when the
+ * certificate hadn't expired, or there's no date to go by.
+ */
+export function billedCertWarning(customer: string | null, expiresAt: string | null | undefined, invoiceDay: string): string | null {
+  if (certWarning(expiresAt, invoiceDay)?.level !== 'expired') return null;
+  return `${customer || 'This customer'}'s tax-exempt certificate expired ${shortDate(expiresAt!.slice(0, 10))}. `
+    + 'Still billed tax exempt; get a new certificate on file.';
+}
+
 export type TaxMismatch = 'netsuite_taxes' | 'netsuite_exempt' | null;
 
 /** Where FleetSuite and NetSuite disagree about taxing the customer. */

@@ -92,7 +92,7 @@ interface SentInvoice {
 }
 
 interface InvoiceVehiclesResult {
-  results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string }[];
+  results: { customer: string; po?: string | null; invoiceId?: string; invoiceNumber?: string; vehicleCount: number; status: string; error?: string; taxWarning?: string }[];
   summary: { success: number; errors: number };
 }
 
@@ -846,6 +846,7 @@ export default function InvoicingHubPage() {
                 <div key={i} style={{ fontSize: '11px', fontWeight: 600, color: r.status === 'success' ? '#22c55e' : '#ef4444', marginBottom: '2px' }}>
                   {r.customer}{r.po ? ` · PO #${r.po}` : ''} ({r.vehicleCount} VIN{r.vehicleCount !== 1 ? 's' : ''})
                   {r.status === 'success' ? ` → Invoice #${r.invoiceNumber}` : ` — ${r.error}`}
+                  {r.taxWarning && <div style={{ color: '#f59e0b' }}>{r.taxWarning}</div>}
                 </div>
               ))}
               {invoiceResult.summary.success > 0 && (() => {
@@ -1160,7 +1161,7 @@ export default function InvoicingHubPage() {
               body: JSON.stringify({ jobId: job.id }),
             }).catch(() => {});
             const emailNow = await dialog.confirm(
-              `Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in NetSuite.\n\nEmail it to the customer now?`
+              `Invoice ${result.invoiceNumber || result.invoiceId || 'created'} in NetSuite.${result.taxWarning ? `\n\n${result.taxWarning}` : ''}\n\nEmail it to the customer now?`
             );
             if (emailNow) {
               emailForJob(updated, {

@@ -22,6 +22,7 @@ import {
   type OwnInvoiceInput,
   type SavedOwnInvoice,
 } from './own-invoices';
+import { pct, readRates } from './sales-tax-rates';
 
 const ACME = 'c0000000-0000-4000-8000-00000000000a';
 const LOCATIONS = new Map([['1', "O'Fallon"], ['2', 'Wentzville'], ['3', 'Kansas City'], ['5', 'Social Circle']]);
@@ -35,13 +36,23 @@ const facts = (over: Partial<OwnInvoiceFacts> = {}): OwnInvoiceFacts => ({
     ['58', { number: 'DISCOUNT', type: 'Discount', taxableOverride: null }],
     ['60', { number: 'SUBTOTAL', type: 'Subtotal', taxableOverride: null }],
   ]),
-  customer: { id: ACME, taxExempt: false },
+  customer: { id: ACME, taxExempt: false, name: 'Sample Fleet Co', certExpires: null },
   customerListed: true,
   terms: { id: '4', name: 'Net 30', days: 30 },
   rate: 0.1,
+  rates: [],
   locations: LOCATIONS,
   ...over,
 });
+
+const EXEMPT = { id: ACME, taxExempt: true, name: 'Sample Fleet Co', certExpires: null };
+
+/** O'Fallon's rate went up on October 1, 2026; Wentzville has its own; Kansas City has none on Books. */
+const RATES = readRates([
+  { location_id: '1', starts_on: '2026-10-01', rate_pct: '8.738', note: null },
+  { location_id: '1', starts_on: '2025-01-01', rate_pct: '8.488', note: null },
+  { location_id: '2', starts_on: '2025-01-01', rate_pct: 8.45, note: null },
+]);
 
 const input = (over: Partial<OwnInvoiceInput> = {}): OwnInvoiceInput => ({
   netsuiteId: '5001',
@@ -117,12 +128,33 @@ describe('working out FleetSuite\'s own invoice', () => {
   });
 
   it('charges no tax to a customer marked tax-exempt, nor for work at Social Circle, Georgia', () => {
-    const exempt = workOutOwnInvoice(input(), facts({ customer: { id: ACME, taxExempt: true } }));
+    const exempt = workOutOwnInvoice(input(), facts({ customer: EXEMPT }));
     expect(exempt).toMatchObject({ taxBasis: 'exempt_customer', taxRate: 0, taxCents: 0, totalCents: 25100 });
     expect(exempt.lines[0]).toMatchObject({ taxable: true, taxCents: 0 });
 
-    const georgia = workOutOwnInvoice(input({ locationId: '5' }), facts({ customer: { id: ACME, taxExempt: true } }));
+    const georgia = workOutOwnInvoice(input({ locationId: '5' }), facts({ customer: EXEMPT }));
     expect(georgia).toMatchObject({ taxBasis: 'georgia', taxRate: 0, taxCents: 0 });
+  });
+
+  it("taxes at the rate in force at the invoice's location on its day, from Books → Sales tax, else at Settings' one rate", () => {
+    const at = (locationId: string | null, invoiceDate: string) => {
+      const own = workOutOwnInvoice(input({ locationId, invoiceDate, lines: [{ itemId: '55', quantity: 1, rate: 100 }] }), facts({ rates: RATES }));
+      return [own.taxRule, pct(own.taxRate), own.taxCents];
+    };
+    expect(at('1', '2026-10-01')).toEqual(['tax@2', '8.738%', 874]);
+    expect(at('1', '2026-09-30')).toEqual(['tax@2', '8.488%', 849]);
+    expect(at('2', '2026-10-20')).toEqual(['tax@2', '8.45%', 845]);
+    // Kansas City has no rate on Books, and O'Fallon none before its first: Settings' 10%, the rule before part 66.
+    expect(at('3', '2026-10-20')).toEqual(['tax@1', '10%', 1000]);
+    expect(at('1', '2024-12-31')).toEqual(['tax@1', '10%', 1000]);
+    expect(at(null, '2026-10-20')).toEqual(['tax@1', '10%', 1000]);
+  });
+
+  it('charges an exempt customer and Social Circle no tax under the dated rates too, by the same rule', () => {
+    expect(workOutOwnInvoice(input(), facts({ rates: RATES, customer: EXEMPT })))
+      .toMatchObject({ taxRule: 'tax@2', taxBasis: 'exempt_customer', taxRate: 0, taxCents: 0 });
+    expect(workOutOwnInvoice(input({ locationId: '5' }), facts({ rates: RATES })))
+      .toMatchObject({ taxRule: 'tax@2', taxBasis: 'georgia', taxRate: 0, taxCents: 0 });
   });
 
   it('works out the amount from the quantity and price, to the cent half to even, unless the amount is known', () => {
@@ -202,6 +234,7 @@ describe('the copy as the database takes it', () => {
       { line_no: 1, item_netsuite_id: '55', item_number: 'SHELF-1', description: null, quantity: 1, rate: 50, amount: '50.00', priced: true, taxable: true, tax: '5.00', sales_order_line_id: null },
       { line_no: 2, item_netsuite_id: '58', item_number: 'DISCOUNT', description: null, quantity: null, rate: null, amount: '-5.00', priced: true, taxable: true, tax: '-0.50', sales_order_line_id: null },
     ]);
+    expect(savePayload(workOutOwnInvoice(input(), facts({ rates: RATES })))).toMatchObject({ tax_rule: 'tax@2', tax_rate: '0.087380', tax: '21.93' });
   });
 
   it('spells cents the way the database reads them', () => {
@@ -305,8 +338,9 @@ const lists = (): Row[] => [
 const database = (over: Record<string, Row[] | { error: string }> = {}) => ({
   gl_netsuite_lists: lists(),
   netsuite_parts: [],
-  customers: [{ id: ACME, netsuite_id: '9001', tax_exempt: false }],
+  customers: [{ id: ACME, netsuite_id: '9001', tax_exempt: false, company_name: 'Sample Fleet Co', tax_exempt_expires_at: null }],
   quote_settings: [{ id: 1, sales_tax_rate_pct: 8.488 }],
+  sales_tax_rates: [],
   netsuite_sales_orders: [{ id: SO_ID, netsuite_id: '700', customer_netsuite_id: '9001', customer_name: 'Sample Fleet Co', otherrefnum: 'PO-77', memo: 'Upfit', vin: '1FTBW3XG0LKA00001' }],
   netsuite_sales_order_lines: [
     soLine('1', '55', 2, 0, 125.5, 251),
@@ -353,8 +387,31 @@ describe('reading what FleetSuite knows', () => {
     const two = (a: boolean | null, b: boolean | null) => fakeService(database({
       customers: [{ id: ACME, netsuite_id: '9001', tax_exempt: a }, { id: 'c-2', netsuite_id: '9001', tax_exempt: b }],
     })).service;
-    expect((await readOwnInvoiceFacts(two(true, true), '9001', [])).customer).toEqual({ id: null, taxExempt: true });
-    expect((await readOwnInvoiceFacts(two(true, null), '9001', [])).customer).toEqual({ id: null, taxExempt: false });
+    expect((await readOwnInvoiceFacts(two(true, true), '9001', [])).customer).toEqual({ id: null, taxExempt: true, name: null, certExpires: null });
+    expect((await readOwnInvoiceFacts(two(true, null), '9001', [])).customer).toEqual({ id: null, taxExempt: false, name: null, certExpires: null });
+  });
+
+  it("reads each location's dated rates, and the customer's name and its latest exemption certificate", async () => {
+    const { service } = fakeService(database({
+      customers: [
+        { id: ACME, netsuite_id: '9001', tax_exempt: true, company_name: ' ', tax_exempt_expires_at: '2026-06-30' },
+        { id: 'c-2', netsuite_id: '9001', tax_exempt: true, company_name: ' Masterack ', tax_exempt_expires_at: null },
+        { id: 'c-3', netsuite_id: '9001', tax_exempt: true, company_name: 'Masterack LLC', tax_exempt_expires_at: '2025-12-31' },
+      ],
+      sales_tax_rates: [
+        { location_id: '2', starts_on: '2025-01-01', rate_pct: '8.450', note: null },
+        { location_id: '1', starts_on: '2026-10-01', rate_pct: '8.738', note: 'Fourth quarter' },
+        { location_id: '1', starts_on: '2025-01-01', rate_pct: '8.488', note: null },
+      ],
+    }));
+    const f = await readOwnInvoiceFacts(service, '9001', []);
+    expect(f.customer).toEqual({ id: null, taxExempt: true, name: 'Masterack', certExpires: '2026-06-30' });
+    expect(f.rates.map((r) => [r.locationId, r.startsOn, r.pct, r.note])).toEqual([
+      ['1', '2025-01-01', '8.488%', null], ['1', '2026-10-01', '8.738%', 'Fourth quarter'], ['2', '2025-01-01', '8.45%', null],
+    ]);
+
+    await expect(readOwnInvoiceFacts(fakeService(database({ sales_tax_rates: { error: 'permission denied' } })).service, '9001', []))
+      .rejects.toThrow('permission denied');
   });
 
   it('doesn\'t look up items when there are none, and fails whole when a read fails', async () => {
@@ -488,6 +545,44 @@ describe('saving the copy', () => {
     expect(await saveOwnInvoice(refused.service, { netsuiteId: '5007', madeFrom: 'po', customerNetsuiteId: '9001', billed: [] }, AT))
       .toEqual({ saved: false, reason: "an own invoice's lines don't add up" });
     expect(error).toHaveBeenCalledWith("[books] own copy of NetSuite invoice 5007 not saved: an own invoice's lines don't add up");
+  });
+
+  it("bills at the location's rate on Books → Sales tax on the invoice's day", async () => {
+    const { service, rpc } = fakeService(database({ sales_tax_rates: [{ location_id: '2', starts_on: '2026-10-01', rate_pct: '8.450', note: null }] }));
+    await saveOwnInvoice(service, {
+      netsuiteId: '5011', madeFrom: 'po', customerNetsuiteId: '9001', locationId: 2, billed: [{ itemId: '55', quantity: 1, rate: 100 }],
+    }, AT);
+    expect(payloadOf(rpc)).toMatchObject({ tax_rule: 'tax@2', tax_rate: '0.084500', tax: '8.45', total: '108.45' });
+  });
+
+  it('warns when it bills a tax-exempt customer whose certificate had expired, whether the copy saved or not', async () => {
+    const exempt = (over: Row = {}) => database({
+      customers: [{ id: ACME, netsuite_id: '9001', tax_exempt: true, company_name: 'Sample Fleet Co', tax_exempt_expires_at: '2026-10-18', ...over }],
+    });
+    const made = { netsuiteId: '5012', madeFrom: 'po' as const, customerNetsuiteId: '9001', locationId: '1', billed: [{ itemId: '55', quantity: 1, rate: 100 }] };
+    const taxWarning = "Sample Fleet Co's tax-exempt certificate expired 10/18/2026. Still billed tax exempt; get a new certificate on file.";
+
+    const billed = fakeService(exempt());
+    expect(await saveOwnInvoice(billed.service, made, AT)).toEqual({ saved: true, taxWarning });
+    // Still billed tax exempt.
+    expect(payloadOf(billed.rpc)).toMatchObject({ tax_basis: 'exempt_customer', tax: '0.00' });
+    expect(await saveOwnInvoice(fakeService(exempt(), { data: { saved: false, lines: 0 } }).service, made, AT))
+      .toEqual({ saved: false, reason: 'already saved', taxWarning });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(await saveOwnInvoice(fakeService(exempt(), { error: { message: 'refused' } }).service, made, AT))
+      .toEqual({ saved: false, reason: 'refused', taxWarning });
+  });
+
+  it("doesn't warn while the certificate is good, for a customer that's taxed, or for work at Social Circle", async () => {
+    const exempt = (over: Row = {}) => fakeService(database({
+      customers: [{ id: ACME, netsuite_id: '9001', tax_exempt: true, company_name: 'Sample Fleet Co', tax_exempt_expires_at: '2026-10-18', ...over }],
+    })).service;
+    const made = { netsuiteId: '5013', madeFrom: 'po' as const, customerNetsuiteId: '9001', locationId: '1', billed: [{ itemId: '55', quantity: 1, rate: 100 }] };
+    // AT is October 19 in Central time: a certificate is good through the day it expires.
+    expect(await saveOwnInvoice(exempt({ tax_exempt_expires_at: '2026-10-19' }), made, AT)).toEqual({ saved: true });
+    expect(await saveOwnInvoice(exempt({ tax_exempt_expires_at: null }), made, AT)).toEqual({ saved: true });
+    expect(await saveOwnInvoice(exempt({ tax_exempt: false }), made, AT)).toEqual({ saved: true });
+    expect(await saveOwnInvoice(exempt(), { ...made, locationId: '5' }, AT)).toEqual({ saved: true });
   });
 
   it('says so when the invoice was already saved', async () => {

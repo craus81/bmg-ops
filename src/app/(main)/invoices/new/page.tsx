@@ -37,6 +37,8 @@ interface Done {
   poNumber: string | null;
   totalCents: number;
   warning?: string;
+  /** The customer is billed tax-exempt on a certificate that had expired. */
+  taxWarning?: string;
 }
 
 const newRequestId = () =>
@@ -162,6 +164,7 @@ export default function NewInvoicePage() {
       setDone({
         invoiceId: body.invoiceId, invoiceNumber: body.invoiceNumber, customerName: body.customerName || customer,
         customerNetsuiteId: body.customerNetsuiteId, poNumber: body.poNumber, totalCents: body.totalCents, warning: body.warning,
+        taxWarning: body.taxWarning,
       });
     } catch (e: any) {
       setError(e?.message || "NetSuite didn't make the invoice.");
@@ -220,6 +223,7 @@ export default function NewInvoicePage() {
             {done.customerName} · {formatCents(done.totalCents)}{done.poNumber ? ` · PO ${done.poNumber}` : ''}
           </div>
           {done.warning && <div style={{ fontSize: '13px', color: theme.error, fontWeight: 700 }}>{done.warning}</div>}
+          {done.taxWarning && <div style={{ fontSize: '13px', color: theme.warning, fontWeight: 700 }}>{done.taxWarning}</div>}
           {error && <div style={{ fontSize: '13px', color: theme.error, fontWeight: 700 }}>{error}</div>}
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button onClick={openPdf} disabled={opening} style={btn}>{opening ? 'Opening…' : 'Open PDF'}</button>
