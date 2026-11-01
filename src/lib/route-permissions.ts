@@ -605,6 +605,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/card-charges/route.ts': feature('vendor_payments', "switchIsOn(service, 'card_charges')"),
   // Paying vendors (migration 488): anyone with Payments who can see prices once switched on; until then super admins can make and save runs to see what they'd pay, and nothing is asked for approval or sent. A super admin who didn't ask approves.
   'src/app/api/pay-vendors/route.ts': feature('vendor_payments', "switchIsOn(service, 'vendor_payments')"),
+  // A payment run's checks printed on BMG's stock (migration 489): the same people once paying vendors is switched on; until then super admins can line up the stock and print a test page, and no check is numbered.
+  'src/app/api/pay-vendors/checks/route.ts': feature('vendor_payments', "switchIsOn(service, 'vendor_payments')"),
   // Typed journal entries (migrations 469 and 484): once switched on, anyone with Payments in the general journal and the CPA in its own adjustments; until then super admins can type and look, and nothing is asked or sent.
   'src/app/api/journal-entries/route.ts': authScoped(
     "anyone with Payments types in the general journal and the CPA and super admins in the CPA's adjustments (journalsFor, Books part 53); everyone else is refused, and every step on an entry checks its journal is one of the caller's",

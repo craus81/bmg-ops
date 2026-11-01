@@ -4975,9 +4975,9 @@ what it pays; a check is made To Be Printed).
   there, it's refused and none was made. The send is in the NetSuite feed
   too, under Bill payments ("NetSuite feed").
 
-Checks print from NetSuite's Print Checks, as they do now, until FleetSuite
-prints them on BMG's stock. The alerts also go to anyone with "Copy me on
-new alerts" ticked, never to whoever pressed; nothing is sent to a vendor.
+Its checks print on BMG's check stock from the run ("Checks printed on
+BMG's stock"). The alerts also go to anyone with "Copy me on new alerts"
+ticked, never to whoever pressed; nothing is sent to a vendor.
 
 Books keeps its own copy of each bill payment as it was sent
 (`gl_own_bill_payments`, saved only by `gl_own_bill_payment_save`,
@@ -5014,12 +5014,122 @@ has $500.00 still open.
 
 ### What isn't done yet
 
-- Checks printed on BMG's check stock (part 58), vendor bank numbers kept
-  encrypted (part 59), and the First Bank ACH file (part 60).
+- Vendor bank numbers kept encrypted (part 59), and the First Bank ACH
+  file (part 60).
 - Vendor credits and early-payment discounts taken in a run, and bills in a
   currency other than dollars.
 - A list of the bill payments made in FleetSuite. Books' own copies aren't
   checked against NetSuite's bill payments or posted yet.
+
+## Checks printed on BMG's stock
+
+A payment run's checks print on BMG's pre-printed check stock from the run
+itself, instead of NetSuite's Print Checks (part 58,
+`src/lib/check-printing.ts`, `src/lib/check-pdf.ts`,
+`src/components/PayVendorChecks.tsx`, `/api/pay-vendors/checks`, migration
+489). It rides on paying vendors' switch (`vendor_payments`): until that's
+on, super admins can line up the stock and print a test page, and no check
+is numbered or sent to NetSuite. Once it's on, whoever can pay vendors can.
+
+**What's printed.** One check a letter-size sheet: the check in one part of
+the sheet and a stub in each of the other two, the vendor's and BMG's. The
+stock carries the bank's details, the MICR line, the check number and the
+signature line already, so FleetSuite prints only the date, the payee, the
+amount in figures (stars before it) and in words (stars after it, to the
+end of the line), the vendor's address for a window envelope, and the memo.
+Each stub has the vendor, the check number, the day and memo, the bank
+account, each bill it pays with its date and what's paid on it (twelve
+lines at most, the rest as one line), and the total. The payee is NetSuite's
+Print on Check As for the vendor, or its name when that's blank. Checks are
+signed by hand.
+
+**Lining up the stock.** Pay Vendors → Check stock → Line up the check
+stock, or Line up the stock on a run's Checks, sets a bank account's checks
+(`vendor_check_layouts`): where the check is on the sheet (top, middle or
+bottom), and the print moved right or left and down or up, a sixteenth of
+an inch a press, an inch at most. Print a test page prints a made-up check
+the way it's set, saved or not, marked TEST · NOT A CHECK · VOID, with the
+stock's perforations drawn. Print it on plain paper at actual size, hold it
+against a sheet of the stock up to the light, and move the print until each
+line sits where it should, then Save. A bank account never set prints at the
+top, not moved. Each save is audited.
+
+**Numbering.** An approved run's Checks lists each vendor it pays by check:
+to print once its bill payment is made, and then the check it has. Tick the
+ones to print (all start ticked) and type the number on the first check in
+the printer, suggested as one past the highest check number used on the
+bank account in FleetSuite's checks or NetSuite's copy of the ledger
+(`vendor_check_last_number`). Number gives the ticked checks that number and
+the ones after it, in the run's order:
+
+1. NetSuite's bill payments are read first (`getChecksNow`). Each has to be
+   there, not voided, the vendor's and for what FleetSuite made it for, and
+   still To Be Printed; one that isn't is left out with why, in red. One
+   printed from NetSuite's Print Checks already keeps NetSuite's number and
+   shows as printed from NetSuite. When NetSuite can't be read, nothing is
+   numbered.
+2. Each number has to be unused on the bank account: in FleetSuite's checks,
+   spoiled ones too, in NetSuite's copy of the ledger (its checks, bill
+   payments and refunds on that account, `vendor_check_numbers_used`), and
+   in NetSuite itself (`getCheckNumbersUsed`). One that's used stops it,
+   with which, and nothing is numbered.
+3. The numbers are claimed (`vendor_checks_claim`: each number once on a
+   bank account, one check a bill payment), each with what's printed on it
+   (`printed_as`), so printing it again prints the same thing.
+4. Each number is set in NetSuite in turn (`setCheckNumber`: the bill
+   payment's Check # set and To Be Printed taken off, so NetSuite doesn't
+   print it too). It stops at the first NetSuite refuses or doesn't answer,
+   so the checks to print run on from the first number with none missed,
+   and lets go of the ones after it, to number next. One NetSuite didn't
+   answer about is held: Ask NetSuite, from five minutes on, finds whether
+   NetSuite took it (numbered) or not (let go). Once it's taken, the bill
+   payment's number in FleetSuite and in Books' own copy is the check's. A
+   long run stops in time to answer, and the rest number with the next
+   press.
+
+A vendor NetSuite has no address for gets a warning: its check shows only
+the name in the envelope's window.
+
+**Printing.** The numbered checks show as to print, in number order, with
+where the stock goes ("Put check 1050 on top of the stock in the printer").
+Print opens them as a PDF, a check a sheet, laid out the bank account's way:
+print at actual size, not fit to page. Then say how they came out: All
+printed right (or Printed right on each), or Didn't print right on one that
+jammed or printed crooked, with why. That one is kept with its number and
+why (write VOID across it), and its vendor's check is ready to number again
+from the next check in the printer; FleetSuite knows NetSuite's bill payment
+still has the spoiled number and replaces it. Use it only while the check is
+still in hand: one that went out is voided in NetSuite instead.
+
+Numbering, printing, didn't print right and letting a number go are audited
+on the run (`number_checks`, `print_checks`, `spoil_check`, `let_go_check`),
+with the check numbers and no amounts. Nothing alerts.
+
+Made-up example: the November 6 run above makes Ozark's check To Be Printed
+in NetSuite. Jessie puts the stock in the printer with check 1050 on top,
+types 1050 and presses Number 1 check, and NetSuite's bill payment becomes
+check 1050, no longer To Be Printed. Print shows check 1050 to Ozark Hose &
+Fitting for **1,412.40, "One thousand four hundred twelve and 40/100", with
+B-4410 $812.40 and B-4471 $600.00 on both stubs. It jams: Didn't print
+right, "Jammed". Number 1 check from 1051 makes the bill payment check 1051,
+and 1050 is kept as spoiled.
+
+### Before switching on
+
+- Setting a bill payment's Check # and To Be Printed (`tranId`,
+  `toBePrinted`) through NetSuite's REST API isn't tried on this account
+  yet, nor reading `tobeprinted`, `voided` and the vendor's
+  `printoncheckas` in SuiteQL, nor finding check numbers by bank account
+  (`transactionaccountingline.account`): number one check and check it in
+  NetSuite.
+- Print a test page on plain paper against a sheet of BMG's stock, for each
+  bank account that writes checks, and save where it lines up.
+
+### What isn't done yet
+
+- A positive pay file for the bank, and voiding a check in FleetSuite.
+- Checks written outside a payment run, which still print from NetSuite's
+  Print Checks.
 
 ## Switches
 
@@ -5060,7 +5170,7 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 | `customer_payments` | Anyone with Invoicing receives a customer's check or ACH payment and puts it on that customer's open invoices, and FleetSuite makes the payment in NetSuite, in Undeposited Funds ("Payments received in FleetSuite") | Invoicing → Invoiced → Payment on an open invoice |
 | `customer_deposits` | Anyone with Invoicing takes a customer's check or ACH deposit on a sales order, and FleetSuite makes the customer deposit in NetSuite on that order, in Undeposited Funds; NetSuite puts it on the order's invoice when the order's billed ("Deposits taken in FleetSuite") | Deposit on a sales order, or on an estimate once it has its sales order |
 | `bank_deposits` | Anyone with Invoicing deposits the customer payments and deposits waiting in Undeposited Funds to one of the company's bank accounts, ticked from what NetSuite has waiting, and FleetSuite makes the bank deposit in NetSuite ("Bank deposits made in FleetSuite") | Invoicing → Invoiced → Bank deposit |
-| `vendor_payments` | Anyone with Payments pays the company's open bills in a payment run, ticked from what NetSuite has open, from one of its bank accounts, vendor by vendor by check or ACH, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite ("Vendors paid in FleetSuite") | More → Money & Books → Pay Vendors |
+| `vendor_payments` | Anyone with Payments pays the company's open bills in a payment run, ticked from what NetSuite has open, from one of its bank accounts, vendor by vendor by check or ACH, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite ("Vendors paid in FleetSuite"); its checks print on BMG's check stock from the run, each number set in NetSuite ("Checks printed on BMG's stock") | More → Money & Books → Pay Vendors |
 
 ## Posting
 
