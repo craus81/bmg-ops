@@ -4582,6 +4582,222 @@ export async function createInventoryTransfer(p: InventoryTransferPayload): Prom
   }
 }
 
+// ── Customer payments received in FleetSuite (Books part 54) ───────────────
+
+const textOf = (v: unknown) => (v === null || v === undefined ? '' : String(v).trim());
+/** A NetSuite amount in whole cents, its sign dropped (NetSuite signs open amounts as it pleases); null when it isn't one. */
+const unsignedCents = (v: unknown): number | null => {
+  const n = Number(textOf(v));
+  return textOf(v) !== '' && Number.isFinite(n) ? Math.round(Math.abs(n) * 100) : null;
+};
+
+/** The invoice a payment is started from, and its customer's open invoices in the invoice's subsidiary. */
+export interface PaymentInvoices {
+  invoice: { id: string; number: string; customerId: string; customerName: string; subsidiaryId: string | null; openCents: number } | null;
+  /** Oldest first. */
+  open: { id: string; number: string; date: string | null; dueDate: string | null; po: string | null; totalCents: number; openCents: number }[];
+  /** How many of the customer's open invoices are in another subsidiary, which a payment of this one's can't pay. */
+  elsewhere: number;
+}
+
+/**
+ * The invoice Payment was pressed on, its customer, and that customer's open
+ * invoices as NetSuite has them now, oldest first, with what's still open on
+ * each (foreignamountunpaid, as Financials and the agings read it). Only the
+ * invoice's own subsidiary's are listed, since a payment pays one company's;
+ * the others are counted. `invoice` is null when NetSuite has no invoice by
+ * that id. Throws when NetSuite can't be asked.
+ */
+export async function getPaymentInvoices(invoiceId: string): Promise<PaymentInvoices> {
+  const id = textOf(invoiceId);
+  if (!/^\d{1,20}$/.test(id)) throw new Error(`"${id}" isn't a NetSuite invoice id`);
+  const head = await suiteqlQuery(`
+    SELECT t.id, t.tranid, t.entity AS customer_id, c.companyname AS customer_name, c.entityid AS customer_entity_id,
+           t.foreignamountunpaid AS unpaid, tl.subsidiary AS subsidiary_id
+    FROM transaction t
+    JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'
+    LEFT JOIN customer c ON c.id = t.entity
+    WHERE t.type = 'CustInvc' AND t.id = ${id}
+  `, 5, 0, { retries: 1 });
+  const row = head?.items?.[0];
+  const customerId = textOf(row?.customer_id);
+  if (!row || !/^\d+$/.test(customerId)) return { invoice: null, open: [], elsewhere: 0 };
+  const subsidiaryId = /^\d+$/.test(textOf(row.subsidiary_id)) ? textOf(row.subsidiary_id) : null;
+
+  const rows = await suiteqlQueryAll(`
+    SELECT t.id, t.tranid, t.trandate, t.duedate, t.otherrefnum AS po, t.foreigntotal AS total,
+           t.foreignamountunpaid AS unpaid, tl.subsidiary AS subsidiary_id
+    FROM transaction t
+    JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'
+    WHERE t.type = 'CustInvc' AND t.status = 'A' AND t.entity = ${customerId}
+    ORDER BY t.trandate, t.id
+  `, 1000, { retries: 1 });
+  const open: PaymentInvoices['open'] = [];
+  const seen = new Set<string>();
+  let elsewhere = 0;
+  for (const r of rows) {
+    const invoice = textOf(r.id);
+    const openCents = unsignedCents(r.unpaid);
+    if (!/^\d+$/.test(invoice) || seen.has(invoice) || !openCents) continue;
+    seen.add(invoice);
+    if (textOf(r.subsidiary_id) !== (subsidiaryId ?? '')) { elsewhere += 1; continue; }
+    open.push({
+      id: invoice,
+      number: textOf(r.tranid) || `Invoice ${invoice}`,
+      date: suiteqlDay(r.trandate),
+      dueDate: suiteqlDay(r.duedate),
+      po: textOf(r.po) || null,
+      totalCents: unsignedCents(r.total) ?? openCents,
+      openCents,
+    });
+  }
+  return {
+    invoice: {
+      id,
+      number: textOf(row.tranid) || `Invoice ${id}`,
+      customerId,
+      customerName: textOf(row.customer_name) || textOf(row.customer_entity_id) || `Customer ${customerId}`,
+      subsidiaryId,
+      openCents: unsignedCents(row.unpaid) ?? 0,
+    },
+    open,
+    elsewhere,
+  };
+}
+
+/** What each of a few invoices has open in NetSuite now, invoice id → cents, to check how a payment was applied. Throws when NetSuite can't be asked. */
+export async function getInvoicesOpen(invoiceIds: string[]): Promise<Map<string, number>> {
+  const ids = [...new Set(invoiceIds.filter((i) => /^\d{1,20}$/.test(i)))];
+  const open = new Map<string, number>();
+  if (ids.length === 0) return open;
+  const result = await suiteqlQuery(
+    `SELECT t.id, t.foreignamountunpaid AS unpaid FROM transaction t WHERE t.type = 'CustInvc' AND t.id IN (${ids.join(', ')})`,
+    1000, 0, { retries: 1 },
+  );
+  for (const r of result?.items ?? []) open.set(textOf(r.id), unsignedCents(r.unpaid) ?? 0);
+  return open;
+}
+
+/**
+ * The customer payment NetSuite has under FleetSuite's own name for it (its
+ * External ID), or null when it has none, so a payment sent again never pays
+ * twice. Throws when NetSuite can't be asked, and when FleetSuite's SuiteQL
+ * role can't see a single customer payment, since none found then can't be
+ * told from none seen: the caller fails closed (as findJournalEntry).
+ */
+export async function findCustomerPayment(externalId: string): Promise<{ paymentId: string; number: string } | null> {
+  const ref = externalId.trim();
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(ref)) throw new Error(`"${ref}" isn't an external id FleetSuite makes`);
+  const result = await suiteqlQuery(`
+    SELECT id, tranid
+    FROM transaction
+    WHERE type = 'CustPymt' AND externalid = '${ref}'
+    ORDER BY id
+    FETCH FIRST 1 ROWS ONLY
+  `);
+  const row = result?.items?.[0];
+  if (row) return { paymentId: row.id?.toString() ?? '', number: row.tranid ?? '' };
+  const seen = await suiteqlQuery(`SELECT id FROM transaction WHERE type = 'CustPymt' FETCH FIRST 1 ROWS ONLY`, 1, 0);
+  if (!seen?.items?.length) throw new Error("FleetSuite can't see NetSuite's customer payments, so it can't tell whether this one was made");
+  return null;
+}
+
+/** What createCustomerPayment sends: src/lib/receive-payment.ts's netsuitePayment. */
+export interface CustomerPaymentPayload {
+  /** FleetSuite's own name for it: NetSuite never takes two records of a kind under one. */
+  externalId: string;
+  customerId: string;
+  subsidiaryId: string;
+  /** 'YYYY-MM-DD'. */
+  tranDate: string;
+  /** Dollars. */
+  amount: number;
+  /** A check's number, for NetSuite's Check # field. */
+  checkNumber: string | null;
+  memo: string;
+  /** Each invoice it pays and how much, adding up to the amount. */
+  apply: { invoiceId: string; amount: number }[];
+}
+
+/**
+ * Make a customer payment in NetSuite: POST
+ * /services/rest/record/v1/customerPayment, NetSuite's Accept Customer
+ * Payments, in Undeposited Funds, applied to exactly the invoices named, each
+ * by its id on the apply list with the amount paid on it, and auto-apply off
+ * so NetSuite doesn't spread it oldest first on its own. Refused here when
+ * what it pays on its invoices doesn't add up to its amount to the cent.
+ * `unsure` is set when NetSuite may have made it anyway (no answer, a server
+ * error, or no id in its answer): look for it by its External ID before
+ * trying again.
+ */
+export async function createCustomerPayment(p: CustomerPaymentPayload): Promise<{ success: boolean; paymentId?: string; error?: string; unsure?: boolean }> {
+  const cents = (n: number) => Math.round(n * 100);
+  if (p.apply.length < 1) return { success: false, error: 'A payment needs an invoice to pay' };
+  if (!(cents(p.amount) > 0) || p.apply.some((a) => !(cents(a.amount) > 0))) {
+    return { success: false, error: 'A payment, and what it pays on each invoice, need to be above $0' };
+  }
+  if (p.apply.reduce((s, a) => s + cents(a.amount), 0) !== cents(p.amount)) {
+    return { success: false, error: "What the payment pays on its invoices doesn't add up to its amount" };
+  }
+
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/customerPayment`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    externalId: p.externalId,
+    customer: { id: p.customerId },
+    subsidiary: { id: p.subsidiaryId },
+    tranDate: p.tranDate,
+    payment: p.amount,
+    undepFunds: true,
+    autoApply: false,
+    memo: p.memo,
+    ...(p.checkNumber ? { checkNum: p.checkNumber } : {}),
+    apply: { items: p.apply.map((a) => ({ doc: { id: a.invoiceId }, apply: true, amount: a.amount })) },
+  };
+
+  try {
+    const response = await netsuiteFetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite create customer payment error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      // A 4xx is NetSuite refusing it; after a server error it may have made it anyway.
+      return { success: false, error: `NetSuite error (${response.status}): ${detail}`, ...(response.status >= 500 ? { unsure: true } : {}) };
+    }
+
+    let paymentId = response.headers.get('Location')?.match(/\/(\d+)$/)?.[1] || '';
+    if (!paymentId) {
+      try {
+        const result = await response.json();
+        paymentId = result.id?.toString() || '';
+      } catch {
+        // 204 No Content
+      }
+    }
+    if (!paymentId) return { success: false, error: "NetSuite said it made the payment but didn't say its id.", unsure: true };
+    return { success: true, paymentId };
+  } catch (e: any) {
+    return { success: false, error: `NetSuite didn't answer (${e.message}).`, unsure: true };
+  }
+}
+
 /**
  * Stamp a VIN on an existing NetSuite sales order (custbody_vin_number_).
  *

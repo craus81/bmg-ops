@@ -28,6 +28,7 @@ interface Switch {
   where: string;
   turnOn?: string;
   turnOff?: string;
+  later?: string;
   on: boolean;
   changedAt: string | null;
   changedBy: string | null;
@@ -131,6 +132,7 @@ export default function BooksSwitchesPage() {
               )}
             </div>
             <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{s.what}</div>
+            {s.later && !s.on && <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>{s.later}</div>}
             <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
               Where: {s.where}
               {s.changedAt ? ` · Switched ${s.on ? 'on' : 'off'} by ${s.changedBy || 'someone'}, ${when(s.changedAt)}` : ''}

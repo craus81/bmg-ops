@@ -92,9 +92,12 @@ get a 1099 was paid in a year, by category, worked out from the copy of
 NetSuite, part 51, NetSuite's own 1099 report uploaded and held against
 those totals vendor by vendor and box by box, part 52, the books opened
 to a bookkeeper and a CPA, each a login of their own ("Who can open the
-books"), and part 53, the CPA's own adjustments journal, on the journal
+books"), part 53, the CPA's own adjustments journal, on the journal
 entries typed in FleetSuite and switched off with them ("The CPA's
-adjustments journal").
+adjustments journal"), and part 54, a customer's check or ACH payment
+received in FleetSuite, put on their open invoices and sent on to NetSuite,
+with Books' own copy of each, built switched off ("Payments received in
+FleetSuite").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -820,6 +823,10 @@ what the next posting run does about it.
   below). Bank
   deposits, which move the money from Undeposited Funds to the bank, aren't
   copied yet.
+- A payment received in FleetSuite (part 54) is made in NetSuite and comes
+  back through the ledger mirror like any other, so it's checked and posted
+  the same way; Books' own copy of it isn't used yet ("Payments received in
+  FleetSuite").
 
 ### Posting payments
 
@@ -4561,14 +4568,117 @@ labor hours it keeps 1.5 in FleetSuite and sends nothing.
   price needs the item script in NetSuite to be the current
   `scripts/netsuite-item-restlet.js`, as the Parts page's edits do.
 
+## Payments received in FleetSuite
+
+Payments, deposits and banking stay in NetSuite on January 1, 2027 and move
+into FleetSuite during 2027, each before its move, with FleetSuite sending
+each on to NetSuite so nobody types anything twice (owner decisions
+2026-10-31). Part 54 is the first piece: a customer's check or ACH payment
+received in FleetSuite and put on that customer's open invoices
+(`src/lib/receive-payment.ts`, migration 485). Card payments wait on
+eBizCharge; deposits on estimates and orders, and bank deposits, come next.
+It's built switched off ("Switches") and stays off past January 1: until a
+super admin turns it on, only super admins can open the screen, to see what
+it would send, and nothing goes to NetSuite. Once it's on, anyone with
+Invoicing who can see prices can.
+
+On Invoicing → Invoiced each open NetSuite invoice has a Payment button,
+which opens `/invoices/payment?invoice=<NetSuite id>`
+(`deepLinks.receivePayment`). The screen reads the invoice, its customer and
+that customer's open invoices as NetSuite has them now, oldest first, with
+what's still open on each (`getPaymentInvoices`: status Open and
+`foreignamountunpaid`, as Financials and the agings read them). Only the
+invoice's own company's invoices are listed, since a payment pays one
+company's; any others are counted in a line. It also lists the payments
+FleetSuite received from the customer in the last 60 days, made or being
+made. Then the person fills in (`workOutPayment`):
+
+- **Check or ACH**, with the check's number, which a check must have, or the
+  ACH payment's reference. NetSuite's memo reads "Check 10442" or
+  "ACH 0187", then the memo typed.
+- **The day it was received**, not after today nor more than a year back.
+- **The amount and what it pays on each invoice.** The screen starts with
+  the invoice Payment was pressed on, paid in full; Oldest first spreads the
+  amount over the open invoices oldest first, as NetSuite's own Accept
+  Payment does. Every dollar received goes on an invoice, and none pays
+  more than NetSuite has open on it now.
+
+Receive payment sends it once. The page makes an id when it opens, the
+press's, and the route (`/api/invoices/payment`) works the payment out again
+from what NetSuite has open now, never from what the page sent, and sends
+nothing that doesn't fit. A check whose number FleetSuite already has from
+that customer, made or being made, is turned away; a second check with the
+same number takes a letter after it. Then the route takes a claim on the
+press (`received_payments`, `received_payment_claim`), looks in NetSuite for
+a payment under the press's External ID (`fleetsuite-cp-<id>`,
+`findCustomerPayment`), and only when there's none makes it
+(`createCustomerPayment`: a customer payment in Undeposited Funds, applied
+to exactly the invoices picked with the amount on each, NetSuite's own
+auto-apply off). NetSuite never takes two payments under one External ID
+either.
+
+- **Made**: FleetSuite keeps NetSuite's id and number on the press, reads
+  the invoices back and says in red when what NetSuite shows open on one
+  isn't what it had less what the payment paid (`appliedAsSent`), keeps
+  Books' own copy, and audits it. Pressed again, it says what the first
+  press made.
+- **Refused**: the claim is let go with NetSuite's reason in red
+  (`received_payment_let_go`), and the same form can be sent again.
+- **Not sure** (no answer, a fault on NetSuite's side, or no id in its
+  answer): it's held. Ask NetSuite, from five minutes on, looks for it by
+  its External ID: found, it's made; not there, it's let go and nothing was
+  paid. The send is in the NetSuite feed too, which keeps unsure ones on
+  top until someone has looked ("NetSuite feed").
+
+Nothing is emailed to the customer.
+
+Books keeps its own copy of each one as it was received and sent, rather
+than read back from NetSuite (`gl_own_payments` and
+`gl_own_payment_applications`, saved only by `gl_own_payment_save`,
+`src/lib/books/own-payments.ts`): the company, the day, check or ACH with
+its number or reference, NetSuite's memo, the amount, that it went to
+Undeposited Funds, and what it paid on each invoice. Saving it never stops
+a payment; one that can't be saved is said on the screen in red.
+
+Made-up example: Acme Plumbing owes $400.10 on INV1990 and $250.00 on
+INV2001, and its check 10442 for $650.10 comes in on October 30. Payment on
+INV2001 starts with $250.00 on INV2001; typing $650.10 and pressing Oldest
+first puts $400.10 on INV1990 and $250.00 on INV2001. Receive payment makes
+one NetSuite payment of $650.10 in Undeposited Funds, its memo
+"Check 10442", and both invoices are paid.
+
+### Before switching on
+
+- FleetSuite's NetSuite role needs to make customer payments and to see
+  them, and each invoice's open amount, in SuiteQL. Until it can see a
+  customer payment, FleetSuite can't tell one that isn't there from one it
+  can't see, and sends nothing.
+- The field names it sends (`undepFunds`, `autoApply`, `checkNum` and the
+  `apply` list) are NetSuite's REST names, not yet tried on this account:
+  check the first real payment in NetSuite, the invoices it paid, and that
+  it's in Undeposited Funds.
+
+### What isn't done yet
+
+- Card payments (eBizCharge), deposits on estimates and orders, and bank
+  deposits, which move the money from Undeposited Funds to the bank.
+- A payment that pays more than the customer's open invoices, takes a
+  discount, or applies a credit memo or deposit along with the money.
+- A list of payments received beyond the screen's 60 days. Books' own
+  copies aren't checked against NetSuite's payments or posted yet; until
+  they are, NetSuite's payment posts from the copy of NetSuite's ledger as
+  any payment does ("Payments").
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
-row each in `books_switches` (migrations 466 to 473 and 478 to 480,
+row each in `books_switches` (migrations 466 to 473, 478 to 480 and 485,
 `src/lib/books/switches.ts`), and stays off until a super admin turns it on
 in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
 which whoever opens the books can read. The plan turns them on on January 1,
-2027, asking the owner once in late December.
+2027, asking the owner once in late December, all but `customer_payments`,
+which stays off until receiving payments moves into FleetSuite during 2027;
+its card on the page says so (`later`).
 
 While a piece is off, the people who'd use it don't see it at all; super
 admins can open its screen and see what it would send, and its route
@@ -4594,6 +4704,7 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 | `item_accounts` | Anyone with Payments changes an item's income account, an inventory item's cost of goods sold and inventory asset accounts, and the expense account of one that's bought, and FleetSuite makes the change in NetSuite ("Item accounts changed in FleetSuite") | More → Money & Books → Item Accounts, or Change accounts on Books → Stock by item |
 | `estimates_in_fleetsuite` | Estimates stay in FleetSuite: nobody pushes or syncs one to NetSuite, and NetSuite gets each job's sales order when it's made ("Estimates in FleetSuite only") | An estimate's buttons, where Push to NetSuite as Estimate goes |
 | `fleetsuite_records` | A change made in NetSuite to a customer's name, email, phone or billing address, a vendor's name, email or phone, or an item's number, display name, description, purchase price, vendor or labor hours, doesn't come over FleetSuite's: it's listed to keep FleetSuite's, sent on to NetSuite (but for an item's vendor and labor hours, which stay in FleetSuite), or take NetSuite's ("FleetSuite's record wins") | The NetSuite customer, vendor and parts syncs, and Books → Changed in NetSuite |
+| `customer_payments` | Anyone with Invoicing receives a customer's check or ACH payment and puts it on that customer's open invoices, and FleetSuite makes the payment in NetSuite, in Undeposited Funds ("Payments received in FleetSuite") | Invoicing → Invoiced → Payment on an open invoice |
 
 ## Posting
 

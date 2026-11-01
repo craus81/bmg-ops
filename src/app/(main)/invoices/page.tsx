@@ -12,7 +12,8 @@
  *  - Sent: recent invoices from both sources, grouped by customer, with
  *    per-invoice and per-customer email actions (shared EmailInvoicesModal),
  *    and Credit on each NetSuite invoice once credit memos are switched on
- *    (invoices/credit-memo), and Fix once fixing invoices is (invoices/fix).
+ *    (invoices/credit-memo), Fix once fixing invoices is (invoices/fix), and
+ *    Payment on each open one once receiving payments is (invoices/payment).
  *
  * Deep scan management (PO matching, bulk edit, archive) stays on the Scan
  * Log page; job editing stays on the Graphics page. This page is only about
@@ -239,6 +240,24 @@ export default function InvoicingHubPage() {
         if (!cancelled) setCanFix(res.ok && !!body.canUse);
       } catch {
         if (!cancelled) setCanFix(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [canOpen, canSeeMoney]);
+
+  // Payment on each open NetSuite invoice, the same way: once receiving
+  // payments is switched on, anyone with Invoicing; until then super admins only.
+  const [canPay, setCanPay] = useState(false);
+  useEffect(() => {
+    if (!canOpen || !canSeeMoney) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/invoices/payment?status=1');
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled) setCanPay(res.ok && !!body.canUse);
+      } catch {
+        if (!cancelled) setCanPay(false);
       }
     })();
     return () => { cancelled = true; };
@@ -1053,6 +1072,13 @@ export default function InvoicingHubPage() {
                             title="Fix this invoice: its PO number, memo and VIN, and while nothing is paid its date and lines"
                             style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: '2px 4px' }}
                           >Fix</button>
+                        )}
+                        {canPay && !r.qbo && r.status === 'open' && r.invoiceId && /^\d+$/.test(r.invoiceId) && (
+                          <button
+                            onClick={() => router.push(deepLinks.receivePayment(r.invoiceId!))}
+                            title="Receive a check or ACH payment on this invoice and the customer's other open ones"
+                            style={{ background: 'transparent', border: 'none', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer', padding: '2px 4px' }}
+                          >Payment</button>
                         )}
                         {!r.qbo && (() => {
                           const bad = isBadDelivery(emailedByNumber[r.invoiceNumber]?.delivery_status);

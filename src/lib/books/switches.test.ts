@@ -36,7 +36,7 @@ describe('switches', () => {
   it('names each piece, where people find it, and only those', () => {
     expect(SWITCH_PIECES).toEqual([
       'credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes', 'bill_fixes',
-      'customer_vendor_details', 'item_accounts', 'estimates_in_fleetsuite', 'fleetsuite_records',
+      'customer_vendor_details', 'item_accounts', 'estimates_in_fleetsuite', 'fleetsuite_records', 'customer_payments',
     ]);
     expect(SWITCHES.credit_memos.where).toBe('Invoicing → Invoiced → Credit on an invoice');
     expect(SWITCHES.vendor_credits.where).toBe('More → Purchasing → Vendor Credits');
@@ -73,6 +73,14 @@ describe('switches', () => {
       turnOn: "Switch on FleetSuite's record wins? From now on a change made in NetSuite to a customer's or vendor's name, email, phone or address, or to an item's number, names, description, purchase price, vendor or labor hours, doesn't come into FleetSuite by itself: it's listed under Books → Changed in NetSuite.",
       turnOff: "Switch off FleetSuite's record wins? NetSuite's changes come into FleetSuite again as before, over what FleetSuite has.",
     });
+    expect(SWITCHES.customer_payments).toEqual({
+      name: 'Receiving payments',
+      what: "Anyone with Invoicing receives a customer's check or ACH payment in FleetSuite and puts it on that customer's open invoices, and FleetSuite makes the payment in NetSuite, in Undeposited Funds, and keeps its own copy for the books.",
+      where: 'Invoicing → Invoiced → Payment on an open invoice',
+      later: 'Stays off on January 1: receiving payments moves into FleetSuite during 2027.',
+    });
+    // Only receiving payments waits past January 1.
+    expect(SWITCH_PIECES.filter((p) => SWITCHES[p].later !== undefined)).toEqual(['customer_payments']);
     // Only the pieces that are the other way round ask in their own words.
     expect(SWITCH_PIECES.filter((p) => SWITCHES[p].turnOn !== undefined || SWITCHES[p].turnOff !== undefined)).toEqual(['estimates_in_fleetsuite', 'fleetsuite_records']);
     expect(isSwitchPiece('credit_memos')).toBe(true);
@@ -86,6 +94,7 @@ describe('switches', () => {
     expect(isSwitchPiece('item_accounts')).toBe(true);
     expect(isSwitchPiece('estimates_in_fleetsuite')).toBe(true);
     expect(isSwitchPiece('fleetsuite_records')).toBe(true);
+    expect(isSwitchPiece('customer_payments')).toBe(true);
     expect(isSwitchPiece('payroll')).toBe(false);
     expect(isSwitchPiece('toString')).toBe(false);
     expect(isSwitchPiece(null)).toBe(false);
@@ -104,6 +113,7 @@ describe('switches', () => {
       { piece: 'item_accounts', on: false, changedBy: null, changedAt: null },
       { piece: 'estimates_in_fleetsuite', on: false, changedBy: null, changedAt: null },
       { piece: 'fleetsuite_records', on: false, changedBy: null, changedAt: null },
+      { piece: 'customer_payments', on: false, changedBy: null, changedAt: null },
     ]);
     expect(await readSwitches(fakeService().service)).toEqual([
       { piece: 'credit_memos', on: false, changedBy: null, changedAt: null },
@@ -117,6 +127,7 @@ describe('switches', () => {
       { piece: 'item_accounts', on: false, changedBy: null, changedAt: null },
       { piece: 'estimates_in_fleetsuite', on: false, changedBy: null, changedAt: null },
       { piece: 'fleetsuite_records', on: false, changedBy: null, changedAt: null },
+      { piece: 'customer_payments', on: false, changedBy: null, changedAt: null },
     ]);
     await expect(readSwitches(fakeService({ error: 'denied' }).service)).rejects.toThrow('denied');
   });

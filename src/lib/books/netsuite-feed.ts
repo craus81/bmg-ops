@@ -88,6 +88,7 @@ export const FEED_KINDS: ReadonlyArray<{ key: string; name: string }> = [
   { key: 'journalEntry', name: 'Journal entries' },
   { key: 'inventoryAdjustment', name: 'Inventory adjustments' },
   { key: 'inventoryTransfer', name: 'Inventory transfers' },
+  { key: 'customerPayment', name: 'Customer payments' },
   { key: 'customer', name: 'Customers' },
   { key: 'vendor', name: 'Vendors' },
   { key: 'contact', name: 'Contacts' },

@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473 and 478 to 480, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 to 480 and 485, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -16,11 +16,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * record wins: on, it stops the NetSuite syncs writing over FleetSuite's
  * customers, vendors and items, so a sync that can't read it stops rather
  * than count it as off (readSwitch, src/lib/fleetsuite-records.ts).
+ * Receiving payments stays off past January 1, until payments move into
+ * FleetSuite during 2027 (`later` says so).
  */
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
-  | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records';
+  | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments';
 
 export interface SwitchInfo {
   name: string;
@@ -31,6 +33,8 @@ export interface SwitchInfo {
   /** What switching it on or off asks first, where the Switches page's own words don't fit. */
   turnOn?: string;
   turnOff?: string;
+  /** Why it isn't switched on with the others on January 1, for one that waits longer. */
+  later?: string;
 }
 
 export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
@@ -92,6 +96,12 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     where: 'The NetSuite customer, vendor and parts syncs, and Books → Changed in NetSuite',
     turnOn: "Switch on FleetSuite's record wins? From now on a change made in NetSuite to a customer's or vendor's name, email, phone or address, or to an item's number, names, description, purchase price, vendor or labor hours, doesn't come into FleetSuite by itself: it's listed under Books → Changed in NetSuite.",
     turnOff: "Switch off FleetSuite's record wins? NetSuite's changes come into FleetSuite again as before, over what FleetSuite has.",
+  },
+  customer_payments: {
+    name: 'Receiving payments',
+    what: "Anyone with Invoicing receives a customer's check or ACH payment in FleetSuite and puts it on that customer's open invoices, and FleetSuite makes the payment in NetSuite, in Undeposited Funds, and keeps its own copy for the books.",
+    where: 'Invoicing → Invoiced → Payment on an open invoice',
+    later: 'Stays off on January 1: receiving payments moves into FleetSuite during 2027.',
   },
 };
 
