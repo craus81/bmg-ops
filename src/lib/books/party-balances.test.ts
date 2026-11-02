@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
-  copyHoldsAccounts, isParty, partyBalances, partyDetail, partyName,
+  copyHoldsAccounts, isParty, onTrialBalance, partyBalances, partyDetail, partyName,
   type PartyBalanceData, type PartyBalancesData, type PartyDocumentsData,
 } from './party-balances';
+import type { ReportAccount, ReportData } from './reports';
 
 const ACME = 'c0000000-0000-4000-8000-00000000000a';
 const BRAVO = 'c0000000-0000-4000-8000-00000000000b';
@@ -133,5 +134,62 @@ describe('copyHoldsAccounts', () => {
     expect(copyHoldsAccounts({ ...totals, copied: [] }, ['120', null])).toBe(false);
     expect(copyHoldsAccounts({ netsuite: [] }, ['120'])).toBeNull();
     expect(copyHoldsAccounts(null, ['120'])).toBeNull();
+  });
+});
+
+describe('onTrialBalance', () => {
+  const account = (id: string, ns: string | null, type: string, company: string | null = null): ReportAccount => ({
+    id, netsuite_account_id: ns, number: null, name: id, account_type: type, statement: 'balance_sheet', parent_id: null, company,
+  });
+  const sides = (cents: number) => ({ debit: cents > 0 ? (cents / 100).toFixed(2) : '0', credit: cents < 0 ? (-cents / 100).toFixed(2) : '0' });
+  /**
+   * Made-up books for BMG: a receivable account both companies use, one of
+   * FleetSuite's own, one only 1084 uses and one only BMG does; a payable
+   * account; and sales, which count for neither.
+   */
+  const DATA: ReportData = {
+    company: 'BMG',
+    accounts: [
+      account('a120', '120', 'accounts_receivable'),
+      account('a121', null, 'accounts_receivable'),
+      account('a122', '122', 'accounts_receivable', '1084'),
+      account('a123', '123', 'accounts_receivable', 'BMG'),
+      account('a200', '200', 'accounts_payable'),
+      account('a400', '400', 'income'),
+    ],
+    opening: [{ netsuite_account_id: '120', ...sides(80000) }, { netsuite_account_id: '200', ...sides(-30000) }],
+    netsuite: [
+      { netsuite_account_id: '120', month: '2027-11-01', ...sides(10000) },
+      { netsuite_account_id: '120', month: '2028-01-01', ...sides(5000) },
+      { netsuite_account_id: '122', month: '2027-11-01', ...sides(99900) },
+      { netsuite_account_id: '123', month: '2027-12-01', ...sides(2500) },
+      { netsuite_account_id: '200', month: '2027-12-01', ...sides(-4000) },
+      { netsuite_account_id: '400', month: '2027-12-01', ...sides(-14500) },
+    ],
+    fleetsuite: [
+      { account: '120', month: '2027-12-01', ...sides(12000) },
+      { account: 'fs:a121', month: '2027-12-01', ...sides(700) },
+      { account: '122', month: '2027-12-01', ...sides(55500) },
+      { account: '200', month: '2027-12-01', ...sides(-4100) },
+      { account: '200', month: '2028-02-01', ...sides(-100000) },
+      { account: '400', month: '2027-12-01', ...sides(-12700) },
+    ],
+  };
+
+  it("adds up the company's receivable accounts at the month's end, FleetSuite's own too, as what customers owe", () => {
+    expect(onTrialBalance(DATA, 'customer', '2027-12-01')).toEqual({ fleetsuite: 80000 + 12000 + 700, netsuite: 80000 + 10000 + 2500 });
+    expect(onTrialBalance(DATA, 'customer', '2028-01-01')).toEqual({ fleetsuite: 92700, netsuite: 97500 });
+    expect(onTrialBalance({ ...DATA, company: '1084' }, 'customer', '2027-12-01')).toEqual({ fleetsuite: 92700 + 55500, netsuite: 90000 + 99900 });
+  });
+
+  it('reads the payable accounts as what vendors are owed', () => {
+    expect(onTrialBalance(DATA, 'vendor', '2027-12-01')).toEqual({ fleetsuite: 34100, netsuite: 34000 });
+    expect(onTrialBalance(DATA, 'vendor', '2027-11-01')).toEqual({ fleetsuite: 30000, netsuite: 30000 });
+  });
+
+  it('comes to nothing for a chart with no such account', () => {
+    const none = { ...DATA, accounts: DATA.accounts.filter((a) => a.account_type === 'income') };
+    expect(onTrialBalance(none, 'vendor', '2027-12-01')).toEqual({ fleetsuite: 0, netsuite: 0 });
+    expect(onTrialBalance(none, 'customer', '2027-12-01')).toEqual({ fleetsuite: 0, netsuite: 0 });
   });
 });

@@ -1,6 +1,7 @@
 import type { GlTotals } from './differences';
 import { toCents } from './netsuite-gl';
 import { detailDocuments, type AccountDocumentsData, type DetailDocument } from './report-detail';
+import { lineSpan, type ReportData } from './reports';
 
 /**
  * Customer and vendor balances (migration 406, docs/books.md "Customer and
@@ -138,7 +139,8 @@ export interface PartyBalances {
   differing: number;
 }
 
-const byName = (a: PartyBalance, b: PartyBalance) =>
+/** By name, the lines FleetSuite can't name last. */
+export const byPartyName = (a: PartyBalance, b: PartyBalance) =>
   Number(a.party === '') - Number(b.party === '') || a.name.localeCompare(b.name, 'en-US', { sensitivity: 'base' }) || a.party.localeCompare(b.party);
 
 /** gl_party_balances' answer for one kind, as the page shows it. */
@@ -169,7 +171,7 @@ export function partyBalances(data: PartyBalancesData | null, kind: PartyKind): 
   });
   parties.sort((a, b) => Number(b.differs) - Number(a.differs)
     || (a.differs ? Math.abs(b.fleetsuite - b.netsuite) - Math.abs(a.fleetsuite - a.netsuite) : 0)
-    || byName(a, b));
+    || byPartyName(a, b));
   const unsplit = read(data?.opening.total) - read(data?.opening.named);
   const sum = (side: 'fleetsuite' | 'netsuite') => parties.reduce((total, p) => total + p[side], unsplit);
   return {
@@ -181,6 +183,34 @@ export function partyBalances(data: PartyBalancesData | null, kind: PartyKind): 
     totals: { fleetsuite: sum('fleetsuite'), netsuite: sum('netsuite') },
     differing: parties.filter((p) => p.differs).length,
   };
+}
+
+/** The chart's accounts a kind's balances are on. */
+export const PARTY_ACCOUNT_TYPE: Readonly<Record<PartyKind, string>> = { customer: 'accounts_receivable', vendor: 'accounts_payable' };
+
+/**
+ * The receivable (payable) accounts on the trial balance at the end of
+ * `to`'s month, each side, as a kind's balances read: the chart's accounts
+ * gl_party_balances_through (migration 503) counts, those the company can
+ * use. Every customer's (vendor's) balance then comes to it, once the copy
+ * of NetSuite's ledger holds all NetSuite's own totals say moved them.
+ */
+export function onTrialBalance(data: ReportData, kind: PartyKind, to: string): { fleetsuite: number; netsuite: number } {
+  const sign = signOf(kind);
+  let fleetsuite = 0;
+  let netsuite = 0;
+  for (const a of data.accounts) {
+    if (a.account_type !== PARTY_ACCOUNT_TYPE[kind] || (a.company && a.company !== data.company)) continue;
+    const { ending } = lineSpan(data, 'trial_balance', a.netsuite_account_id ?? `fs:${a.id}`, { from: to, to });
+    fleetsuite += ending.fleetsuite;
+    netsuite += ending.netsuite;
+  }
+  return { fleetsuite: sign * fleetsuite || 0, netsuite: sign * netsuite || 0 };
+}
+
+/** A kind's balances at a month's end (gl_party_balances_through), with its accounts on the trial balance then (onTrialBalance). */
+export interface PartyBalancesAt extends PartyBalances {
+  trialBalance: { fleetsuite: number; netsuite: number };
 }
 
 /** One customer's or vendor's balance and the documents behind it. */
