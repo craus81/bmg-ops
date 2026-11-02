@@ -1,7 +1,7 @@
 // The words Books → Backups shows for each backup: its size, how long it
-// ran and what it holds (src/lib/books/backup-words.ts).
+// ran, what it holds and what its restore test put back (src/lib/books/backup-words.ts).
 import { describe, it, expect } from 'vitest';
-import { BACKUPS_LISTED, fileSize, holdsWords, tookWords } from './backup-words';
+import { BACKUPS_LISTED, fileSize, holdsWords, restoredWords, tookWords } from './backup-words';
 import { BACKUPS_LISTED as LISTED_BY_THE_RUN } from './backups';
 
 describe('Books → Backups words', () => {
@@ -28,6 +28,13 @@ describe('Books → Backups words', () => {
       .toBe('1.2 MB · 90 tables · 41,200 rows · 3,100 entries · 9,800 lines');
     expect(holdsWords({ bytes: null, tables: 1, rows: 1, entries: 1, lines: 0 })).toBe('1 table · 1 row · 1 entry · 0 lines');
     expect(holdsWords({ bytes: null, tables: null, rows: null, entries: null, lines: null })).toBe('');
+  });
+
+  it('says what a restore test put back and checked, leaving out what a failed one never counted', () => {
+    expect(restoredWords({ tables: 90, rows: 41_200, entries: 3_100, lines: 9_800, links: 67 }))
+      .toBe('90 tables · 41,200 rows · 3,100 entries · 9,800 lines · 67 links between tables');
+    expect(restoredWords({ tables: 4, rows: 1, entries: 0, lines: 0, links: 1 })).toBe('4 tables · 1 row · 0 entries · 0 lines · 1 link between tables');
+    expect(restoredWords({ tables: null, rows: null, entries: null, lines: null, links: null })).toBe('');
   });
 
   it('lists the same number of backups the run reads', () => {

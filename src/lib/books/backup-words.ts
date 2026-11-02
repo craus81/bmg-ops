@@ -1,9 +1,10 @@
 import type { BackupRecord } from './backups';
+import type { DrillRecord } from './restore-drill';
 
 /**
  * Words and numbers Books → Backups shows (src/app/(main)/admin/books/backups),
- * apart from src/lib/books/backups.ts so the page doesn't carry the server's
- * code. docs/books.md "Backups".
+ * apart from src/lib/books/backups.ts and restore-drill.ts so the page doesn't
+ * carry the server's code. docs/books.md "Backups" and "The restore drill".
  */
 
 /** Backups the page lists, newest first. */
@@ -35,5 +36,13 @@ export function holdsWords(b: Pick<BackupRecord, 'bytes' | 'tables' | 'rows' | '
     b.rows !== null ? plural(b.rows, 'row', 'rows') : null,
     b.entries !== null ? plural(b.entries, 'entry', 'entries') : null,
     b.lines !== null ? plural(b.lines, 'line', 'lines') : null,
+  ].filter(Boolean).join(' · ');
+}
+
+/** What a restore test put back and checked, in one line: "90 tables · 41,200 rows · 3,100 entries · 9,800 lines · 67 links between tables". */
+export function restoredWords(d: Pick<DrillRecord, 'tables' | 'rows' | 'entries' | 'lines' | 'links'>): string {
+  return [
+    holdsWords({ ...d, bytes: null }),
+    d.links !== null ? plural(d.links, 'link between tables', 'links between tables') : '',
   ].filter(Boolean).join(' · ');
 }

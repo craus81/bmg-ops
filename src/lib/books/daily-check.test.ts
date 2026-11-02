@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  adjustmentAlertsFor, alertsFor, backupAlertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, fulfillmentAlertsFor,
+  adjustmentAlertsFor, alertsFor, backupAlertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, drillAlertsFor, fulfillmentAlertsFor,
   invoicePdfAlertsFor, lookOf,
   mistakeAlertsFor, nextCheck, numberAlertsFor, ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
   type BalanceNews, type ChangeAlertItem, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews,
@@ -1030,5 +1030,34 @@ describe('backupAlertsFor', () => {
 
   it('tells nothing when the backups are fine', () => {
     expect(backupAlertsFor(null)).toEqual([]);
+  });
+});
+
+describe('drillAlertsFor', () => {
+  it("says why the newest backup didn't pass its restore test, opening it on Books → Backups", () => {
+    expect(drillAlertsFor({ kind: 'failed', id: 'd-1', backupId: 'b-1', backupAt: '2026-11-02T08:11:00Z', error: 'gl_lines has 899 rows in the scratch database, and the backup\'s manifest says 900.' })).toEqual([{
+      title: "Backups: the books' restore test didn't pass",
+      body: "gl_lines has 899 rows in the scratch database, and the backup's manifest says 900. It was putting back the backup from Nov 2, 2026, 2:11 AM. "
+        + 'Books → Backups can test it again.',
+      url: '/admin/books/backups?backup=b-1',
+      about: 'drill',
+    }]);
+    expect(drillAlertsFor({ kind: 'failed', id: 'd-2', backupId: 'b-1', backupAt: '2026-11-02T08:11:00Z', error: null })[0].body)
+      .toBe('It stopped without saying why. It was putting back the backup from Nov 2, 2026, 2:11 AM. Books → Backups can test it again.');
+    expect(drillAlertsFor({ kind: 'failed', id: 'd-3', backupId: 'b-1', backupAt: '2026-11-02T08:11:00Z', error: `${'x'.repeat(170)} y` })[0].body)
+      .toMatch(/^x{160}… It was putting back/);
+  });
+
+  it("says the newest backup hasn't had its restore test, opening it on Books → Backups", () => {
+    expect(drillAlertsFor({ kind: 'missed', id: null, backupId: 'b-2', backupAt: '2026-07-01T08:11:00Z', error: null })).toEqual([{
+      title: "Backups: the books' restore test didn't run",
+      body: "The nightly restore test, at 2:51 AM Central, hasn't put back the backup from Jul 1, 2026, 3:11 AM. Books → Backups can test it now.",
+      url: '/admin/books/backups?backup=b-2',
+      about: 'drill',
+    }]);
+  });
+
+  it('tells nothing when the newest backup passed', () => {
+    expect(drillAlertsFor(null)).toEqual([]);
   });
 });

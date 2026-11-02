@@ -28,6 +28,7 @@ import { FIELD_NAMES, isBlank, keepSends, KIND_NAMES, recordsWin, shownValue, ty
 import { lookAtOwnNumbers, markOwnNumbersTold, OWN_NUMBER_KINDS, type NumberAlertItem } from './own-numbers';
 import { lookAtInvoicePdfs, markInvoicePdfsTold, type PdfAlertItem } from './invoice-pdfs';
 import { lookAtBackups, type BackupAlertItem } from './backups';
+import { lookAtDrills, type DrillAlertItem } from './restore-drill';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -126,7 +127,10 @@ import { lookAtBackups, type BackupAlertItem } from './backups';
  *
  * And the backups of the books (part 84, src/lib/books/backups.ts): at each
  * day's first look, after the night's backup, the newest one if it didn't
- * work, or that none good has been made in 26 hours.
+ * work, or that none good has been made in 26 hours. And their restore test
+ * (part 85, src/lib/books/restore-drill.ts): at each day's first look, after
+ * the night's test, the newest good backup's if it didn't pass, or that it
+ * has had none.
  *
  * In-app and push only (books_month_differs, books_stock_differs,
  * books_balance_differs, books_own_invoice_differs,
@@ -135,7 +139,8 @@ import { lookAtBackups, type BackupAlertItem } from './backups';
  * Adjusts (books_own_adjustment_differs), the sends
  * (books_netsuite_send_unsure), what changed in NetSuite
  * (books_record_changed_in_netsuite), own numbers (books_own_number),
- * invoice PDFs (books_invoice_pdf) and backups (books_backup), which are emailed too to a super admin
+ * invoice PDFs (books_invoice_pdf), backups (books_backup) and their restore test
+ * (books_restore_drill), which are emailed too to a super admin
  * with "Copy me on new alerts" ticked (Craig, 2026-10-28). The record in
  * sync_state, 'books_daily_check', holds which months differ and how many of
  * their documents, which items' counts differ and by about how many, whose
@@ -331,10 +336,11 @@ export interface CheckAlert {
    * (books_own_receipt_differs), the Inventory Adjusts (books_own_adjustment_differs), likely mistakes
    * (books_mistake_found), sends to NetSuite FleetSuite isn't sure about (books_netsuite_send_unsure), what changed
    * in NetSuite (books_record_changed_in_netsuite), FleetSuite's own numbers (books_own_number), its invoice PDFs
-   * (books_invoice_pdf) or the backups of the books (books_backup); one about months has none (books_month_differs).
+   * (books_invoice_pdf), the backups of the books (books_backup) or their restore test (books_restore_drill); one
+   * about months has none (books_month_differs).
    */
   about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change' | 'number' | 'pdf'
-    | 'backup';
+    | 'backup' | 'drill';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -945,6 +951,29 @@ export function backupAlertsFor(item: BackupAlertItem | null): CheckAlert[] {
   }];
 }
 
+/**
+ * What the super admins are told about the restore test at the day's first look (src/lib/books/restore-drill.ts):
+ * the newest good backup didn't pass its latest, or has had none; both open the backup on Books → Backups.
+ */
+export function drillAlertsFor(item: DrillAlertItem | null): CheckAlert[] {
+  if (!item) return [];
+  const backup = `the backup from ${backupTime(item.backupAt)}`;
+  if (item.kind === 'failed') {
+    return [{
+      title: "Backups: the books' restore test didn't pass",
+      body: `${shortReason(item.error || 'It stopped without saying why.')} It was putting back ${backup}. Books → Backups can test it again.`,
+      url: deepLinks.booksBackups(item.backupId),
+      about: 'drill',
+    }];
+  }
+  return [{
+    title: "Backups: the books' restore test didn't run",
+    body: `The nightly restore test, at 2:51 AM Central, hasn't put back ${backup}. Books → Backups can test it now.`,
+    url: deepLinks.booksBackups(item.backupId),
+    about: 'drill',
+  }];
+}
+
 // ── Looking ────────────────────────────────────────────────────────────────
 
 /** Months whose documents are looked up at once. */
@@ -1484,6 +1513,16 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     told += backup.length;
   } catch (err) {
     errors.push(`Backups: ${reason(err)}`);
+  }
+
+  // The restore test: at the day's first look, after the night's test, the newest good backup's if it didn't pass, or
+  // none on it. Told each morning until one passes.
+  try {
+    const drill = drillAlertsFor(await lookAtDrills(service, opts.look === 'first'));
+    alerts.push(...drill);
+    told += drill.length;
+  } catch (err) {
+    errors.push(`Restore test: ${reason(err)}`);
   }
 
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.

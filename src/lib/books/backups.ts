@@ -126,6 +126,7 @@ export const NOT_BOOKS: Readonly<Record<string, string>> = {
   app_request_files: 'In-app requests.',
   app_request_me_too: 'In-app requests.',
   books_backups: 'The record of the backups themselves.',
+  books_restore_drills: 'The record of the restore drills, which put each backup back into a scratch database.',
 };
 
 export interface BackupColumn {
@@ -170,8 +171,10 @@ interface TrialBalance {
 /** A problem to say as it is, in the words the page shows. */
 export class BackupProblem extends Error {}
 
-const reasonOf = (err: unknown) => String((err as any)?.message || err || 'unknown error').replace(/\s+/g, ' ').trim().slice(0, 500);
-const counted = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+/** An error's message on one line, for a record or a page. */
+export const reasonOf = (err: unknown) => String((err as any)?.message || err || 'unknown error').replace(/\s+/g, ' ').trim().slice(0, 500);
+/** 1 → '1 entry', 1200 → '1,200 entries'. */
+export const counted = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
 // ── CSV, as Postgres's COPY writes and reads it ─────────────────────────────
 

@@ -2019,6 +2019,12 @@ good has been made in 26 hours, or none ever (`books_backup`, in the app and
 by push, and emailed to a super admin with "Copy me on new alerts" ticked).
 It's told each morning until a good one is made.
 
+And their restore test (part 85, "The restore drill"): at each day's first
+look, after the night's test, the newest good backup's latest test if it
+didn't pass, saying why, or that it has had none 90 minutes after it began,
+both opening the backup on Books → Backups (`books_restore_drill`, sent as
+`books_backup` is). It's told each morning until one passes.
+
 ## Reports
 
 `/admin/books/reports` shows one company's profit and loss, balance sheet,
@@ -7374,13 +7380,79 @@ Into an empty Postgres, as its superuser, with psql:
 
 `src/lib/books/backups.test.ts` restores a backup this way into an empty
 database and holds that it comes back row for row, a closed month still
-closed and the next entry numbered after the last.
+closed and the next entry numbered after the last. The restore drill does
+the same every night ("The restore drill").
 
 ### What isn't done yet
 
-- The restore drill: a backup restored into a scratch database and checked,
-  on a schedule (part 85, the rest of the checklist's Backups).
 - A second copy away from Cloudflare.
+
+## The restore drill
+
+Part 85 (migration 507, `src/lib/books/restore-drill.ts`) puts a backup back
+the way "Restoring one" says and checks the books came back whole, the rest
+of the NetSuite Exit Checklist's Backups: every night at 08:51 UTC (2:51 AM
+Central, 3:51 in summer time; `/api/cron/books-restore-drill`, 40 minutes
+after the backup and before the daily check's first look), on the newest
+good backup, and whenever a super admin presses Test restore now on
+Books → Backups. The nightly one restores each backup until it has passed
+once; one that failed is tried again the next night. It never touches the
+books: the scratch database is Postgres run as WebAssembly (PGlite, Postgres
+18) in the drill's own memory and thrown away after, so it needs no switch.
+
+A drill:
+
+1. takes the backup's zip out of BMG's file storage, checks it's the size
+   and SHA-256 the backup kept, and checks it again as the backup did (each
+   file's SHA-256 against the manifest, and the journal adding up to the
+   manifest's trial balance);
+2. builds empty books from FleetSuite's own migrations, up to the backup's
+   (the manifest's `migration`): migrations 314 and 454 (`DRILL_NEEDS`),
+   and each migration from 359 on that names one of the books' tables, over
+   small stand-ins for the rest of FleetSuite they point at
+   (`DRILL_STAND_INS`: the roles, profiles, customers, NetSuite's parts and
+   orders). A backup made by a newer FleetSuite than the one running is
+   refused, saying so;
+3. checks each table it built has the backup's shape: the same columns of
+   the same types, key, generated and identity columns, and tables it
+   points at;
+4. restores the backup as "Restoring one" does: triggers and foreign keys
+   held, each table emptied, each CSV file loaded in `load_order` with its
+   first line matched against the manifest's columns, and each identity
+   column's next number set past the highest;
+5. checks the restored books: each table holds the rows the manifest counts;
+   each row that points at another of the books' tables finds its row (the
+   links); the journal has the backup's entries and lines; each entry has
+   two lines or more and balances; each line has its entry's company and
+   date and an account of that company; and the journal adds up, account by
+   account, to the trial balance the backup was made with.
+
+The first thing wrong is said in words (`books_restore_drills.error`); one
+that passes keeps what came back: tables, rows, entries, lines and links.
+One runs at a time, with 270 seconds to finish in; one still running after
+10 minutes has stopped and is marked failed. A drill's record changes only
+while it runs, and every one is kept.
+
+Books → Backups' Restore test panel says how the newest good backup's test
+went, marks each backup with its latest test, and says when the next
+nightly one runs; a super admin's Test restore now tests the newest good
+backup at once (`test_restore_books` in the audit log). At each day's first
+look the daily check tells the super admins when the newest good backup's
+latest test didn't pass, or it has had none 90 minutes after it began
+(`books_restore_drill`, "Daily check"), opening the backup on
+Books → Backups, each morning until one passes.
+
+`src/lib/books/restore-drill.test.ts` builds the scratch database from every
+migration, so a books migration that won't run there fails the tests rather
+than the night's drill (migrations/README.md), then backs up a made-up
+journal, restores it, and breaks the backup some thirty ways, holding that
+each is caught and said.
+
+### What isn't done yet
+
+- A rehearsal into a database like Supabase's own: the drill restores into
+  PGlite's Postgres 18, which proves the files and the migrations, not the
+  time a real restore takes.
 
 ## Who can open the books
 
