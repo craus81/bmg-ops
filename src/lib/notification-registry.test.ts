@@ -136,6 +136,7 @@ describe.each([
   ["sends to NetSuite FleetSuite isn't sure about", 'books_netsuite_send_unsure', "FleetSuite isn't sure NetSuite took a send"],
   ["a customer's, vendor's or item's details changed in NetSuite", 'books_record_changed_in_netsuite', "A customer's, vendor's or item's details changed in NetSuite"],
   ["FleetSuite's own numbers", 'books_own_number', "NetSuite didn't keep FleetSuite's number, or something was made in NetSuite"],
+  ["FleetSuite's invoice PDFs", 'books_invoice_pdf', "An invoice's PDF didn't go to NetSuite"],
 ])('%s (Craig, 2026-10-28: new alerts copy him by email)', (_what, type, label) => {
 
   it('is listed in Settings → Notifications by what it tells', () => {

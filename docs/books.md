@@ -5934,12 +5934,92 @@ it.
 
 ### What isn't done yet
 
-- The invoice PDF going to NetSuite with each invoice is part 68.
+- The invoice PDF going to NetSuite with each invoice is part 68 (Invoice
+  PDFs, below).
 - Sales orders and POs still start in NetSuite for whoever makes them
   there; the list made in NetSuite shows who, and the switch doesn't stop
   them.
 - Estimates, customer payments, deposits and journal entries keep
   NetSuite's numbers.
+
+## Invoice PDFs
+
+With FleetSuite's own numbers, the plan has each invoice FleetSuite makes
+carry FleetSuite's own PDF of it in NetSuite from the second quarter of 2027
+(the NetSuite Exit Checklist's April to June group). Part 68 builds it,
+switched off (`invoice_pdfs`, migration 498, `src/lib/books/invoice-pdfs.ts`).
+
+Books opens FleetSuite's own PDF of any of its own invoices, switched on or
+off: FleetSuite's PDF on the invoice's page in Books → Own invoices
+(`/api/admin/books/own-invoices/pdf`). It's drawn from FleetSuite's copy of
+the invoice (`src/lib/books/own-invoice-pdf.ts`): the letterhead from
+Settings → Company, who it's billed to from FleetSuite's record of the
+customer (NetSuite's name where it has none), the number, date, due date,
+terms, PO and VIN, each line, and the subtotal, sales tax and total, marked
+Voided when NetSuite voided the invoice. A line whose price FleetSuite didn't
+know shows Not priced; that copy is incomplete, so its PDF never goes to
+NetSuite. The same builder makes the PDF NetSuite gets, so the two can't
+differ. Whoever opens the books opens it.
+
+Once a super admin switches it on, the two-hourly run
+(`/api/cron/books-invoice-pdfs`, :56 on odd UTC hours, after the invoice
+copies it checks against) looks at each copy made since, the ones it hasn't
+looked at first, 25 a run in four minutes. A copy that matches NetSuite's
+invoice has its PDF sent through the PDF script in NetSuite
+(`attachPdfToInvoice`, `scripts/netsuite-pdf-restlet.js` action
+`attach_pdf`): kept in the File Cabinet's FleetSuite Invoice PDFs folder as
+Invoice_INV10001_123456.pdf (the number, then NetSuite's id for the
+invoice) and attached to the invoice. Fix an invoice makes the copy's next
+version, and that gets its own file (`_v2`); the earlier one comes off the
+invoice once the next is on, and when NetSuite can't take it off, both stay
+and the invoice's page says so. Sent again under the same name, because
+FleetSuite never heard the first answer, the script finds the file it kept
+and attaches that, so an invoice never gets two. A PDF over 700 KB isn't
+sent: it's kept as refused, saying a smaller logo makes it smaller.
+
+A copy that doesn't match is held back, saying why: it differs from
+NetSuite's invoice, it's incomplete, NetSuite voided the invoice, or the copy
+of NetSuite's invoice isn't there yet. The run looks again on each run while
+a copy waits for NetSuite's in its first three days, and once a day for the
+rest while the copy is under 60 days old; never for a voided one. NetSuite
+refusing it is tried again 20 hours on; FleetSuite not sure NetSuite has it,
+an hour on; and one still on its way 15 minutes on never heard back, and is
+sent again. After three tries the run stops. The daily check tells the super
+admins, once each, about every PDF NetSuite refused or FleetSuite is still
+unsure about after three tries (`books_invoice_pdf`, emailed, and copied to
+whoever has Copy me on new alerts), and each morning about a run that
+couldn't send any: the PDF script can't take them, or the company's name
+couldn't be read for the letterhead. Each send is on the NetSuite feed as
+a PDF for an invoice; the feed's not-sure alert leaves them to this one,
+since the run sends them again itself.
+
+The invoice's page says where its PDF is (`src/lib/books/invoice-pdf-status.ts`):
+on NetSuite's invoice, when and by whom; held back and why, and when the run
+looks again; on its way; or what NetSuite said and when FleetSuite tries
+again. One attached before NetSuite's invoice changed is said too. While
+the copy matches NetSuite's invoice, a super admin can send it from there,
+even after the run's three tries (audited, `send_invoice_pdf`, without
+amounts). The run doesn't look at copies made before Invoice PDFs went on:
+those go only from the page.
+
+While it's off, nothing goes to NetSuite, and the invoice's page says so.
+
+### Before switching on
+
+- Upload the newest `scripts/netsuite-pdf-restlet.js` (2026-11-01.1) over
+  the PDF script in NetSuite, then open its script record, Edit, and Save,
+  so it picks up POST (POST = onPost). Until then System Health shows the
+  PDF RESTlet behind, and the run sends nothing, saying why.
+- The deployment's role needs Documents and Files (Create) and Invoice
+  (Edit).
+- Look at the company's name and logo in Settings → Company: they're the
+  PDF's letterhead.
+
+### What isn't done yet
+
+- Emails of invoices, from NetSuite or from FleetSuite, still carry
+  NetSuite's own PDF.
+- Credit memos get no PDF of FleetSuite's own.
 
 ## Switches
 

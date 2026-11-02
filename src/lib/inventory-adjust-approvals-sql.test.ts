@@ -83,8 +83,9 @@ describe('migration 494', () => {
   it('starts approving adjustments switched off, a sixteenth piece', async () => {
     expect((await pg.query(`SELECT piece, is_on, changed_by FROM books_switches WHERE piece = 'adjustment_approvals'`)).rows)
       .toEqual([{ piece: 'adjustment_approvals', is_on: false, changed_by: null }]);
-    // Every piece the app named then is one the column takes, and nothing else is (497 adds FleetSuite's own numbers).
-    const then = SWITCH_PIECES.filter((piece) => piece !== 'own_numbers');
+    // Every piece the app named then is one the column takes, and nothing else is (497 adds FleetSuite's own numbers,
+    // 498 invoice PDFs).
+    const then = SWITCH_PIECES.filter((piece) => piece !== 'own_numbers' && piece !== 'invoice_pdfs');
     expect(then).toHaveLength(16);
     await pg.exec('BEGIN');
     try {

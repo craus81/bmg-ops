@@ -8,6 +8,7 @@ import { BOOKS_DAILY_CHECK } from '@/lib/books/daily-check';
 import { checkOwnInvoices, type OwnPairsData } from '@/lib/books/own-invoice-check';
 import { OWN_COMPANY } from '@/lib/books/own-invoices';
 import { ownBooks, type OwnBooks } from '@/lib/books/own-invoice-posting';
+import { readInvoicePdfView } from '@/lib/books/invoice-pdfs';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,7 +30,10 @@ const monthEnd = (month: string) => {
  * line. Each says what the books hold for the invoice (`books`, migration
  * 409): the entry that stands and whether it was made from FleetSuite's own
  * copy or NetSuite's invoice (src/lib/books/own-invoice-posting.ts), null
- * when none stands. Amounts are whole cents.
+ * when none stands. Amounts are whole cents. The one invoice also says
+ * where FleetSuite's own PDF of it is in NetSuite (`pdf`, migration 498,
+ * src/lib/books/invoice-pdf-status.ts), or why that couldn't be read
+ * (`pdfError`).
  *
  * Super admins, the bookkeeper and the CPA, as the rest of the books
  * (docs/books.md "FleetSuite's own invoices").
@@ -59,7 +63,10 @@ export async function GET(req: NextRequest) {
     if (!invoice) return NextResponse.json({ error: 'FleetSuite has no copy of that invoice' }, { status: 404 });
     const books = await booksFor([invoice.netsuiteId]);
     if ('error' in books) return NextResponse.json({ error: books.error }, { status: 500 });
-    return NextResponse.json({ invoice: { ...invoice, books: books.get(invoice.netsuiteId) ?? null } });
+    // The PDF's line is one part of the page: a read of it that fails leaves the rest.
+    const pdf = await readInvoicePdfView(service, invoice.netsuiteId)
+      .then((view) => ({ pdf: view }), (err) => ({ pdfError: String(err?.message || err) }));
+    return NextResponse.json({ invoice: { ...invoice, books: books.get(invoice.netsuiteId) ?? null, ...pdf } });
   }
 
   const [months, mirror, copy, lists, check] = await Promise.all([

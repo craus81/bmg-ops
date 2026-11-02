@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, 478 to 480, 485 to 488, 494 and 497, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 to 480, 485 to 488, 494, 497 and 498, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -22,13 +22,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * Receiving payments, taking deposits, bank deposits and paying vendors stay
  * off past January 1, until they move into FleetSuite during 2027,
  * approving adjustments until the plan adds it in 2027, and FleetSuite's own
- * numbers until the second quarter of 2027 (`later` says so).
+ * numbers and invoice PDFs until the second quarter of 2027 (`later` says so).
  */
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
   | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments'
-  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals' | 'own_numbers';
+  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals' | 'own_numbers' | 'invoice_pdfs';
 
 export interface SwitchInfo {
   name: string;
@@ -142,6 +142,14 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     turnOn: "Switch on FleetSuite's own numbers? First tick Allow Override for Sales Order, Purchase Order, Invoice and Credit Memo in NetSuite (Setup → Company → Auto-Generated Numbers), or NetSuite keeps its own numbers. From now on each one FleetSuite makes gets FleetSuite's next number.",
     turnOff: "Switch off FleetSuite's own numbers? NetSuite numbers what FleetSuite makes again, as before. The numbers FleetSuite already gave stay on their documents.",
     later: "Stays off on January 1: FleetSuite's own numbers start in the second quarter of 2027.",
+  },
+  invoice_pdfs: {
+    name: 'Invoice PDFs',
+    what: "Each invoice FleetSuite makes gets FleetSuite's own PDF of it attached in NetSuite, once FleetSuite's copy matches NetSuite's invoice, and each invoice's page in Books says whether NetSuite has it. Until it's on, FleetSuite sends no PDF, and Books still opens FleetSuite's PDF of each invoice.",
+    where: 'Books → Own invoices, on each invoice',
+    turnOn: "Switch on Invoice PDFs? First upload the newest PDF script (scripts/netsuite-pdf-restlet.js) in NetSuite and save its script record, or NetSuite can't take the PDFs. From now on each invoice FleetSuite makes gets FleetSuite's own PDF attached in NetSuite once FleetSuite's copy matches it.",
+    turnOff: "Switch off Invoice PDFs? FleetSuite stops sending its PDFs to NetSuite. The ones already attached stay on their invoices.",
+    later: "Stays off on January 1: FleetSuite's invoice PDFs go to NetSuite from the second quarter of 2027, with FleetSuite's own numbers.",
   },
 };
 

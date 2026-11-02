@@ -282,6 +282,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Super admins, the only people who can open the books.' },
+  // FleetSuite's invoice PDFs once switched on (part 68, migration 498).
+  // Emailed like the send alert, only to anyone with "Copy me on new alerts"
+  // (Craig's standing rule, 2026-10-28).
+  { type: 'books_invoice_pdf', label: "An invoice's PDF didn't go to NetSuite", description: "Once Invoice PDFs is switched on, NetSuite refused FleetSuite's PDF of an invoice, FleetSuite still isn't sure NetSuite has it after three tries, or the two-hourly run couldn't send any (the PDF script in NetSuite needs its newest copy, or the company's name couldn't be read). Told once, at the daily check's first look after it; a run that couldn't send any is told at each day's first look until it can. Opens the invoice's page in Books → Own invoices, the NetSuite feed when there are several, or Books → Switches.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, the only people who can open the books.' },
   { type: 'books_mistake_found', label: 'Books found likely mistakes in NetSuite', description: "FleetSuite's nightly mistake checks found a bill, check or card charge copied from NetSuite that looks like a mistake (entered twice, far off the vendor's usual, a monthly charge missing, or coded to an account the vendor doesn't use) and nobody has cleared it by the daily check's second look. Opens it on Mistake checks, or the list when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
 
   // ── Contract installers (CNI) ─────────────────────────────────────────

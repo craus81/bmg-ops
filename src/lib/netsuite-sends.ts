@@ -47,7 +47,7 @@ export interface Send {
   madeType: string | null;
   /** A document number, external ID or name it sends, to find it by in NetSuite. */
   docRef: string | null;
-  /** Sent to the item script (a RESTlet), whose answer says in its body whether it did it. */
+  /** Sent to a script in NetSuite (a RESTlet: the item script, or the PDF script's attach_pdf), whose answer says in its body whether it did it. */
   script: boolean;
 }
 
@@ -129,6 +129,10 @@ export function sendOf(url: string, method: string | undefined, body: unknown): 
     const script = { ...base, script: true };
     if (fields?.action === 'createDropShipPo') {
       return { ...script, action: 'transform', recordType: 'salesOrder', recordId: idOf(fields.salesOrderId), madeType: 'purchaseOrder' };
+    }
+    // FleetSuite's own PDF of an invoice, attached to it by the PDF script (Books part 68): found by the file's name.
+    if (fields?.action === 'attach_pdf') {
+      return { ...script, action: 'change', recordType: 'invoice', recordId: digitsOf(fields.invoiceId), docRef: refOf(fields.fileName) };
     }
     if (fields && 'itemId' in fields) {
       return { ...script, action: 'change', recordType: 'item', recordId: idOf(fields.itemId), docRef: refOf(fields.itemNumber) };
@@ -399,9 +403,18 @@ export function recordName(type: string): string {
 const a = (name: string) => `${/^[aeiou]/i.test(name) ? 'an' : 'a'} ${name}`;
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/**
+ * Whether a send was the PDF script's attach_pdf (Books part 68), by what sendOf keeps of it: a change to an invoice
+ * found by a PDF file's name. FleetSuite sends those again itself, and Invoice PDFs tells about the ones that don't take.
+ */
+export function isInvoicePdfSend(s: { action: SendAction; record_type: string; doc_ref?: string | null }): boolean {
+  return s.action === 'change' && s.record_type === 'invoice' && /\.pdf$/i.test(s.doc_ref ?? '');
+}
+
 /** What a send asked NetSuite for, in a few words: 'New invoice', 'Change to a sales order', 'Invoice from a sales order'. */
-export function describeSend(s: { action: SendAction; record_type: string; made_type: string | null }): string {
+export function describeSend(s: { action: SendAction; record_type: string; made_type: string | null; doc_ref?: string | null }): string {
   if (s.action === 'script') return 'Request to the item script';
+  if (isInvoicePdfSend(s)) return 'PDF for an invoice';
   if (s.record_type === 'other') return s.action === 'create' ? 'New record in NetSuite' : s.action === 'delete' ? 'Deletion in NetSuite' : 'Change in NetSuite';
   const name = recordName(s.record_type);
   if (s.action === 'create') return `New ${recordName(s.made_type ?? s.record_type)}`;

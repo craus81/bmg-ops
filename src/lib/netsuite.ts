@@ -5836,6 +5836,56 @@ export async function getNetSuitePdf(
   }
 }
 
+/** How long attaching an invoice PDF waits for NetSuite: the script keeps the file, then attaches it. */
+const ATTACH_PDF_TIMEOUT_MS = 60_000;
+
+export type AttachPdfAnswer =
+  | { outcome: 'attached'; fileId: string; replaced: boolean | null }
+  | { outcome: 'refused' | 'unsure'; error: string };
+
+/**
+ * Attaches FleetSuite's own PDF of an invoice to NetSuite's invoice (Books part 68, src/lib/books/invoice-pdfs.ts)
+ * through the PDF script's attach_pdf (scripts/netsuite-pdf-restlet.js, 2026-11-01.1 on): kept in the File Cabinet as
+ * fileName and attached, and an earlier version's file, when one is named, taken off the invoice. Sent once, as every
+ * POST to a script is; the script finds a file it already kept by its name, so sending the same one again never
+ * attaches two. Never throws: NetSuite's answer comes back as attached, refused, or unsure when FleetSuite can't tell
+ * whether NetSuite has it.
+ */
+export async function attachPdfToInvoice(args: {
+  invoiceId: string;
+  fileName: string;
+  pdfBase64: string;
+  replaceFileId: string | null;
+}): Promise<AttachPdfAnswer> {
+  const restletUrl = process.env.NETSUITE_PDF_RESTLET_URL;
+  if (!restletUrl) return { outcome: 'refused', error: "The PDF script's address isn't set (NETSUITE_PDF_RESTLET_URL), so nothing was sent." };
+  let result: any;
+  try {
+    result = await callRestlet(restletUrl, 'POST', undefined, {
+      action: 'attach_pdf',
+      invoiceId: args.invoiceId,
+      fileName: args.fileName,
+      pdfBase64: args.pdfBase64,
+      ...(args.replaceFileId ? { replaceFileId: args.replaceFileId } : {}),
+    }, { timeoutMs: ATTACH_PDF_TIMEOUT_MS });
+  } catch (e: any) {
+    if (e?.name === 'TimeoutError') return { outcome: 'unsure', error: "NetSuite didn't answer in time." };
+    const message = String(e?.message || e || 'NetSuite did not answer').slice(0, 600);
+    const status = Number(/^NetSuite RESTlet error \((\d{3})\)/.exec(message)?.[1] ?? 0);
+    // A 4xx is NetSuite saying no, but for a concurrency rejection, which says only that it was busy.
+    if (status >= 400 && status < 500 && !isConcurrencyError(status, message)) return { outcome: 'refused', error: message };
+    return { outcome: 'unsure', error: message };
+  }
+  if (result?.success === false) {
+    return { outcome: 'refused', error: String(result.error || "The PDF script said it didn't attach it.").slice(0, 600) };
+  }
+  const fileId = typeof result?.fileId === 'string' || typeof result?.fileId === 'number' ? String(result.fileId) : '';
+  if (result?.success === true && /^\d{1,20}$/.test(fileId)) {
+    return { outcome: 'attached', fileId, replaced: typeof result.replaced === 'boolean' ? result.replaced : null };
+  }
+  return { outcome: 'unsure', error: "NetSuite answered, but not in a way FleetSuite could read, so it can't tell whether the PDF is on the invoice." };
+}
+
 /**
  * Update an item's description in NetSuite via the item RESTlet.
  *
