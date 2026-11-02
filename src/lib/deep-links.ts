@@ -703,6 +703,14 @@ export const deepLinks = {
    *  it's left out. Open to whoever opens the books. */
   booksSalesTax: (month?: string | null) =>
     `/admin/books/sales-tax${month ? `?${new URLSearchParams({ month: month.slice(0, 7) })}` : ''}`,
+  /** Books → Year end on one company's year: it closing into retained
+   *  earnings, what's done before it closes, and closing or reopening it
+   *  (src/lib/books/year-end.ts); BMG and last year when they're left out.
+   *  Open to whoever opens the books. */
+  booksYearEnd: (company?: string | null, year?: number | null) => {
+    const query = new URLSearchParams({ ...(company ? { company } : {}), ...(year ? { year: String(year) } : {}) }).toString();
+    return `/admin/books/year-end${query ? `?${query}` : ''}`;
+  },
   /** Books → Own numbers: the numbers FleetSuite gives each sales order, PO,
    *  invoice and credit memo it makes in NetSuite once FleetSuite's own
    *  numbers is on (src/lib/books/own-numbers.ts), the numbers of one kind

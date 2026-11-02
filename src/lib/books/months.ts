@@ -8,8 +8,9 @@ import { lastDay } from './opening-balances';
 /**
  * Closing a month (docs/books.md "Closing a month"). Books → Months closes a
  * company's months in FleetSuite's books one after another, each once it's
- * over, and reopens the latest one closed, for a reason; both are logged
- * (migration 359's gl_period_events). A closed month takes nothing new, so
+ * over, and reopens the latest one closed, for a reason, unless its year is
+ * closed on Books → Year end (migration 502); both are logged (migration
+ * 359's gl_period_events). A closed month takes nothing new, so
  * the posting run leaves it as it is and what NetSuite changes in it waits
  * until it's reopened. Closing starts with the month the books went live:
  * nothing dated before then posts but the opening entry anyway.
@@ -49,7 +50,12 @@ export interface MonthRow {
   closed: { at: string | null; by: string | null } | null;
   compared: MonthCompared;
   events: MonthEvent[];
-  /** What can be done with it now: the first month that's open and over can be closed, the latest one closed reopened. */
+  /** Its year is closed on Books → Year end, so it stays closed until the year is reopened (migration 502). */
+  yearClosed: boolean;
+  /**
+   * What can be done with it now: the first month that's open and over can be closed, the latest one closed reopened
+   * unless its year is closed.
+   */
   can: 'close' | 'reopen' | null;
 }
 
@@ -83,7 +89,9 @@ export function monthRows(opts: {
   liveFrom: string | null;
   today: string;
   periods: PeriodRow[];
-  compared: Map<string, MonthCompared>;
+  compared: ReadonlyMap<string, MonthCompared>;
+  /** The company's years closed on Books → Year end. */
+  closedYears: ReadonlySet<number>;
 }): MonthRow[] {
   if (!opts.liveFrom) return [];
   const first = monthOfDate(opts.liveFrom)!;
@@ -96,13 +104,15 @@ export function monthRows(opts: {
   return months.map((month): MonthRow => {
     const period = byMonth.get(month);
     const over = lastDay(month) < opts.today;
+    const yearClosed = opts.closedYears.has(Number(month.slice(0, 4)));
     return {
       month,
       over,
       closed: period?.closed ? { at: period.closedAt, by: period.closedBy } : null,
       compared: opts.compared.get(month) ?? NOTHING,
       events: period?.events ?? [],
-      can: month === lastClosed ? 'reopen' : month === firstOpen && over ? 'close' : null,
+      yearClosed,
+      can: month === lastClosed ? (yearClosed ? null : 'reopen') : month === firstOpen && over ? 'close' : null,
     };
   }).reverse();
 }
@@ -132,15 +142,44 @@ export function closeRefusal(opts: {
   return null;
 }
 
-/** Why a month can't be reopened now, or null when it can: only the latest one closed, and only for a reason. */
+/**
+ * Why a month can't be reopened now, or null when it can: only the latest one closed, not in a closed year, and only
+ * for a reason.
+ */
 export function reopenRefusal(opts: { rows: MonthRow[]; month: string; reason: string }): Refusal | null {
   const words = monthText(opts.month);
   const row = opts.rows.find((r) => r.month === opts.month);
   if (!row?.closed) return { message: `${words} isn't closed.`, status: 409 };
+  if (row.yearClosed) {
+    return { message: `${opts.month.slice(0, 4)} is closed, so ${words} stays closed. Reopen the year on Year end first.`, status: 409 };
+  }
   const later = opts.rows.filter((r) => r.month > opts.month && r.closed).map((r) => r.month).sort().reverse()[0];
   if (later) return { message: `Reopen ${monthText(later)} first: months reopen from the latest.`, status: 409 };
   if (!opts.reason.trim()) return { message: `Say why ${words} is reopened.`, status: 400 };
   return null;
+}
+
+/**
+ * A company's months as gl_periods holds them, and each month compared with NetSuite as Differences vs NetSuite
+ * compares it (gl_books_differences).
+ */
+export async function readMonthFacts(
+  service: SupabaseClient,
+  company: { id: string; code: string },
+): Promise<{ periods: PeriodRow[]; compared: Map<string, MonthCompared> }> {
+  const [periods, sides] = await Promise.all([
+    readPeriods(service, company.id),
+    service.rpc('gl_books_differences', { p_company: company.code }),
+  ]);
+  if (sides.error) throw new Error(`Couldn't compare the books with NetSuite: ${sides.error.message}`);
+  const raw = (sides.data ?? {}) as Partial<DiffData>;
+  const compared = comparedMonths({
+    netsuite: raw.netsuite ?? [],
+    fleetsuite: raw.fleetsuite ?? [],
+    netsuite_kinds: raw.netsuite_kinds ?? [],
+    fleetsuite_kinds: raw.fleetsuite_kinds ?? [],
+  });
+  return { periods, compared };
 }
 
 /** A company's months as gl_periods holds them, with every close and reopen, oldest first. */

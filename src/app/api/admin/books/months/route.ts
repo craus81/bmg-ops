@@ -5,32 +5,24 @@ import { booksAllows } from '@/lib/books/access';
 import { createServiceClient } from '@/lib/supabase-service';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
-import type { DiffData } from '@/lib/books/differences';
 import { readCompanies, type CompanyRow } from '@/lib/books/going-live';
 import { BOOKS_COMPANIES, BooksError, setPeriodStatus, type BooksCompany } from '@/lib/books/journal';
 import { centralDate } from '@/lib/books/mistake-checks';
-import { closeRefusal, comparedMonths, monthRows, readPeriods, reopenRefusal } from '@/lib/books/months';
+import { closeRefusal, monthRows, readMonthFacts, reopenRefusal } from '@/lib/books/months';
 import { PLANNED_LIVE_FROM } from '@/lib/books/opening-balances';
+import { closedYears, readYears } from '@/lib/books/year-end';
 
 export const dynamic = 'force-dynamic';
 
 const failed = (err: unknown) => NextResponse.json({ error: String((err as any)?.message || err) }, { status: 500 });
 
-/** A company's months since its books went live, newest first, each compared with NetSuite as Differences vs NetSuite compares it. */
+/**
+ * A company's months since its books went live, newest first, each compared with NetSuite as Differences vs NetSuite
+ * compares it, and whether its year is closed.
+ */
 async function readMonths(service: SupabaseClient, company: CompanyRow, today: string) {
-  const [periods, sides] = await Promise.all([
-    readPeriods(service, company.id),
-    service.rpc('gl_books_differences', { p_company: company.code }),
-  ]);
-  if (sides.error) throw new Error(`Couldn't compare the books with NetSuite: ${sides.error.message}`);
-  const raw = (sides.data ?? {}) as Partial<DiffData>;
-  const compared = comparedMonths({
-    netsuite: raw.netsuite ?? [],
-    fleetsuite: raw.fleetsuite ?? [],
-    netsuite_kinds: raw.netsuite_kinds ?? [],
-    fleetsuite_kinds: raw.fleetsuite_kinds ?? [],
-  });
-  return monthRows({ liveFrom: company.books_live_from, today, periods, compared });
+  const [{ periods, compared }, years] = await Promise.all([readMonthFacts(service, company), readYears(service, company.id)]);
+  return monthRows({ liveFrom: company.books_live_from, today, periods, compared, closedYears: closedYears(years) });
 }
 
 /**
@@ -42,8 +34,9 @@ async function readMonths(service: SupabaseClient, company: CompanyRow, today: s
  *
  * POST { company, month: 'YYYY-MM', action: 'close' | 'reopen', reason } —
  * closes the first month that's open and over, or reopens the latest one
- * closed. Reopening needs a reason, and so does closing a month that doesn't
- * match NetSuite; the journal logs both (migration 359), and they're audited.
+ * closed unless its year is closed (Books → Year end, migration 502).
+ * Reopening needs a reason, and so does closing a month that doesn't match
+ * NetSuite; the journal logs both (migration 359), and they're audited.
  *
  * Super admins, the bookkeeper and the CPA see it; the bookkeeper and super
  * admins close a month, and only a super admin reopens one (docs/books.md "Who

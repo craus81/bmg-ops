@@ -670,6 +670,50 @@ export function yearClosings(data: ReportData, kind: ReportKind, key: string, ra
     .filter((c): c is { month: string; closed: Pair } => !!c.closed && !isZero(c.closed));
 }
 
+/**
+ * A year's close into retained earnings (docs/books.md "Year end"), each
+ * side as the balance sheet shows equity, credit positive. Nothing is
+ * posted to close it: the balance sheet takes the year's net income into
+ * retained earnings at the next one's start, as NetSuite's does. Where the
+ * chart has no retained earnings account, they're the balance sheet's own
+ * line of earlier years' net income, and nothing is posted to that.
+ */
+export interface YearCloseAmounts {
+  /** The retained earnings account, or null for the balance sheet's own line. */
+  account: { key: string; number: string | null; name: string } | null;
+  /** Retained earnings at January 1, once the year before closed into them. */
+  starting: Pair;
+  /** Posted straight to retained earnings in the year. */
+  posted: Pair;
+  /** The year's net income, a profit positive. */
+  netIncome: Pair;
+  /** Retained earnings once the year closes into them, at the next January 1. */
+  closed: Pair;
+}
+
+export function yearCloseAmounts(data: ReportData, year: number): YearCloseAmounts {
+  const b = books(data);
+  const january = `${year}-01-01`;
+  const december = `${year}-12-01`;
+  const incomeKeys = b.keys.filter((k) => isIncomeStatement(b, k));
+  const reAccount = retainedEarningsAccount(b.data.accounts, b.data.company);
+  const key = reAccount ? keyOf(reAccount) : null;
+  // Debit positive, as the books keep them.
+  const own = (f: (side: Side, key: string) => number) => (key ? pairOf((side) => f(side, key)) : ZERO);
+  const earlier = incomeKeys.reduce((sum, k) => plus(sum, pairOf((side) => before(b, side, k, january))), ZERO);
+  const thisYear = incomeKeys.reduce((sum, k) => plus(sum, pairOf((side) => moved(b, side, k, january, december))), ZERO);
+  const starting = times(-1, plus(own((side, k) => before(b, side, k, january)), earlier));
+  const posted = times(-1, own((side, k) => moved(b, side, k, january, december)));
+  const netIncome = times(-1, thisYear);
+  return {
+    account: reAccount && key ? { key, number: reAccount.number, name: reAccount.name } : null,
+    starting,
+    posted,
+    netIncome,
+    closed: plus(plus(starting, posted), netIncome),
+  };
+}
+
 /** The latest month either side has, but never before `floor`. */
 export function lastReportMonth(data: ReportData, floor: string): string {
   let last = floor;

@@ -26,19 +26,47 @@ const periods = (over: Partial<Record<string, Partial<PeriodRow>>> = {}): Period
   },
 ];
 
-const rows = (opts: { today?: string; liveFrom?: string | null; periods?: PeriodRow[]; compared?: Map<string, MonthCompared> } = {}) => monthRows({
+const rows = (opts: {
+  today?: string;
+  liveFrom?: string | null;
+  periods?: PeriodRow[];
+  compared?: Map<string, MonthCompared>;
+  closedYears?: Set<number>;
+} = {}) => monthRows({
   liveFrom: opts.liveFrom === undefined ? LIVE : opts.liveFrom,
   today: opts.today ?? '2027-03-15',
   periods: opts.periods ?? periods(),
   compared: opts.compared ?? new Map([[JAN, MATCHES], [FEB, DIFFERS]]),
+  closedYears: opts.closedYears ?? new Set(),
+});
+
+/** Made-up books live November 2026, with November and December closed and 2026 closed on Year end. */
+const NOV = '2026-11-01';
+const DEC = '2026-12-01';
+const closedPeriod = (id: string, month: string, at: string): PeriodRow => ({
+  id, month, closed: true, closedAt: at, closedBy: 'Craig', events: [{ action: 'closed', by: 'Craig', reason: null, at }],
+});
+const yearClosed = (january: Partial<PeriodRow> = {}) => rows({
+  liveFrom: NOV,
+  today: '2027-02-15',
+  periods: [
+    closedPeriod('p0', NOV, '2026-12-08T16:00:00Z'),
+    closedPeriod('p1', DEC, '2027-01-12T16:00:00Z'),
+    { id: 'p2', month: JAN, closed: false, closedAt: null, closedBy: null, events: [], ...january },
+  ],
+  compared: new Map(),
+  closedYears: new Set([2026]),
 });
 
 describe('monthRows', () => {
   it('lists the months since the books went live, newest first, with what can be done with each', () => {
     expect(rows()).toEqual([
-      { month: MAR, over: false, closed: null, compared: { status: 'none', differing: 0, notPosted: false }, events: [], can: null },
-      { month: FEB, over: true, closed: null, compared: DIFFERS, events: periods()[1].events, can: 'close' },
-      { month: JAN, over: true, closed: { at: '2027-02-12T21:04:00Z', by: 'Craig' }, compared: MATCHES, events: periods()[0].events, can: 'reopen' },
+      { month: MAR, over: false, closed: null, compared: { status: 'none', differing: 0, notPosted: false }, events: [], yearClosed: false, can: null },
+      { month: FEB, over: true, closed: null, compared: DIFFERS, events: periods()[1].events, yearClosed: false, can: 'close' },
+      {
+        month: JAN, over: true, closed: { at: '2027-02-12T21:04:00Z', by: 'Craig' }, compared: MATCHES, events: periods()[0].events,
+        yearClosed: false, can: 'reopen',
+      },
     ]);
   });
 
@@ -51,6 +79,22 @@ describe('monthRows', () => {
       .toEqual([['2027-04-01', false, null], [MAR, true, null], [FEB, true, 'close'], [JAN, true, 'reopen']]);
     const both = periods({ [FEB]: { closed: true, closedAt: '2027-03-11T10:00:00Z', closedBy: 'Craig' } });
     expect(rows({ periods: both }).map((r) => [r.month, r.can])).toEqual([[MAR, null], [FEB, 'reopen'], [JAN, null]]);
+  });
+
+  it("keeps a closed year's months closed: none of them reopens until the year does", () => {
+    expect(yearClosed().map((r) => [r.month, r.yearClosed, r.can])).toEqual([
+      [FEB, false, null], [JAN, false, 'close'], [DEC, true, null], [NOV, true, null],
+    ]);
+    const januaryClosed = yearClosed({ closed: true, closedAt: '2027-02-09T16:00:00Z', closedBy: 'Craig' });
+    expect(januaryClosed.map((r) => [r.month, r.yearClosed, r.can])).toEqual([
+      [FEB, false, null], [JAN, false, 'reopen'], [DEC, true, null], [NOV, true, null],
+    ]);
+    // The same months with the year open again.
+    const reopened = monthRows({
+      liveFrom: NOV, today: '2027-02-15', compared: new Map(), closedYears: new Set([2025]),
+      periods: [closedPeriod('p0', NOV, '2026-12-08T16:00:00Z'), closedPeriod('p1', DEC, '2027-01-12T16:00:00Z')],
+    });
+    expect(reopened.map((r) => [r.month, r.yearClosed, r.can])).toEqual([[FEB, false, null], [JAN, false, 'close'], [DEC, false, 'reopen'], [NOV, false, null]]);
   });
 
   it('has nothing before the books are live, nor before the month they go live', () => {
@@ -114,6 +158,20 @@ describe('reopenRefusal', () => {
     });
     expect(reopenRefusal({ rows: rows(), month: FEB, reason: 'A late bill' })).toEqual({ message: "February 2027 isn't closed.", status: 409 });
     expect(reopenRefusal({ rows: rows(), month: MAR, reason: 'A late bill' })).toEqual({ message: "March 2027 isn't closed.", status: 409 });
+  });
+
+  it('leaves a closed year\'s months closed until the year is reopened', () => {
+    expect(reopenRefusal({ rows: yearClosed(), month: DEC, reason: 'A late bill' })).toEqual({
+      message: '2026 is closed, so December 2026 stays closed. Reopen the year on Year end first.', status: 409,
+    });
+    expect(reopenRefusal({ rows: yearClosed(), month: NOV, reason: 'A late bill' })?.message).toBe(
+      '2026 is closed, so November 2026 stays closed. Reopen the year on Year end first.',
+    );
+    const januaryClosed = yearClosed({ closed: true, closedAt: '2027-02-09T16:00:00Z', closedBy: 'Craig' });
+    expect(reopenRefusal({ rows: januaryClosed, month: JAN, reason: 'A late bill' })).toBeNull();
+    expect(reopenRefusal({ rows: januaryClosed, month: DEC, reason: 'A late bill' })?.message).toBe(
+      '2026 is closed, so December 2026 stays closed. Reopen the year on Year end first.',
+    );
   });
 });
 
