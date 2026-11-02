@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, 478 to 480, 485 to 488, 494, 497 to 499, 504 and 505, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 to 480, 485 to 488, 494, 497 to 499, 504, 505 and 509, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -24,7 +24,11 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * than NetSuite (src/lib/books/money-screens.ts), and FleetSuite AI answers
  * money questions from them (src/lib/books/assistant-books.ts). Nor does
  * Portal billing on FleetSuite's books: on, the customer portal's billing
- * reads them (src/lib/portal-billing.ts).
+ * reads them (src/lib/portal-billing.ts). Nor does Two-step sign-in for
+ * money roles: on, everyone who holds one gives a code from an authenticator
+ * app when they sign in (src/lib/two-step.ts, requireAuth in
+ * src/lib/api-auth.ts), and FleetSuite refuses them when it can't read it
+ * rather than let a sign-in through without its code.
  * Receiving payments, taking deposits, bank deposits and paying vendors stay
  * off past January 1, until they move into FleetSuite during 2027,
  * approving adjustments until the plan adds it in 2027, FleetSuite's own
@@ -37,7 +41,7 @@ export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
   | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments'
   | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals' | 'own_numbers' | 'invoice_pdfs' | 'stock_counts'
-  | 'money_screens' | 'portal_books';
+  | 'money_screens' | 'portal_books' | 'two_step_sign_in';
 
 export interface SwitchInfo {
   name: string;
@@ -180,6 +184,13 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     turnOn: "Switch on Portal billing on FleetSuite's books? Customers then see their open invoices from FleetSuite's books, as of when the books last caught up with NetSuite (every two hours), rather than NetSuite's live. Nothing is sent to NetSuite and no customer is emailed.",
     turnOff: "Switch off Portal billing on FleetSuite's books? The portal goes back to reading NetSuite live.",
     later: 'Stays off on January 1: NetSuite has every invoice and payment, live, through 2027, so the portal reads NetSuite until the full cutover.',
+  },
+  two_step_sign_in: {
+    name: 'Two-step sign-in for money roles',
+    what: "Everyone with a money role (super admin, executive, finance, bookkeeper or CPA) gives a code from an authenticator app on their phone when they sign in, once each time they sign in on a device, and anyone who hasn't set one up sets it up first. Until it's on, only people who set it up themselves are asked.",
+    where: 'Signing in, and Settings → Two-step sign-in',
+    turnOn: "Switch on Two-step sign-in for money roles? Everyone with a money role then gives a code from their authenticator app each time they sign in, and anyone who hasn't set one up has to before they can do anything else. It switches on only from a sign-in that gave its own code, so set yours up first in Settings → Two-step sign-in. Nothing is sent to NetSuite.",
+    turnOff: "Switch off Two-step sign-in for money roles? People who set it up still give their code when they sign in; nobody else is asked to set it up.",
   },
 };
 

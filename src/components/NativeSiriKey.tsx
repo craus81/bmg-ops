@@ -10,8 +10,10 @@ import { ensureSiriKey } from '@/lib/siri-bridge';
  * without opening the app (src/lib/siri-bridge.ts). No-op on the web.
  */
 export default function NativeSiriKey() {
-  const { user, hasFeature, loading } = useAuth();
-  const canSchedule = !loading && hasFeature('schedule');
+  const { user, hasFeature, loading, twoStep } = useAuth();
+  // Not while the sign-in still owes its two-step code: FleetSuite refuses
+  // the key until then, and this runs again once it's given.
+  const canSchedule = !loading && !twoStep && hasFeature('schedule');
 
   useEffect(() => {
     if (user?.id && canSchedule) ensureSiriKey(user.id);

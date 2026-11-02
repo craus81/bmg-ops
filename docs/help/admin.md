@@ -63,6 +63,35 @@ Set them back to **Approved** to restore.
 
 ---
 
+## Reset someone's two-step sign-in (super admins)
+
+For a lost or replaced phone.
+
+1. **Admin → Users** → tap the user.
+2. Under **Two-step sign-in**, tap **Reset** and confirm.
+
+Their authenticator app stops working for FleetSuite and they're signed
+out everywhere. They sign in with their password and set it up again. The
+other super admins hear about it, and so do they.
+
+---
+
+## Ask everyone with a money role for a code (super admins)
+
+Super admins, executives, finance, the bookkeeper and the CPA give a code
+from an authenticator app each time they sign in once this is on.
+
+1. Have each of them set theirs up first (**Settings → Two-step
+   sign-in**), and set up yours.
+2. **More → Books → Switches** → **Two-step sign-in for money roles** →
+   **Switch on**.
+
+It switches on only from a sign-in that gave its own code, which setting
+yours up does. Anyone with a money role who hasn't set one up is asked to
+before they can do anything else.
+
+---
+
 ## Give someone access to one extra feature
 
 When someone needs access to a single feature their role doesn't

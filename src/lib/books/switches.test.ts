@@ -38,7 +38,7 @@ describe('switches', () => {
       'credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes', 'bill_fixes',
       'customer_vendor_details', 'item_accounts', 'estimates_in_fleetsuite', 'fleetsuite_records', 'customer_payments',
       'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'stock_counts',
-      'money_screens', 'portal_books',
+      'money_screens', 'portal_books', 'two_step_sign_in',
     ]);
     expect(SWITCHES.credit_memos.where).toBe('Invoicing → Invoiced → Credit on an invoice');
     expect(SWITCHES.vendor_credits.where).toBe('More → Purchasing → Vendor Credits');
@@ -144,6 +144,13 @@ describe('switches', () => {
       turnOff: "Switch off Portal billing on FleetSuite's books? The portal goes back to reading NetSuite live.",
       later: 'Stays off on January 1: NetSuite has every invoice and payment, live, through 2027, so the portal reads NetSuite until the full cutover.',
     });
+    expect(SWITCHES.two_step_sign_in).toEqual({
+      name: 'Two-step sign-in for money roles',
+      what: "Everyone with a money role (super admin, executive, finance, bookkeeper or CPA) gives a code from an authenticator app on their phone when they sign in, once each time they sign in on a device, and anyone who hasn't set one up sets it up first. Until it's on, only people who set it up themselves are asked.",
+      where: 'Signing in, and Settings → Two-step sign-in',
+      turnOn: "Switch on Two-step sign-in for money roles? Everyone with a money role then gives a code from their authenticator app each time they sign in, and anyone who hasn't set one up has to before they can do anything else. It switches on only from a sign-in that gave its own code, so set yours up first in Settings → Two-step sign-in. Nothing is sent to NetSuite.",
+      turnOff: "Switch off Two-step sign-in for money roles? People who set it up still give their code when they sign in; nobody else is asked to set it up.",
+    });
     // Only receiving payments, taking deposits, bank deposits, paying vendors, approving adjustments, own numbers,
     // invoice PDFs, counts and the portal's billing wait past January 1.
     expect(SWITCH_PIECES.filter((p) => SWITCHES[p].later !== undefined)).toEqual([
@@ -153,6 +160,7 @@ describe('switches', () => {
     // Only the pieces that are the other way round, need a step in NetSuite first, or send nothing, ask in their own words.
     expect(SWITCH_PIECES.filter((p) => SWITCHES[p].turnOn !== undefined || SWITCHES[p].turnOff !== undefined)).toEqual([
       'estimates_in_fleetsuite', 'fleetsuite_records', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'money_screens', 'portal_books',
+      'two_step_sign_in',
     ]);
     expect(isSwitchPiece('credit_memos')).toBe(true);
     expect(isSwitchPiece('vendor_credits')).toBe(true);
@@ -175,6 +183,7 @@ describe('switches', () => {
     expect(isSwitchPiece('stock_counts')).toBe(true);
     expect(isSwitchPiece('money_screens')).toBe(true);
     expect(isSwitchPiece('portal_books')).toBe(true);
+    expect(isSwitchPiece('two_step_sign_in')).toBe(true);
     expect(isSwitchPiece('payroll')).toBe(false);
     expect(isSwitchPiece('toString')).toBe(false);
     expect(isSwitchPiece(null)).toBe(false);
@@ -203,6 +212,7 @@ describe('switches', () => {
       { piece: 'stock_counts', on: false, changedBy: null, changedAt: null },
       { piece: 'money_screens', on: false, changedBy: null, changedAt: null },
       { piece: 'portal_books', on: false, changedBy: null, changedAt: null },
+      { piece: 'two_step_sign_in', on: false, changedBy: null, changedAt: null },
     ]);
     expect(await readSwitches(fakeService().service)).toEqual([
       { piece: 'credit_memos', on: false, changedBy: null, changedAt: null },
@@ -226,6 +236,7 @@ describe('switches', () => {
       { piece: 'stock_counts', on: false, changedBy: null, changedAt: null },
       { piece: 'money_screens', on: false, changedBy: null, changedAt: null },
       { piece: 'portal_books', on: false, changedBy: null, changedAt: null },
+      { piece: 'two_step_sign_in', on: false, changedBy: null, changedAt: null },
     ]);
     await expect(readSwitches(fakeService({ error: 'denied' }).service)).rejects.toThrow('denied');
   });

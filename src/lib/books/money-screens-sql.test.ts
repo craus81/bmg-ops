@@ -104,8 +104,8 @@ describe('migration 504: the switch', () => {
       { piece: 'money_screens', is_on: false },
       { piece: 'stock_counts', is_on: false },
     ]);
-    // Every piece the app named then is one the column takes, and nothing else is (505 adds portal billing).
-    const then = SWITCH_PIECES.filter((piece) => piece !== 'portal_books');
+    // Every piece the app named then is one the column takes, and nothing else is (505 adds portal billing, 509 two-step sign-in).
+    const then = SWITCH_PIECES.filter((piece) => !['portal_books', 'two_step_sign_in'].includes(piece));
     expect(then).toEqual([...PIECES, 'money_screens']);
     for (const piece of then) {
       await db.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);

@@ -104,8 +104,9 @@ describe('migration 499: the switch', () => {
   it('adds Counts, off, and keeps every earlier piece', async () => {
     expect((await pg.query(`SELECT piece, is_on, changed_by FROM books_switches WHERE piece = 'stock_counts'`)).rows)
       .toEqual([{ piece: 'stock_counts', is_on: false, changed_by: null }]);
-    // Every piece the app named then is one the column takes, and nothing else is (504 adds money screens, 505 portal billing).
-    const then = SWITCH_PIECES.filter((piece) => !['money_screens', 'portal_books'].includes(piece));
+    // Every piece the app named then is one the column takes, and nothing else is (504 adds money screens, 505 portal billing,
+    // 509 two-step sign-in).
+    const then = SWITCH_PIECES.filter((piece) => !['money_screens', 'portal_books', 'two_step_sign_in'].includes(piece));
     expect(then.at(-1)).toBe('stock_counts');
     expect(then).toHaveLength(19);
     for (const piece of then) await pg.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);

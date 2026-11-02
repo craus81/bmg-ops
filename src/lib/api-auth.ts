@@ -13,6 +13,8 @@ import { createServiceClient } from './supabase-service';
 import { resolveFeatures, isAdminRole, INTERNAL_STAFF_ROLES, type FeatureKey } from '@/lib/features';
 import { loadRoleFeatureSettings } from '@/lib/role-feature-settings';
 import { booksAccess, booksAllows, type BooksAccess } from '@/lib/books/access';
+import { readSwitch } from '@/lib/books/switches';
+import { TWO_STEP_REFUSAL, hasAuthenticator, holdsMoneyRole, tokenLevel, twoStepNeed } from '@/lib/two-step';
 
 // Server-side call sites read admin authority through api-auth; the predicate
 // itself lives in features.ts (client-safe) so AuthProvider shares it.
@@ -25,6 +27,14 @@ interface AuthResult {
   user: any;
   profile?: any;
   error?: NextResponse;
+}
+
+export interface AuthOptions {
+  /**
+   * false lets in a sign-in that still owes its two-step code (src/lib/two-step.ts):
+   * only for what the code screen itself asks, and for taking access away.
+   */
+  twoStep?: boolean;
 }
 
 /** What a request's sign-in token is read from: a NextRequest, or next/headers' headers() and cookies() together. */
@@ -155,8 +165,15 @@ export function storageAccessOf(profile: any): 'staff' | 'installer' | 'none' {
  * Verify the request has a valid authenticated session AND the account has
  * been approved by an admin. Pending, denied, and deactivated accounts are
  * rejected. Returns the user's profile so downstream checks can reuse it.
+ *
+ * A sign-in that still owes its two-step code (src/lib/two-step.ts: everyone
+ * who set an authenticator app up, and every money role while Books →
+ * Switches "Two-step sign-in for money roles" is on) is refused with 403 and
+ * `twoStep` naming what it owes, unless `opts.twoStep` is false. Every
+ * requireX below comes through here, so every route that takes a session
+ * asks it.
  */
-export async function requireAuth(req: NextRequest): Promise<AuthResult> {
+export async function requireAuth(req: NextRequest, opts: AuthOptions = {}): Promise<AuthResult> {
   try {
     const accessToken = extractAccessToken(req);
 
@@ -195,10 +212,40 @@ export async function requireAuth(req: NextRequest): Promise<AuthResult> {
       return { user, profile, error: NextResponse.json({ error: 'Forbidden: account not approved' }, { status: 403 }) };
     }
 
+    if (opts.twoStep !== false) {
+      const refusal = await twoStepRefusal(service, user, profile, accessToken);
+      if (refusal) return { user, profile, error: refusal };
+    }
+
     return { user, profile };
   } catch {
     return { user: null, error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) };
   }
+}
+
+/**
+ * The refusal for a sign-in that still owes its two-step code, or null.
+ * The switch is read only for a money role that hasn't set an authenticator
+ * app up; when it can't be read, FleetSuite refuses (503) rather than let a
+ * sign-in through that may owe its code, and never answers 401, which the
+ * app would take for being signed out.
+ */
+async function twoStepRefusal(
+  service: ReturnType<typeof createServiceClient>, user: any, profile: any, accessToken: string,
+): Promise<NextResponse | null> {
+  const level = tokenLevel(accessToken);
+  const authenticator = hasAuthenticator(user);
+  const moneyRole = holdsMoneyRole(profileRoles(profile));
+  let switchOn = false;
+  if (level !== 'aal2' && !authenticator && moneyRole) {
+    try {
+      switchOn = await readSwitch(service, 'two_step_sign_in');
+    } catch {
+      return NextResponse.json({ error: TWO_STEP_REFUSAL.unknown }, { status: 503 });
+    }
+  }
+  const need = twoStepNeed({ level, hasAuthenticator: authenticator, moneyRole, switchOn });
+  return need ? NextResponse.json({ error: TWO_STEP_REFUSAL[need], twoStep: need }, { status: 403 }) : null;
 }
 
 /**
@@ -343,8 +390,8 @@ export async function requireBooks(req: NextRequest, need: BooksAccess): Promise
  * rows, so a per-user grant or revoke is finally enforced on the backend (until
  * now overrides were resolved client-side only — pure UI theater).
  */
-export async function requireFeature(req: NextRequest, key: FeatureKey): Promise<AuthResult> {
-  const auth = await requireAuth(req);
+export async function requireFeature(req: NextRequest, key: FeatureKey, opts: AuthOptions = {}): Promise<AuthResult> {
+  const auth = await requireAuth(req, opts);
   if (auth.error) return auth;
 
   if (!(await profileHasFeature(auth.user.id, auth.profile, key))) {

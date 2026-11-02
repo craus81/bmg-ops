@@ -86,8 +86,8 @@ describe('migration 498: the switch', () => {
     expect((await db.query('SELECT piece, is_on FROM books_switches WHERE piece = $1', ['invoice_pdfs'])).rows)
       .toEqual([{ piece: 'invoice_pdfs', is_on: false }]);
     // Every piece the app named then is one the column takes, and nothing else is (499 adds counts, 504 money screens, 505 portal
-    // billing).
-    const then = SWITCH_PIECES.filter((piece) => !['stock_counts', 'money_screens', 'portal_books'].includes(piece));
+    // billing, 509 two-step sign-in).
+    const then = SWITCH_PIECES.filter((piece) => !['stock_counts', 'money_screens', 'portal_books', 'two_step_sign_in'].includes(piece));
     expect(then).toEqual([...PIECES, 'invoice_pdfs']);
     for (const piece of then) {
       await db.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);

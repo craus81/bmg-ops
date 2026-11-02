@@ -49,8 +49,10 @@ describe('migration 505', () => {
   });
 
   it('takes every piece the app names, and nothing else', async () => {
-    expect(SWITCH_PIECES).toEqual([...PIECES, 'portal_books']);
-    for (const piece of SWITCH_PIECES) {
+    // Every piece the app named then is one the column takes, and nothing else is (509 adds two-step sign-in).
+    const then = SWITCH_PIECES.filter((piece) => piece !== 'two_step_sign_in');
+    expect(then).toEqual([...PIECES, 'portal_books']);
+    for (const piece of then) {
       await db.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);
     }
     expect((await db.query('SELECT count(*)::int AS n FROM books_switches')).rows[0]).toEqual({ n: 21 });
