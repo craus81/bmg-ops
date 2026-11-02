@@ -6280,8 +6280,8 @@ assistant read FleetSuite's books instead of NetSuite (the NetSuite Exit
 Checklist's "Money screens on FleetSuite's books"). Part 80 does Home →
 Financials, switched off (`money_screens`, migration 504,
 `src/lib/books/money-screens.ts`, `src/lib/books/money-screens-data.ts`),
-part 81 Financial History, on the same switch, and part 82 the portal's
-billing, on a switch of its own (below).
+part 81 Financial History and part 83 the AI assistant, on the same switch,
+and part 82 the portal's billing, on a switch of its own (below).
 NetSuite's income statement read behind the tab's profit and loss has no
 company in it, so today's band most likely has 1084's rent and mortgage in
 BMG's. With the switch on, the tab reads BMG's books alone.
@@ -6430,6 +6430,55 @@ NetSuite names Acme on. NetSuite still has INV103 open, which the books
 have paid. Acme's portal shows a balance of $1,375, $875 past due, on
 three invoices, and won't give INV103's PDF.
 
+### The AI assistant
+
+FleetSuite AI (`/api/ai-agent/chat`) answers by asking NetSuite, the app's
+database and the knowledge base, so its money answers have come from
+SuiteQL against NetSuite: what customers owe, overdue invoices, revenue by
+month. With `money_screens` on, leadership's come from BMG's books in
+FleetSuite instead, the numbers Home → Financials and Financial History
+show (part 83, `src/lib/books/assistant-books.ts`,
+`loadBooksForAssistant`):
+
+- **It asks the books by name**, a `books` read with no SQL, so it reaches
+  BMG's books alone, never 1084's, and only these: `summary` (the tab's
+  tiles: cash, what customers owe and how late, what BMG owes and the
+  net), `receivables` and `payables` (each customer's or vendor's balance,
+  how late and its open documents, largest first), `open_invoices` and
+  `open_bills` (the lists behind the tiles, most overdue first), each of
+  those four narrowed to part of a name if asked, `accounts` (each bank,
+  card, payable and sales tax account's balance), and `profit_and_loss`
+  and `months` (the band's profit and loss for months from January 2025
+  on, as one total with what customers paid, or month by month, a month
+  not over yet marked so).
+- **Only those who open the Financials tab** (super admins and
+  executives) get them; anyone else is refused, as they're refused
+  NetSuite's money now. Its prompt drops NetSuite's A/R, A/P, revenue and
+  overdue examples and lists the reads instead.
+- **NetSuite's balances are refused**: SuiteQL that reads GL lines, an
+  account or a balance, or what's unpaid on a document, is pointed at the
+  books (`readsNetSuiteBalances`). Sales orders, estimates, items, stock
+  and the Upfit vs Graphics split of invoice lines still come from
+  NetSuite, and payroll from the app's database.
+- **Each answer says when the books are as of**: the last posting run, in
+  Central time, and when it failed, stopped for time or hasn't run yet,
+  that the books may be behind NetSuite, which the assistant passes on.
+- Each read goes in the audit log with the chat's other queries
+  (`ai_agent`), with the read and what it was narrowed to.
+
+A read that fails answers "Couldn't read FleetSuite's books" and why; the
+assistant doesn't fall back to NetSuite then. A month before January 2025,
+or past the books' latest, is refused, saying which months the books have.
+With the switch off nothing changes: the prompt has no books, a books read
+is refused, and NetSuite answers as now.
+
+Made-up example: Acme owes $1,300 in BMG's books, $500 not yet due and an
+$800 invoice 32 days late. Asked "who owes us the most?", the assistant
+reads `receivables` and answers Acme, $1,300, $800 of it 32 days late, as
+of the posting run at 10:00 AM Central. Asked "what was net income in
+October?", it reads `profit_and_loss` for 2026-10 and answers $100 on
+$1,000 of revenue.
+
 ### Before switching on
 
 - Look at Books → Differences for BMG: where FleetSuite's books still
@@ -6437,10 +6486,13 @@ three invoices, and won't give INV103's PDF.
   show FleetSuite's.
 - For the portal, open a few customers' Billing with the switch off and
   then on, from Preview ↗ on the PO status link card of each customer's page.
+- Ask FleetSuite AI what customers owe and last month's profit and loss
+  with the switch off and then on: the answers move to the tab's numbers.
 
 ### What isn't done yet
 
-- The AI assistant still reads NetSuite.
+- FleetSuite AI's Upfit vs Graphics split still reads NetSuite's invoice
+  lines; Books → Report builder has the books' profit and loss by division.
 - The revenue, receivables trend, sales and operations bands still read
   NetSuite, and the trend lines are NetSuite's nightly snapshots.
 - Reports' card for Financial History still reads "QuickBooks before the
@@ -6477,9 +6529,10 @@ approval before it goes to NetSuite, so off leaves Adjust as now, and Adjust
 stops when it can't read it rather than post one unapproved.
 `own_numbers` needs a step in NetSuite first, ticking Allow Override, so the
 page asks with its own words too. `money_screens` sends nothing anywhere:
-off, Home → Financials and Financial History read NetSuite, as now, and
-on, BMG's books in FleetSuite, so the page asks with its own words too, as
-it does for `portal_books`, which does the same for what customers see.
+off, Home → Financials, Financial History and FleetSuite AI read NetSuite,
+as now, and on, BMG's books in FleetSuite, so the page asks with its own
+words too, as it does for `portal_books`, which does the same for what
+customers see.
 
 | Piece | What it does once it's on | Where |
 | --- | --- | --- |
@@ -6502,7 +6555,7 @@ it does for `portal_books`, which does the same for what customers see.
 | `own_numbers` | Each sales order, PO, invoice and credit memo FleetSuite makes in NetSuite gets FleetSuite's next number of its kind, and NetSuite keeps it as the document's number once Allow Override is ticked there ("Own numbers") | Every sales order, PO, invoice and credit memo FleetSuite makes, and Books → Own numbers |
 | `invoice_pdfs` | Each invoice FleetSuite makes gets FleetSuite's own PDF of it attached in NetSuite, once FleetSuite's copy matches NetSuite's invoice ("Invoice PDFs") | Books → Own invoices, on each invoice |
 | `stock_counts` | Admins count a location's stock, all of it or a part, on a printed sheet or a phone, and ask for approval of what differs from NetSuite; a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as one Inventory Adjustment ("Counts") | Counts on the Inventory page |
-| `money_screens` | Home → Financials and Financial History read BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, the lists behind them, and each month's profit and loss from the QuickBooks cutover on, without 1084's ("Money screens") | Home → Financials, and Reports → Financial History |
+| `money_screens` | Home → Financials, Financial History and FleetSuite AI read BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, the lists behind them, and each month's profit and loss from the QuickBooks cutover on, without 1084's ("Money screens") | Home → Financials, Reports → Financial History, and FleetSuite AI |
 | `portal_books` | The customer portal's Billing and the billing card on a customer's dashboard list each customer's open invoices from BMG's books in FleetSuite instead of NetSuite, as of when the books last caught up with NetSuite ("The portal") | The customer portal's Billing, and the billing card on a customer's dashboard |
 
 ## Posting

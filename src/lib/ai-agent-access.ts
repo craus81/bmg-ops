@@ -41,20 +41,29 @@ export function canSeeBooks(roles: string[]): boolean {
   return roles.includes('super_admin');
 }
 
-// SuiteQL touching GL accounts, customer/vendor balances, credit limits, or
-// payment/bill/journal transactions — the "bank-balance-like figures" the
-// audit flagged. Revenue via SalesOrd/foreigntotal is intentionally NOT here
-// so sales staff keep their sales-order reporting.
-export const NETSUITE_FINANCIAL_PATTERNS: RegExp[] = [
+// SuiteQL reading balances or what's open: GL lines, the accounts and their
+// balances, customers' and vendors' balances, what's unpaid on a document.
+// With Financials on FleetSuite's books on (Books → Switches, docs/books.md
+// "The AI assistant"), leadership gets these from FleetSuite's books instead
+// (readsNetSuiteBalances); everyone else is refused them either way.
+export const NETSUITE_BALANCE_PATTERNS: RegExp[] = [
   /transactionaccountingline/i,
   /\bfrom\s+account\b/i,
   /\bjoin\s+account\b/i,
   /\.\s*balance\b/i,
   /overduebalance/i,
   /foreignamountunpaid/i,
-  /creditlimit/i,
   /\.\s*(?:debit|credit)\b/i,
   /\bacctnumber\b/i,
+];
+
+// SuiteQL touching GL accounts, customer/vendor balances, credit limits, or
+// payment/bill/journal transactions — the "bank-balance-like figures" the
+// audit flagged. Revenue via SalesOrd/foreigntotal is intentionally NOT here
+// so sales staff keep their sales-order reporting.
+export const NETSUITE_FINANCIAL_PATTERNS: RegExp[] = [
+  ...NETSUITE_BALANCE_PATTERNS,
+  /creditlimit/i,
   /'(?:CustInvc|CustPymt|CustCred|CustDep|VendBill|VendPymt|VendCred|Journal|Deposit|Check)'/i,
 ];
 
@@ -142,6 +151,12 @@ export function touchesForbiddenData(sql: string | undefined): boolean {
 export function touchesBooksData(source: string, sql: string | undefined): boolean {
   if (!sql || source !== 'supabase') return false;
   return BOOKS_PATTERNS.some(re => re.test(sql));
+}
+
+/** True when SuiteQL reads balances or what's open, which FleetSuite's books answer once they're switched on. */
+export function readsNetSuiteBalances(source: string, sql: string | undefined): boolean {
+  if (!sql || source !== 'netsuite') return false;
+  return NETSUITE_BALANCE_PATTERNS.some(re => re.test(sql));
 }
 
 /** True when a query reaches financial data for the given source. */

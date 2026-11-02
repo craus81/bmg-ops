@@ -3,6 +3,10 @@ import { transactionUrl } from '@/lib/netsuite';
 import { DEFAULT_PNL_PERIOD, payrollAccountIds, PNL_PERIOD_KEYS, pnlPeriodDefs, type PnlPeriod, type PnlPeriodKey } from '@/lib/pnl';
 import { fetchByIdChunks } from '@/lib/scan-log-load';
 import { buildAgings, type AgedDocument, type Agings, type OpenDocumentsData } from './agings';
+import {
+  accountRows, billRows, booksNote, invoiceRows, monthRows, monthsAsked, partyRows, pnlRow, summaryRow,
+  type BooksAsk, type BooksRow,
+} from './assistant-books';
 import { BOOKS_INVOICE_POSTING } from './invoice-posting';
 import {
   accountGroups, apRows, arRows, booksFinancials, booksPnlPeriod, MONEY_SCREENS_COMPANY, notOpenOf, portalAsOf, portalInvoices,
@@ -10,9 +14,10 @@ import {
 } from './money-screens';
 import { BOOKS_GL_SYNC } from './netsuite-gl';
 import { BOOKS_OPEN_ITEMS_SYNC } from './netsuite-open-items';
+import { lastDay } from './opening-balances';
 import { chicagoDate } from './own-invoices';
 import { partyBalances, type PartyBalancesData, type PartyKind } from './party-balances';
-import { loadReports, type LoadedReports } from './report-data';
+import { loadReports, postingOf, type LoadedReports } from './report-data';
 import type { ReportData } from './reports';
 import { readTaxAccounts } from './sales-tax-data';
 import type { OpenArInvoice, OpenVendorBill, StatementInvoice } from '@/lib/financials-data';
@@ -22,8 +27,9 @@ import type { OpenArInvoice, OpenVendorBill, StatementInvoice } from '@/lib/fina
  * (src/lib/books/money-screens.ts): the tab's summary, the lists behind its
  * tiles, and one period of its profit and loss band, each for BMG alone.
  * A read that fails comes back as { error }. Financial History reads BMG's
- * books here too (loadBooksForHistory), and so does the customer portal's
- * billing (loadBooksPortalInvoices).
+ * books here too (loadBooksForHistory), so does the customer portal's
+ * billing (loadBooksPortalInvoices), and so does FleetSuite AI
+ * (loadBooksForAssistant).
  */
 
 const COMPANY = MONEY_SCREENS_COMPANY;
@@ -113,15 +119,51 @@ async function readFacts(service: SupabaseClient, kind: PartyKind, documents: Ag
 }
 
 /** The tab's summary from BMG's books. */
+async function readFinancials(service: SupabaseClient): Promise<BooksFinancials> {
+  const [loaded, customers, vendors] = await Promise.all([
+    readBooks(service),
+    readAgings(service, 'customer'),
+    readBalances(service, 'vendor'),
+  ]);
+  const groups = await readGroups(service, loaded);
+  return booksFinancials(groups, customers, vendors.totals.fleetsuite, sourceOf(loaded));
+}
+
+/** Every open invoice and credit memo, most overdue first, then the largest. */
+async function readArInvoices(service: SupabaseClient): Promise<{ invoices: OpenArInvoice[]; notOpen: number }> {
+  const customers = await readAgings(service, 'customer');
+  const invoices = arRows(customers, await readFacts(service, 'customer', openDocuments(customers)), link);
+  invoices.sort((a, b) => b.daysPastDue - a.daysPastDue || b.unpaid - a.unpaid);
+  return { invoices, notOpen: notOpenOf(customers) };
+}
+
+/** Every open bill and bill credit, most overdue first, then the largest. */
+async function readApBills(service: SupabaseClient): Promise<{ bills: OpenVendorBill[]; notOpen: number }> {
+  const vendors = await readAgings(service, 'vendor');
+  const bills = apRows(vendors, await readFacts(service, 'vendor', openDocuments(vendors)), link);
+  bills.sort((a, b) => b.daysPastDue - a.daysPastDue || b.unpaid - a.unpaid);
+  return { bills, notOpen: notOpenOf(vendors) };
+}
+
+/** What customers paid in BMG's books from one day through another, both counted. */
+async function readCollections(service: SupabaseClient, from: string, to: string): Promise<{ total: number; count: number } | null> {
+  const { data, error } = await service.rpc('gl_books_collections', { p_company: COMPANY, p_from: from, p_to: to });
+  if (error) throw new Error(error.message);
+  const read = data as { total: string; count: number } | null;
+  return read ? { total: Number(read.total) || 0, count: Number(read.count) || 0 } : null;
+}
+
+/** How the last posting run went, as Reports reads it; null before it has run. */
+async function readPosting(service: SupabaseClient): Promise<LoadedReports['lastPosting']> {
+  const { data, error } = await service.from('sync_state').select('last_result, updated_at').eq('sync_type', BOOKS_INVOICE_POSTING).maybeSingle();
+  if (error) throw new Error(error.message);
+  return postingOf(data);
+}
+
+/** The tab's summary from BMG's books. */
 export async function loadBooksFinancials(service: SupabaseClient): Promise<BooksFinancials | { error: string }> {
   try {
-    const [loaded, customers, vendors] = await Promise.all([
-      readBooks(service),
-      readAgings(service, 'customer'),
-      readBalances(service, 'vendor'),
-    ]);
-    const groups = await readGroups(service, loaded);
-    return booksFinancials(groups, customers, vendors.totals.fleetsuite, sourceOf(loaded));
+    return await readFinancials(service);
   } catch (err) {
     return { error: `Couldn't read FleetSuite's books: ${message(err)}` };
   }
@@ -132,10 +174,7 @@ export async function loadBooksArInvoices(service: SupabaseClient): Promise<{
   success: true; unpaidColumn: true; invoices: OpenArInvoice[]; notOpen: number;
 } | { error: string }> {
   try {
-    const customers = await readAgings(service, 'customer');
-    const invoices = arRows(customers, await readFacts(service, 'customer', openDocuments(customers)), link);
-    invoices.sort((a, b) => b.daysPastDue - a.daysPastDue || b.unpaid - a.unpaid);
-    return { success: true, unpaidColumn: true, invoices, notOpen: notOpenOf(customers) };
+    return { success: true, unpaidColumn: true, ...await readArInvoices(service) };
   } catch (err) {
     return { error: `Couldn't read FleetSuite's books: ${message(err)}` };
   }
@@ -146,10 +185,7 @@ export async function loadBooksApBills(service: SupabaseClient): Promise<{
   success: true; unpaidColumn: true; bills: OpenVendorBill[]; notOpen: number;
 } | { error: string }> {
   try {
-    const vendors = await readAgings(service, 'vendor');
-    const bills = apRows(vendors, await readFacts(service, 'vendor', openDocuments(vendors)), link);
-    bills.sort((a, b) => b.daysPastDue - a.daysPastDue || b.unpaid - a.unpaid);
-    return { success: true, unpaidColumn: true, bills, notOpen: notOpenOf(vendors) };
+    return { success: true, unpaidColumn: true, ...await readApBills(service) };
   } catch (err) {
     return { error: `Couldn't read FleetSuite's books: ${message(err)}` };
   }
@@ -180,13 +216,7 @@ export async function loadBooksPnlPeriod(service: SupabaseClient, key: PnlPeriod
   const ids = payrollAccountIds();
   const shared = { options: PNL_PERIOD_KEYS.map((k) => ({ key: k, label: defs[k].label })), payrollConfigured: ids.size > 0 };
   try {
-    const [loaded, collected] = await Promise.all([
-      readBooks(service),
-      service.rpc('gl_books_collections', { p_company: COMPANY, p_from: def.from, p_to: def.to }),
-    ]);
-    if (collected.error) throw new Error(collected.error.message);
-    const read = collected.data as { total: string; count: number } | null;
-    const collections = read ? { total: Number(read.total) || 0, count: Number(read.count) || 0 } : null;
+    const [loaded, collections] = await Promise.all([readBooks(service), readCollections(service, def.from, def.to)]);
     return { period: booksPnlPeriod(loaded.data, def, ids, collections), ...shared, books: sourceOf(loaded) };
   } catch (err) {
     return {
@@ -208,6 +238,49 @@ export async function loadBooksForHistory(service: SupabaseClient): Promise<{ da
     return { data: loaded.data, books: sourceOf(loaded) };
   } catch (err) {
     throw new Error(`Couldn't read FleetSuite's books: ${message(err)}`);
+  }
+}
+
+/** One read's rows; a month the books don't have comes back as { error }. */
+async function readForAssistant(service: SupabaseClient, ask: BooksAsk): Promise<BooksRow[] | { error: string }> {
+  switch (ask.read) {
+    case 'summary':
+      return [summaryRow(await readFinancials(service))];
+    case 'receivables':
+      return partyRows(await readAgings(service, 'customer'), ask.name);
+    case 'payables':
+      return partyRows(await readAgings(service, 'vendor'), ask.name);
+    case 'open_invoices':
+      return invoiceRows((await readArInvoices(service)).invoices, ask.name);
+    case 'open_bills':
+      return billRows((await readApBills(service)).bills, ask.name);
+    case 'accounts':
+      return accountRows(await readGroups(service, await readBooks(service)));
+    default: {
+      const loaded = await readBooks(service);
+      const range = monthsAsked(ask, loaded.lastMonth, loaded.through);
+      if ('error' in range) return range;
+      const ids = payrollAccountIds();
+      const thisMonth = `${chicagoDate().slice(0, 7)}-01`;
+      if (ask.read === 'months') return monthRows(loaded.data, range, ids, thisMonth);
+      return [pnlRow(loaded.data, range, ids, await readCollections(service, range.from, lastDay(range.to)), thisMonth)];
+    }
+  }
+}
+
+/**
+ * One read FleetSuite AI asks of BMG's books with Financials on FleetSuite's
+ * books on (src/lib/books/assistant-books.ts): its rows, and when the books
+ * are as of, for the assistant to pass on. A read that fails, or a month the
+ * books don't have, comes back as { error }.
+ */
+export async function loadBooksForAssistant(service: SupabaseClient, ask: BooksAsk): Promise<{ items: BooksRow[]; asOf: string } | { error: string }> {
+  try {
+    const [items, posting] = await Promise.all([readForAssistant(service, ask), readPosting(service)]);
+    if ('error' in items) return items;
+    return { items, asOf: booksNote(posting) };
+  } catch (err) {
+    return { error: `Couldn't read FleetSuite's books: ${message(err)}` };
   }
 }
 

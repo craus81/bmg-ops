@@ -1,9 +1,11 @@
 // Home → Financials' routes (src/app/api/reports/financials and the lists
 // under it) with "Financials on FleetSuite's books" off and on (migration
 // 504): off, they read NetSuite as before; on, BMG's books in FleetSuite,
-// here a made-up chart, journal and agings, without touching NetSuite.
+// here a made-up chart, journal and agings, without touching NetSuite. And
+// FleetSuite AI's reads of the same books (part 83), the same numbers.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 let allowed = true;
 vi.mock('@/lib/api-auth', () => ({
@@ -27,6 +29,8 @@ import { GET as arRoute } from '../../app/api/reports/financials/ar-invoices/rou
 import { GET as apRoute } from '../../app/api/reports/financials/ap-bills/route';
 import { GET as accountsRoute } from '../../app/api/reports/financials/accounts/route';
 import { GET as pnlRoute } from '../../app/api/reports/financials/pnl/route';
+import type { BooksAsk } from './assistant-books';
+import { loadBooksForAssistant } from './money-screens-data';
 
 const ACME = '11111111-1111-4111-8111-111111111111';
 const BRAVO = '22222222-2222-4222-8222-222222222222';
@@ -381,6 +385,166 @@ describe("Financials on FleetSuite's books, switched off", () => {
     }
     expect(reads).toEqual([]);
     expect(rpcs).toEqual([]);
+    expect(anyNetSuite()).toBe(false);
+  });
+});
+
+describe("FleetSuite AI's reads of BMG's books", () => {
+  const read = (ask: BooksAsk) => loadBooksForAssistant(service as unknown as SupabaseClient, ask);
+  const asOf = "From BMG's books in FleetSuite, as Home → Financials shows them, as of the posting run at 11/2/2026, 11:48 AM Central (it runs every two hours).";
+
+  it("gives the tab's tiles as the tab adds them up, without 1084's", async () => {
+    expect(await read({ read: 'summary' })).toEqual({
+      items: [{
+        cash: 9100, customers_owe: 1250, past_due: 750, current: 500, days_1_30: 0, days_31_60: 800, days_61_90: -50, over_90_days: 0,
+        not_in_an_open_invoice: 0, open_invoices_and_credit_memos: 3, bmg_owes: 1570, vendor_bills: 1000, cards: 500, sales_tax: 70, net: 8780,
+      }],
+      asOf,
+    });
+    expect(anyNetSuite()).toBe(false);
+    expect(new Set(rpcs.map(([, args]) => args.p_company))).toEqual(new Set(['BMG']));
+  });
+
+  it("gives each customer's balance and how late, the largest first, or one customer's", async () => {
+    second = true;
+    expect(await read({ read: 'receivables' })).toEqual({
+      items: [
+        {
+          customer: 'Acme Fleet', balance: 1250, current: 500, days_1_30: 0, days_31_60: 800, days_61_90: -50, over_90_days: 0,
+          not_in_an_open_document: 0, open_documents: 3, most_days_past_due: 32,
+        },
+        {
+          customer: 'Bravo Trucking', balance: 820, current: 900, days_1_30: 0, days_31_60: 0, days_61_90: 0, over_90_days: 0,
+          not_in_an_open_document: -80, open_documents: 1, most_days_past_due: 0,
+        },
+      ],
+      asOf,
+    });
+    expect(await read({ read: 'receivables', name: 'bravo' })).toEqual({ items: [expect.objectContaining({ customer: 'Bravo Trucking' })], asOf });
+  });
+
+  it("gives each vendor's balance and how late, a bill credit taking off what's owed", async () => {
+    second = true;
+    expect(await read({ read: 'payables' })).toEqual({
+      items: [
+        {
+          vendor: 'Parts Co', balance: 1000, current: 0, days_1_30: 870, days_31_60: 0, days_61_90: 0, over_90_days: 0,
+          not_in_an_open_document: 130, open_documents: 2, most_days_past_due: 13,
+        },
+        {
+          vendor: 'Steel Inc', balance: 200, current: 0, days_1_30: 0, days_31_60: 200, days_61_90: 0, over_90_days: 0,
+          not_in_an_open_document: 0, open_documents: 1, most_days_past_due: 48,
+        },
+      ],
+      asOf,
+    });
+  });
+
+  it('lists the open invoices and bills behind the tiles in their order, or one name\'s', async () => {
+    second = true;
+    expect(await read({ read: 'open_invoices' })).toEqual({
+      items: [
+        { number: 'CM7', customer: 'Acme Fleet', date: '2026-09-01', due: null, po: 'RMA-9', total: -50, open: -50, days_past_due: 62, credit_memo: true },
+        { number: 'INV101', customer: 'Acme Fleet', date: '2026-09-01', due: '2026-10-01', po: 'PO-77', total: 1000, open: 800, days_past_due: 32 },
+        { number: 'INV201', customer: 'Bravo Trucking', date: '2026-10-25', due: '2026-11-24', po: null, total: 900, open: 900, days_past_due: 0 },
+        { number: 'INV102', customer: 'Acme Fleet', date: '2026-10-21', due: '2026-11-20', po: null, total: 500, open: 500, days_past_due: 0 },
+      ],
+      asOf,
+    });
+    expect((await read({ read: 'open_invoices', name: 'Bravo' }) as { items: unknown[] }).items).toEqual([expect.objectContaining({ number: 'INV201' })]);
+    expect(await read({ read: 'open_bills' })).toEqual({
+      items: [
+        { number: 'VB2', vendor: 'Steel Inc', date: '2026-08-16', due: '2026-09-15', memo: null, total: 200, open: 200, days_past_due: 48 },
+        { number: 'VB1', vendor: 'Parts Co', date: '2026-09-20', due: '2026-10-20', memo: 'Oct parts', total: 900, open: 900, days_past_due: 13 },
+        { number: 'VC1', vendor: 'Parts Co', date: '2026-10-25', due: null, memo: null, total: -30, open: -30, days_past_due: 8, bill_credit: true },
+      ],
+      asOf,
+    });
+    expect((await read({ read: 'open_bills', name: 'steel' }) as { items: unknown[] }).items).toEqual([expect.objectContaining({ number: 'VB2' })]);
+    expect(anyNetSuite()).toBe(false);
+  });
+
+  it('gives the accounts behind cash, the cards and sales tax', async () => {
+    expect(await read({ read: 'accounts' })).toEqual({
+      items: [
+        { kind: 'bank', account: '1000 Checking', balance: 9100 },
+        { kind: 'credit card', account: '2100 Chase card', balance: 500 },
+        { kind: 'sales tax', account: '2200 Sales tax', balance: 70 },
+      ],
+      asOf,
+    });
+  });
+
+  it("gives last month's profit and loss as the band does, payroll apart, with what customers paid", async () => {
+    const october = {
+      from: '2026-10', to: '2026-10', revenue: 1000, cost_of_sales: 0, gross_profit: 1000, gross_margin_pct: 100, payroll: 300, expenses: 600,
+      other_income: 0, other_expenses: 0, net_income: 100, net_margin_pct: 10, customers_paid: 2200, payments: 6,
+    };
+    expect(await read({ read: 'profit_and_loss' })).toEqual({ items: [october], asOf });
+    expect(await read({ read: 'profit_and_loss', from: '2026-10', to: '2026-10' })).toEqual({ items: [october], asOf });
+    expect(rpcs.filter(([name]) => name === 'gl_books_collections').map(([, args]) => args)).toEqual([
+      { p_company: 'BMG', p_from: '2026-10-01', p_to: '2026-10-31' },
+      { p_company: 'BMG', p_from: '2026-10-01', p_to: '2026-10-31' },
+    ]);
+
+    // From October on runs through this month, which isn't over yet.
+    rpcs.length = 0;
+    expect(await read({ read: 'profit_and_loss', from: '2026-10' })).toEqual({ items: [{ ...october, to: '2026-11', not_over_yet: true }], asOf });
+    expect(rpcs.find(([name]) => name === 'gl_books_collections')?.[1]).toEqual({ p_company: 'BMG', p_from: '2026-10-01', p_to: '2026-11-30' });
+    expect(anyNetSuite()).toBe(false);
+  });
+
+  it('gives this year month by month, and keeps to the months the books have', async () => {
+    const months = await read({ read: 'months' }) as { items: Array<Record<string, unknown>> };
+    expect(months.items.map((m) => m.month)).toEqual([
+      '2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11',
+    ]);
+    expect(months.items[9]).toEqual({
+      month: '2026-10', revenue: 1000, cost_of_sales: 0, gross_profit: 1000, gross_margin_pct: 100, payroll: 300, expenses: 600,
+      other_income: 0, other_expenses: 0, net_income: 100, net_margin_pct: 10,
+    });
+    expect(months.items[10]).toMatchObject({ month: '2026-11', revenue: 0, net_margin_pct: null, not_over_yet: true });
+    expect(rpcs.map(([name]) => name)).not.toContain('gl_books_collections');
+
+    expect(await read({ read: 'months', from: '2024-06' })).toEqual({
+      error: "FleetSuite's books start in January 2025: the months before are QuickBooks', in Reports → Financial History.",
+    });
+    expect(await read({ read: 'profit_and_loss', to: '2026-12' })).toEqual({ error: "FleetSuite's books have months from 2025-01 through 2026-11." });
+  });
+
+  it('says when the books may be behind NetSuite', async () => {
+    syncState.books_invoice_posting.last_result = { error: 'Deadlock', partial: true };
+    expect((await read({ read: 'accounts' }) as { asOf: string }).asOf).toBe(
+      "From BMG's books in FleetSuite, as Home → Financials shows them. The last posting run, at 11/2/2026, 11:48 AM Central, failed (Deadlock), so they may be behind NetSuite: say so.",
+    );
+    delete (syncState as Record<string, unknown>).books_invoice_posting;
+    expect((await read({ read: 'summary' }) as { asOf: string }).asOf).toBe(
+      "From BMG's books in FleetSuite, as Home → Financials shows them. The posting run hasn't run yet, so documents NetSuite has may be missing: say so.",
+    );
+  });
+
+  it("says plainly when the books can't be read", async () => {
+    for (const [fails, ask, why] of [
+      ['gl_party_balances', { read: 'receivables' }, 'gl_party_balances failed'],
+      ['gl_party_open_documents', { read: 'payables' }, 'gl_party_open_documents failed'],
+      ['ledger_invoices', { read: 'open_invoices' }, "Couldn't read ledger_invoices"],
+      ['gl_netsuite_bills', { read: 'open_bills' }, "Couldn't read gl_netsuite_bills"],
+      ['gl_accounts', { read: 'accounts' }, "Couldn't read gl_accounts"],
+      ['gl_books_totals', { read: 'months' }, 'gl_books_totals failed'],
+      ['gl_books_collections', { read: 'profit_and_loss' }, 'gl_books_collections failed'],
+      ['sync_state', { read: 'receivables' }, "Couldn't read sync_state"],
+    ] as const) {
+      failing = fails;
+      expect(await read(ask), fails).toEqual({ error: `Couldn't read FleetSuite's books: ${why}` });
+    }
+    failing = null;
+    const companies = TABLES.gl_companies;
+    TABLES.gl_companies = companies.filter((c) => c.code !== 'BMG');
+    try {
+      expect(await read({ read: 'summary' })).toEqual({ error: "Couldn't read FleetSuite's books: FleetSuite's books have no company BMG" });
+    } finally {
+      TABLES.gl_companies = companies;
+    }
     expect(anyNetSuite()).toBe(false);
   });
 });

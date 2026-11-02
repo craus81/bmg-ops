@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
-import { builderAsk, monthsFor, type LoadedReports } from './report-data';
+import { builderAsk, monthsFor, postingOf, type LoadedReports } from './report-data';
 
 describe('the report builder’s months that move with the calendar', () => {
   it('works each out from last month', () => {
@@ -70,5 +70,19 @@ describe('the report a request asks the builder for', () => {
     expect(ask('from=2024-06&to=2027-01')).toMatchObject({ months: 'year_to_date', from: '2026-01-01', to: '2026-10-01' });
     expect(ask('months=picked&from=2026-09&to=2026-02')).toMatchObject({ months: 'picked', from: '2026-01-01', to: '2026-02-01' });
     expect(ask('division=&location=')).toMatchObject({ division: null, location: null });
+  });
+});
+
+describe('how the last posting run went', () => {
+  it('is nothing before it has run', () => {
+    expect(postingOf(null)).toBeNull();
+  });
+
+  it('says when it ran, what went wrong and whether it stopped for time', () => {
+    const at = '2026-11-02T17:48:00Z';
+    expect(postingOf({ last_result: null, updated_at: at })).toEqual({ at, error: null, partial: false });
+    expect(postingOf({ last_result: { posted: 3 }, updated_at: at })).toEqual({ at, error: null, partial: false });
+    expect(postingOf({ last_result: { partial: true }, updated_at: at })).toEqual({ at, error: null, partial: true });
+    expect(postingOf({ last_result: { error: 'Deadlock', partial: false }, updated_at: at })).toEqual({ at, error: 'Deadlock', partial: false });
   });
 });
