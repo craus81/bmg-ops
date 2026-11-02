@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import type { BankRecYear, MonthView, SavedRec } from './bank-reconciliation';
 import type { LedgerBlock } from './general-ledger';
 import type { CompanyValue } from './inventory-value';
 import { byPartyName, type PartyBalance, type PartyBalancesAt, type PartyKind } from './party-balances';
@@ -26,12 +27,11 @@ import { CHECK_LABELS, STATE_WORDS } from './year-end-words';
  * document behind it (part 65, sales-tax-worksheet.ts). Built on the server
  * by the download routes, as is a report from the report builder (part 72,
  * report-builder.ts) and a company's year-end package for the CPA, those
- * reports, its general ledger, what each customer and vendor was owed and
- * its stock at the year's end in one file (parts 75 to 77, Books → Year
- * end); amounts
- * are dollars in Excel's own Accounting format, read as the report shows
- * them, and anything the page warns about is written at the top, in red
- * when it's a failure.
+ * reports, its general ledger, what each customer and vendor was owed, its
+ * bank reconciliations and its stock at the year's end in one file (parts
+ * 75 to 78, Books → Year end); amounts are dollars in Excel's own
+ * Accounting format, read as the report shows them, and anything the page
+ * warns about is written at the top, in red when it's a failure.
  */
 
 export const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -1098,6 +1098,8 @@ export interface YearEndWorkbookInput {
   ledger: { accounts: LedgerBlock[]; notes: WorkbookNote[] };
   /** Each customer's and vendor's balance at `to`'s end (readPartyBalances in year-end-data.ts), with what each warns about beyond Reports' notes (partyNotes). */
   parties: Record<PartyKind, { balances: PartyBalancesAt; notes: WorkbookNote[] }>;
+  /** Each bank account reconciled in FleetSuite, through `to` (readBankRecs in year-end-data.ts), with what they warn about (bankRecNotes); none for a company with none. */
+  banks: { accounts: BankRecYear[]; notes: WorkbookNote[] };
   /** The company's stock at `to`'s end, with what Inventory value warns about (inventoryNotes); null for a company with none. */
   inventory: { value: CompanyValue; notes: WorkbookNote[] } | null;
   now: Date;
@@ -1116,9 +1118,11 @@ const PACKAGE_INVENTORY: InventorySheetNames = {
  * own totals; the general ledger, every account's documents in the year with
  * each side's running balance; what each customer owed and each vendor was
  * owed at the year's end, both sides, and how they come to the trial
- * balance; and, for a company with stock, its inventory value at the year's
- * end. What Year end says about the year is at the top of each sheet, above
- * what the sheet's own page warns about.
+ * balance; each bank account reconciled in FleetSuite, its statement at the
+ * year's end held against the books and each month of the year; and, for a
+ * company with stock, its inventory value at the year's end. What Year end
+ * says about the year is at the top of each sheet, above what the sheet's
+ * own page warns about.
  */
 export async function yearEndWorkbook(input: YearEndWorkbookInput): Promise<WorkbookFile> {
   const { company, year, to, view, now } = input;
@@ -1155,6 +1159,12 @@ export async function yearEndWorkbook(input: YearEndWorkbookInput): Promise<Work
       `${PARTY_WORDS[kind].owed(end)}, FleetSuite's books next to NetSuite's, and how they come to the ${PARTY_WORDS[kind].accounts} accounts `
         + 'on the trial balance.',
     );
+  }
+  if (input.banks.accounts.length) {
+    const [recs, byMonth] = addBankRecSheets(wb, { company, year, to, banks: input.banks.accounts, notes: [...yearNotes, ...input.banks.notes], now });
+    add(recs, `Each bank account reconciled in FleetSuite at ${end}: the statement's ending balance, each entry the books had by its last day `
+      + "that hadn't cleared the bank, and FleetSuite's books then.");
+    add(byMonth, `Each month's statement in ${year} on each bank account reconciled in FleetSuite: its balances, what cleared, and who reconciled it.`);
   }
   if (input.inventory) {
     // Inventory value's own notes say when its month isn't over, so the year's first note, which says it of the year, is left off.
@@ -1461,4 +1471,175 @@ function addPartySheet(wb: ExcelJS.Workbook, p: {
   redIf(tie.getCell(2), left.fleetsuite !== 0);
   redIf(tie.getCell(3), left.netsuite !== 0);
   return sheet;
+}
+
+// ── Bank reconciliations ───────────────────────────────────────────────────
+
+/**
+ * What the bank reconciliations warn about beyond what Year end says of the
+ * year: the last posting run, an account with more entries than are read at
+ * once, entries the books changed since they cleared on a month done, the
+ * year's last statement not reconciled yet, and entries NetSuite has that
+ * FleetSuite's books haven't posted yet.
+ */
+export function bankRecNotes(p: {
+  banks: readonly Pick<BankRecYear, 'account' | 'year' | 'notPosted' | 'capped'>[];
+  lastPosting: (Run & { partial: boolean }) | null;
+}): WorkbookNote[] {
+  const notes = postingNotes(p.lastPosting, "FleetSuite's books");
+  for (const { account, year, notPosted, capped } of p.banks) {
+    const name = account.name;
+    if (capped) {
+      notes.push({
+        tone: 'red',
+        text: `${name} has more than ${DOCUMENTS_LISTED.toLocaleString('en-US')} entries, more than FleetSuite reads at once, so its books here stop short.`,
+      });
+    }
+    const changed = year.months.filter((m) => m.state === 'done' && m.changed.length);
+    if (changed.length) {
+      const entries = changed.reduce((sum, m) => sum + m.changed.length, 0);
+      notes.push({
+        tone: 'red',
+        text: `${name}: the books changed ${count(entries, 'entry', 'entries')} that cleared on ${changed.map((m) => monthOf(m.month)).join(', ')} since, `
+          + `so from ${monthName(changed[0].month)} on the books don't tie to the bank.`,
+      });
+    }
+    if (year.end && year.end.state !== 'done') notes.push({ tone: 'amber', text: `${name}: ${monthName(year.end.month)}'s statement isn't reconciled yet.` });
+    if (notPosted) {
+      notes.push({
+        tone: 'amber',
+        text: `${name}: ${count(notPosted, 'entry', 'entries')} NetSuite has ${notPosted === 1 ? "isn't" : "aren't"} posted to FleetSuite's books yet, `
+          + `so ${notPosted === 1 ? "it isn't" : "they aren't"} here.`,
+      });
+    }
+  }
+  return notes;
+}
+
+/** Who finished reconciling a month, and when: 'Valarie, January 5, 2028 at 9:00 AM Central'. */
+const doneBy = (saved: SavedRec | null) => `${saved?.doneBy ?? 'someone'}${saved?.doneAt ? `, ${centralTime(saved.doneAt)}` : ''}`;
+
+/** A month's Reconciled cell: who and when, or that it isn't yet, and whether the books changed what cleared on it since. */
+function reconciledWords(m: MonthView): { text: string; color: string | null } {
+  if (m.state !== 'done') return { text: m.saved ? 'Being reconciled' : 'Not yet', color: AMBER };
+  const by = `By ${doneBy(m.saved)}`;
+  if (!m.changed.length) return { text: by, color: null };
+  return { text: `${by}. The books changed ${count(m.changed.length, 'entry', 'entries')} that cleared on it since.`, color: RED };
+}
+
+/**
+ * Each bank account reconciled in FleetSuite at the end of `to`'s month, as
+ * Books → 1084's bank reconciliation holds it: the statement's ending
+ * balance, each entry the books had by its last day that hadn't cleared the
+ * bank, the bank with them, and FleetSuite's books then, which come to the
+ * same once they tie; then each month of the year: its starting and ending
+ * balance, what cleared in and out, the difference left and who reconciled
+ * it. Returns the two sheets.
+ */
+function addBankRecSheets(wb: ExcelJS.Workbook, p: {
+  company: WorkbookCompany; year: number; to: string; banks: readonly BankRecYear[]; notes: WorkbookNote[]; now: Date;
+}): [ExcelJS.Worksheet, ExcelJS.Worksheet] {
+  const { to } = p;
+  const january = `${p.year}-01-01`;
+  const setup = { pageSetup: { orientation: 'landscape' as const, fitToPage: true, fitToWidth: 1, fitToHeight: 0 } };
+  const muted = (row: ExcelJS.Row, col: number) => { row.getCell(col).font = { color: { argb: MUTED } }; };
+
+  const recs = wb.addWorksheet('Bank Reconciliations', setup);
+  [32, 11, 36, 14, 28, 40].forEach((w, i) => { recs.getColumn(i + 1).width = w; });
+  recs.getColumn(2).numFmt = DATE;
+  amountColumns(recs, 7, 7, 16);
+  recs.getColumn(8).width = 50;
+  const recsHead = titleRows(recs, {
+    company: p.company,
+    title: 'Bank Reconciliations',
+    period: `As of ${monthEnd(to)}`,
+    about: `Each bank account reconciled in FleetSuite, its statement for ${monthName(to)} held against FleetSuite's books: the bank's ending balance, `
+      + "each entry the books had by the statement's last day that hadn't cleared the bank by then, and the books on that day. "
+      + "The bank with what hadn't cleared comes to the books once they tie.",
+    notes: p.notes,
+    now: p.now,
+    header: ['Account', 'Date', 'Type', 'Number', 'Name', 'Memo', 'Amount', 'Note'],
+    amounts: [7, 7],
+  });
+  for (const b of p.banks) {
+    const acct = b.account.name;
+    const end = b.year.end;
+    if (!end) {
+      muted(recs.addRow([acct, null, `Reconciling starts with ${monthName(b.start.firstMonth)}, after ${monthName(to)}.`]), 3);
+      continue;
+    }
+    const done = end.state === 'done';
+    const on = dayName(end.endsOn);
+    const statement = recs.addRow([
+      acct, dateCell(end.endsOn), 'Ending balance on the bank statement', null, null, null, end.endingCents === null ? null : dollars(end.endingCents),
+      `${monthName(end.month)} ${done ? `reconciled by ${doneBy(end.saved)}` : "isn't reconciled yet"}`,
+    ]);
+    statement.font = { bold: true };
+    if (!done) statement.getCell(8).font = { bold: true, color: { argb: AMBER } };
+    for (const d of end.notCleared) {
+      recs.addRow([acct, dateCell(d.date), d.type, d.number, d.name, d.memo, dollars(d.cents), `Not cleared by ${on}`]);
+    }
+    if (!end.notCleared.length) muted(recs.addRow([acct, null, `Every entry the books had by ${on} had cleared.`]), 3);
+    const bank = recs.addRow([
+      acct, null, "The bank with what hadn't cleared", null, null, null, end.endingCents === null ? null : dollars(end.endingCents + end.notClearedCents), null,
+    ]);
+    const books = recs.addRow([acct, dateCell(end.endsOn), "FleetSuite's books", null, null, null, dollars(end.booksCents), null]);
+    const tieNote = end.tieCents === null ? { text: "The statement's ending balance isn't typed yet.", color: AMBER }
+      : end.tieCents === 0 ? null
+        : done ? { text: `The books changed since ${monthName(end.month)} was reconciled.`, color: RED }
+          : { text: "Not reconciled yet: what's ticked so far counts as cleared.", color: AMBER };
+    const tie = recs.addRow([
+      acct, null, 'The books less the bank', null, null, null, end.tieCents === null ? null : dollars(end.tieCents), tieNote?.text ?? null,
+    ]);
+    for (const row of [bank, books, tie]) row.font = { bold: true };
+    bank.getCell(7).border = { top: { style: 'thin' } };
+    tie.getCell(7).border = { top: { style: 'double' } };
+    if (tieNote) {
+      tie.getCell(8).font = { bold: true, color: { argb: tieNote.color } };
+      if (end.tieCents) tie.getCell(7).font = { bold: true, color: { argb: tieNote.color } };
+    }
+  }
+  recs.autoFilter = { from: { row: recsHead, column: 1 }, to: { row: recs.rowCount, column: 8 } };
+
+  const months = wb.addWorksheet('Bank Reconciliations by Month', setup);
+  [32, 16, 12].forEach((w, i) => { months.getColumn(i + 1).width = w; });
+  months.getColumn(3).numFmt = DATE;
+  amountColumns(months, 4, 8, 16);
+  months.getColumn(9).width = 50;
+  const monthsHead = titleRows(months, {
+    company: p.company,
+    title: 'Bank Reconciliations by Month',
+    period: `${monthStart(january)} to ${monthEnd(to)}`,
+    about: `Each month's statement in ${p.year} on each bank account reconciled in FleetSuite: its starting balance, what cleared in and out, `
+      + "its ending balance and the difference left, which is nothing once it's reconciled, and who reconciled it.",
+    notes: p.notes,
+    now: p.now,
+    header: ['Account', 'Month', "Statement's last day", 'Starting balance', 'Money in', 'Money out', 'Ending balance', 'Difference', 'Reconciled'],
+    amounts: [4, 8],
+  });
+  for (const b of p.banks) {
+    const acct = b.account.name;
+    const { start } = b;
+    if (start.firstMonth >= january && start.firstMonth <= to) {
+      const outstanding = start.outstanding.length;
+      months.addRow([
+        acct, 'Where reconciling starts', dateCell(start.asOf), null, null, null, dollars(start.balanceCents), null,
+        outstanding ? `${count(outstanding, 'entry', 'entries')} hadn't cleared by then` : null,
+      ]).font = { italic: true };
+    }
+    if (!b.year.months.length) muted(months.addRow([acct, `Reconciling starts with ${monthName(start.firstMonth)}, after ${monthName(to)}.`]), 2);
+    for (const m of b.year.months) {
+      const later = m.state === 'later';
+      const words = reconciledWords(m);
+      const row = months.addRow([
+        acct, monthName(m.month), later && !m.saved ? null : dateCell(m.endsOn),
+        m.startingCents === null ? null : dollars(m.startingCents), later ? null : dollars(m.inCents), later ? null : dollars(m.outCents),
+        m.endingCents === null ? null : dollars(m.endingCents), m.differenceCents === null ? null : dollars(m.differenceCents), words.text,
+      ]);
+      if (words.color) row.getCell(9).font = { color: { argb: words.color } };
+    }
+  }
+  months.autoFilter = { from: { row: monthsHead, column: 1 }, to: { row: months.rowCount, column: 9 } };
+
+  return [recs, months];
 }

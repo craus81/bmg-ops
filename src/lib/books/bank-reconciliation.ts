@@ -19,7 +19,8 @@
  *
  * The rules here are pure and client-safe; /api/admin/books/bank-reconciliation
  * and its page both use them, the page to show what the ticks come to as
- * they're made, the route to check what's saved.
+ * they're made, the route to check what's saved; and the year-end package
+ * shows each account's year with them (recYear, part 78).
  */
 
 import { formatCents, isDay, MAX_LINE_CENTS } from '@/lib/typed-journal-entries';
@@ -393,4 +394,79 @@ export function monthViews(b: RecBooks, thisMonth: string): MonthView[] {
     if (month === next) return nextView(b, draftFor(b, month));
     return laterView(b, month);
   });
+}
+
+// ── At a year's end ─────────────────────────────────────────────────────────
+
+/**
+ * A month's statement held against the books on its last day, as the
+ * year-end package shows a year's last one: the bank's ending balance, each
+ * entry the books had by then that hadn't cleared on it or a month before,
+ * and the books then. They tie when the books less what hadn't cleared come
+ * to the ending balance.
+ */
+export interface RecEnd {
+  month: string;
+  state: RecState;
+  saved: SavedRec | null;
+  endsOn: string;
+  endingCents: number | null;
+  /** The entries the books had by the statement's last day that hadn't cleared by then, by date. */
+  notCleared: BankDoc[];
+  notClearedCents: number;
+  /** The books' balance at the statement's last day. */
+  booksCents: number;
+  /** The books less what hadn't cleared, less the ending balance: $0 when they tie; null while the ending balance isn't typed. */
+  tieCents: number | null;
+}
+
+/** A bank account's reconciliation in a year, through its last month or this one. */
+export interface RecYear {
+  /** Each month from January, or the month reconciling starts with, through `to`, oldest first. */
+  months: MonthView[];
+  /** The statement at `to` held against the books; null when reconciling starts after it. */
+  end: RecEnd | null;
+}
+
+/** A bank account reconciled in FleetSuite, through the year-end package's last month (readBankRecs in year-end-data.ts). */
+export interface BankRecYear {
+  account: { id: string; name: string };
+  start: RecStart;
+  year: RecYear;
+  /** Entries NetSuite's copy has on the account that FleetSuite's books haven't posted yet. */
+  notPosted: number;
+  /** More entries on the account than are read at once. */
+  capped: boolean;
+}
+
+/**
+ * A year's months as the page shows them, from January (or the month
+ * reconciling starts with) through `to`, December or this month, and the
+ * statement at `to` held against the books: what hadn't cleared by its last
+ * day is each entry that can clear on it that isn't ticked on it, as the
+ * page counts it, done or not.
+ */
+export function recYear(b: RecBooks, p: { year: number; to: string; thisMonth: string }): RecYear {
+  const january = `${p.year}-01-01`;
+  const months = monthViews(b, p.thisMonth).filter((m) => m.month >= january && m.month <= p.to).reverse();
+  const last = months.find((m) => m.month === p.to);
+  if (!last) return { months, end: null };
+  const ticked = new Set(b.ticks.filter((t) => t.month === p.to).map((t) => t.doc));
+  const notCleared = openEntries(b, p.to, last.endsOn).filter((d) => !ticked.has(d.doc));
+  const notClearedCents = notCleared.reduce((sum, d) => sum + d.cents, 0);
+  const booksCents = balanceOn(b, last.endsOn);
+  return {
+    months,
+    end: {
+      month: p.to,
+      state: last.state,
+      saved: last.saved,
+      endsOn: last.endsOn,
+      endingCents: last.endingCents,
+      notCleared,
+      notClearedCents,
+      booksCents,
+      tieCents: last.endingCents === null ? null : booksCents - notClearedCents - last.endingCents,
+    },
+  };
 }

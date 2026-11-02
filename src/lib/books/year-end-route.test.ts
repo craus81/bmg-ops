@@ -27,6 +27,7 @@ vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok
 import { GET, POST } from '../../app/api/admin/books/year-end/route';
 import { GET as DOWNLOAD } from '../../app/api/admin/books/year-end/download/route';
 import { PLANNED_LIVE_FROM } from './opening-balances';
+import { lastDay, monthAfter } from './bank-reconciliation';
 import { monthsBetween } from './netsuite-gl';
 
 type Row = Record<string, any>;
@@ -45,6 +46,28 @@ const account = (id: string, nsId: string, number: string, name: string, type: s
 });
 
 const MONTHS_2027 = monthsBetween('2027-01-01', '2027-12-01');
+
+/**
+ * BMG's First Bank checking reconciled in FleetSuite from January 2027,
+ * each statement typed in by Jessie and reconciled by Valarie on the 5th of
+ * the month after: 4,000.00 until March's sale cleared, 14,000.00 until
+ * April's rent did, then 11,900.00.
+ */
+const BANK_START = {
+  company: 'BMG', account: '10', first_month: '2027-01-01', as_of: '2026-12-31', balance_cents: 400000, outstanding: [],
+  updated_by: 'u-valarie', updated_at: '2027-01-05T15:00:00Z',
+};
+const statement = (month: string) => {
+  const at = `${monthAfter(month).slice(0, 8)}05T15:00:00Z`;
+  return {
+    company: 'BMG', account: '10', month, ends_on: lastDay(month), ending_cents: month < '2027-03-01' ? 400000 : month < '2027-04-01' ? 1400000 : 1190000,
+    status: 'done', done_by: 'u-valarie', done_at: at, updated_by: 'u-jessie', updated_at: at,
+  };
+};
+const CLEARED = [
+  { company: 'BMG', account: '10', doc: '501', month: '2027-03-01', cents: 1000000 },
+  { company: 'BMG', account: '10', doc: '502', month: '2027-04-01', cents: -210000 },
+];
 
 /** FleetSuite's journal on BMG's income and expense accounts by division and location, as gl_books_split_totals has it. */
 const split = (acct: string, month: string, cents: number) => ({
@@ -116,7 +139,7 @@ function query(table: string) {
     lte: (col: string, v: string) => { filters.push((r) => r[col] <= v); return q; },
     in: (col: string, values: unknown[]) => { filters.push((r) => values.includes(r[col])); return q; },
     range: async (from: number, to: number) => { const r = result(); return { ...r, data: r.data && r.data.slice(from, to + 1) }; },
-    maybeSingle: async () => ({ data: null, error: null }),
+    maybeSingle: async () => { const r = result(); return { data: r.data?.[0] ?? null, error: r.error }; },
     insert: async (rows: unknown) => { audits.push(...(Array.isArray(rows) ? rows : [rows]) as Row[]); return { error: null }; },
     then: (done: (v: unknown) => unknown, failed: (e: unknown) => unknown) => Promise.resolve(result()).then(done, failed),
   };
@@ -211,8 +234,11 @@ beforeEach(() => {
       { id: 'j1', company: 'BMG', tran_date: '2027-12-31', journal: 'cpa_adjustments', status: 'draft' },
       { id: 'j2', company: 'BMG', tran_date: '2027-06-30', journal: 'general', status: 'made' },
     ],
-    bank_rec_starts: [{ company: 'BMG', account: '10', first_month: '2027-01-01' }],
-    bank_recs: MONTHS_2027.slice(0, 11).map((month) => ({ company: 'BMG', account: '10', month, status: 'done' })),
+    bank_rec_starts: [{ ...BANK_START }],
+    bank_recs: MONTHS_2027.slice(0, 11).map(statement),
+    bank_rec_ticks: CLEARED.map((t) => ({ ...t })),
+    bank_rec_events: [],
+    profiles: [{ id: 'u-valarie', full_name: 'Valarie' }, { id: 'u-jessie', full_name: 'Jessie' }],
     sales_tax_returns: MONTHS_2027.map((month) => ({ company: 'BMG', month })),
   };
   partyData = { customer: NOBODY, vendor: NOBODY };
@@ -360,7 +386,7 @@ describe('Books → Year end: closing and reopening', () => {
     fullName = null;
     booksTotals = [fs('10', '2027-03-01', 1000000), fs('40', '2027-03-01', -1000000), fs('60', '2027-04-01', 200000), fs('10', '2027-04-01', -200000)];
     tables.typed_journal_entries = [];
-    tables.bank_recs = MONTHS_2027.map((month) => ({ company: 'BMG', account: '10', month, status: 'done' }));
+    tables.bank_recs = MONTHS_2027.map(statement);
     // April matches once the books do.
     const matched = { ...BMG_DIFFERENCES, fleetsuite: BMG_DIFFERENCES.netsuite };
     const real = service.rpc;
@@ -516,6 +542,8 @@ describe('Books → Year end: the year-end package', () => {
     return Array.from({ length: ws.rowCount - at }, (_, i) => Array.from({ length: width }, (_, c) => ws.getRow(at + 1 + i).getCell(c + 1).value ?? null));
   };
   const documentReads = () => rpcs.filter(([name]) => name === 'gl_books_account_documents');
+  /** The general ledger's reads, from January of the year; the bank reconciliations read from where FleetSuite's books start. */
+  const ledgerReads = (january: string) => documentReads().filter(([, args]) => args.p_from === january);
   const NOT_POSTED = "Nothing has posted to FleetSuite's books yet.";
 
   it("gives BMG's last year as one Excel file: its reports at December 31, how it closes, its ledger, its stock and what's done before it closes", async () => {
@@ -527,7 +555,8 @@ describe('Books → Year end: the year-end package', () => {
     const all = await sheetsOf(res);
     expect(all.map((s) => s.name)).toEqual([
       'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows',
-      'Retained Earnings', 'General Ledger', 'Customer Balances', 'Vendor Balances', 'Inventory value', 'Inventory ties to accounts',
+      'Retained Earnings', 'General Ledger', 'Customer Balances', 'Vendor Balances', 'Bank Reconciliations', 'Bank Reconciliations by Month',
+      'Inventory value', 'Inventory ties to accounts',
     ]);
     const contents = column(all[0]);
     expect(contents.slice(0, 3)).toEqual(['Example Fleet Upfitters LLC', 'Year-end package 2027', 'January 1, 2027 to December 31, 2027']);
@@ -575,7 +604,7 @@ describe('Books → Year end: the year-end package', () => {
       ['6000 Rent', null, 'Total, January to December 2027', null, null, null, null, null, 100, 2100, 2000, null],
     ]);
     // Documents read only for the accounts that moved, over the year, as each account's own download reads them.
-    expect(documentReads()).toEqual(['10', '40', '60'].map((acct) => ['gl_books_account_documents', {
+    expect(ledgerReads('2027-01-01')).toEqual(['10', '40', '60'].map((acct) => ['gl_books_account_documents', {
       p_company: 'BMG', p_account: acct, p_from: '2027-01-01', p_to: '2027-12-01', p_differs: false, p_limit: 20000,
     }]));
     // No customer or vendor had a balance, and the chart has no receivable or payable account.
@@ -709,7 +738,105 @@ describe('Books → Year end: the year-end package', () => {
     expect(notesOf(named(await sheetsOf(await download()), 'General Ledger'))).toEqual([
       NOT_POSTED, "NetSuite's totals haven't been read yet, so NetSuite's side is empty.",
     ]);
-    expect(documentReads().slice(-3).map(([, args]) => args.p_account)).toEqual(['10', '40', '60']);
+    expect(ledgerReads('2027-01-01').slice(-3).map(([, args]) => args.p_account)).toEqual(['10', '40', '60']);
+  });
+
+  it("holds BMG's bank account at December 31 against its books and lists each month of the year, as Books' bank reconciliation reads them", async () => {
+    const bank = '1010 First Bank checking';
+    const day = (iso: string) => new Date(`${iso}T00:00:00Z`);
+    // 1084's own reconciliation of the same NetSuite account, from June, which BMG's reads leave alone.
+    tables.bank_rec_starts.unshift({ ...BANK_START, company: '1084', first_month: '2027-06-01', as_of: '2027-05-31', balance_cents: 250000 });
+    tables.bank_recs.push({ ...statement('2027-12-01'), company: '1084' });
+    tables.bank_rec_ticks.push({ company: '1084', account: '10', doc: '503', month: '2027-06-01', cents: 50000 });
+    let all = await sheetsOf(await download());
+    // December isn't reconciled yet: nothing typed for it.
+    const unreconciled = "1010 First Bank checking: December 2027's statement isn't reconciled yet.";
+    expect(notesOf(named(all, 'Bank Reconciliations'))).toEqual([unreconciled]);
+    expect(under(named(all, 'Bank Reconciliations'), 'Account', 8)).toEqual([
+      [bank, day('2027-12-31'), 'Ending balance on the bank statement', null, null, null, null, "December 2027 isn't reconciled yet"],
+      [bank, null, 'Every entry the books had by December 31, 2027 had cleared.', null, null, null, null, null],
+      [bank, null, "The bank with what hadn't cleared", null, null, null, null, null],
+      [bank, day('2027-12-31'), "FleetSuite's books", null, null, null, 11900, null],
+      [bank, null, 'The books less the bank', null, null, null, null, "The statement's ending balance isn't typed yet."],
+    ]);
+    const months = under(named(all, 'Bank Reconciliations by Month'), 'Account', 9);
+    expect(notesOf(named(all, 'Bank Reconciliations by Month'))).toEqual([unreconciled]);
+    expect(months).toHaveLength(13);
+    expect([0, 1, 3, 4, 12].map((i) => months[i])).toEqual([
+      [bank, 'Where reconciling starts', day('2026-12-31'), null, null, null, 4000, null, null],
+      [bank, 'January 2027', day('2027-01-31'), 4000, 0, 0, 4000, 0, 'By Valarie, February 5, 2027 at 9:00 AM Central'],
+      [bank, 'March 2027', day('2027-03-31'), 4000, 10000, 0, 14000, 0, 'By Valarie, April 5, 2027 at 10:00 AM Central'],
+      [bank, 'April 2027', day('2027-04-30'), 14000, 0, 2100, 11900, 0, 'By Valarie, May 5, 2027 at 10:00 AM Central'],
+      [bank, 'December 2027', day('2027-12-31'), 11900, 0, 0, null, null, 'Not yet'],
+    ]);
+    // Read as Books' bank reconciliation reads the account: each entry on it from where FleetSuite's books start through this month.
+    expect(documentReads().filter(([, args]) => args.p_from === '2025-01-01')).toEqual([['gl_books_account_documents', {
+      p_company: 'BMG', p_account: '10', p_from: '2025-01-01', p_to: '2028-01-01', p_differs: false, p_limit: 20000,
+    }]]);
+
+    // December reconciled, with a deposit that hadn't cleared by its last day and one NetSuite has that hasn't posted yet; more entries than
+    // are read at once, and the last posting run failed.
+    tables.bank_recs.push(statement('2027-12-01'));
+    tables.sync_state = [{ sync_type: 'books_invoice_posting', last_result: { error: 'NetSuite timed out' }, updated_at: '2028-01-20T14:00:00Z' }];
+    const real = service.rpc;
+    service.rpc = async (name, args) => {
+      const read = await real(name, args);
+      if (name !== 'gl_books_account_documents' || args.p_from !== '2025-01-01') return read;
+      const data = read.data as Row;
+      const rows = [
+        ...data.rows,
+        docOf('503', '0.00', '500.00', { type: 'Deposit', number: 'D9', month: '2027-12-01', date: '2027-12-30', name: 'Example Fleet Co' }),
+        docOf('504', '75.00', '0.00', { type: 'Deposit', number: 'D10', month: '2027-12-01', date: '2027-12-29' }),
+      ];
+      return { data: { ...data, rows, documents: 20001 }, error: null };
+    };
+    try {
+      all = await sheetsOf(await download());
+    } finally {
+      service.rpc = real;
+    }
+    expect(notesOf(named(all, 'Bank Reconciliations'))).toEqual([
+      'The last posting run failed (January 20, 2028 at 8:00 AM Central): NetSuite timed out',
+      '1010 First Bank checking has more than 20,000 entries, more than FleetSuite reads at once, so its books here stop short.',
+      "1010 First Bank checking: 1 entry NetSuite has isn't posted to FleetSuite's books yet, so it isn't here.",
+    ]);
+    expect(under(named(all, 'Bank Reconciliations'), 'Account', 8)).toEqual([
+      [bank, day('2027-12-31'), 'Ending balance on the bank statement', null, null, null, 11900, 'December 2027 reconciled by Valarie, January 5, 2028 at 9:00 AM Central'],
+      [bank, day('2027-12-30'), 'Deposit', 'D9', 'Example Fleet Co', null, 500, 'Not cleared by December 31, 2027'],
+      [bank, null, "The bank with what hadn't cleared", null, null, null, 12400, null],
+      [bank, day('2027-12-31'), "FleetSuite's books", null, null, null, 12400, null],
+      [bank, null, 'The books less the bank', null, null, null, 0, null],
+    ]);
+    expect(under(named(all, 'Bank Reconciliations by Month'), 'Account', 9).at(-1)).toEqual([
+      bank, 'December 2027', day('2027-12-31'), 11900, 0, 0, 11900, 0, 'By Valarie, January 5, 2028 at 9:00 AM Central',
+    ]);
+
+    // An account no longer reconciled by the time it's read is left out, with its sheets when it's the only one.
+    const from = service.from;
+    service.from = (table: string) => {
+      const q = from(table);
+      if (table === 'bank_rec_starts') q.maybeSingle = async () => ({ data: null, error: null });
+      return q;
+    };
+    try {
+      all = await sheetsOf(await download());
+    } finally {
+      service.from = from;
+    }
+    expect(all.map((s) => s.name)).not.toContain('Bank Reconciliations');
+    expect(all.map((s) => s.name)).not.toContain('Bank Reconciliations by Month');
+
+    // 1084's package has its own, from June, with no entry in its books on the account.
+    tables.sync_state = [];
+    const theirs = await sheetsOf(await download('company=1084&year=2027'));
+    expect(under(named(theirs, 'Bank Reconciliations by Month'), 'Account', 9).slice(0, 2)).toEqual([
+      [bank, 'Where reconciling starts', day('2027-05-31'), null, null, null, 2500, null, null],
+      [bank, 'June 2027', null, null, null, null, null, null, 'Not yet'],
+    ]);
+    expect(under(named(theirs, 'Bank Reconciliations'), 'Account', 8).at(-2)).toEqual([bank, day('2027-12-31'), "FleetSuite's books", null, null, null, 0, null]);
+    // A company reconciling no bank account in FleetSuite has no bank sheets.
+    tables.bank_rec_starts = tables.bank_rec_starts.filter((r) => r.company !== '1084');
+    expect((await sheetsOf(await download('company=1084&year=2027'))).map((s) => s.name)).not.toContain('Bank Reconciliations');
   });
 
   it('says on every sheet that the year is closed, by whom and when', async () => {
@@ -733,7 +860,8 @@ describe('Books → Year end: the year-end package', () => {
       "January 2028 isn't over yet, so this is where it stood when the file was made.",
     ]);
     // Nothing has moved this year yet: no documents to read, each balance carried through the month, 2027 coming into retained earnings.
-    expect(documentReads()).toEqual([]);
+    expect(ledgerReads('2028-01-01')).toEqual([]);
+    expect(documentReads().map(([, args]) => [args.p_account, args.p_from, args.p_to])).toEqual([['10', '2025-01-01', '2028-01-01']]);
     expect(column(named(now, 'General Ledger'))[3]).toMatch(/^Every account with a balance or a document in the month \(2 accounts\),/);
     expect(under(named(now, 'General Ledger'), 'Account', 3)).toEqual([
       ['1010 First Bank checking', null, 'Balance at the end of December 2027'],
@@ -807,9 +935,25 @@ describe('Books → Year end: the year-end package', () => {
       gl_books_account_documents: 'gl_books_account_documents is down',
       gl_party_balances_through: 'gl_party_balances_through is down',
     };
+    // The ledger's reads, with no bank account reconciled to read too.
+    const starts = tables.bank_rec_starts;
+    tables.bank_rec_starts = [];
     for (const [table, error] of Object.entries(said)) {
       errors = { [table]: { message: `${table} is down` } };
       const res = await download();
+      expect([table, res.status, await res.json()]).toEqual([table, 500, { error }]);
+    }
+    // The bank account's, in 2028, when nothing has moved for the ledger to read.
+    tables.bank_rec_starts = starts;
+    const bank: Record<string, string> = {
+      gl_books_account_documents: "Couldn't read the account's entries: gl_books_account_documents is down",
+      bank_rec_ticks: "Couldn't read what cleared: bank_rec_ticks is down",
+      bank_rec_events: "Couldn't read what was reconciled: bank_rec_events is down",
+      profiles: 'profiles is down',
+    };
+    for (const [table, error] of Object.entries(bank)) {
+      errors = { [table]: { message: `${table} is down` } };
+      const res = await download('year=2028');
       expect([table, res.status, await res.json()]).toEqual([table, 500, { error }]);
     }
     errors = {};
