@@ -192,6 +192,10 @@ describe('migration 507: finishing a drill', () => {
     const r = await rpc('books_restore_drill_begin', { how: 'by_hand' });
     await rpc('books_restore_drill_finish', { id: r.id, status: 'failed', error: `  ${'x'.repeat(700)}  `, tables: 3 });
     expect(await drill(r.id)).toMatchObject({ status: 'failed', error: 'x'.repeat(600), table_count: 3, link_count: null });
+    // Cut where it has spaces, it's trimmed again.
+    const cut = await rpc('books_restore_drill_begin', { how: 'by_hand' });
+    await rpc('books_restore_drill_finish', { id: cut.id, status: 'failed', error: `${'x'.repeat(598)}  ${'y'.repeat(50)}` });
+    expect(await drill(cut.id)).toMatchObject({ status: 'failed', error: 'x'.repeat(598) });
   });
 
   it('refuses a passed drill without what came back, or with an error, and leaves it running', async () => {

@@ -152,6 +152,7 @@ describe("the drill's scratch database", () => {
       '360-elsewhere.sql': 'CREATE TABLE photo_shares (id int);',
       '361-said.sql': '-- gl_entries gets a column next time\nCREATE TABLE photo_links (id int);',
       '362-longer.sql': 'CREATE TABLE gl_entries_archive (id int);',
+      '363-prefixed.sql': 'CREATE TABLE old_gl_entries (id int);',
       '454-inventory-adjustments.sql': 'CREATE TABLE inventory_adjustments (id int);',
       '500-later.sql': 'ALTER TABLE public.GL_ENTRIES ADD COLUMN memo text;',
     };
@@ -237,6 +238,9 @@ describe("a table's shape in the backup against FleetSuite's migrations", () => 
 
   it('says a different key, generated or identity columns, or tables pointed at', () => {
     expect(shapeProblem(backup, made({ key: ['company_id', 'period_start'] }))).toBe("gl_periods's key is (id) in the backup and (company_id, period_start) in FleetSuite's migrations.");
+    // A key is its columns in order.
+    expect(shapeProblem(made({ key: ['company_id', 'period_start'] }), made({ key: ['period_start', 'company_id'] })))
+      .toBe("gl_periods's key is (company_id, period_start) in the backup and (period_start, company_id) in FleetSuite's migrations.");
     expect(shapeProblem(backup, made({ generated: [] }))).toBe("gl_periods's generated columns are (period_end) in the backup and (none) in FleetSuite's migrations.");
     expect(shapeProblem(backup, made({ identity: ['id'] }))).toBe("gl_periods's identity columns are (none) in the backup and (id) in FleetSuite's migrations.");
     expect(shapeProblem(backup, made({ parents: ['gl_companies'] }))).toBe("gl_periods's tables it points at are (gl_companies, profiles) in the backup and (gl_companies) in FleetSuite's migrations.");
@@ -369,6 +373,15 @@ describe('a restore drill of a real backup', () => {
     expect(await dump(kept!.db, BACKUP_TABLES)).toEqual(await dump(source, BACKUP_TABLES));
     const next = await kept!.db.query<{ n: number }>(`SELECT nextval(pg_get_serial_sequence('public.gl_entries', 'entry_no'))::int AS n`);
     expect(next.rows[0].n).toBe(Math.max(...Object.keys(entry).map(Number)) + 1);
+    // A table the backup holds no rows of numbers its first from 1.
+    const empty = nightManifest.tables.filter((t: BackupTable & { rows: number }) => t.rows === 0 && t.identity.length > 0);
+    expect(empty.map((t: BackupTable) => t.table)).toContain('stock_counts');
+    for (const t of empty) {
+      for (const column of t.identity) {
+        const first = await kept!.db.query<{ n: number }>(`SELECT nextval(pg_get_serial_sequence($1, $2))::int AS n`, [`public.${t.table}`, column]);
+        expect(first.rows[0].n).toBe(1);
+      }
+    }
     // The triggers are back on: an entry that doesn't balance is refused again.
     await expect(kept!.db.query(`SELECT gl_post_entry($1::jsonb)`, [JSON.stringify({
       company: 'BMG', entry_date: '2026-11-05', source_type: 'invoice', source_id: 'INV9', posting_rule: 'invoice@1', idempotency_key: 'after-restore',
@@ -492,6 +505,7 @@ describe('a restore drill of a real backup', () => {
     else expect(result.error).toMatch(error);
     expect(await drillRow(result.id)).toMatchObject({ status: 'failed', error: result.error, row_count: null, link_count: null });
     expect(vi.mocked(recordHeartbeat).mock.calls.at(-1)![2]).toMatchObject({ state: 'failed', error: result.error, backup });
+    expect(vi.mocked(recordHeartbeat).mock.calls.at(-1)![3]).toEqual({ startedAt: expect.any(Number), records: null, touchLastSyncedAt: false });
     return result;
   }
 
@@ -525,6 +539,9 @@ describe('a restore drill of a real backup', () => {
     await fails(await tampered((t) => { t.manifestText = '[]'; }), "The backup is in a form this FleetSuite doesn't know (undefined).");
     await fails(await tampered((t) => { t.manifest.format = 'fleetsuite-books-backup@2'; }), "The backup is in a form this FleetSuite doesn't know (fleetsuite-books-backup@2).");
     await fails(await tampered((t) => { t.manifest.load_order = t.manifest.load_order.slice(1); }), "The backup's load order doesn't name each of its tables once.");
+    await fails(await tampered((t) => { t.manifest.load_order[0] = t.manifest.load_order[1]; }), "The backup's load order doesn't name each of its tables once.");
+    await fails(await tampered((t) => { t.manifest.tables.push({ ...t.manifest.tables.find((x: any) => x.table === 'gl_period_events') }); }),
+      "The backup's manifest lists a table twice.");
     await fails(await tampered((t) => {
       t.manifest.tables = t.manifest.tables.filter((x: any) => x.table !== 'gl_entries');
       t.manifest.load_order = t.manifest.load_order.filter((x: string) => x !== 'gl_entries');
@@ -646,11 +663,16 @@ describe('a restore drill of a real backup', () => {
       CREATE TRIGGER drill_moves BEFORE INSERT ON public.gl_lines FOR EACH ROW EXECUTE FUNCTION public.drill_moves();
       ALTER TABLE public.gl_lines ENABLE ALWAYS TRIGGER drill_moves;
     `);
-    // Whichever of the two accounts the trial balance lists first is named.
-    await fails(made.id!, new RegExp(`^The restored journal adds up differently for (${[
-      '11099 Drill Receivable \\(BMG\\): \\$2,602\\.00 of debits and \\$1,250\\.50 of credits, and the backup was made with \\$2,601\\.00 and \\$1,250\\.50',
-      '40099 Drill Upfit Sales \\(BMG\\): \\$0\\.00 of debits and \\$1,351\\.50 of credits, and the backup was made with \\$0\\.00 and \\$1,350\\.50',
-    ].join('|')})\\.$`),
+    // The first account the trial balance lists that differs is named: by its credits alone, or by its debits.
+    const listedFirst = (number: string) => tampered((t) => {
+      const tb = t.manifest.journal.trial_balance;
+      tb.unshift(...tb.splice(tb.findIndex((a: any) => a.account_id === acct[number]), 1));
+    });
+    await fails(await listedFirst('40099'),
+      'The restored journal adds up differently for 40099 Drill Upfit Sales (BMG): $0.00 of debits and $1,351.50 of credits, and the backup was made with $0.00 and $1,350.50.',
+      { scratch: moving });
+    await fails(await listedFirst('11099'),
+      'The restored journal adds up differently for 11099 Drill Receivable (BMG): $2,602.00 of debits and $1,250.50 of credits, and the backup was made with $2,601.00 and $1,250.50.',
       { scratch: moving });
   });
 
