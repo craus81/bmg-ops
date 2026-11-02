@@ -1993,10 +1993,12 @@ one naming the first three.
 
 ## Reports
 
-`/admin/books/reports` shows one company's profit and loss, balance sheet
-and trial balance from FleetSuite's own books, each line next to the same
-report worked out from NetSuite's own totals, so the owner and the CPA can
-see they agree (owner decision 2026-10-17). The profit and loss covers the
+`/admin/books/reports` shows one company's profit and loss, balance sheet,
+trial balance and cash flow statement from FleetSuite's own books, each
+line next to the same report worked out from NetSuite's own totals, so the
+owner and the CPA can see they agree (owner decision 2026-10-17; the cash
+flow statement from the NetSuite Exit Checklist's "Report builder",
+2026-11-02). The profit and loss and the cash flow statement cover the
 months picked with From and To, as NetSuite's reports do (the owner chose
 any range over a fixed twelve months the same day); the balance sheet and
 trial balance are at the To month's end. Months run from January 2025 to
@@ -2028,20 +2030,36 @@ to its side like any other entry.
   this year's is a Net income line; the year is the calendar year.
 - Trial balance: as the trial balance check lays it out, debits and credits
   apart, with each side's totals.
+- Cash flow statement: as NetSuite's Statement of Cash Flows lays it out
+  (the indirect method). Operating activities: net income for the months,
+  then Adjustments to net income, the change in each account of the types
+  NetSuite counts there (accounts receivable, other current assets,
+  unbilled receivables, deferred expense, accounts payable, credit cards,
+  other current liabilities and deferred revenue); Investing activities:
+  fixed and other assets; Financing activities: long term liabilities and
+  equity; then Net change in cash for the period, and Cash at the beginning
+  and at the end of the period, the bank accounts' balances. Cash coming in
+  is positive: an asset that grew took cash, a liability or equity that grew
+  brought it in, so the statement comes to the change in the bank accounts.
+  Retained earnings takes in no earlier years' income here, since that
+  moves no cash; what posts to it does show, under financing.
 
 Each account sits under its parent when the parent is in the same section,
 with a total for the parent; one whose parent is in another section, or
 whose parents loop, starts its own branch. Accounts with nothing on either
 side don't show. A NetSuite account the chart doesn't have yet can't be
 placed, so it shows apart at the end, debit positive, and out of net
-income.
+income; on the cash flow statement it has a part of its own before the
+change in cash, read as cash like any other account, and still counts in
+the change, so the statement comes to the bank accounts either way.
 
 A line differs when its two sides aren't the same to the cent; the count
-covers accounts, retained earnings and net income, not totals. The month
-strip marks each month by its own report: its profit and loss alone, or the
-balance sheet or trial balance at its end, so a difference shows on the
-profit and loss in the month it comes from and on the balance sheet from
-then on. When the report differs, the page links to Differences vs NetSuite
+covers accounts, retained earnings and net income, not totals, so on the
+cash flow statement the cash at either end, a balance the balance sheet
+already checks, isn't counted. The month strip marks each month by its own
+report: its profit and loss or cash flow alone, or the balance sheet or
+trial balance at its end, so a difference shows on the profit and loss in
+the month it comes from and on the balance sheet from then on. When the report differs, the page links to Differences vs NetSuite
 at the first month in it that differs (`?company=&month=`), where the
 documents behind it are listed.
 
@@ -2084,7 +2102,9 @@ What a line covers: on the profit and loss, the months picked; on the
 balance sheet, the To month, between the account's balance at the end of the
 month before and at the end of To; on the trial balance, the same for a
 balance sheet account and the year to date for income and expenses (those
-lines carry `yearToDate`). `lineSpan` in `src/lib/books/reports.ts` works
+lines carry `yearToDate`); on the cash flow statement, the months picked,
+as what the account's change did to cash, cash coming in positive, with no
+balance before (a bank account's is the change in cash itself). `lineSpan` in `src/lib/books/reports.ts` works
 out both ends as the report itself does, so the last one is the line, and
 the amounts read as that report shows them: income, liabilities and equity
 positive on the profit and loss and balance sheet, debit positive (Dr and
@@ -2156,7 +2176,8 @@ to $1,000.00 on NetSuite's side".
 
 The file names say what's in them: `BMG Profit and Loss 2026-01 to
 2026-09.xlsx` (one month alone is `2026-09`), `BMG Balance Sheet
-2026-09-30.xlsx`, `BMG Trial Balance 2026-09-30.xlsx`, and `BMG 1200
+2026-09-30.xlsx`, `BMG Trial Balance 2026-09-30.xlsx`, `BMG Statement of
+Cash Flows 2026-01 to 2026-09.xlsx`, and `BMG 1200
 Receivables 2026-08 to 2026-09.xlsx` for a line's documents. On a computer
 the button downloads the file; in the iPhone app it opens the share sheet
 (Save to Files, Mail, AirDrop), as Client Files' zip does (`saveFile` in

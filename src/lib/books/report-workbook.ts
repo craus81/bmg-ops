@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
 import type { CompanyValue } from './inventory-value';
 import type { DetailDocument, LedgerRow } from './report-detail';
+import { coversMonths } from './report-links';
 import type { Pair, Report, ReportKind, ReportLine } from './reports';
 import type { FiledReturn, OtherMoves, ReturnHeld, SalesTaxWorksheet } from './sales-tax-worksheet';
 import { BASIS_WORDS, RETURN_FIELD_WORDS } from './sales-tax-words';
@@ -9,10 +10,10 @@ import { BASIS_WORDS, RETURN_FIELD_WORDS } from './sales-tax-words';
  * Books → Reports and an account line's detail as Excel files (docs/books.md
  * "Excel downloads"; the NetSuite Exit Checklist's "Excel downloads", thread
  * "Replacing NetSuite with FleetSuite", 2026-10-31), so the owner or the CPA
- * can work with the books in Excel: the profit and loss, balance sheet or
- * trial balance as Reports shows it, FleetSuite's books next to NetSuite's
- * with the difference, each line indented as on the page; one account's
- * documents by date with each side's running balance
+ * can work with the books in Excel: the profit and loss, balance sheet,
+ * trial balance or cash flow statement as Reports shows it, FleetSuite's
+ * books next to NetSuite's with the difference, each line indented as on the
+ * page; one account's documents by date with each side's running balance
  * (runningBalances in report-detail.ts); a company's inventory value at a
  * month's end with how it ties to each inventory account (part 64,
  * inventory-value.ts); and a month's Missouri sales tax worksheet with every
@@ -93,6 +94,7 @@ const REPORT_NAMES: Record<ReportKind, string> = {
   profit_and_loss: 'Profit and Loss',
   balance_sheet: 'Balance Sheet',
   trial_balance: 'Trial Balance',
+  cash_flow: 'Statement of Cash Flows',
 };
 
 /** A name a file system takes: no slashes, colons or the like. */
@@ -105,7 +107,7 @@ export function sheetName(name: string): string {
 
 /** The report's file: "BMG Profit and Loss 2026-01 to 2026-09.xlsx", "BMG Balance Sheet 2026-09-30.xlsx". */
 export function reportFileName(company: string, kind: ReportKind, from: string, to: string): string {
-  const period = kind !== 'profit_and_loss'
+  const period = !coversMonths(kind)
     ? `${to.slice(0, 7)}-${String(lastDay(to)).padStart(2, '0')}`
     : from === to ? to.slice(0, 7) : `${from.slice(0, 7)} to ${to.slice(0, 7)}`;
   return `${cleanName(`${company} ${REPORT_NAMES[kind]} ${period}`)}.xlsx`;
@@ -269,11 +271,14 @@ export async function reportWorkbook(input: ReportWorkbookInput): Promise<Workbo
   titleRows(sheet, {
     company: input.company,
     title: REPORT_NAMES[kind],
-    period: kind === 'profit_and_loss' ? `${monthStart(from)} to ${monthEnd(to)}` : `As of ${monthEnd(to)}`,
+    period: coversMonths(kind) ? `${monthStart(from)} to ${monthEnd(to)}` : `As of ${monthEnd(to)}`,
     about: trial
       ? "FleetSuite's own books next to NetSuite's own totals: balance sheet accounts at their month-end balance, income and expenses "
         + "for the year to date, earlier years' net income in retained earnings, as on NetSuite's Trial Balance report."
-      : "FleetSuite's own books next to NetSuite's own totals, laid out as NetSuite's reports are.",
+      : kind === 'cash_flow'
+        ? "FleetSuite's own books next to NetSuite's own totals, laid out as NetSuite's Statement of Cash Flows: net income, then what "
+          + 'the change in each other account did to cash, cash coming in positive.'
+        : "FleetSuite's own books next to NetSuite's own totals, laid out as NetSuite's reports are.",
     notes: input.notes,
     now: input.now,
     header: trial
@@ -341,6 +346,7 @@ const READS: Record<ReportKind, string> = {
   profit_and_loss: 'Amounts read as the profit and loss shows them.',
   balance_sheet: 'Amounts read as the balance sheet shows them.',
   trial_balance: 'Amounts read as the trial balance shows them: debits positive, credits negative.',
+  cash_flow: 'Amounts read as the cash flow statement shows them: cash coming in positive, going out negative.',
 };
 
 const dateCell = (iso: string | null) => (iso ? new Date(`${iso.slice(0, 10)}T00:00:00Z`) : null);

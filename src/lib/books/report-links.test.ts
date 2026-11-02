@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { detailMonths } from './report-links';
+import { coversMonths, detailMonths } from './report-links';
 
 const range = { from: '2026-03-01', to: '2026-10-01', first: '2025-01-01' };
 const gaps = (...months: string[]) => months.map((month) => ({ month, difference: 100 }));
 
 describe('the months a line on Reports opens its detail on', () => {
-  it("covers the profit and loss's months, a trial balance income line's year to date, else the report's month", () => {
+  it("covers the profit and loss's and cash flow's months, a trial balance income line's year to date, else the report's month", () => {
     expect(detailMonths('profit_and_loss', {}, range)).toEqual({ from: '2026-03-01', to: '2026-10-01' });
+    expect(detailMonths('cash_flow', {}, range)).toEqual({ from: '2026-03-01', to: '2026-10-01' });
     expect(detailMonths('balance_sheet', {}, range)).toEqual({ from: '2026-10-01', to: '2026-10-01' });
     expect(detailMonths('trial_balance', {}, range)).toEqual({ from: '2026-10-01', to: '2026-10-01' });
     expect(detailMonths('trial_balance', { yearToDate: true }, range)).toEqual({ from: '2026-01-01', to: '2026-10-01' });
@@ -23,6 +24,11 @@ describe('the months a line on Reports opens its detail on', () => {
       .toEqual({ from: '2026-03-01', to: '2026-10-01' });
     expect(detailMonths('trial_balance', { yearToDate: true, months: gaps('2026-02-01') }, range))
       .toEqual({ from: '2026-01-01', to: '2026-10-01' });
+  });
+
+  it('says which reports cover months from From through To', () => {
+    expect([coversMonths('profit_and_loss'), coversMonths('cash_flow')]).toEqual([true, true]);
+    expect([coversMonths('balance_sheet'), coversMonths('trial_balance')]).toEqual([false, false]);
   });
 
   it("never starts before the reports' first month", () => {

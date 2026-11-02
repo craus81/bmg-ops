@@ -176,6 +176,33 @@ describe('a report as an Excel file', () => {
     expect(total.getCell(2).border ?? {}).toEqual({});
   });
 
+  it('lays the cash flow statement out as Reports does, named for its months, cash coming in positive', async () => {
+    const file = await reportFile('cash_flow', '2026-08-01', '2026-09-01');
+    expect(file.name).toBe('BMG Statement of Cash Flows 2026-08 to 2026-09.xlsx');
+    expect((await reportFile('cash_flow', '2026-09-01', '2026-09-01')).name).toBe('BMG Statement of Cash Flows 2026-09.xlsx');
+    const ws = await read(file);
+    expect(ws.name).toBe('Statement of Cash Flows');
+    expect(ws.pageSetup.orientation).toBe('portrait');
+    expect(cells(ws, 2, 1)).toEqual(['Statement of Cash Flows']);
+    expect(cells(ws, 3, 1)).toEqual(['August 1, 2026 to September 30, 2026']);
+    expect(cells(ws, 4, 1)[0]).toMatch(/laid out as NetSuite's Statement of Cash Flows: net income, then what the change in each other account did to cash, cash coming in positive\.$/);
+    expect(cells(ws, headerRow(ws, 'Number'), 5)).toEqual(['Number', 'Account', 'FleetSuite', 'NetSuite', 'Difference']);
+    expect(body(ws, 'Number', 5)).toEqual([
+      [null, 'Operating activities', null, null, null],
+      [null, 'Net income', 375, 450, -75],
+      [null, 'Adjustments to net income', null, null, null],
+      ['1200', 'Receivables', -1200, -1250, 50],
+      [null, 'Total adjustments to net income', -1200, -1250, 50],
+      [null, 'Net cash from operating activities', -825, -800, -25],
+      [null, 'Net change in cash for the period', -825, -800, -25],
+      [null, 'Cash at the beginning of the period', 7000, 7000, 0],
+      [null, 'Cash at the end of the period', 6175, 6200, -25],
+    ]);
+    const head = headerRow(ws, 'Number');
+    expect(ws.getRow(head + 2).getCell(2).font).toMatchObject({ italic: true });
+    expect(ws.getRow(head + 9).getCell(3).border).toEqual({ top: { style: 'double' } });
+  });
+
   it("marks a NetSuite account the chart doesn't have yet", async () => {
     const data = books();
     data.netsuite.push(ns('77', '2026-09-01', 700), ns('1', '2026-09-01', -700));

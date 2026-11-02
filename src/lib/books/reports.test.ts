@@ -360,6 +360,144 @@ describe('the trial balance', () => {
   });
 });
 
+describe('the cash flow statement', () => {
+  it("lays a month out as NetSuite's Statement of Cash Flows: net income, then each other account's change, to the change in cash", () => {
+    const cf = report(books(), 'cash_flow', { to: '2025-01-01' });
+    // January 2025: 1,070.00 of sales on account with its tax, 400.00 of stock sold and 330.00 of payroll paid from the bank.
+    expect(shape(cf.lines)).toEqual([
+      ['section', 0, 'Operating activities', null, null],
+      ['account', 1, 'Net income', 27000, 27000],
+      ['section', 1, 'Adjustments to net income', null, null],
+      // Receivables that grew took cash; the stock sold and the tax still owed brought it in.
+      ['account', 2, 'Receivables', -107000, -107000],
+      ['account', 2, 'Inventory', 40000, 40000],
+      ['account', 2, 'Sales tax', 7000, 7000],
+      ['total', 1, 'Total adjustments to net income', -60000, -60000],
+      ['total', 0, 'Net cash from operating activities', -33000, -33000],
+      ['total', 0, 'Net change in cash for the period', -33000, -33000],
+      ['total', 0, 'Cash at the beginning of the period', 1000000, 1000000],
+      ['total', 0, 'Cash at the end of the period', 967000, 967000],
+    ]);
+    expect(cf.differing).toBe(0);
+    expect(cf.lines.filter((l) => l.grand).map((l) => l.label)).toEqual(['Net change in cash for the period', 'Cash at the end of the period']);
+    expect(cf.lines[1]).toMatchObject({ derived: true });
+    expect(cf.lines.find((l) => l.label === 'Receivables')).toMatchObject({ number: '1200', account: '12', inChart: true });
+    expect(cf.totals).toBeUndefined();
+  });
+
+  it("covers any range of months, an account whose change comes to nothing left out", () => {
+    // The first quarter of 2025: January's sale was paid in February, and March's rent went on the card.
+    const quarter = report(books(), 'cash_flow', { from: '2025-01-01', to: '2025-03-01' }).lines;
+    expect(amountOf(quarter, 'Net income')).toEqual([-23000, -23000]);
+    expect(quarter.some((l) => l.label === 'Receivables')).toBe(false);
+    expect(amountOf(quarter, 'Chase card')).toEqual([50000, 50000]);
+    expect(amountOf(quarter, 'Total adjustments to net income')).toEqual([97000, 97000]);
+    expect(amountOf(quarter, 'Net change in cash for the period')).toEqual([74000, 74000]);
+    expect(amountOf(quarter, 'Cash at the end of the period')).toEqual([1074000, 1074000]);
+    // A range across the end of a year, and one asked for backwards, which is its end's month alone.
+    expect(amountOf(report(books(), 'cash_flow', { from: '2025-12-01', to: '2026-01-01' }).lines, 'Net income')).toEqual([200500, 200500]);
+    expect(shape(report(books(), 'cash_flow', { from: '2025-03-01', to: '2025-01-01' }).lines))
+      .toEqual(shape(report(books(), 'cash_flow', { to: '2025-01-01' }).lines));
+  });
+
+  it('puts fixed and other assets under investing, and long term liabilities and equity under financing', () => {
+    // March 2026: a 200.00 truck, 50.00 off the loan and 30.00 to the owner, all from the bank.
+    const moves: Move[] = [['15', 20000], ['10', -20000], ['25', 5000], ['10', -5000], ['30', 3000], ['10', -3000], ['16', 900], ['10', -900]];
+    const accounts = [...ACCOUNTS, account('a16', '16', '1600', 'Deposits held', 'other_asset')];
+    const data = books({
+      accounts,
+      fleetsuite: moves.map(([a, c]) => fs(a, '2026-03-01', c)),
+      netsuite: moves.map(([a, c]) => ns(a, '2026-03-01', c)),
+    });
+    expect(shape(report(data, 'cash_flow', { to: '2026-03-01' }).lines)).toEqual([
+      // Net income always shows, nothing or not.
+      ['section', 0, 'Operating activities', null, null],
+      ['account', 1, 'Net income', 0, 0],
+      ['total', 0, 'Net cash from operating activities', 0, 0],
+      ['section', 0, 'Investing activities', null, null],
+      ['account', 1, 'Trucks', -20000, -20000],
+      ['account', 1, 'Deposits held', -900, -900],
+      ['total', 0, 'Net cash from investing activities', -20900, -20900],
+      ['section', 0, 'Financing activities', null, null],
+      ['account', 1, 'Loan', -5000, -5000],
+      ['account', 1, 'Owner capital', -3000, -3000],
+      ['total', 0, 'Net cash from financing activities', -8000, -8000],
+      ['total', 0, 'Net change in cash for the period', -28900, -28900],
+      // February 2026's rent left the two banks apart; the starting and ending cash aren't lines that differ.
+      ['total', 0, 'Cash at the beginning of the period', 1012000, 1009500],
+      ['total', 0, 'Cash at the end of the period', 983100, 980600],
+    ]);
+    expect(report(data, 'cash_flow', { to: '2026-03-01' }).differing).toBe(0);
+  });
+
+  it('puts unbilled receivables, deferred expense, payables and deferred revenue with the adjustments to net income', () => {
+    const accounts = [
+      ...ACCOUNTS,
+      account('a14', '14', '1400', 'Unbilled receivables', 'unbilled_receivable'),
+      account('a17', '17', '1450', 'Prepaid insurance', 'deferred_expense'),
+      account('a26', '26', '2600', 'Customer deposits', 'deferred_revenue'),
+    ];
+    const moves: Move[] = [['14', 1000], ['17', 2000], ['20', -3000], ['26', -4000], ['10', 4000]];
+    const data = books({ accounts, fleetsuite: moves.map(([a, c]) => fs(a, '2026-03-01', c)), netsuite: moves.map(([a, c]) => ns(a, '2026-03-01', c)) });
+    const lines = report(data, 'cash_flow', { to: '2026-03-01' }).lines;
+    expect(lines.filter((l) => l.depth === 2).map((l) => [l.label, l.fleetsuite])).toEqual([
+      ['Unbilled receivables', -1000], ['Prepaid insurance', -2000], ['Payables', 3000], ['Customer deposits', 4000],
+    ]);
+    expect(amountOf(lines, 'Net cash from operating activities')).toEqual([4000, 4000]);
+    expect(amountOf(lines, 'Net change in cash for the period')).toEqual([4000, 4000]);
+  });
+
+  it('counts the lines that differ: net income and any account, never the cash at either end', () => {
+    // February 2026: 600.00 of rent and 25.00 of shop supplies in FleetSuite, 650.00 of rent in NetSuite, all from the bank.
+    const cf = report(books(), 'cash_flow', { to: '2026-02-01' });
+    expect(amountOf(cf.lines, 'Net income')).toEqual([-62500, -65000]);
+    expect(amountOf(cf.lines, 'Net change in cash for the period')).toEqual([-62500, -65000]);
+    expect(amountOf(cf.lines, 'Cash at the beginning of the period')).toEqual([1074500, 1074500]);
+    expect(amountOf(cf.lines, 'Cash at the end of the period')).toEqual([1012000, 1009500]);
+    expect(cf.differing).toBe(1);
+    expect(cf.lines.find((l) => l.label === 'Net income')?.months).toEqual([{ month: '2026-02-01', difference: 2500 }]);
+    // March 2026 moved nothing, so it matches though the cash it starts and ends with doesn't.
+    const march = report(books(), 'cash_flow', { to: '2026-03-01' });
+    expect(march.differing).toBe(0);
+    expect(amountOf(march.lines, 'Cash at the end of the period')).toEqual([1012000, 1009500]);
+  });
+
+  it("gives a NetSuite account the chart doesn't have yet a part of its own, still counted in the change in cash", () => {
+    const data = books({ netsuite: [ns('77', '2026-03-01', 1500), ns('10', '2026-03-01', -1500)] });
+    const cf = report(data, 'cash_flow', { to: '2026-03-01' });
+    expect(shape(cf.lines).slice(3)).toEqual([
+      ['section', 0, 'Not in the chart of accounts yet', null, null],
+      ['account', 1, 'NetSuite account 77', 0, -1500],
+      ['total', 0, 'Net cash from accounts not in the chart yet', 0, -1500],
+      ['total', 0, 'Net change in cash for the period', 0, -1500],
+      ['total', 0, 'Cash at the beginning of the period', 1012000, 1009500],
+      ['total', 0, 'Cash at the end of the period', 1012000, 1008000],
+    ]);
+    expect(cf.lines.find((l) => l.account === '77')).toMatchObject({ inChart: false });
+    expect(cf.differing).toBe(1);
+  });
+
+  it('comes to the change in the bank accounts on both sides, for every range', () => {
+    const data = books({ netsuite: [ns('77', '2025-06-01', 700), ns('10', '2025-06-01', -700)], fleetsuite: [fs('10', '2024-12-01', 500), fs('30', '2024-12-01', -500)] });
+    const months = ['2025-01-01', '2025-02-01', '2025-03-01', '2025-06-01', '2025-12-01', '2026-01-01', '2026-02-01', '2026-03-01'];
+    let checked = 0;
+    for (const from of months) {
+      for (const to of months.filter((m) => m >= from)) {
+        const lines = report(data, 'cash_flow', { from, to }).lines;
+        const [change, start, end] = ['Net change in cash for the period', 'Cash at the beginning of the period', 'Cash at the end of the period']
+          .map((label) => lines.find((l) => l.label === label)!);
+        for (const side of ['fleetsuite', 'netsuite'] as const) {
+          expect(start[side]! + change[side]!, `${from} ${to} ${side}`).toBe(end[side]);
+        }
+        // The cash at the end is the balance sheet's bank.
+        expect(end.fleetsuite, `${from} ${to}`).toBe(amountOf(report(data, 'balance_sheet', { to }).lines, 'Checking')![0]);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(36);
+  });
+});
+
 describe('accounts under their parents', () => {
   // Account 9, the bank, takes the other side of every entry.
   const tree = (accounts: ReportAccount[], moves: Move[]) => report({
@@ -413,8 +551,9 @@ describe('the months', () => {
     const differing = (kind: Parameters<typeof reportMonths>[1]) =>
       reportMonths(books(), kind, '2026-03-01').filter((m) => !m.matches).map((m) => [m.month, m.differing]);
     expect(reportMonths(books(), 'profit_and_loss', '2026-03-01')).toHaveLength(15);
-    // A profit and loss by the month's own activity; a balance sheet or trial balance by its end.
+    // A profit and loss or cash flow statement by the month's own activity; a balance sheet or trial balance by its end.
     expect(differing('profit_and_loss')).toEqual([['2026-02-01', 2]]);
+    expect(differing('cash_flow')).toEqual([['2026-02-01', 1]]);
     expect(differing('balance_sheet')).toEqual([['2026-02-01', 2], ['2026-03-01', 2]]);
     expect(differing('trial_balance')).toEqual([['2026-02-01', 3], ['2026-03-01', 3]]);
     expect(reportMonths(books(), 'balance_sheet', '2026-03-01')[0]).toEqual({ month: '2025-01-01', matches: true, differing: 0 });
@@ -459,6 +598,14 @@ describe('the months a line differs in', () => {
     expect(monthsOf(report(data(), 'profit_and_loss', { from: '2026-02-01', to: '2026-02-01' }).lines, 'Rent'))
       .toEqual([{ month: '2026-02-01', difference: -5000 }]);
 
+    // The cash flow statement's, from its own months only, cash coming in positive.
+    const cf = report(data(), 'cash_flow', { from: '2025-01-01', to: '2026-02-01' }).lines;
+    expect(monthsOf(cf, 'Net income')).toEqual([
+      { month: '2025-03-01', difference: -1000 }, { month: '2026-01-01', difference: 300 }, { month: '2026-02-01', difference: 2500 },
+    ]);
+    expect(monthsOf(report(data(), 'cash_flow', { from: '2026-02-01', to: '2026-02-01' }).lines, 'Net income'))
+      .toEqual([{ month: '2026-02-01', difference: 2500 }]);
+
     // The trial balance's, debit positive, income and expenses for the year to date.
     const tb = report(data(), 'trial_balance', { to: '2026-02-01' }).lines;
     expect(monthsOf(tb, 'Rent')).toEqual([{ month: '2026-02-01', difference: -5000 }]);
@@ -471,6 +618,7 @@ describe('the months a line differs in', () => {
       ['profit_and_loss', { from: '2025-01-01', to: '2026-02-01' }], ['profit_and_loss', { to: '2026-01-01' }],
       ['balance_sheet', { to: '2025-12-01' }], ['balance_sheet', { to: '2026-02-01' }],
       ['trial_balance', { to: '2025-12-01' }], ['trial_balance', { to: '2026-02-01' }],
+      ['cash_flow', { from: '2025-01-01', to: '2026-02-01' }], ['cash_flow', { to: '2026-01-01' }],
     ];
     for (const [kind, range] of cases) {
       const lines = report(data(), kind, range).lines;
@@ -508,15 +656,18 @@ describe("what an account's line is made of (its detail)", () => {
     netsuite: [ns('90', '2026-01-01', 300), ns('10', '2026-01-01', -300), ns('77', '2025-02-01', 700), ns('10', '2025-02-01', -700)],
   });
   const pair = (span: { fleetsuite: number; netsuite: number } | null) => (span ? [span.fleetsuite, span.netsuite] : null);
-  /** The months the detail of a line covers, as Reports links it: the profit and loss's, a balance at `to`, the trial balance's year for income. */
-  const covers = (kind: ReportKind, l: ReportLine, range: { from?: string; to: string }) =>
-    ({ from: kind === 'profit_and_loss' ? range.from ?? range.to : l.yearToDate ? `${range.to.slice(0, 4)}-01-01` : range.to, to: range.to });
+  /** The months the detail of a line covers, as Reports links it: the profit and loss's and cash flow's, a balance at `to`, the trial balance's year for income. */
+  const covers = (kind: ReportKind, l: ReportLine, range: { from?: string; to: string }) => ({
+    from: kind === 'profit_and_loss' || kind === 'cash_flow' ? range.from ?? range.to : l.yearToDate ? `${range.to.slice(0, 4)}-01-01` : range.to,
+    to: range.to,
+  });
 
   it('ends at every account line of every report, from its balance before through what moved', () => {
     const cases: Array<[ReportKind, { from?: string; to: string }]> = [
       ['profit_and_loss', { from: '2025-01-01', to: '2026-02-01' }], ['profit_and_loss', { from: '2026-01-01', to: '2026-02-01' }],
       ['profit_and_loss', { to: '2025-02-01' }], ['balance_sheet', { to: '2025-01-01' }], ['balance_sheet', { to: '2025-12-01' }],
       ['balance_sheet', { to: '2026-02-01' }], ['trial_balance', { to: '2025-03-01' }], ['trial_balance', { to: '2026-02-01' }],
+      ['cash_flow', { from: '2025-01-01', to: '2026-02-01' }], ['cash_flow', { to: '2025-02-01' }], ['cash_flow', { to: '2026-01-01' }],
     ];
     let checked = 0;
     for (const [kind, range] of cases) {
@@ -530,7 +681,7 @@ describe("what an account's line is made of (its detail)", () => {
         checked += 1;
       }
     }
-    expect(checked).toBeGreaterThan(60);
+    expect(checked).toBeGreaterThan(70);
   });
 
   it('starts a balance sheet account at its balance before the first month, as the line shows it', () => {
@@ -594,6 +745,20 @@ describe("what an account's line is made of (its detail)", () => {
     });
     // The trial balance reads them debit positive.
     expect(pair(lineSpan(books(), 'trial_balance', '40', { from: '2026-01-01', to: '2026-02-01' }).ending)).toEqual([-200000, -200000]);
+  });
+
+  it('has a cash flow line cover what the account did to cash in the months, with no balance before', () => {
+    // January 2025's receivables took 1,070.00 of cash; the bank's own line is the change in cash itself.
+    expect(lineSpan(books(), 'cash_flow', '12', { from: '2025-01-01', to: '2025-01-01' })).toEqual({
+      sign: -1, starting: null, moved: { fleetsuite: -107000, netsuite: -107000 }, closed: null, ending: { fleetsuite: -107000, netsuite: -107000 },
+    });
+    expect(lineSpan(books(), 'cash_flow', '10', { from: '2025-01-01', to: '2025-02-01' })).toMatchObject({
+      sign: 1, starting: null, ending: { fleetsuite: 74000, netsuite: 74000 },
+    });
+    // Rent took cash; retained earnings takes in no earlier years' income on the cash flow statement.
+    expect(pair(lineSpan(books(), 'cash_flow', '65', { from: '2026-02-01', to: '2026-02-01' }).ending)).toEqual([-60000, -65000]);
+    expect(lineSpan(books(), 'cash_flow', '39', { from: '2025-12-01', to: '2026-01-01' }).closed).toBeNull();
+    expect(lineSpan(data(), 'cash_flow', '77', { from: '2025-02-01', to: '2025-02-01' })).toMatchObject({ sign: -1, ending: { fleetsuite: 0, netsuite: -700 } });
   });
 
   it("counts a NetSuite account the chart doesn't have yet as the report lists it", () => {

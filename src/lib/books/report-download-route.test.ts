@@ -189,6 +189,33 @@ describe("a report's Excel download", () => {
       .toMatchObject({ report: 'trial_balance', from: '2026-08-01', to: '2026-08-01' });
   });
 
+  it('makes the cash flow statement for the months picked, on the page, as a file and in a line\'s documents', async () => {
+    const path = 'company=BMG&report=cash_flow&from=2026-08&to=2026-09';
+    const page = await (await reportJson(get(`/api/admin/books/reports?${path}`))).json();
+    expect(page).toMatchObject({ report: 'cash_flow', from: '2026-08-01', to: '2026-09-01', differing: 2 });
+    expect(page.lines.map((l: any) => [l.label, l.fleetsuite, l.netsuite])).toEqual([
+      ['Operating activities', null, null],
+      ['Net income', 37500, 45000],
+      ['Adjustments to net income', null, null],
+      ['Receivables', -120000, -125000],
+      ['Total adjustments to net income', -120000, -125000],
+      ['Net cash from operating activities', -82500, -80000],
+      ['Net change in cash for the period', -82500, -80000],
+      ['Cash at the beginning of the period', 700000, 700000],
+      ['Cash at the end of the period', 617500, 620000],
+    ]);
+    // Each month by its own cash flow: August's invoice and September's shop supplies.
+    expect(page.months.filter((m: any) => !m.matches).map((m: any) => m.month)).toEqual(['2026-08-01', '2026-09-01']);
+    const res = await reportDownload(get(`/api/admin/books/reports/download?${path}`));
+    expect(res.headers.get('content-disposition')).toContain('filename="BMG Statement of Cash Flows 2026-08 to 2026-09.xlsx"');
+    // A line's documents read as the cash flow shows them: receivables that grew took cash.
+    const detail = await (await detailJson(get('/api/admin/books/reports/detail?company=BMG&account=2&report=cash_flow&from=2026-08&to=2026-09'))).json();
+    expect(detail).toMatchObject({ report: 'cash_flow', starting: null, ending: { fleetsuite: -120000, netsuite: -125000 }, copyHolds: true });
+    expect(detail.rows[0]).toMatchObject({ number: 'INV1001', fleetsuite: -120000, netsuite: -125000 });
+    const file = await sheet(await detailDownload(get('/api/admin/books/reports/detail/download?company=BMG&account=2&report=cash_flow&from=2026-08&to=2026-09')));
+    expect(String(rowsOf(file, 1)[3][0])).toMatch(/Amounts read as the cash flow statement shows them: cash coming in positive, going out negative\.$/);
+  });
+
   it('is for whoever opens the books, the CPA too', async () => {
     roles = ['admin'];
     expect((await reportDownload(get('/api/admin/books/reports/download?company=BMG'))).status).toBe(403);

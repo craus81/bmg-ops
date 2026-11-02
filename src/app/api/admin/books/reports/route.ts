@@ -10,9 +10,10 @@ export const dynamic = 'force-dynamic';
 /**
  * GET /api/admin/books/reports?company=BMG&report=profit_and_loss&from=2026-01&to=2026-09
  * — one company's profit and loss for the months from `from` through `to`
- * (`to` alone by default, last month by default), or its balance sheet or
- * trial balance (report=balance_sheet, trial_balance) at the end of `to`,
- * from FleetSuite's own books, next to NetSuite's own totals
+ * (`to` alone by default, last month by default), its cash flow statement
+ * for the same months (report=cash_flow), or its balance sheet or trial
+ * balance (report=balance_sheet, trial_balance) at the end of `to`, from
+ * FleetSuite's own books, next to NetSuite's own totals
  * (src/lib/books/reports.ts, migration 396), with whether the report for
  * each month alone since January 2025 matches.
  *
