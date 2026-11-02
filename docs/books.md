@@ -6582,10 +6582,10 @@ totals for the year:
   is used and the page says so: someone paid just under the real minimum
   can show as getting one, but nobody who should is left out.
 - Left to file by hand in IRIS, and listed in red with why: a payee
-  FleetSuite can't split some of what it was paid (its boxes may be short),
-  one paid in a category FleetSuite doesn't fill in (tax withheld, say),
-  and one with a box below nothing. Those under the minimums are listed
-  too.
+  FleetSuite can't split some of what it was paid (its boxes may be short)
+  or paid back (they may be too high), one paid in a category FleetSuite
+  doesn't fill in (tax withheld, say), and one with a box below nothing.
+  Those under the minimums are listed too.
 - No file is made while the year isn't over (make it in January), while
   checks or bill payments for it aren't in FleetSuite's copies yet, or
   before the vendors' 1099 flags are copied.
@@ -6634,7 +6634,8 @@ The file:
   row. The template's example row, when it has one, gives the words for the
   form and the tax ID types (`BUSINESS_TIN`).
 - Names, streets and cities are written as the IRS takes them
-  (`nameLine`, `streetLine`, `cityName`: O'Fallon as O Fallon), states as
+  (`nameLine`, `streetLine`, `cityName`: periods dropped, so L.L.C. as LLC
+  and P.O. as PO, and other marks a space, so O'Fallon as O Fallon), states as
   their two letters, amounts as `1234.56`, the account number as NetSuite's
   id for the vendor, tax IDs and ZIP+4s without dashes unless ticked.
 - A form goes in the file once it's checked, has nothing stopping it, and
