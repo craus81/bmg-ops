@@ -83,8 +83,8 @@ describe('migration 486', () => {
       { piece: 'customer_payments', is_on: false, changed_by: null },
     ]);
     // Every piece the app named then is one the column takes, and nothing else is (487 adds bank deposits, 488 paying vendors,
-    // 494 approving adjustments, 497 FleetSuite's own numbers).
-    const then = SWITCH_PIECES.filter((piece) => !['bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers'].includes(piece));
+    // 494 approving adjustments, 497 FleetSuite's own numbers, 498 invoice PDFs).
+    const then = SWITCH_PIECES.filter((piece) => !['bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs'].includes(piece));
     expect(then).toHaveLength(13);
     await pg.exec('BEGIN');
     try {

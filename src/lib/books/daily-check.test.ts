@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
-  adjustmentAlertsFor, alertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, fulfillmentAlertsFor, lookOf, mistakeAlertsFor,
-  nextCheck, numberAlertsFor, ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
+  adjustmentAlertsFor, alertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, fulfillmentAlertsFor, invoicePdfAlertsFor, lookOf,
+  mistakeAlertsFor, nextCheck, numberAlertsFor, ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
   type BalanceNews, type ChangeAlertItem, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews,
   type SendAlertItem, type StockNews,
 } from './daily-check';
 import type { DiffDocumentData } from './differences';
 import type { NumberAlertItem } from './own-numbers';
+import type { PdfAlertItem } from './invoice-pdfs';
 import type { OwnAdjustmentCheck } from './own-adjustment-check';
 import type { OwnBillCheck } from './own-bill-check';
 import type { OwnFulfillmentCheck } from './own-fulfillment-check';
@@ -747,6 +748,72 @@ describe('numberAlertsFor', () => {
 
   it('tells nothing when nothing is new', () => {
     expect(numberAlertsFor([])).toEqual([]);
+  });
+});
+
+describe('invoicePdfAlertsFor', () => {
+  const pdf = (n: number, over: Partial<PdfAlertItem> = {}): PdfAlertItem => ({
+    invoiceId: `900${n}`, version: 1, number: `INV1000${n}`, state: 'refused', error: 'You do not have permission to attach files.', tries: 1, ...over,
+  });
+  const BLOCKED = "The PDF script's address isn't set (NETSUITE_PDF_RESTLET_URL).";
+
+  it('says what NetSuite said of a PDF it refused, and when FleetSuite tries again, opening the invoice', () => {
+    expect(invoicePdfAlertsFor([pdf(1)], null)).toEqual([{
+      title: 'Invoice PDFs: NetSuite refused the PDF of INV10001',
+      body: 'You do not have permission to attach files. FleetSuite tries again 20 hours on, three times in all.',
+      url: '/admin/books/own-invoices/invoice?id=9001',
+      about: 'pdf',
+    }]);
+    expect(invoicePdfAlertsFor([pdf(2, { tries: 3, error: 'Locked period' })], null)[0].body)
+      .toBe("Locked period. FleetSuite has tried three times and won't again on its own; the invoice's page can send it again.");
+    expect(invoicePdfAlertsFor([pdf(3, { number: null, error: '' })], null)[0]).toMatchObject({
+      title: 'Invoice PDFs: NetSuite refused the PDF of an invoice',
+      body: 'NetSuite gave no reason. FleetSuite tries again 20 hours on, three times in all.',
+    });
+  });
+
+  it("says FleetSuite isn't sure NetSuite has one after three tries, and that sending it again is safe", () => {
+    expect(invoicePdfAlertsFor([pdf(1, { state: 'unsure', tries: 3, error: "NetSuite didn't answer in time." })], null)).toEqual([{
+      title: 'Invoice PDFs: not sure NetSuite has the PDF of INV10001',
+      body: "FleetSuite tried three times. NetSuite didn't answer in time. Sending it again from the invoice's page never puts two on it.",
+      url: '/admin/books/own-invoices/invoice?id=9001',
+      about: 'pdf',
+    }]);
+    expect(invoicePdfAlertsFor([pdf(1, { state: 'unsure', tries: 3, error: '' })], null)[0].body)
+      .toBe("FleetSuite tried three times. FleetSuite never heard back from NetSuite. Sending it again from the invoice's page never puts two on it.");
+  });
+
+  it("says first why the last run couldn't send any, opening Books → Switches", () => {
+    expect(invoicePdfAlertsFor([], BLOCKED)).toEqual([{
+      title: "Invoice PDFs: FleetSuite couldn't send any",
+      body: `${BLOCKED} Until then no invoice's PDF goes to NetSuite.`,
+      url: '/admin/books/switches',
+      about: 'pdf',
+    }]);
+    expect(invoicePdfAlertsFor([pdf(1)], BLOCKED).map((a) => a.title)).toEqual([
+      "Invoice PDFs: FleetSuite couldn't send any", 'Invoice PDFs: NetSuite refused the PDF of INV10001',
+    ]);
+  });
+
+  it('tells about up to three one by one and more in one notification, opening the NetSuite feed', () => {
+    expect(invoicePdfAlertsFor([pdf(1), pdf(2), pdf(3)], null)).toHaveLength(3);
+    expect(invoicePdfAlertsFor([pdf(1), pdf(2), pdf(3), pdf(4), pdf(5), pdf(6, { state: 'unsure', tries: 3 })], BLOCKED)).toEqual([
+      expect.objectContaining({ title: "Invoice PDFs: FleetSuite couldn't send any" }),
+      {
+        title: "Invoice PDFs: 6 invoices' PDFs need a look",
+        body: 'NetSuite refused the PDFs of INV10001, INV10002, INV10003 and 2 more. '
+          + "FleetSuite isn't sure NetSuite has the PDF of INV10006, after three tries. Each invoice's page in Books → Own invoices says why.",
+        url: '/admin/books/netsuite-feed',
+        about: 'pdf',
+      },
+    ]);
+    expect(invoicePdfAlertsFor([pdf(1, { state: 'unsure', tries: 3 }), pdf(2, { state: 'unsure', tries: 3 }), pdf(3, { number: null }), pdf(4)], null)[0].body)
+      .toBe("NetSuite refused the PDFs of an invoice and INV10004. FleetSuite isn't sure NetSuite has the PDFs of INV10001 and INV10002, after three tries. "
+        + "Each invoice's page in Books → Own invoices says why.");
+  });
+
+  it('tells nothing when nothing is new', () => {
+    expect(invoicePdfAlertsFor([], null)).toEqual([]);
   });
 });
 

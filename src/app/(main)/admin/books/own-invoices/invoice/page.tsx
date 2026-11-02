@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
-import { booksAccess } from '@/lib/books/access';
+import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
+import { openPdfBytes } from '@/lib/native-files';
+import { pdfStatusLine, type InvoicePdfView, type PdfTone } from '@/lib/books/invoice-pdf-status';
 import type { OwnCheckStatus, OwnInvoiceCheck, OwnLinePair } from '@/lib/books/own-invoice-check';
 import type { OwnBooks } from '@/lib/books/own-invoice-posting';
 
@@ -19,12 +21,15 @@ import type { OwnBooks } from '@/lib/books/own-invoice-posting';
  * differ; each line FleetSuite billed paired with NetSuite's; what FleetSuite
  * couldn't work out; how it worked its copy out; and which copy the books
  * posted the invoice from (migration 409,
- * src/lib/books/own-invoice-posting.ts). Open to whoever opens the books;
- * opened from Own invoices, Invoices vs NetSuite, or the daily check's
- * notification (?id=, NetSuite's id for the invoice).
+ * src/lib/books/own-invoice-posting.ts). FleetSuite's own PDF of it opens
+ * here, with whether NetSuite's invoice has it (migration 498,
+ * docs/books.md "Invoice PDFs"); a super admin can send it from here. Open
+ * to whoever opens the books; opened from Own invoices, Invoices vs
+ * NetSuite, or the daily check's notification (?id=, NetSuite's id for the
+ * invoice).
  */
 
-type Invoice = OwnInvoiceCheck & { books: OwnBooks | null };
+type Invoice = OwnInvoiceCheck & { books: OwnBooks | null; pdf?: InvoicePdfView; pdfError?: string };
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' });
 const fmt = (cents: number) => money.format(cents / 100);
@@ -43,6 +48,16 @@ const STATUS: Record<OwnCheckStatus, { chip: string; color: string }> = {
   matches: { chip: 'Matches NetSuite', color: GREEN },
   voided: { chip: 'Voided in NetSuite', color: GRAY },
 };
+
+const TONE: Record<PdfTone, string> = { ok: GREEN, warn: AMBER, bad: RED, muted: 'var(--text-muted)' };
+
+const act = (go: boolean, enabled: boolean): React.CSSProperties => ({
+  padding: '6px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 800, cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.5,
+  border: `1px solid ${go ? GREEN : 'var(--border)'}`, background: go ? `${GREEN}22` : 'var(--card)', color: go ? GREEN : 'var(--text-primary)',
+});
+
+// Two lines until tapped, then all of it, downward.
+const clamp: React.CSSProperties = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
 
 const banner = (color: string): React.CSSProperties => ({
   padding: '10px 14px', borderRadius: '8px', marginBottom: '10px', fontSize: '12px', fontWeight: 600,
@@ -120,6 +135,9 @@ export default function BooksOwnInvoicePage() {
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [pdfBusy, setPdfBusy] = useState<'open' | 'send' | null>(null);
+  const [pdfNote, setPdfNote] = useState('');
+  const [pdfWhole, setPdfWhole] = useState(false);
 
   const load = useCallback(async (id: string) => {
     try {
@@ -143,7 +161,50 @@ export default function BooksOwnInvoicePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
   }, [authLoading, router, load]);
 
+  /** FleetSuite's own PDF of the invoice, drawn from its copy. The window opens on the tap, as popup blockers want. */
+  const openPdf = async () => {
+    if (!invoice || pdfBusy) return;
+    setPdfBusy('open');
+    setPdfNote('');
+    const w = window.open('about:blank', '_blank');
+    try {
+      const res = await apiFetch(`/api/admin/books/own-invoices/pdf?${new URLSearchParams({ id: invoice.netsuiteId })}`);
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.error || `Request failed (${res.status})`);
+      }
+      const named = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1];
+      openPdfBytes(w, await res.arrayBuffer(), named ?? `Invoice_${invoice.number}.pdf`);
+    } catch (e: any) {
+      w?.close();
+      setPdfNote(`Couldn't open the PDF: ${e?.message || 'it failed'}`);
+    }
+    setPdfBusy(null);
+  };
+
+  /** A super admin sends the PDF to NetSuite's invoice now; the line is read again whatever came of it. */
+  const sendPdf = async () => {
+    if (!invoice || pdfBusy) return;
+    setPdfBusy('send');
+    setPdfNote('');
+    try {
+      const res = await apiFetch('/api/admin/books/own-invoices/pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: invoice.netsuiteId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) setPdfNote(json.error || `Request failed (${res.status})`);
+    } catch (e: any) {
+      setPdfNote(e?.message || "Couldn't send the PDF");
+    }
+    await load(invoice.netsuiteId);
+    setPdfBusy(null);
+  };
+
   const s = invoice ? STATUS[invoice.status] : null;
+  const pdfLine = invoice?.pdf ? pdfStatusLine(invoice.pdf, invoice.status) : null;
+  const canSendPdf = !!pdfLine?.canSend && booksAllows(booksAccess(hasRole), 'owner');
 
   return (
     <div>
@@ -171,6 +232,22 @@ export default function BooksOwnInvoicePage() {
                 {invoice.status === 'matches' && invoice.books?.from === 'netsuite' ? 'Why, on Invoices vs NetSuite' : 'How it posts, on Invoices vs NetSuite'}
               </Link>
             </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 8px', marginTop: '10px' }}>
+              <button onClick={openPdf} disabled={!!pdfBusy} style={act(false, !pdfBusy)}>{pdfBusy === 'open' ? 'Opening…' : "FleetSuite's PDF"}</button>
+              {canSendPdf && (
+                <button onClick={sendPdf} disabled={!!pdfBusy} style={act(true, !pdfBusy)}>{pdfBusy === 'send' ? 'Sending…' : 'Send to NetSuite'}</button>
+              )}
+            </div>
+            {pdfLine && (
+              <div
+                onClick={() => setPdfWhole(!pdfWhole)}
+                style={{ ...(pdfWhole ? {} : clamp), fontSize: '12px', color: TONE[pdfLine.tone], fontWeight: pdfLine.tone === 'bad' ? 700 : 400, marginTop: '4px', cursor: 'pointer', overflowWrap: 'anywhere' }}
+              >
+                {pdfLine.text}
+              </div>
+            )}
+            {invoice.pdfError && <div style={{ fontSize: '12px', color: RED, fontWeight: 700, marginTop: '4px' }}>{invoice.pdfError}</div>}
+            {pdfNote && <div style={{ fontSize: '12px', color: RED, fontWeight: 700, marginTop: '4px' }}>{pdfNote}</div>}
           </div>
 
           <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px' }}>

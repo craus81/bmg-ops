@@ -23,9 +23,10 @@ import { checkOwnAdjustments, INVENTORY_ADJUST_ACCOUNT, type AdjustPairsData, ty
 import { MISTAKE_KINDS, type MistakeKind } from './mistake-checks';
 import { readClosedMonths } from './months';
 import { readNames } from './netsuite-feed';
-import { describeSend, NO_ANSWER_MS, type SendAction } from '@/lib/netsuite-sends';
+import { describeSend, isInvoicePdfSend, NO_ANSWER_MS, type SendAction } from '@/lib/netsuite-sends';
 import { FIELD_NAMES, isBlank, keepSends, KIND_NAMES, recordsWin, shownValue, type DifferenceRow } from '@/lib/fleetsuite-records';
 import { lookAtOwnNumbers, markOwnNumbersTold, OWN_NUMBER_KINDS, type NumberAlertItem } from './own-numbers';
+import { lookAtInvoicePdfs, markInvoicePdfsTold, type PdfAlertItem } from './invoice-pdfs';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -115,15 +116,22 @@ import { lookAtOwnNumbers, markOwnNumbersTold, OWN_NUMBER_KINDS, type NumberAler
  * NetSuite instead of FleetSuite, told about at the first look that finds
  * it, once.
  *
+ * And, once Invoice PDFs is on (part 68, src/lib/books/invoice-pdfs.ts),
+ * each invoice's PDF NetSuite refused, or FleetSuite is still unsure about
+ * after three tries, told about at the first look that finds it, once, and,
+ * at each day's first look, why the last two-hourly run couldn't send any.
+ * The PDF script's sends aren't told about as sends FleetSuite isn't sure
+ * about: FleetSuite sends those again itself.
+ *
  * In-app and push only (books_month_differs, books_stock_differs,
  * books_balance_differs, books_own_invoice_differs,
  * books_own_fulfillment_differs, books_own_bill_differs,
  * books_own_receipt_differs, books_mistake_found), but for the Inventory
  * Adjusts (books_own_adjustment_differs), the sends
  * (books_netsuite_send_unsure), what changed in NetSuite
- * (books_record_changed_in_netsuite) and own numbers (books_own_number), which
- * are emailed too to a super admin with "Copy me on new alerts" ticked (Craig,
- * 2026-10-28). The record in
+ * (books_record_changed_in_netsuite), own numbers (books_own_number) and
+ * invoice PDFs (books_invoice_pdf), which are emailed too to a super admin
+ * with "Copy me on new alerts" ticked (Craig, 2026-10-28). The record in
  * sync_state, 'books_daily_check', holds which months differ and how many of
  * their documents, which items' counts differ and by about how many, whose
  * balances differ and in how many documents, which own invoices,
@@ -317,10 +325,10 @@ export interface CheckAlert {
    * (books_own_fulfillment_differs), Books' own bills (books_own_bill_differs) and receipts
    * (books_own_receipt_differs), the Inventory Adjusts (books_own_adjustment_differs), likely mistakes
    * (books_mistake_found), sends to NetSuite FleetSuite isn't sure about (books_netsuite_send_unsure), what changed
-   * in NetSuite (books_record_changed_in_netsuite) or FleetSuite's own numbers (books_own_number); one about months
-   * has none (books_month_differs).
+   * in NetSuite (books_record_changed_in_netsuite), FleetSuite's own numbers (books_own_number) or its invoice PDFs
+   * (books_invoice_pdf); one about months has none (books_month_differs).
    */
-  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change' | 'number';
+  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change' | 'number' | 'pdf';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -693,6 +701,8 @@ export interface SendAlertItem {
   who: string | null;
   /** Why FleetSuite isn't sure; none when it never heard back. */
   error: string | null;
+  /** The PDF script's: marked told without a notification, since FleetSuite sends it again itself (Invoice PDFs). */
+  quiet?: true;
 }
 
 const sentAt = (iso: string) => new Date(iso).toLocaleString('en-US', {
@@ -833,6 +843,64 @@ export function numberAlertsFor(items: NumberAlertItem[]): CheckAlert[] {
       about: 'number',
     };
   });
+}
+
+/**
+ * What the super admins are told about FleetSuite's invoice PDFs while Invoice PDFs is on: why the last two-hourly run
+ * couldn't send any, opening Books → Switches; and each PDF NetSuite refused, or FleetSuite is still unsure about after
+ * three tries, a notification for each, opening the invoice's page, or with more than ONE_BY_ONE at a look one naming
+ * the first few, opening the NetSuite feed.
+ */
+export function invoicePdfAlertsFor(items: PdfAlertItem[], blocked: string | null): CheckAlert[] {
+  const alerts: CheckAlert[] = [];
+  if (blocked) {
+    alerts.push({
+      title: "Invoice PDFs: FleetSuite couldn't send any",
+      body: `${blocked} Until then no invoice's PDF goes to NetSuite.`,
+      url: deepLinks.booksSwitches(),
+      about: 'pdf',
+    });
+  }
+  if (!items.length) return alerts;
+  const name = (i: PdfAlertItem) => i.number ?? 'an invoice';
+  if (items.length > ONE_BY_ONE) {
+    const few = (list: PdfAlertItem[]) => listed(list.length > ONE_BY_ONE
+      ? [...list.slice(0, ONE_BY_ONE).map(name), `${list.length - ONE_BY_ONE} more`]
+      : list.map(name));
+    const refused = items.filter((i) => i.state === 'refused');
+    const unsure = items.filter((i) => i.state === 'unsure');
+    const pdfOf = (list: PdfAlertItem[]) => `${list.length > 1 ? 'PDFs' : 'PDF'} of ${few(list)}`;
+    alerts.push({
+      title: `Invoice PDFs: ${items.length} invoices' PDFs need a look`,
+      body: [
+        refused.length ? `NetSuite refused the ${pdfOf(refused)}.` : '',
+        unsure.length ? `FleetSuite isn't sure NetSuite has the ${pdfOf(unsure)}, after three tries.` : '',
+        "Each invoice's page in Books → Own invoices says why.",
+      ].filter(Boolean).join(' '),
+      url: deepLinks.booksNetsuiteFeed(),
+      about: 'pdf',
+    });
+    return alerts;
+  }
+  for (const i of items) {
+    alerts.push(i.state === 'refused'
+      ? {
+        title: `Invoice PDFs: NetSuite refused the PDF of ${name(i)}`,
+        body: `${shortReason(i.error || 'NetSuite gave no reason.')} ${i.tries >= 3
+          ? "FleetSuite has tried three times and won't again on its own; the invoice's page can send it again."
+          : 'FleetSuite tries again 20 hours on, three times in all.'}`,
+        url: deepLinks.booksOwnInvoice(i.invoiceId),
+        about: 'pdf',
+      }
+      : {
+        title: `Invoice PDFs: not sure NetSuite has the PDF of ${name(i)}`,
+        body: `FleetSuite tried three times. ${shortReason(i.error || 'FleetSuite never heard back from NetSuite.')} `
+          + "Sending it again from the invoice's page never puts two on it.",
+        url: deepLinks.booksOwnInvoice(i.invoiceId),
+        about: 'pdf',
+      });
+  }
+  return alerts;
 }
 
 // ── Looking ────────────────────────────────────────────────────────────────
@@ -1058,8 +1126,11 @@ const SENDS_AT_A_LOOK = 200;
  * first: NetSuite's answer didn't settle it, or none came within NO_ANSWER_MS.
  */
 async function lookAtSends(service: SupabaseClient, now: Date): Promise<SendAlertItem[]> {
-  type Row = { id: string; started_at: string; action: SendAction; record_type: string; made_type: string | null; error: string | null; user_id: string | null };
-  const untold = () => service.from('netsuite_sends').select('id, started_at, action, record_type, made_type, error, user_id')
+  type Row = {
+    id: string; started_at: string; action: SendAction; record_type: string; made_type: string | null; doc_ref: string | null;
+    error: string | null; user_id: string | null;
+  };
+  const untold = () => service.from('netsuite_sends').select('id, started_at, action, record_type, made_type, doc_ref, error, user_id')
     .is('looked_at', null)
     .is('told_at', null);
   const [answered, unanswered] = await Promise.all([
@@ -1080,6 +1151,7 @@ async function lookAtSends(service: SupabaseClient, now: Date): Promise<SendAler
     at: r.started_at,
     who: r.user_id ? names.get(r.user_id) ?? null : null,
     error: r.error,
+    ...(isInvoicePdfSend(r) ? { quiet: true as const } : {}),
   }));
 }
 
@@ -1320,8 +1392,9 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
   let sends: SendAlertItem[] = [];
   try {
     sends = await lookAtSends(service, new Date());
-    alerts.push(...sendAlertsFor(sends));
-    told += sends.length;
+    const loud = sends.filter((s) => !s.quiet);
+    alerts.push(...sendAlertsFor(loud));
+    told += loud.length;
   } catch (err) {
     errors.push(`NetSuite feed: ${reason(err)}`);
   }
@@ -1348,6 +1421,19 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     errors.push(`Own numbers: ${reason(err)}`);
   }
 
+  // FleetSuite's invoice PDFs, while it's on: each NetSuite refused, or FleetSuite is still unsure about after three
+  // tries, told about at the first look that finds it, once, and at the first look of the day why the last run couldn't
+  // send any.
+  let pdfs: PdfAlertItem[] = [];
+  try {
+    const found = await lookAtInvoicePdfs(service, opts.look === 'first');
+    pdfs = found.items;
+    alerts.push(...invoicePdfAlertsFor(pdfs, found.blocked));
+    told += pdfs.length + (found.blocked ? 1 : 0);
+  } catch (err) {
+    errors.push(`Invoice PDFs: ${reason(err)}`);
+  }
+
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.
   if (alerts.length) await opts.tell(alerts);
   if (sends.length) {
@@ -1369,6 +1455,13 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
       await markOwnNumbersTold(service, numbers);
     } catch (err) {
       errors.push(`Own numbers: ${reason(err)}`);
+    }
+  }
+  if (pdfs.length) {
+    try {
+      await markInvoicePdfsTold(service, pdfs);
+    } catch (err) {
+      errors.push(`Invoice PDFs: ${reason(err)}`);
     }
   }
   const result: DailyCheckResult = { look: opts.look, told, ...(errors.length ? { error: errors.join(' ') } : {}) };

@@ -7,7 +7,9 @@
  * through R2 credentials, so what staff open is byte-for-byte what the
  * customer receives.
  *
- * Server-only: callers pass a service-role Supabase client.
+ * Server-only: callers pass a service-role Supabase client. FleetSuite's own
+ * invoice PDF (src/lib/books/invoice-pdfs.ts) carries the same letterhead,
+ * through readLetterhead.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -22,10 +24,15 @@ export type StatementPdfResult =
   | { ok: true; buffer: Buffer; filename: string }
   | { ok: false; status: number; error: string };
 
-export async function generateStatementPdf(
+/**
+ * The company letterhead every FleetSuite PDF carries: the company profile
+ * from the settings singleton, with the logo read through R2 credentials and
+ * inlined (jsPDF can't fetch). A logo that can't be read leaves the text
+ * letterhead.
+ */
+export async function readLetterhead(
   supabase: SupabaseClient,
-  data: Omit<StatementPdfData, 'letterhead'>,
-): Promise<StatementPdfResult> {
+): Promise<{ company: CompanyProfile; logoDataUrl: string | null }> {
   const { data: settings } = await supabase
     .from('wrap_quote_settings')
     .select('company')
@@ -50,8 +57,14 @@ export async function generateStatementPdf(
       logoDataUrl = `data:${type};base64,${got.bytes.toString('base64')}`;
     }
   }
+  return { company, logoDataUrl };
+}
 
-  const doc = buildStatementPdf({ ...data, letterhead: { company, logoDataUrl } });
+export async function generateStatementPdf(
+  supabase: SupabaseClient,
+  data: Omit<StatementPdfData, 'letterhead'>,
+): Promise<StatementPdfResult> {
+  const doc = buildStatementPdf({ ...data, letterhead: await readLetterhead(supabase) });
   return {
     ok: true,
     buffer: Buffer.from(doc.output('arraybuffer')),

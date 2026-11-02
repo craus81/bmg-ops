@@ -14,6 +14,7 @@ import {
   updateCustomer,
   getItemBasePrices,
   updateItemFields,
+  attachPdfToInvoice,
 } from './netsuite';
 
 // Characterization tests for the NetSuite client. All network calls are
@@ -917,6 +918,86 @@ describe('updateItemFields', () => {
     vi.stubEnv('NETSUITE_ITEM_RESTLET_URL', '');
     expect(await updateItemFields(812, { purchasePrice: 12.5 })).toEqual({
       success: false, error: 'Item RESTlet not configured. Set NETSUITE_ITEM_RESTLET_URL (deploy scripts/netsuite-item-restlet.js).',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// FleetSuite's own PDF of an invoice, attached to NetSuite's invoice by the PDF script's attach_pdf
+// (scripts/netsuite-pdf-restlet.js, Books part 68): the file NetSuite kept comes back, a refusal is a no, and no
+// answer, a fault on NetSuite's side or an answer that can't be read is not sure, since NetSuite may have it anyway.
+describe('attachPdfToInvoice', () => {
+  const SCRIPT = 'https://1234567-sb1.restlets.api.netsuite.com/app/site/hosting/restlet.nl?script=102&deploy=1';
+  const ask = { invoiceId: '123456', fileName: 'Invoice_INV10001_123456.pdf', pdfBase64: 'JVBERi0x', replaceFileId: null };
+  beforeEach(() => { vi.stubEnv('NETSUITE_PDF_RESTLET_URL', SCRIPT); });
+
+  it('posts the PDF to the script once, and says which file NetSuite kept', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, fileId: '9200', reused: false, replaced: null }));
+    expect(await attachPdfToInvoice(ask)).toEqual({ outcome: 'attached', fileId: '9200', replaced: null });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(SCRIPT);
+    expect(init.method).toBe('POST');
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    // A minute for the script to keep the file and attach it, inside the page's 90 seconds.
+    expect(timeout).toHaveBeenCalledWith(60_000);
+    timeout.mockRestore();
+    expect(JSON.parse(init.body)).toEqual({
+      action: 'attach_pdf', invoiceId: '123456', fileName: 'Invoice_INV10001_123456.pdf', pdfBase64: 'JVBERi0x',
+    });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, fileId: 9300, replaced: false }));
+    expect(await attachPdfToInvoice({ ...ask, fileName: 'Invoice_INV10001_123456_v2.pdf', replaceFileId: '9200' }))
+      .toEqual({ outcome: 'attached', fileId: '9300', replaced: false });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ replaceFileId: '9200' });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, fileId: '9301', replaced: true }));
+    expect(await attachPdfToInvoice({ ...ask, replaceFileId: '9200' })).toMatchObject({ replaced: true });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, fileId: '9302', replaced: 'yes' }));
+    expect(await attachPdfToInvoice({ ...ask, replaceFileId: '9200' })).toMatchObject({ replaced: null });
+  });
+
+  it('is a no when the script or NetSuite refuses', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: false, error: 'Failed to attach the PDF: No invoice 123456' }));
+    expect(await attachPdfToInvoice(ask)).toEqual({ outcome: 'refused', error: 'Failed to attach the PDF: No invoice 123456' });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: false }));
+    expect(await attachPdfToInvoice(ask)).toEqual({ outcome: 'refused', error: "The PDF script said it didn't attach it." });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: false, error: 'x'.repeat(700) }));
+    expect(((await attachPdfToInvoice(ask)) as { error: string }).error).toHaveLength(600);
+    fetchMock.mockResolvedValueOnce(new Response('Invalid login attempt.', { status: 401 }));
+    expect(await attachPdfToInvoice(ask)).toEqual({ outcome: 'refused', error: 'NetSuite RESTlet error (401): Invalid login attempt.' });
+    fetchMock.mockResolvedValueOnce(new Response('{"error":{"code":"INVALID_REQUEST"}}', { status: 499 }));
+    expect((await attachPdfToInvoice(ask)).outcome).toBe('refused');
+    // Sent once: a refusal is never sent again.
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("is not sure when NetSuite didn't answer, faulted, was busy, or answered in a way FleetSuite can't read", async () => {
+    fetchMock.mockResolvedValueOnce(new Response('An unexpected error occurred.', { status: 500 }));
+    expect(await attachPdfToInvoice(ask)).toEqual({ outcome: 'unsure', error: 'NetSuite RESTlet error (500): An unexpected error occurred.' });
+    fetchMock.mockResolvedValueOnce(new Response('{"error":{"code":"SSS_REQUEST_LIMIT_EXCEEDED"}}', { status: 400 }));
+    expect((await attachPdfToInvoice(ask)).outcome).toBe('unsure');
+    fetchMock.mockResolvedValueOnce(new Response('Too many', { status: 429 }));
+    expect((await attachPdfToInvoice(ask)).outcome).toBe('unsure');
+    fetchMock.mockRejectedValueOnce(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }));
+    expect(await attachPdfToInvoice(ask)).toEqual({ outcome: 'unsure', error: "NetSuite didn't answer in time." });
+    fetchMock.mockRejectedValueOnce(new Error('fetch failed'));
+    expect(await attachPdfToInvoice(ask)).toEqual({ outcome: 'unsure', error: 'fetch failed' });
+    const unreadable = "NetSuite answered, but not in a way FleetSuite could read, so it can't tell whether the PDF is on the invoice.";
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true }));
+    expect(await attachPdfToInvoice(ask)).toEqual({ outcome: 'unsure', error: unreadable });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ success: true, fileId: 'f-1' }));
+    expect(await attachPdfToInvoice(ask)).toEqual({ outcome: 'unsure', error: unreadable });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: 1 }));
+    expect(await attachPdfToInvoice(ask)).toEqual({ outcome: 'unsure', error: unreadable });
+    // The concurrency rejection isn't sent again either: a POST may have done it.
+    expect(fetchMock).toHaveBeenCalledTimes(8);
+  });
+
+  it("sends nothing, and says so, when the script's address isn't set", async () => {
+    vi.stubEnv('NETSUITE_PDF_RESTLET_URL', '');
+    expect(await attachPdfToInvoice(ask)).toEqual({
+      outcome: 'refused', error: "The PDF script's address isn't set (NETSUITE_PDF_RESTLET_URL), so nothing was sent.",
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });

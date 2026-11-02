@@ -21,7 +21,7 @@ vi.mock('next/headers', () => ({
 }));
 
 import {
-  answerOf, describeSend, netsuiteFetch, reasonOf, recordName, recordUrl, scrub, sendOf, setSendWriter, thrownAnswer,
+  answerOf, describeSend, isInvoicePdfSend, netsuiteFetch, reasonOf, recordName, recordUrl, scrub, sendOf, setSendWriter, thrownAnswer,
   tokenUser, whoSent, type Send, type SendRow, type SendWriter,
 } from './netsuite-sends';
 
@@ -104,6 +104,14 @@ describe('sendOf', () => {
     });
     expect(sendOf(SCRIPT, 'POST', JSON.stringify({ itemId: 812 }))?.recordId).toBe('812');
     expect(sendOf(SCRIPT, 'POST', JSON.stringify({ itemId: 'x'.repeat(61) }))?.recordId).toBeNull();
+    // FleetSuite's own invoice PDF, attached by the PDF script: a change to the invoice, found by the file's name.
+    const attach = { action: 'attach_pdf', invoiceId: '123456', fileName: 'Invoice_INV10001_123456.pdf', pdfBase64: 'JVBERi0x', replaceFileId: '9100' };
+    expect(sendOf(SCRIPT, 'POST', JSON.stringify(attach))).toEqual({
+      method: 'POST', action: 'change', recordType: 'invoice', recordId: '123456', madeType: null, docRef: 'Invoice_INV10001_123456.pdf', script: true,
+    });
+    expect(sendOf(SCRIPT, 'POST', JSON.stringify({ ...attach, invoiceId: 'INV10001' }))?.recordId).toBeNull();
+    // As big as FleetSuite sends one (700 KB of PDF), it's still read.
+    expect(sendOf(SCRIPT, 'POST', JSON.stringify({ ...attach, pdfBase64: 'A'.repeat(Math.ceil((700 * 1024) / 3) * 4) }))?.recordType).toBe('invoice');
     expect(sendOf(SCRIPT, 'POST', JSON.stringify({ action: 'somethingNew' }))).toEqual({
       method: 'POST', action: 'script', recordType: 'script', recordId: null, madeType: null, docRef: null, script: true,
     });
@@ -154,6 +162,11 @@ describe('answerOf', () => {
       .toEqual({ outcome: 'refused', httpStatus: 200, madeId: null, docRef: null, error: 'Missing parameter: itemId' });
     expect(answerOf(script, 200, null, JSON.stringify({ success: false, error: { message: 'No vendor' } })).error).toBe('No vendor');
     expect(answerOf(script, 200, null, JSON.stringify({ success: false })).error).toBe("The item script said it didn't do it.");
+    // The PDF script's answer names the file it kept, not a record it made: the feed links to the invoice.
+    expect(answerOf(script, 200, null, JSON.stringify({ success: true, fileId: '9200', reused: false, replaced: true })))
+      .toEqual({ outcome: 'took', httpStatus: 200, madeId: null, docRef: null, error: null });
+    expect(answerOf(script, 200, null, JSON.stringify({ success: false, error: 'Failed to attach the PDF: No invoice 999' })))
+      .toMatchObject({ outcome: 'refused', error: 'Failed to attach the PDF: No invoice 999' });
     expect(answerOf(script, 200, null, 'Not JSON')).toEqual({
       outcome: 'unsure', httpStatus: 200, madeId: null, docRef: null,
       error: "NetSuite answered, but not in a way FleetSuite could read, so it can't tell whether it was done.",
@@ -263,6 +276,25 @@ describe('how a send reads', () => {
     expect(d('create', 'other')).toBe('New record in NetSuite');
     expect(d('change', 'other')).toBe('Change in NetSuite');
     expect(d('delete', 'other')).toBe('Deletion in NetSuite');
+    // The PDF script's attach_pdf, by the file's name sendOf keeps.
+    expect(describeSend({ action: 'change', record_type: 'invoice', made_type: null, doc_ref: 'Invoice_INV10001_9001.pdf' })).toBe('PDF for an invoice');
+    expect(describeSend({ action: 'change', record_type: 'invoice', made_type: null, doc_ref: 'INV10001' })).toBe('Change to an invoice');
+  });
+
+  it("knows the PDF script's sends by what it keeps of them", () => {
+    expect(isInvoicePdfSend({ action: 'change', record_type: 'invoice', doc_ref: 'Invoice_INV10001_9001.pdf' })).toBe(true);
+    expect(isInvoicePdfSend({ action: 'change', record_type: 'invoice', doc_ref: 'Invoice_INV10001_9001_v2.PDF' })).toBe(true);
+    expect(isInvoicePdfSend({ action: 'change', record_type: 'invoice', doc_ref: 'INV10001' })).toBe(false);
+    expect(isInvoicePdfSend({ action: 'change', record_type: 'invoice', doc_ref: null })).toBe(false);
+    expect(isInvoicePdfSend({ action: 'change', record_type: 'invoice' })).toBe(false);
+    expect(isInvoicePdfSend({ action: 'change', record_type: 'creditMemo', doc_ref: 'Invoice_INV10001_9001.pdf' })).toBe(false);
+    expect(isInvoicePdfSend({ action: 'create', record_type: 'invoice', doc_ref: 'Invoice_INV10001_9001.pdf' })).toBe(false);
+    expect(isInvoicePdfSend({ action: 'change', record_type: 'invoice', doc_ref: 'Invoice.pdf.bak' })).toBe(false);
+    // What sendOf keeps of an attach_pdf is one.
+    const send = sendOf(SCRIPT.replace('script=101', 'script=102'), 'POST', JSON.stringify({
+      action: 'attach_pdf', invoiceId: '9001', fileName: 'Invoice_INV10001_9001.pdf', pdfBase64: 'JVBERi0=',
+    }))!;
+    expect(isInvoicePdfSend({ action: send.action, record_type: send.recordType, doc_ref: send.docRef })).toBe(true);
   });
 
   it("links to NetSuite's page for the record, when it knows the record and the account", () => {

@@ -4,7 +4,7 @@ import { compactSuiteqlError } from '@/lib/sales-order-sync';
 import { recordHeartbeat } from '@/lib/system-health';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
 import { pingRestlet } from '@/lib/restlet-probe';
-import { RESTLET_SPECS } from '@/lib/restlet-versions';
+import { PDF_RESTLET_MINIMUMS, versionAtLeast } from '@/lib/restlet-versions';
 import { safeIntId } from '@/lib/sql-safe';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { isoDate } from '@/lib/financials-data';
@@ -1727,17 +1727,19 @@ export async function runNetSuiteMirror(
    * same dead endpoint.
    */
   async function pdfRestletState(): Promise<{ state: 'ready' | 'outdated' | 'unreachable'; error?: string }> {
-    const spec = RESTLET_SPECS.find(s => s.key === 'pdf');
     const url = (process.env.NETSUITE_PDF_RESTLET_URL || '').trim();
-    // Neither can happen here (the caller checked the URL, and RESTLET_SPECS
-    // carries 'pdf'), but "we could not tell" must never read as "ready".
-    if (!spec || !url) return { state: 'outdated' };
+    // Can't happen here (the caller checked the URL), but "we could not
+    // tell" must never read as "ready".
+    if (!url) return { state: 'outdated' };
     const probe = await pingRestlet('pdf', url);
     if (!probe.reachable) return { state: 'unreachable', error: probe.error || 'no answer' };
     // Reachable but no version field: a deployment older than the ping
     // action, which still answers 200. Genuinely out of date.
     if (!probe.version) return { state: 'outdated' };
-    return { state: probe.version >= spec.expectedVersion ? 'ready' : 'outdated' };
+    // Credit memos' own minimum, not the script's newest version: a later
+    // power the owner hasn't uploaded yet (attaching invoice PDFs) mustn't
+    // park credit memos a deployed script can render.
+    return { state: versionAtLeast(probe.version, PDF_RESTLET_MINIMUMS.creditMemos) ? 'ready' : 'outdated' };
   }
 
   /**

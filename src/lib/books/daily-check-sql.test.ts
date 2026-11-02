@@ -9,9 +9,11 @@
 // at the likely mistakes the night's look kept, through migration 431's, and at
 // what NetSuite has instead of FleetSuite's record of a customer or vendor,
 // through migration 480's, and at the numbers NetSuite didn't keep and the
-// sales orders and POs made in NetSuite instead, through migration 497's. This
+// sales orders and POs made in NetSuite instead, through migration 497's, and
+// at the invoice PDFs NetSuite refused or FleetSuite isn't sure about, through
+// migration 498's. This
 // runs the same migrations as differences-sql.test.ts, with 401, 406, 407,
-// 416, 431, 435, 454, 457, 477, 480 and 497, in an in-memory Postgres (PGlite) as the app's
+// 416, 431, 435, 454, 457, 477, 480, 497 and 498, in an in-memory Postgres (PGlite) as the app's
 // server login, copies a made-up handful of NetSuite documents for BMG and
 // 1084, posts FleetSuite's entries for some of them, copies a few stock moves
 // and NetSuite's counts, saves an own invoice, an own fulfillment, a few
@@ -90,6 +92,9 @@ async function freshDb(): Promise<PGlite> {
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
+  // What migration 498 points at that migration 471 adds: the version of FleetSuite's copy of an invoice.
+  await pg.exec('ALTER TABLE gl_own_invoices ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1');
+  await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', '498-books-invoice-pdfs.sql'), 'utf8'));
   await pg.exec(`UPDATE gl_companies SET netsuite_subsidiary_id = '5' WHERE code = '1084'`);
   for (const [ns, name, type] of ACCOUNTS) {
     await pg.query(
@@ -161,7 +166,7 @@ describe('the daily books check', () => {
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
   /**
    * What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes,
-   * sends to NetSuite, changes in NetSuite and FleetSuite's own numbers, apart.
+   * sends to NetSuite, changes in NetSuite, FleetSuite's own numbers and its invoice PDFs, apart.
    */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
@@ -174,6 +179,7 @@ describe('the daily books check', () => {
   let toldSends: CheckAlert[] = [];
   let toldChanges: CheckAlert[] = [];
   let toldNumbers: CheckAlert[] = [];
+  let toldPdfs: CheckAlert[] = [];
 
   /** A read of one of the books' tables, or a change to one, built the way supabase-js builds it, run against the database. */
   const read = (table: string) => {
@@ -268,10 +274,11 @@ describe('the daily books check', () => {
     toldSends = [];
     toldChanges = [];
     toldNumbers = [];
+    toldPdfs = [];
     const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
       : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
         : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : alert.about === 'send' ? toldSends
-          : alert.about === 'change' ? toldChanges : alert.about === 'number' ? toldNumbers : told);
+          : alert.about === 'change' ? toldChanges : alert.about === 'number' ? toldNumbers : alert.about === 'pdf' ? toldPdfs : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
@@ -1076,6 +1083,11 @@ describe('the daily books check', () => {
     // One a super admin already looked for, and one already told about.
     await send(ID(6), { finished_at: ago(89), outcome: 'unsure', looked_at: ago(30), looked_by: JESSIE });
     await send(ID(7), { finished_at: ago(89), outcome: 'unsure', told_at: ago(60) });
+    // The PDF script's, which FleetSuite sends again itself: marked told, but told about by Invoice PDFs instead.
+    await send(ID(8), {
+      finished_at: ago(89), outcome: 'unsure', action: 'change', record_type: 'invoice', record_id: '5201', made_type: null,
+      doc_ref: 'Invoice_INV5201_5201.pdf', error: "NetSuite didn't answer in time.",
+    });
 
     await look('first');
     expect(toldSends).toEqual([
@@ -1093,7 +1105,7 @@ describe('the daily books check', () => {
       },
     ]);
     const marked = await pg.query<{ id: string }>('SELECT id FROM netsuite_sends WHERE told_at IS NOT NULL ORDER BY id');
-    expect(marked.rows.map((r) => r.id)).toEqual([ID(1), ID(2), ID(7)]);
+    expect(marked.rows.map((r) => r.id)).toEqual([ID(1), ID(2), ID(7), ID(8)]);
 
     // Told once: the next look says nothing of them.
     await look('second');
@@ -1111,7 +1123,7 @@ describe('the daily books check', () => {
     } finally {
       failing = null;
     }
-    await pg.query('DELETE FROM netsuite_sends WHERE id = ANY($1)', [[1, 2, 3, 4, 5, 6, 7].map(ID)]);
+    await pg.query('DELETE FROM netsuite_sends WHERE id = ANY($1)', [[1, 2, 3, 4, 5, 6, 7, 8].map(ID)]);
   });
 
   it('tells once about each change made in NetSuite while FleetSuite’s record wins, at the first look that finds it', async () => {
@@ -1297,6 +1309,101 @@ describe('the daily books check', () => {
         DELETE FROM netsuite_vendor_pos WHERE true;
         DELETE FROM netsuite_sales_orders WHERE netsuite_id LIKE '81%';
       `);
+    }
+  });
+
+  it('tells once about each invoice PDF NetSuite refused or FleetSuite is still unsure about, and each morning why a run sent none', async () => {
+    // FleetSuite's copies of four invoices it made (migration 407), and what became of their PDFs (migration 498).
+    for (const id of ['5301', '5302', '5303', '5304']) {
+      await pg.query('SELECT gl_own_invoice_save($1::jsonb)', [JSON.stringify({
+        netsuite_id: id, netsuite_number: `INV${id}`, company: 'BMG', made_from: 'po', customer_netsuite_id: '9001', customer_id: ACME,
+        invoice_date: '2026-10-20', location_netsuite_id: '1', location_from: 'sent', terms_days: 0, due_date: '2026-10-20',
+        tax_rule: 'tax@1', tax_basis: 'rate', tax_rate: '0.084880', subtotal: '100.00', tax: '8.49', total: '108.49', lines_from: 'sent', unknowns: [],
+        lines: [{ line_no: 1, item_netsuite_id: '55', item_number: 'SHELF-1', quantity: 1, rate: 100, amount: '100.00', priced: true, taxable: true, tax: '8.49' }],
+      })]);
+    }
+    const CRAIG = 'd0000000-0000-4000-8000-0000000000c1';
+    await pg.query("INSERT INTO profiles (id, full_name) VALUES ($1, 'Craig George') ON CONFLICT (id) DO NOTHING", [CRAIG]);
+    const pdf = (id: string, state: string, tries: number, error: string, hoursAgo: number, by: string | null = null) => pg.query(
+      `INSERT INTO own_invoice_pdfs (invoice_id, version, state, file_name, tries, error, asked_by, started_at, answered_at)
+       VALUES ($1, 1, $2, $3, $4, $5, $6, now() - make_interval(hours => $7), now() - make_interval(hours => $7))`,
+      [id, state, `Invoice_INV${id}_${id}.pdf`, tries, error, by, hoursAgo],
+    );
+    // NetSuite refused the first; FleetSuite is still unsure of the second after three tries, and of the third after one;
+    // a super admin sent the fourth from its page, and saw what NetSuite said there.
+    await pdf('5301', 'refused', 1, 'You do not have permission to attach files.', 3);
+    await pdf('5302', 'unsure', 3, "NetSuite didn't answer in time.", 2);
+    await pdf('5303', 'unsure', 1, "NetSuite didn't answer in time.", 1);
+    await pdf('5304', 'refused', 1, 'Locked period.', 4, CRAIG);
+    const toldAt = async () => (await pg.query<{ invoice_id: string }>(
+      'SELECT invoice_id FROM own_invoice_pdfs WHERE told_at IS NOT NULL ORDER BY invoice_id')).rows.map((r) => r.invoice_id);
+    const blocked = "The PDF script in NetSuite is the copy from 2026-09-15.1, which can't attach PDFs. "
+      + 'Upload the newest scripts/netsuite-pdf-restlet.js over it and save its script record.';
+    store.set('books_invoice_pdfs', { last_result: { looked: 0, blocked }, updated_at: new Date().toISOString() });
+
+    // While it's off, nothing is told.
+    await look('first');
+    expect(toldPdfs).toEqual([]);
+    expect(await toldAt()).toEqual([]);
+
+    await pg.exec(`UPDATE books_switches SET is_on = true, changed_at = '2026-10-01T00:00:00Z' WHERE piece = 'invoice_pdfs'`);
+    try {
+      expect(await look('first')).toMatchObject({ told: 3 });
+      expect(toldPdfs).toEqual([
+        {
+          title: "Invoice PDFs: FleetSuite couldn't send any",
+          body: `${blocked} Until then no invoice's PDF goes to NetSuite.`,
+          url: '/admin/books/switches',
+          about: 'pdf',
+        },
+        {
+          title: 'Invoice PDFs: NetSuite refused the PDF of INV5301',
+          body: 'You do not have permission to attach files. FleetSuite tries again 20 hours on, three times in all.',
+          url: '/admin/books/own-invoices/invoice?id=5301',
+          about: 'pdf',
+        },
+        {
+          title: 'Invoice PDFs: not sure NetSuite has the PDF of INV5302',
+          body: "FleetSuite tried three times. NetSuite didn't answer in time. Sending it again from the invoice's page never puts two on it.",
+          url: '/admin/books/own-invoices/invoice?id=5302',
+          about: 'pdf',
+        },
+      ]);
+      expect(await toldAt()).toEqual(['5301', '5302']);
+
+      // Told once; why the run sent none is told again only at the next day's first look.
+      await look('second');
+      expect(toldPdfs).toEqual([]);
+      await look('first');
+      expect(toldPdfs.map((a) => a.title)).toEqual(["Invoice PDFs: FleetSuite couldn't send any"]);
+      store.set('books_invoice_pdfs', { last_result: { looked: 2, attached: 2 }, updated_at: new Date().toISOString() });
+      await look('first');
+      expect(toldPdfs).toEqual([]);
+
+      // One it can't mark is told again next time; one it can't read is said, and the rest of the check goes on.
+      await pg.exec(`UPDATE own_invoice_pdfs SET tries = 3, answered_at = now() WHERE invoice_id = '5303'`);
+      failing = (name) => name === 'own_invoice_pdfs_mark_told';
+      try {
+        const result = await look('first');
+        expect(toldPdfs.map((a) => a.title)).toEqual(['Invoice PDFs: not sure NetSuite has the PDF of INV5303']);
+        expect(result.error).toContain("Invoice PDFs: couldn't mark the PDFs told about (own_invoice_pdfs_mark_told failed)");
+        failing = (name) => name === 'own_invoice_pdfs_to_tell';
+        const unread = await look('first');
+        expect(unread.error).toContain("Invoice PDFs: couldn't read the PDFs to tell about (own_invoice_pdfs_to_tell failed)");
+        expect(unread.heartbeat).toBeDefined();
+        expect(toldPdfs).toEqual([]);
+      } finally {
+        failing = null;
+      }
+      await look('second');
+      expect(toldPdfs.map((a) => a.title)).toEqual(['Invoice PDFs: not sure NetSuite has the PDF of INV5303']);
+      expect(await toldAt()).toEqual(['5301', '5302', '5303']);
+      await look('first');
+      expect(toldPdfs).toEqual([]);
+    } finally {
+      await pg.exec(`UPDATE books_switches SET is_on = false WHERE piece = 'invoice_pdfs'`);
+      await pg.exec('DELETE FROM own_invoice_pdfs WHERE true');
+      store.delete('books_invoice_pdfs');
     }
   });
 

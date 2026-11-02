@@ -36,6 +36,13 @@ const NON_WINANSI: [RegExp, string][] = [
   [/[•●]/g, '-'],
 ];
 
+/** Folds the typographic characters our text carries to ones helvetica (WinAnsi) can draw. */
+export function foldToWinAnsi(text: string): string {
+  let s = text;
+  for (const [re, to] of NON_WINANSI) s = s.replace(re, to);
+  return s;
+}
+
 /**
  * Flatten one pre-escaped model fragment to plain text.
  *
@@ -53,7 +60,7 @@ export function htmlToText(html: string | null | undefined): string {
     .replace(/&#(\d+);/g, (_m, d) => String.fromCharCode(Number(d)))
     .replace(/&#x([0-9a-f]+);/gi, (_m, h) => String.fromCharCode(parseInt(h, 16)))
     .replace(/&([a-z0-9]+);/gi, (m, name) => ENTITIES[String(name).toLowerCase()] ?? m);
-  for (const [re, to] of NON_WINANSI) s = s.replace(re, to);
+  s = foldToWinAnsi(s);
   return s
     .split('\n')
     .map(line => line.replace(/[ \t]+/g, ' ').trim())
