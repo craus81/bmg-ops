@@ -120,6 +120,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/stock/item/route.ts': books(['read']),
   'src/app/api/admin/books/switches/route.ts': books(['read', 'owner']),
   'src/app/api/admin/books/trial-balance/route.ts': books(['read', 'keep']),
+  'src/app/api/admin/books/year-end/route.ts': books(['read', 'keep'], "booksAllows(auth.access, 'owner')"),
   'src/app/api/admin/business-pulse/route.ts': superAdmin(),
   'src/app/api/cron/books-netsuite-gl/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-invoice-posting/route.ts': cron('requireSuperAdmin('),

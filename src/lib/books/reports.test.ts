@@ -4,7 +4,7 @@ vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
 import {
-  lastReportMonth, lineSpan, profitAndLossByName, profitAndLossLines, report, reportMonths, yearClosings,
+  lastReportMonth, lineSpan, profitAndLossByName, profitAndLossLines, report, reportMonths, yearCloseAmounts, yearClosings,
   type ReportAccount, type ReportAmount, type ReportData, type ReportKind, type ReportLine,
 } from './reports';
 import { trialBalance, type TbAmount } from './trial-balance';
@@ -837,5 +837,64 @@ describe("what an account's line is made of (its detail)", () => {
     const tb = report(books(), 'trial_balance', { to: '2026-02-01' }).lines;
     expect(tb.filter((l) => l.yearToDate).map((l) => l.label)).toEqual(['Sales', 'Rent', 'Shop supplies', 'Interest income', 'Bank fees']);
     expect(report(books(), 'profit_and_loss', { to: '2026-02-01' }).lines.some((l) => l.yearToDate)).toBe(false);
+  });
+});
+
+describe("a year's close into retained earnings", () => {
+  /** The balance sheet's retained earnings line at a month's end, each side. */
+  const reLine = (d: ReportData, month: string) => {
+    const line = report(d, 'balance_sheet', { to: month }).lines.find((l) => l.account === '39' || /^Retained earnings/.test(l.label))!;
+    return { fleetsuite: line.fleetsuite, netsuite: line.netsuite };
+  };
+
+  it("takes a year's net income into retained earnings at the next one's start, as the balance sheet does", () => {
+    // The 4,000.00 earned before 2025, then 2025's 230.00 lost.
+    expect(yearCloseAmounts(books(), 2025)).toEqual({
+      account: { key: '39', number: '3900', name: 'Retained Earnings' },
+      starting: { fleetsuite: 400000, netsuite: 400000 },
+      posted: { fleetsuite: 0, netsuite: 0 },
+      netIncome: { fleetsuite: -23000, netsuite: -23000 },
+      closed: { fleetsuite: 377000, netsuite: 377000 },
+    });
+    // 2026 earned 1,380.00 in FleetSuite's books and 1,355.00 in NetSuite's, February's rent and shop supplies apart.
+    const y2026 = yearCloseAmounts(books(), 2026);
+    expect(y2026).toMatchObject({
+      starting: { fleetsuite: 377000, netsuite: 377000 },
+      netIncome: { fleetsuite: 138000, netsuite: 135500 },
+      closed: { fleetsuite: 515000, netsuite: 512500 },
+    });
+    // What it closes into is the balance sheet's retained earnings in the January after, and its start the one before.
+    expect(y2026.closed).toEqual(reLine(books(), '2027-01-01'));
+    expect(y2026.starting).toEqual(reLine(books(), '2026-01-01'));
+    // A year with nothing in it closes nothing more.
+    expect(yearCloseAmounts(books(), 2027)).toMatchObject({ starting: y2026.closed, netIncome: { fleetsuite: 0, netsuite: 0 }, closed: y2026.closed });
+  });
+
+  it('adds what was posted straight to retained earnings in the year, each side its own', () => {
+    // 500.00 taken out of retained earnings in June 2026, and 100.00 more in NetSuite's books in December.
+    const d = books({
+      fleetsuite: [fs('39', '2026-06-01', 50000), fs('10', '2026-06-01', -50000)],
+      netsuite: [ns('39', '2026-06-01', 50000), ns('10', '2026-06-01', -50000), ns('39', '2026-12-01', 10000), ns('10', '2026-12-01', -10000)],
+    });
+    const y = yearCloseAmounts(d, 2026);
+    expect(y.posted).toEqual({ fleetsuite: -50000, netsuite: -60000 });
+    expect(y.closed).toEqual({ fleetsuite: 465000, netsuite: 452500 });
+    expect(y.closed).toEqual(reLine(d, '2027-01-01'));
+    // The next year starts where it closed; earlier ones don't see it.
+    expect(yearCloseAmounts(d, 2027).starting).toEqual(y.closed);
+    expect(yearCloseAmounts(d, 2025)).toEqual(yearCloseAmounts(books(), 2025));
+  });
+
+  it("closes into the balance sheet's own line of earlier years' net income when no one account is retained earnings", () => {
+    const d = books({ accounts: ACCOUNTS.filter((a) => a.id !== 'a39') });
+    const y = yearCloseAmounts(d, 2026);
+    expect(y).toEqual({
+      account: null,
+      starting: { fleetsuite: 377000, netsuite: 377000 },
+      posted: { fleetsuite: 0, netsuite: 0 },
+      netIncome: { fleetsuite: 138000, netsuite: 135500 },
+      closed: { fleetsuite: 515000, netsuite: 512500 },
+    });
+    expect(y.closed).toEqual(reLine(d, '2027-01-01'));
   });
 });

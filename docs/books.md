@@ -134,9 +134,13 @@ differences reviewed and approved as one adjustment, built switched off
 ("Counts"), part 70, the year's 1099s made as the IRS's own upload file
 for IRIS, its e-file portal, with tax IDs only ever on the device that
 makes it ("Filing the 1099s"), part 71, the cash flow statement on Reports
-("Reports"), and part 72, the profit and loss with a column for each month,
+("Reports"), part 72, the profit and loss with a column for each month,
 quarter, year, division or location, only one division's or location's
-lines when picked ("Report builder").
+lines when picked ("Report builder"), part 73, its lines by customer or
+vendor, months that move with the calendar and reports saved by name
+("Saved reports"), and part 74, each company's year closed into retained
+earnings once all its months are, its months held closed until it's
+reopened ("Year end").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -157,7 +161,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, the own numbers at `/admin/books/own-numbers`, the 1099s at `/admin/books/1099s`, and filing them at `/admin/books/1099s/file`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, the year end at `/admin/books/year-end`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, the own numbers at `/admin/books/own-numbers`, the 1099s at `/admin/books/1099s`, and filing them at `/admin/books/1099s/file`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
 the accounts page, and Home opens it for a bookkeeper or CPA with no other
 role; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
@@ -299,6 +303,7 @@ admins can open it while fixing invoices is switched off.
 | Inventory value: each stocked item's value at a month's end, tied to each inventory account | `migrations/495-inventory-value-at-a-months-end.sql`, `src/lib/books/inventory-value.ts`, `src/lib/books/inventory-value-data.ts`, `src/app/(main)/admin/books/inventory-value/page.tsx`, `src/app/api/admin/books/inventory-value/route.ts` and its `download`; tests `src/lib/books/inventory-value.test.ts`, `src/lib/books/inventory-value-route.test.ts`, `src/lib/books/inventory-value-sql.test.ts` |
 | Sales tax: what goes on Missouri's return for a month, location by location, each location's dated rates, and the return as filed held against it | `migrations/496-books-sales-tax.sql`, `src/lib/books/sales-tax-worksheet.ts`, `src/lib/books/sales-tax-data.ts`, `src/lib/books/sales-tax-words.ts`, `salesTaxWorkbook` in `src/lib/books/report-workbook.ts`, `src/app/(main)/admin/books/sales-tax/page.tsx`, `src/app/api/admin/books/sales-tax/route.ts` and its `download`; tests `src/lib/books/sales-tax-worksheet.test.ts`, `src/lib/books/sales-tax-route.test.ts`, `src/lib/books/sales-tax-sql.test.ts` |
 | Own numbers: FleetSuite's number on each sales order, PO, invoice and credit memo it makes in NetSuite, what became of each, and the sales orders and POs made in NetSuite instead | `migrations/497-books-own-numbers.sql`, `src/lib/books/own-numbers.ts`, `ownNumberFor` in `createSalesOrder`, `createPurchaseOrder`, `createDirectInvoice`, `createInvoiceFromSO` and `createCreditMemoFromInvoice` in `src/lib/netsuite.ts`, the drop ship PO's number in `src/app/api/estimates/[id]/drop-ship/route.ts`, `src/app/(main)/admin/books/own-numbers/page.tsx`, `src/app/api/admin/books/own-numbers/route.ts`; tests `src/lib/books/own-numbers.test.ts`, `src/lib/books/own-numbers-route.test.ts`, `src/lib/netsuite-own-numbers.test.ts`, `src/lib/drop-ship-route.test.ts`, and the tables and their functions `src/lib/books/own-numbers-sql.test.ts` |
+| Year end: each company's year closed into retained earnings once all its months are, in order, its months held closed until it's reopened, with what's done before it closes | `migrations/502-books-year-end.sql`, `src/lib/books/year-end.ts`, `yearCloseAmounts` in `src/lib/books/reports.ts`, `readMonthFacts` and the closed year's months in `src/lib/books/months.ts`, `src/app/(main)/admin/books/year-end/page.tsx`, `src/app/api/admin/books/year-end/route.ts`; tests `src/lib/books/year-end.test.ts`, `src/lib/books/year-end-route.test.ts`, `src/lib/books/year-end-sql.test.ts`, the closed year's months in `src/lib/books/months.test.ts` and `src/lib/books/months-route.test.ts`, and `yearCloseAmounts`' in `src/lib/books/reports.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -6346,6 +6351,8 @@ The rules (`closeRefusal` and `reopenRefusal`):
   documents of kinds FleetSuite doesn't post yet, needs a reason. One that
   matches doesn't.
 - Only the latest month closed reopens, and only for a reason.
+- A month in a year closed on Year end doesn't reopen until the year does
+  ("Year end"); the database holds it too (migration 502).
 
 The bookkeeper and super admins close a month; only a super admin reopens
 one ("Who can open the books").
@@ -6378,6 +6385,80 @@ each inventory account, every cent between them named ("Inventory value at
 a month's end"), and Sales tax shows what goes on Missouri's return for it,
 held against the return once it's filed ("Sales tax"); Months links to
 both.
+
+## Year end
+
+`/admin/books/year-end` (Books → Year end, part 74, linked from the Books
+hub and Months) closes a company's year into retained earnings once every
+month of it is closed (the NetSuite Exit Checklist's "Year-end close";
+owner decision 2026-10-31), and reopens the latest one closed for a reason
+(`src/lib/books/year-end.ts`, `GET` and `POST /api/admin/books/year-end`).
+It lists each year from 2025 through this one and opens on last year, for
+BMG unless another company is picked.
+
+Nothing is posted to close a year, as in NetSuite: the balance sheet
+already takes a year's net income into retained earnings at the next one's
+start ("Reports"). The page shows that close for both books, FleetSuite's
+next to NetSuite's with the difference (`yearCloseAmounts` in
+`reports.ts`): retained earnings at January 1, anything posted straight to
+retained earnings in the year, the year's net income (linked to its profit
+and loss), and retained earnings once it closes, at the next January 1,
+which is the balance sheet's retained earnings line then. With no one
+retained earnings account in the chart, they're the balance sheet's own
+line of earlier years' net income.
+
+Below, what's done before the year closes (`yearChecks`), each linked to
+where it's done:
+
+- Months closed: every month of the year closed on Months, from January,
+  or from the month the books went live in their first year, the next one
+  to close named.
+- Matches NetSuite: the year's months that don't match NetSuite whole, as
+  Months has them.
+- Journal entries: those typed in FleetSuite, dated in the year, that
+  aren't made yet, the CPA's adjustments among them.
+- Bank reconciliations: each account reconciled in FleetSuite through
+  December, from the month it starts ("1084's bank reconciliation").
+- Sales tax returns: for BMG, each month's Missouri return typed in on
+  Sales tax once the month's over.
+
+One that isn't the company's to do, such as 1084's sales tax, a bank
+account not reconciled in FleetSuite yet or a year with nothing posted,
+reads Not here.
+
+The rules (`closeYearRefusal` and `reopenYearRefusal`):
+
+- Nothing closes before the books are live. A year before the one they went
+  live in closes in NetSuite: the page shows it as the rehearsal, with
+  nothing to close.
+- A year closes once all its months are closed, so not before it's over,
+  and years close in order from the one the books went live in.
+- Closing a year with anything not done needs a reason. One with
+  everything done doesn't.
+- Only the latest year closed reopens, and only for a reason.
+
+Only a super admin closes or reopens a year; the bookkeeper and the CPA
+see the page ("Who can open the books").
+
+Closing keeps what FleetSuite's books had for the year then: its net
+income and retained earnings once it closed. Should either differ later,
+say when an account's type changes in the chart, the page says so in red.
+
+A closed year holds its months: none of them reopens until the year does,
+on Months or any other way, since the database refuses it (migration 502's
+`gl_periods_year_lock`), so nothing posts into a closed year.
+`gl_set_year_status` closes and reopens a year. It checks the order, the
+months and the reason to reopen again inside the database, with the year's
+months locked while it does, and keeps every close and reopen with who,
+when, why and the amounts (`gl_year_close_events`). Both are audited
+(`close_year`, `reopen_year`), without the amounts.
+
+Closing a year here doesn't close it in NetSuite, where its months close
+as before.
+
+### What isn't done yet
+
+- The CPA's year-end package in Excel.
 
 ## NetSuite feed
 
@@ -6801,7 +6882,7 @@ a staff one:
 
 | Who | Level | What they can do |
 | --- | --- | --- |
-| Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, and reopening a closed month |
+| Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, reopening a closed month, and closing and reopening a year |
 | Bookkeeper | `keep` | Everything else: Sync now and Copy now, Post now, Look now, closing a month, clearing and reopening mistake checks, Looked at it on the NetSuite feed, Snap a bill, NetSuite's 1099 report, and checking the 1099s in NetSuite and making their file |
 | CPA | `read` | Every Books page and Excel download, changing nothing, and its own adjustments journal on Journal entries ("The CPA's adjustments journal") |
 

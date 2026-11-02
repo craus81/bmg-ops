@@ -351,6 +351,16 @@ describe('Books inventory value links', () => {
   });
 });
 
+describe('Books year end links', () => {
+  it("opens one company's year, BMG and last year when left out", () => {
+    expect(deepLinks.booksYearEnd()).toBe('/admin/books/year-end');
+    expect(deepLinks.booksYearEnd(null, null)).toBe('/admin/books/year-end');
+    expect(deepLinks.booksYearEnd('1084', 2027)).toBe('/admin/books/year-end?company=1084&year=2027');
+    expect(deepLinks.booksYearEnd('BMG')).toBe('/admin/books/year-end?company=BMG');
+    expect(deepLinks.booksYearEnd(null, 2026)).toBe('/admin/books/year-end?year=2026');
+  });
+});
+
 describe('Books sales tax links', () => {
   it("opens one month's return, last month when left out", () => {
     expect(deepLinks.booksSalesTax()).toBe('/admin/books/sales-tax');

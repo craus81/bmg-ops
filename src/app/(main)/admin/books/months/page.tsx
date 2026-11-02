@@ -39,6 +39,7 @@ interface Month {
   closed: { at: string | null; by: string | null } | null;
   compared: { status: 'matches' | 'differs' | 'none'; differing: number; notPosted: boolean };
   events: MonthEvent[];
+  yearClosed: boolean;
   can: 'close' | 'reopen' | null;
 }
 
@@ -183,6 +184,8 @@ export default function BooksMonthsPage() {
 
   const name = data?.companies.find((c) => c.code === company)?.name ?? company;
   const firstMonth = data ? (data.liveFrom ?? data.plannedLiveFrom) : '';
+  // The latest month closed, which reopens unless its year is closed.
+  const latestClosed = data?.months.find((m) => m.closed)?.month ?? '';
 
   return (
     <div>
@@ -205,6 +208,8 @@ export default function BooksMonthsPage() {
           <Link href={deepLinks.booksInventoryValue()} style={{ color: 'var(--text-secondary)' }}>Inventory value</Link>
           {' · '}
           <Link href={deepLinks.booksSalesTax()} style={{ color: 'var(--text-secondary)' }}>Sales tax</Link>
+          {' · '}
+          <Link href={deepLinks.booksYearEnd(company || null)} style={{ color: 'var(--text-secondary)' }}>Year end</Link>
           {' · '}
           <Link href="/admin/books/going-live" style={{ color: 'var(--text-secondary)' }}>Going live</Link>
           {' · '}
@@ -256,6 +261,14 @@ export default function BooksMonthsPage() {
                   {m.closed && (
                     <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                       Closed{m.closed.by ? ` by ${m.closed.by}` : ''}{m.closed.at ? ` ${when(m.closed.at)}` : ''}
+                    </div>
+                  )}
+                  {m.month === latestClosed && m.yearClosed && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                      <Link href={deepLinks.booksYearEnd(company, Number(m.month.slice(0, 4)))} style={{ color: 'inherit' }}>
+                        {m.month.slice(0, 4)} is closed
+                      </Link>
+                      , so its months stay closed until the year is reopened.
                     </div>
                   )}
 

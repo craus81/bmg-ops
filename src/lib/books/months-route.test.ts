@@ -129,6 +129,8 @@ beforeEach(() => {
     gl_period_events: [
       { id: 'ev1', period_id: 'p1', action: 'closed', actor_name: 'Craig', reason: null, created_at: '2027-02-12T21:04:00Z' },
     ],
+    gl_year_closes: [],
+    gl_year_close_events: [],
   };
   errors = {};
   audits = [];
@@ -158,11 +160,11 @@ describe('Books → Months', () => {
       plannedLiveFrom: '2027-01-01',
       today: '2027-03-15',
       months: [
-        { month: MAR, over: false, closed: null, compared: { status: 'none', differing: 0, notPosted: true }, events: [], can: null },
-        { month: FEB, over: true, closed: null, compared: { status: 'differs', differing: 2, notPosted: false }, events: [], can: 'close' },
+        { month: MAR, over: false, closed: null, compared: { status: 'none', differing: 0, notPosted: true }, events: [], yearClosed: false, can: null },
+        { month: FEB, over: true, closed: null, compared: { status: 'differs', differing: 2, notPosted: false }, events: [], yearClosed: false, can: 'close' },
         {
           month: JAN, over: true, closed: { at: '2027-02-12T21:04:00Z', by: 'Craig' }, compared: { status: 'matches', differing: 0, notPosted: false },
-          events: [{ action: 'closed', by: 'Craig', reason: null, at: '2027-02-12T21:04:00Z' }], can: 'reopen',
+          events: [{ action: 'closed', by: 'Craig', reason: null, at: '2027-02-12T21:04:00Z' }], yearClosed: false, can: 'reopen',
         },
       ],
     });
@@ -182,6 +184,8 @@ describe('Books → Months', () => {
       gl_companies: 'gl_companies is down',
       gl_periods: "Couldn't read the months: gl_periods is down",
       gl_period_events: "Couldn't read when the months were closed: gl_period_events is down",
+      gl_year_closes: "Couldn't read the years closed: gl_year_closes is down",
+      gl_year_close_events: "Couldn't read when the years were closed: gl_year_close_events is down",
       gl_books_differences: "Couldn't compare the books with NetSuite: gl_books_differences is down",
     };
     for (const [table, error] of Object.entries(said)) {
@@ -281,6 +285,32 @@ describe('Books → Months: closing and reopening', () => {
     expect(await post({ company: 'BMG', month: '2027-01', action: 'reopen', reason: 'A late bill' })).toEqual({
       status: 409, body: { error: 'Reopen February 2027 first: months reopen from the latest.' },
     });
+  });
+
+  it("keeps a closed year's months closed until the year is reopened on Year end", async () => {
+    vi.setSystemTime(new Date('2028-01-20T15:00:00Z'));
+    tables.gl_periods = Array.from({ length: 12 }, (_, i) => ({
+      id: `y${i + 1}`, company_id: 'c2', period_start: `2027-${String(i + 1).padStart(2, '0')}-01`, status: 'closed',
+      closed_at: '2028-01-10T16:00:00Z', closed_by_name: 'Craig',
+    }));
+    tables.gl_period_events = [];
+    tables.gl_year_closes = [{
+      company_id: 'c2', year: 2027, status: 'closed', closed_at: '2028-01-12T16:00:00Z', closed_by_name: 'Craig',
+      net_income_cents: 1250000, retained_earnings_cents: 4250000,
+    }];
+    const months = (await get()).body.months;
+    expect(months.slice(0, 3).map((m: any) => [m.month, m.yearClosed, m.can])).toEqual([
+      ['2028-01-01', false, null], ['2027-12-01', true, null], ['2027-11-01', true, null],
+    ]);
+    expect(await post({ company: 'BMG', month: '2027-12', action: 'reopen', reason: 'A late bill' })).toEqual({
+      status: 409, body: { error: '2027 is closed, so December 2027 stays closed. Reopen the year on Year end first.' },
+    });
+    expect(statusCalls()).toEqual([]);
+    expect(audits).toEqual([]);
+    // Once the year's reopened, December reopens.
+    tables.gl_year_closes = [{ ...tables.gl_year_closes[0], status: 'open', closed_at: null, closed_by_name: null, net_income_cents: null, retained_earnings_cents: null }];
+    expect((await get()).body.months[1]).toMatchObject({ month: '2027-12-01', yearClosed: false, can: 'reopen' });
+    expect((await post({ company: 'BMG', month: '2027-12', action: 'reopen', reason: 'A late bill' })).status).toBe(200);
   });
 
   it("goes by Central time: February isn't over until midnight in O'Fallon", async () => {

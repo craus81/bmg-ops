@@ -256,6 +256,8 @@ export default function BooksAccountsPage() {
             {' · '}
             <Link href="/admin/books/months" style={{ color: 'var(--text-secondary)' }}>Months</Link>
             {' · '}
+            <Link href={deepLinks.booksYearEnd()} style={{ color: 'var(--text-secondary)' }}>Year end</Link>
+            {' · '}
             <Link href={deepLinks.booksRentMortgage()} style={{ color: 'var(--text-secondary)' }}>Rent and mortgage</Link>
             {' · '}
             <Link href={deepLinks.booksBankReconciliation()} style={{ color: 'var(--text-secondary)' }}>1084&apos;s bank reconciliation</Link>
