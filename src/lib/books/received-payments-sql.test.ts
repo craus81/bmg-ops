@@ -84,8 +84,8 @@ describe('migration 485', () => {
     ]);
     // Every piece the app named then is one the column takes, and nothing else is (486 adds taking deposits, 487 bank
     // deposits, 488 paying vendors, 494 approving adjustments, 497 FleetSuite's own numbers, 498 invoice PDFs, 499 counts,
-    // 504 money screens, 505 portal billing).
-    const then = SWITCH_PIECES.filter((piece) => !['customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'stock_counts', 'money_screens', 'portal_books'].includes(piece));
+    // 504 money screens, 505 portal billing, 509 two-step sign-in).
+    const then = SWITCH_PIECES.filter((piece) => !['customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'stock_counts', 'money_screens', 'portal_books', 'two_step_sign_in'].includes(piece));
     expect(then).toHaveLength(12);
     await pg.exec('BEGIN');
     try {

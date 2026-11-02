@@ -349,6 +349,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'access_request', label: 'Access request', description: 'Someone asked for an account or extra permissions.', area: 'system', defaultChannels: ['in_app', 'push'], emailNow: true },
   { type: 'app_request_new', label: 'New request in Requests', description: 'Someone reported a problem, asked for a feature or asked a question in More → Requests. Claude picks it up on its next check.', area: 'system', defaultChannels: ['in_app', 'push', 'email'], emailNow: true, alwaysOn: 'Always sent on every channel while you watch how Requests works (Craig, 2026-10-30).', audience: 'Anyone with "Copy me on new alerts" (Admin → Users → Settings).' },
   { type: 'app_request_update', label: 'Reply or status on a request', description: 'Claude or someone else answered a request you sent, backed with Me too, or watch; or marked it Done or Won\'t do. Customer and installer logins get it in the app only, never by email.', area: 'system', defaultChannels: ['in_app', 'push', 'email'], emailNow: true, alwaysOn: 'Always sent: it is the answer to your request.', audience: 'Whoever sent the request, whoever tapped Me too, and anyone with "Copy me on new alerts".' },
+  // Someone's two-step sign-in changed (Books part 87, src/lib/two-step.ts).
+  // Emailed like the books' alerts, only to anyone with "Copy me on new
+  // alerts" (Craig's standing rule, 2026-10-28).
+  { type: 'two_step_changed', label: "Someone's two-step sign-in was set up or reset", description: "Someone set up two-step sign-in in FleetSuite with an authenticator app, so one set up by someone else who had their password is caught, or a super admin reset someone's, signing them out everywhere. The person whose two-step sign-in was reset hears too. Opens their user, where a super admin can reset it.", area: 'system', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins and anyone with "Copy me on new alerts", except whoever made the change, and the person when a super admin resets theirs.' },
   { type: 'account_closed', label: 'Account closed', description: 'Someone deleted their own FleetSuite account from Settings.', area: 'system', defaultChannels: ['in_app', 'push', 'email'], emailNow: true, audience: 'Super admins.' },
 
   // ── Messages & mentions ───────────────────────────────────────────────

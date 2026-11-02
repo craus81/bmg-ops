@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { requireBooks, requireSuperAdmin } from '@/lib/api-auth';
+import { getAccessToken, requireBooks, requireSuperAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { SWITCHES, SWITCH_ON_DATE_TEXT, isSwitchPiece, readSwitches, setSwitch } from '@/lib/books/switches';
+import { tokenLevel } from '@/lib/two-step';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,6 +17,9 @@ const service = createServiceClient();
  * GET  — every switch, whether it's on, and who changed it last; anyone who
  *        opens the books.
  * POST — { piece, on }: turn one on or off. Super admins only, and audited.
+ *        Two-step sign-in for money roles switches on only from a sign-in
+ *        that gave its own two-step code (src/lib/two-step.ts), so whoever
+ *        switches it on has set theirs up and seen it work.
  */
 export async function GET(req: NextRequest) {
   const auth = await requireBooks(req, 'read');
@@ -57,6 +61,11 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const { piece, on } = parsed.data;
   if (!isSwitchPiece(piece)) return NextResponse.json({ error: `There's no switch called ${piece}.` }, { status: 400 });
+  if (piece === 'two_step_sign_in' && on && tokenLevel(getAccessToken(req)) !== 'aal2') {
+    return NextResponse.json({
+      error: 'Set up two-step sign-in for yourself first (Settings → Two-step sign-in), then switch it on: it switches on only from a sign-in that gave its own code.',
+    }, { status: 409 });
+  }
 
   try {
     const { was } = await setSwitch(service, piece, on, auth.user.id);

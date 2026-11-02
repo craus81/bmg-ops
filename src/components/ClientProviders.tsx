@@ -17,6 +17,7 @@ import UsageTelemetry from '@/components/UsageTelemetry';
 import LastPageTracker from '@/components/LastPageTracker';
 import DuoLayoutWatcher from '@/components/DuoLayoutWatcher';
 import PaneBridge from '@/components/PaneBridge';
+import { TwoStepScreen } from '@/components/TwoStep';
 import { SplitScreenProvider, SplitPanes, useSplitScreen } from '@/components/SplitScreen';
 import { isPaneWindow } from '@/lib/split-screen';
 
@@ -78,7 +79,7 @@ function DeniedScreen({ closed = false }: { closed?: boolean }) {
 function AppShell({ children, pane }: { children: React.ReactNode; pane: boolean }) {
   const router = useRouter();
   const split = useSplitScreen();
-  const { user, loading, profile } = useAuth();
+  const { user, loading, profile, twoStep } = useAuth();
   const { activePart, appLoading } = useApp();
 
   useEffect(() => {
@@ -113,6 +114,10 @@ function AppShell({ children, pane }: { children: React.ReactNode; pane: boolean
   if (profile?.status === 'pending') return <PendingScreen />;
   if (profile?.status === 'denied') return <DeniedScreen />;
   if (profile?.deactivated) return <DeniedScreen closed />;
+
+  // Two-step sign-in (src/lib/two-step.ts): the code, or setting an
+  // authenticator app up, before anything else shows or loads.
+  if (twoStep) return <TwoStepScreen need={twoStep} />;
 
   // One side of split screen: just the page; the header and tab bar are
   // the page around it.

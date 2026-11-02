@@ -12,7 +12,10 @@ vi.mock('@supabase/supabase-js', () => ({
 }));
 vi.mock('@/lib/supabase-service', () => ({
   createServiceClient: () => ({
-    from: () => ({ select: () => ({ eq: () => ({ single: async () => ({ data: profile, error: null }) }) }) }),
+    // Two-step sign-in for money roles stays switched off here (src/lib/two-step.ts).
+    from: (table: string) => (table === 'books_switches'
+      ? { select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: { is_on: false }, error: null }) }) }) }
+      : { select: () => ({ eq: () => ({ single: async () => ({ data: profile, error: null }) }) }) }),
   }),
 }));
 

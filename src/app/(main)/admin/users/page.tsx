@@ -9,6 +9,7 @@ import { useDialog } from '@/components/DialogProvider';
 import type { Profile, AppRole } from '@/lib/types';
 import { FEATURES, OWNER_GIVEN_ROLES, ROLE_DEFAULT_FEATURES, resolveFeatures, type FeatureKey } from '@/lib/features';
 import AdminUserSettings from '@/components/AdminUserSettings';
+import { TwoStepAdmin } from '@/components/TwoStep';
 import CustomerPicker from '@/components/CustomerPicker';
 
 interface Company {
@@ -1355,6 +1356,12 @@ export default function UsersPage() {
                     )}
                   </div>
                 </div>
+              )}
+
+              {/* Super admin: someone's two-step sign-in, and Reset for a
+                  lost phone (src/lib/two-step.ts). */}
+              {isSuperAdmin && (
+                <TwoStepAdmin userId={editUser.id} userName={editUser.full_name || editUser.email || 'this user'} />
               )}
 
               {/* Super admin: view/edit this user's own settings (field ask

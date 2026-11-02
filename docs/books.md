@@ -6530,7 +6530,7 @@ $1,000 of revenue.
 
 Each piece that takes the team out of NetSuite is built switched off, one
 row each in `books_switches` (migrations 466 to 473, 478 to 480, 485 to
-488, 494, 497 to 499, 504 and 505, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
+488, 494, 497 to 499, 504, 505 and 509, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
 in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
 which whoever opens the books can read. The plan turns them on on January 1,
 2027, asking the owner once in late December, all but `customer_payments`,
@@ -6560,7 +6560,11 @@ page asks with its own words too. `money_screens` sends nothing anywhere:
 off, Home → Financials, Financial History and FleetSuite AI read NetSuite,
 as now, and on, BMG's books in FleetSuite, so the page asks with its own
 words too, as it does for `portal_books`, which does the same for what
-customers see.
+customers see. `two_step_sign_in` sends nothing anywhere either: on, everyone
+with a money role gives a code from an authenticator app when they sign in,
+and a sign-in that can't read it is refused rather than let through without
+its code; it switches on only from a sign-in that gave its own code
+("Two-step sign-in").
 
 | Piece | What it does once it's on | Where |
 | --- | --- | --- |
@@ -6585,6 +6589,7 @@ customers see.
 | `stock_counts` | Admins count a location's stock, all of it or a part, on a printed sheet or a phone, and ask for approval of what differs from NetSuite; a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as one Inventory Adjustment ("Counts") | Counts on the Inventory page |
 | `money_screens` | Home → Financials, Financial History and FleetSuite AI read BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, the lists behind them, and each month's profit and loss from the QuickBooks cutover on, without 1084's ("Money screens") | Home → Financials, Reports → Financial History, and FleetSuite AI |
 | `portal_books` | The customer portal's Billing and the billing card on a customer's dashboard list each customer's open invoices from BMG's books in FleetSuite instead of NetSuite, as of when the books last caught up with NetSuite ("The portal") | The customer portal's Billing, and the billing card on a customer's dashboard |
+| `two_step_sign_in` | Everyone with a money role (super admin, executive, finance, bookkeeper or CPA) gives a code from an authenticator app on their phone when they sign in, once each time they sign in on a device, and anyone who hasn't set one up sets it up first; until then only people who set it up themselves are asked ("Two-step sign-in") | Signing in, and Settings → Two-step sign-in |
 
 ## Posting
 
@@ -7561,7 +7566,114 @@ holds how each change reads.
 - Someone with the database owner's password can switch a trigger off, and
   that isn't written down: the history holds every change made any other
   way.
-- Two-step sign-in for the money roles (part 87).
+
+## Two-step sign-in
+
+Part 87 (migration 509, `src/lib/two-step.ts`, `/api/auth/two-step`,
+`/api/admin/two-step`) asks for a code from an authenticator app on the
+person's phone when they sign in, the NetSuite Exit Checklist's Controls: a
+password, or a magic link from someone's email, no longer opens the books
+or moves money on its own. Supabase Auth keeps each person's authenticator
+app (a TOTP factor) and checks its codes. A sign-in that has given its code
+is at `aal2` (its access token's `aal` claim) and stays there as its token
+refreshes, so a person gives a code once each time they sign in on a
+device, however they signed in: a password, a magic link or the iPhone app.
+
+**Who is asked** (`twoStepNeed`):
+
+- Anyone who has set an authenticator app up, whatever their role, with the
+  switch on or off.
+- With Books → Switches "Two-step sign-in for money roles"
+  (`two_step_sign_in`) on, everyone who holds a money role (super admin,
+  executive, finance, bookkeeper, CPA: `TWO_STEP_ROLES`), who sets one up
+  first when they haven't.
+- Nobody else.
+
+**How it's held.**
+
+- `requireAuth` (`src/lib/api-auth.ts`), which every route that takes a
+  sign-in goes through, and so `requireAdmin`, `requireSuperAdmin`,
+  `requireFeature`, `requireBooks` and the rest, refuses a sign-in that
+  still owes its code with 403 and `twoStep` (`code` or `setup`), before
+  its own role check. It reads the switch only for a money role without an
+  app whose sign-in hasn't given a code, and when it can't read it answers
+  503 ("FleetSuite couldn't check two-step sign-in just now") rather than
+  let the sign-in through, and never as signed out.
+- Two calls take a sign-in that still owes its code: the code and set-up
+  screens' own read (`GET /api/auth/two-step`), and taking a Siri key away
+  (`DELETE /api/siri/key`), which Sign Out does on the iPhone.
+- The app asks what's owed before anything shows (`AuthProvider`) and shows
+  the code or set-up screen in place of the page (`TwoStepScreen`, with
+  Sign Out). A call refused partway through a sign-in, when the switch goes
+  on or the person sets an app up on another device, brings the screen at
+  once (`apiFetch`, `TWO_STEP_EVENT`). The iPhone app takes the phone for
+  alerts and makes its Siri key only once the code is given.
+- The switch turns on only from a sign-in that gave its own code: Books →
+  Switches refuses it otherwise (409), so whoever switches it on has set
+  theirs up and seen it work. Switching it off needs nothing.
+
+**Setting one up.** Settings → Two-step sign-in (`/settings#two-step`,
+`deepLinks.twoStepSettings`), shown to the money roles, admins and anyone
+who has it set up: Set up two-step sign-in shows a QR code to scan with an
+authenticator app (the iPhone's Passwords app, Google or Microsoft
+Authenticator, 1Password), the key to type, and a link that opens the app
+on that phone, then takes the first code. The set-up screen does the same
+when the switch asks a money role first. The codes show in the app as "BMG
+FleetSuite". Move to a new phone sets up the new one; the old one goes once
+the new one's code is taken. One started and never finished goes when the
+next is started. FleetSuite's server never sees a key or a code: the page
+hands them to Supabase.
+
+**Alerts.** When someone sets one up in FleetSuite, FleetSuite writes it in
+the audit log (`two_step_set_up`, table `auth.mfa_factors`) and tells the
+super admins and anyone copied on new alerts, bell, push and email
+("Someone's two-step sign-in was set up or reset", `two_step_changed`),
+once for each app and only within an hour of its first code, so one set up
+by someone else who had the password is caught. It opens the person on
+Admin → Users, which says since when each person's is on.
+
+**A lost phone: Reset.** A super admin opens the person on Admin → Users:
+Two-step sign-in says since when it's on, and Reset takes away every app
+they set up, which signs them out everywhere. They sign in again with their
+password and set it up again, when FleetSuite asks or in Settings. Reset is
+audited (`two_step_reset`) and tells the other super admins and anyone
+copied on new alerts, and the person, whose alert opens Settings → Two-step
+sign-in. A super admin who resets their own is signed out too. If no other
+super admin can, Supabase's dashboard takes the app away: Authentication →
+Users → the person → remove their MFA factor.
+
+`src/lib/two-step.test.ts` holds who is asked and the screens' helpers;
+`src/lib/two-step-gate.test.ts` holds `requireAuth`'s gate;
+`src/lib/two-step-route.test.ts` holds the routes, the alerts, Reset and
+the switch's rule; `src/lib/api-client-two-step.test.ts` holds the screen
+coming up partway through; `src/lib/books/two-step-sql.test.ts` holds
+migration 509.
+
+### Before switching on
+
+- Everyone with a money role sets theirs up in Settings first, so nobody
+  meets the set-up screen at a bad moment. Whoever switches it on has to
+  (the switch refuses otherwise).
+- At least two super admins with it set up, so either can reset the other's.
+- Supabase's TOTP multi-factor stays on for the project (Authentication →
+  Multi-Factor; on by default).
+- The plan switches it on with the others on January 1, 2027, but nothing
+  waits on the books going live, so it can go on sooner.
+
+### What it doesn't cover
+
+- Supabase's own API, which some pages read straight from the browser with
+  the person's sign-in, still answers a sign-in that hasn't given its code:
+  what any staff login reads that way, and for finance, admins, executives
+  and super admins the QuickBooks and NetSuite mirror (`ledger_*`,
+  `is_ledger_reader()`). The books themselves (`gl_*`, `books_*`) answer
+  only FleetSuite's server, and nothing changes them that way.
+- Keys that aren't a sign-in: a phone's Siri key (the schedule only), and
+  the tokens FleetSuite's own jobs and agents use.
+- An authenticator app set up straight through Supabase's API, around
+  FleetSuite's screens, isn't announced: the screens tell FleetSuite, and
+  Supabase doesn't. Admin → Users still says since when each person's is
+  on, and Reset takes it away.
 
 ## Who can open the books
 
@@ -7601,6 +7713,9 @@ How it's held:
   (`guard_profile_privilege_columns`, migration 483), while an admin can
   still take one away. Sign-up can't ask for either.
 - The AI assistant isn't open to a login that has nothing but these roles.
+- With Two-step sign-in for money roles on, the super admins, the
+  bookkeeper and the CPA give a code from an authenticator app when they
+  sign in ("Two-step sign-in").
 
 ### What isn't done yet
 

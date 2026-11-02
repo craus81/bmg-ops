@@ -211,6 +211,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/upload-zip/route.ts': admin(),
   'src/app/api/admin/role-permissions/route.ts': superAdmin(),
   'src/app/api/admin/user-settings/route.ts': superAdmin(),
+  'src/app/api/admin/two-step/route.ts': superAdmin(),
   'src/app/api/account/delete/route.ts': authScoped('Settings → Delete my account (Apple 5.1.1(v)): any signed-in person, pending ones included, closes only their own account (user.id from the session, no id in the body); owners are refused', 'user.id'),
   'src/app/api/ai-agent/chat/route.ts': authScoped('the caller\'s role is resolved server-side and per-role capability checks decide which data sources each query may touch', 'rolesOf'),
   'src/app/api/approve/condition/[token]/route.ts': token('customer acknowledgment of the vehicle condition report via the emailed magic link; the token is the credential and expiry is enforced', '\'condition_token\''),
@@ -249,6 +250,10 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/auth/quickbooks/route.ts': admin(),
   'src/app/api/auth/quickbooks/callback/route.ts': admin(),
   'src/app/api/auth/google/route.ts': staff(),
+  'src/app/api/auth/two-step/route.ts': authScoped(
+    "two-step sign-in for the signed-in person only (src/lib/two-step.ts): GET is the code and set-up screens' own read, answered before the sign-in has given its code; POST reads that person's own authenticator apps from Supabase and needs a sign-in that gave its code",
+    'requireAuth(req, { twoStep: false })', 'listFactors({ userId: me })',
+  ),
   'src/app/api/auth/request-access/route.ts': pub('the login page Request Access form: the person has no account; it only notifies super admins and writes nothing'),
   'src/app/api/auth/signup/route.ts': pub('account creation; new profiles land status=pending and every guard rejects them until an admin approves'),
   'src/app/api/calendar/sync-event/route.ts': staff(),

@@ -39,9 +39,11 @@ const RevokeSchema = z.object({ keyId: z.string().uuid() });
  * Revoke one of the caller's own keys — the app does this on sign-out, before
  * the session ends. (If the caller has since lost Schedule this 403s, which
  * is harmless: authenticateSiriKey refuses their keys for the same reason.)
+ * A sign-in that still owes its two-step code can revoke too: Sign Out on the
+ * code screen comes here, and taking a key away gives nobody anything.
  */
 export async function DELETE(req: NextRequest) {
-  const auth = await requireFeature(req, 'schedule');
+  const auth = await requireFeature(req, 'schedule', { twoStep: false });
   if (auth.error) return auth.error;
 
   const parsed = await validateBody(req, RevokeSchema);

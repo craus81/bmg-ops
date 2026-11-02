@@ -270,6 +270,8 @@ export const deepLinks = {
   creditApplication: (appId: string) => `/admin/credit-applications?app=${appId}`,
   /** Users admin — opens the user's edit modal (e.g. a pending access request). */
   adminUser: (userId: string) => `/admin/users?user=${userId}`,
+  /** Settings, at Two-step sign-in (src/lib/two-step.ts): set an authenticator app up, or move it to a new phone. */
+  twoStepSettings: () => '/settings#two-step',
   /** Invoices hub, Invoiced tab — optionally prefilters to one invoice number. */
   invoicesSent: (invoiceNumber?: string | null) =>
     `/invoices?tab=sent${invoiceNumber ? `&invoice=${encodeURIComponent(invoiceNumber)}` : ''}`,

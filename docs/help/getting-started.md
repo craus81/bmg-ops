@@ -19,6 +19,45 @@ new one.
 
 ---
 
+## Set up two-step sign-in
+
+FleetSuite can ask for a six-digit code from an app on your phone each
+time you sign in, so your password alone can't get anyone in. Everyone who
+works with BMG's money (super admin, executive, finance, bookkeeper, CPA)
+needs it once a super admin switches it on.
+
+1. Put an authenticator app on your phone: the iPhone's **Passwords** app,
+   **Google Authenticator**, **Microsoft Authenticator** or **1Password**.
+2. In FleetSuite, tap your avatar → **Settings** → **Two-step sign-in** →
+   **Set up two-step sign-in**.
+3. Scan the QR code with the app. On the same phone, tap **Add it to your
+   authenticator app** instead, or copy the key into the app.
+4. Type the six-digit code the app shows for **BMG FleetSuite**.
+5. Tap **Save and carry on**.
+
+From then on, each time you sign in on a device, FleetSuite asks for the
+code the app shows. The super admins hear that you set it up, so one set up
+by someone else is caught.
+
+---
+
+## Move two-step sign-in to a new phone
+
+1. **Settings** → **Two-step sign-in** → **Move to a new phone**.
+2. Scan the QR code with the authenticator app on the new phone.
+3. Type its code and tap **Save and carry on**.
+
+The old phone's codes stop working.
+
+---
+
+## I lost my phone and can't give the code
+
+Ask a super admin to reset your two-step sign-in. You're signed out
+everywhere; sign in with your password and set it up again.
+
+---
+
 ## I just signed up and my account says "Pending"
 
 An admin needs to approve you. Ping your shop's admin and ask them to

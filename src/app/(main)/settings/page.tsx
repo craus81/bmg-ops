@@ -15,6 +15,7 @@ import NotificationMatrix from '@/components/NotificationMatrix';
 import { isPushSupported, getPushPermission, getExistingSubscription, subscribeToPush, unsubscribeFromPush } from '@/lib/push-client';
 import { FALLBACK_SALES_TAX_RATE_PCT } from '@/lib/sales-tax';
 import { apiFetch } from '@/lib/api-client';
+import { TwoStepCard } from '@/components/TwoStep';
 
 /**
  * QuickBooks Online + the ledger PDF gate — the Company card's ledger row.
@@ -911,6 +912,11 @@ export default function SettingsPage() {
           </button>
         </form>
       </div>
+
+      {/* Two-step sign-in (src/lib/two-step.ts): set an authenticator app
+          up, or move it to a new phone. Shows itself only to the money roles,
+          admins, and anyone who already has it. */}
+      <TwoStepCard sectionStyle={sectionStyle} />
 
       {/* Email signature — appended to every customer email this user
           composes (estimate approvals, invoices, wrap quotes, statements,

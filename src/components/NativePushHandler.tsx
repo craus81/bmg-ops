@@ -15,11 +15,13 @@ import { useAuth } from '@/components/AuthProvider';
  */
 export default function NativePushHandler() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, twoStep } = useAuth();
   const registeredFor = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!user || registeredFor.current === user.id) return;
+    // Not while the sign-in still owes its two-step code (src/lib/two-step.ts):
+    // FleetSuite won't take this phone for alerts until it's given.
+    if (!user || twoStep || registeredFor.current === user.id) return;
     let cancelled = false;
     const listeners: { remove: () => void }[] = [];
 
@@ -79,8 +81,8 @@ export default function NativePushHandler() {
       cancelled = true;
       listeners.forEach((l) => l.remove());
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- register once per signed-in user
-  }, [user?.id]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- register once per signed-in user, once two-step sign-in is done
+  }, [user?.id, twoStep]);
 
   return null;
 }

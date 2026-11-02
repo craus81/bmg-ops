@@ -7,6 +7,8 @@ import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
 import { resolveFeatures, isAdminRole, type FeatureKey, type RoleFeatureSetting } from '@/lib/features';
 import { forgetSiriKey } from '@/lib/siri-bridge';
+import { apiFetch } from '@/lib/api-client';
+import { TWO_STEP_EVENT, holdsMoneyRole, isTwoStepNeed, type TwoStepNeed } from '@/lib/two-step';
 
 interface AuthContextType {
   user: User | null;
@@ -41,6 +43,11 @@ interface AuthContextType {
   saveNavTabs: (ids: string[] | null, which?: 'bar' | 'open') => Promise<void>;
   /** Fold a page section shut (or open) for this user, saved on their profile. */
   setSectionCollapsed: (key: string, collapsed: boolean) => void;
+  /** What this sign-in still owes for two-step sign-in (src/lib/two-step.ts),
+   *  or null. AppShell shows its screen before anything else. */
+  twoStep: TwoStepNeed | null;
+  /** Asks again what the sign-in owes, after a code is taken or an app set up. */
+  recheckTwoStep: () => Promise<void>;
 }
 
 function sameJson(a: unknown, b: unknown) {
@@ -51,7 +58,14 @@ const AuthContext = createContext<AuthContextType>({
   user: null, profile: null, isAdmin: false, isProduction: false, isGraphicsProduction: false, isSales: false, isCustomer: false, isInstaller: false, isFieldTech: false, isShopTech: false, canSeeMoney: false, hasRole: () => false, hasFeature: () => false, loading: true, signOut: async () => {},
   viewAsRole: null, setViewAsRole: () => {}, isActualAdmin: false,
   profileError: false, retryProfile: async () => {}, saveNavTabs: async () => {}, setSectionCollapsed: () => {},
+  twoStep: null, recheckTwoStep: async () => {},
 });
+
+/** A profile row's roles, the legacy production role read as graphics production. */
+function rolesOfRow(row: { role?: string | null; roles?: string[] | null } | null | undefined): string[] {
+  const raw = row?.roles?.length ? row.roles : (row?.role ? [row.role] : []);
+  return raw.map((r) => (r === 'production' ? 'graphics_production' : r));
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -62,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /** The profile read failed — roles are UNKNOWN, not absent. */
   const [profileError, setProfileError] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [twoStep, setTwoStep] = useState<TwoStepNeed | null>(null);
   const mountedRef = useRef(true);
   // True once init() has finished its awaited profile load (or failed).
   // Until then, ONLY init() may flip `loading` false — see the auth-state
@@ -115,7 +130,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(p => sameJson(p, profileRes.data) ? p : profileRes.data);
     setFeatureOverrides(o => sameJson(o, overridesRes.data || []) ? o : (overridesRes.data || []));
     setRoleSettings(r => sameJson(r, roleSettingsRes.data || []) ? r : (roleSettingsRes.data || []));
+    return profileRes.data as Profile | null;
   };
+
+  /**
+   * What this sign-in still owes for two-step sign-in (src/lib/two-step.ts).
+   * The session says whether it gave its code and whether the person has an
+   * authenticator app; only a money role without one asks FleetSuite whether
+   * the switch is on. When that can't be told, the app opens, and the first
+   * call FleetSuite refuses for it brings the screen (TWO_STEP_EVENT).
+   * Never called inside onAuthStateChange: it needs supabase-js's auth lock.
+   */
+  const twoStepOf = async (row: Profile | null | undefined): Promise<TwoStepNeed | null> => {
+    try {
+      const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+      if (data?.currentLevel === 'aal2') return null;
+      if (data?.nextLevel === 'aal2') return 'code';
+      if (!holdsMoneyRole(rolesOfRow(row))) return null;
+      const res = await apiFetch('/api/auth/two-step');
+      const json = await res.json().catch(() => ({}));
+      return res.ok && isTwoStepNeed(json?.need) ? json.need : null;
+    } catch {
+      return null;
+    }
+  };
+  const profileRef = useRef<Profile | null>(null);
+  profileRef.current = profile;
+  const recheckTwoStep = async () => {
+    const need = await twoStepOf(profileRef.current);
+    if (mountedRef.current) setTwoStep(need);
+  };
+
+  // A call FleetSuite refused for two-step sign-in (apiFetch raises it): the
+  // switch went on, or the person set an app up elsewhere, mid-sign-in.
+  useEffect(() => {
+    const onRefused = (e: Event) => {
+      const need = (e as CustomEvent).detail;
+      if (isTwoStepNeed(need)) setTwoStep(need);
+    };
+    window.addEventListener(TWO_STEP_EVENT, onRefused);
+    return () => window.removeEventListener(TWO_STEP_EVENT, onRefused);
+  }, []);
 
   /**
    * Retry the profile read — the banner's button, the backoff timer, and
@@ -127,7 +182,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const retryProfile = async () => {
     if (!user || retryInFlight.current) return;
     retryInFlight.current = true;
-    try { await loadProfileAndOverrides(user.id); } catch { /* profileError is already set */ }
+    try {
+      const row = await loadProfileAndOverrides(user.id);
+      // init() couldn't ask what two-step sign-in is owed without the profile.
+      if (row !== undefined) {
+        const need = await twoStepOf(row);
+        if (mountedRef.current) setTwoStep(need);
+      }
+    } catch { /* profileError is already set */ }
     finally { retryInFlight.current = false; }
   };
 
@@ -204,7 +266,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // a window where pages mounted with user set but isAdmin=false,
           // so role-gated pages bounced deep links (e.g. email links to
           // /invoices?invoiceJob=…) to /home before roles arrived.
-          await loadProfileAndOverrides(u.id).catch(() => {});
+          const row = await loadProfileAndOverrides(u.id).catch(() => undefined);
+          // Before `loading` flips: nothing behind the two-step screen may
+          // show, or start its loads, first.
+          if (row !== undefined) {
+            const need = await twoStepOf(row);
+            if (mountedRef.current) setTwoStep(need);
+          }
         }
       } catch (e: any) {
         console.error('[AUTH] Init error:', e.message);
@@ -229,6 +297,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setProfile(null);
         setFeatureOverrides([]);
         setRoleSettings([]);
+        setTwoStep(null);
       } else if (event === 'SIGNED_IN') {
         // Deliberately NOT awaited: supabase-js holds an internal auth lock
         // while onAuthStateChange callbacks run, and any awaited query here
@@ -266,6 +335,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(null);
     setFeatureOverrides([]);
     setRoleSettings([]);
+    setTwoStep(null);
   };
 
   // Admin "View As" role override
@@ -310,7 +380,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authResolving = loading || profileError;
 
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile, saveNavTabs, setSectionCollapsed }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile, saveNavTabs, setSectionCollapsed, twoStep, recheckTwoStep }}>
       {profileError && (
         <div role="alert" style={{
           position: 'sticky', top: 0, zIndex: 60, padding: '9px 14px',
