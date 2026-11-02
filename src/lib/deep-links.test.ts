@@ -298,6 +298,14 @@ describe('Adjustments to approve links', () => {
   });
 });
 
+describe('Counts links', () => {
+  it('opens the counts screen, or one count on it', () => {
+    expect(deepLinks.stockCounts()).toBe('/admin/inventory/counts');
+    expect(deepLinks.stockCounts(null)).toBe('/admin/inventory/counts');
+    expect(deepLinks.stockCounts('c0000000-0000-4000-8000-000000000069')).toBe('/admin/inventory/counts?id=c0000000-0000-4000-8000-000000000069');
+  });
+});
+
 describe('Books 1099s links', () => {
   it("opens one company's year of 1099 totals", () => {
     expect(deepLinks.books1099s('BMG', 2025)).toBe('/admin/books/1099s?company=BMG&year=2025');

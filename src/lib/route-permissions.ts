@@ -442,6 +442,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/inventory/adjust/route.ts': admin("readSwitch(service, 'adjustment_approvals')"),
   // Adjustments to approve (migration 494): admins see them and withdraw their own; only a super admin who didn't ask approves, turns down or settles one.
   'src/app/api/inventory/adjust/approvals/route.ts': admin("getProfileRoles(auth.profile).includes('super_admin')"),
+  // Counts (migration 499): admins once counts are switched on; super admins only until then. Only a super admin who didn't ask approves, and only with the switch on.
+  'src/app/api/inventory/counts/route.ts': admin("switchIsOn(service, 'stock_counts')"),
   'src/app/api/inventory/refresh/route.ts': admin(),
   'src/app/api/graphics-jobs/[id]/rep-review/route.ts': staff(),
   'src/app/api/graphics-jobs/[id]/send-for-approval/route.ts': staff(),

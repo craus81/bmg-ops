@@ -219,6 +219,19 @@ part with one waiting shows it in the pop-up, and nothing else is posted
 for it until it's decided (docs/books.md, "Adjustments approved before
 they're posted").
 
+### Counting a location (Counts)
+
+**Counts** at the top of the Inventory page counts a location's stock:
+everything NetSuite has on hand there (500 items a count, the next count
+taking the rest), the items matching a search, or items picked. Print the
+sheet or type the counts on a phone, and **Save**; NetSuite's counts stay
+out of sight until a count is saved. The review shows what differs, then
+**Ask for approval**, and a super admin who didn't ask approves it as one
+NetSuite Inventory Adjustment, or turns it down saying why. An item is on
+one open count per location at a time. Switched off in Books → Switches
+until counts start in the third quarter of 2027; until then only super
+admins see it, and nothing goes to NetSuite (docs/books.md, "Counts").
+
 The **From NetSuite · Refresh** chip shows when stock last came over and
 pulls it now.
 

@@ -4615,6 +4615,127 @@ export async function createInventoryTransfer(p: InventoryTransferPayload): Prom
   }
 }
 
+// ── Counts (Books part 69) ─────────────────────────────────────────────────
+
+/**
+ * 52000 Inventory Adjustment's internal id, the account a count's adjustment
+ * posts to, as Inventory Adjust's does (src/lib/inventory-adjust.ts). Throws
+ * when NetSuite can't be asked or has no such account.
+ */
+export async function getInventoryAdjustmentAccountId(): Promise<string> {
+  const result = await suiteqlQuery(`SELECT id FROM account WHERE acctnumber = '52000' FETCH FIRST 1 ROWS ONLY`);
+  const id = result?.items?.[0]?.id?.toString() ?? '';
+  if (!/^\d+$/.test(id)) throw new Error('NetSuite has no account 52000 Inventory Adjustment');
+  return id;
+}
+
+/** What createCountAdjustment sends (src/lib/stock-counts.ts, /api/inventory/counts). */
+export interface CountAdjustmentPayload {
+  /** FleetSuite's own name for it: NetSuite never takes two records of a kind under one. */
+  externalId: string;
+  /** Left off for an account with one subsidiary. */
+  subsidiaryId: string | null;
+  accountId: string;
+  locationId: string;
+  /** 'YYYY-MM-DD'. */
+  tranDate: string;
+  memo: string;
+  /** Each item that differs, by its signed change. */
+  lines: { itemId: string; adjustQtyBy: number }[];
+}
+
+/**
+ * A count's differences as one NetSuite Inventory Adjustment at its location:
+ * POST /services/rest/record/v1/inventoryAdjustment, a line on the inventory
+ * sublist for each item that differs, adjustQtyBy its signed change, under
+ * the count's External ID so a count sent again is never posted twice.
+ * NetSuite costs units added at the item's average cost. `unsure` is set when
+ * NetSuite may have made it anyway (no answer, a server error, or no id in
+ * its answer): look for it by its External ID before trying again.
+ */
+export async function createCountAdjustment(p: CountAdjustmentPayload): Promise<{ success: boolean; adjustmentId?: string; error?: string; unsure?: boolean }> {
+  if (p.lines.length < 1) return { success: false, error: 'A count adjustment needs an item that differs' };
+  if (p.lines.some((l) => !Number.isFinite(l.adjustQtyBy) || l.adjustQtyBy === 0)) {
+    return { success: false, error: "Each item's change needs to be a number other than 0" };
+  }
+
+  const config = getConfig();
+  const baseUrl = getBaseUrl(config.accountId);
+  const url = `${baseUrl}/services/rest/record/v1/inventoryAdjustment`;
+  const { oauth, token } = createOAuth(config);
+  const authHeader = getAuthHeader(oauth, token, { url, method: 'POST' });
+
+  const body: any = {
+    externalId: p.externalId,
+    account: { id: p.accountId },
+    adjLocation: { id: p.locationId },
+    ...(p.subsidiaryId ? { subsidiary: { id: p.subsidiaryId } } : {}),
+    tranDate: p.tranDate,
+    memo: p.memo.slice(0, 999),
+    inventory: {
+      items: p.lines.map((l) => ({ item: { id: l.itemId }, location: { id: p.locationId }, adjustQtyBy: l.adjustQtyBy })),
+    },
+  };
+
+  try {
+    const response = await netsuiteFetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+        'Prefer': 'respondAsync=false',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('NetSuite count adjustment error:', text, '\nrequest body:', JSON.stringify(body));
+      let detail = text.slice(0, 600);
+      try {
+        const parsed = JSON.parse(text);
+        detail = parsed?.['o:errorDetails']?.[0]?.detail || parsed?.title || detail;
+      } catch { /* keep raw text */ }
+      // A 4xx is NetSuite refusing it; after a server error it may have made it anyway.
+      return { success: false, error: `NetSuite refused the adjustment (${response.status}): ${detail}`, ...(response.status >= 500 ? { unsure: true } : {}) };
+    }
+
+    let adjustmentId = response.headers.get('Location')?.match(/\/(\d+)$/)?.[1] || '';
+    if (!adjustmentId) {
+      try {
+        const result = await response.json();
+        adjustmentId = result.id?.toString() || '';
+      } catch {
+        // 204 No Content
+      }
+    }
+    if (!adjustmentId) return { success: false, error: "NetSuite said it made the adjustment but didn't say its id.", unsure: true };
+    return { success: true, adjustmentId };
+  } catch (e: any) {
+    return { success: false, error: `NetSuite didn't answer (${e.message}).`, unsure: true };
+  }
+}
+
+/**
+ * The inventory adjustment NetSuite has under FleetSuite's own name for a
+ * count (its External ID), or null when it has none, so a count sent again
+ * is never posted twice. Throws when NetSuite can't be asked, so the caller
+ * fails closed (as findInventoryTransfer).
+ */
+export async function findCountAdjustment(externalId: string): Promise<{ adjustmentId: string; number: string } | null> {
+  const ref = externalId.trim();
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(ref)) throw new Error(`"${ref}" isn't an external id FleetSuite makes`);
+  const result = await suiteqlQuery(`
+    SELECT id, tranid
+    FROM transaction
+    WHERE type = 'InvAdjst' AND externalid = '${ref}'
+    ORDER BY id
+    FETCH FIRST 1 ROWS ONLY
+  `);
+  const row = result?.items?.[0];
+  return row ? { adjustmentId: row.id?.toString() ?? '', number: row.tranid ?? '' } : null;
+}
+
 // ── Customer payments received in FleetSuite (Books part 54) ───────────────
 
 const textOf = (v: unknown) => (v === null || v === undefined ? '' : String(v).trim());

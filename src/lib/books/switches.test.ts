@@ -37,7 +37,7 @@ describe('switches', () => {
     expect(SWITCH_PIECES).toEqual([
       'credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes', 'bill_fixes',
       'customer_vendor_details', 'item_accounts', 'estimates_in_fleetsuite', 'fleetsuite_records', 'customer_payments',
-      'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs',
+      'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'stock_counts',
     ]);
     expect(SWITCHES.credit_memos.where).toBe('Invoicing → Invoiced → Credit on an invoice');
     expect(SWITCHES.vendor_credits.where).toBe('More → Purchasing → Vendor Credits');
@@ -122,10 +122,18 @@ describe('switches', () => {
       turnOff: "Switch off Invoice PDFs? FleetSuite stops sending its PDFs to NetSuite. The ones already attached stay on their invoices.",
       later: "Stays off on January 1: FleetSuite's invoice PDFs go to NetSuite from the second quarter of 2027, with FleetSuite's own numbers.",
     });
-    // Only receiving payments, taking deposits, bank deposits, paying vendors, approving adjustments, own numbers and
-    // invoice PDFs wait past January 1.
-    expect(SWITCH_PIECES.filter((p) => SWITCHES[p].later !== undefined))
-      .toEqual(['customer_payments', 'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs']);
+    expect(SWITCHES.stock_counts).toEqual({
+      name: 'Counts',
+      what: "Admins count a location's stock in FleetSuite, all of it or a part, on a printed sheet or a phone, and ask for approval of what differs from NetSuite; a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as one Inventory Adjustment.",
+      where: 'Counts on the Inventory page',
+      later: 'Stays off on January 1: counts start in the third quarter of 2027, tried on a partial count in September.',
+    });
+    // Only receiving payments, taking deposits, bank deposits, paying vendors, approving adjustments, own numbers,
+    // invoice PDFs and counts wait past January 1.
+    expect(SWITCH_PIECES.filter((p) => SWITCHES[p].later !== undefined)).toEqual([
+      'customer_payments', 'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs',
+      'stock_counts',
+    ]);
     // Only the pieces that are the other way round, or need a step in NetSuite first, ask in their own words.
     expect(SWITCH_PIECES.filter((p) => SWITCHES[p].turnOn !== undefined || SWITCHES[p].turnOff !== undefined))
       .toEqual(['estimates_in_fleetsuite', 'fleetsuite_records', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs']);
@@ -147,6 +155,7 @@ describe('switches', () => {
     expect(isSwitchPiece('adjustment_approvals')).toBe(true);
     expect(isSwitchPiece('own_numbers')).toBe(true);
     expect(isSwitchPiece('invoice_pdfs')).toBe(true);
+    expect(isSwitchPiece('stock_counts')).toBe(true);
     expect(isSwitchPiece('payroll')).toBe(false);
     expect(isSwitchPiece('toString')).toBe(false);
     expect(isSwitchPiece(null)).toBe(false);
@@ -172,6 +181,7 @@ describe('switches', () => {
       { piece: 'adjustment_approvals', on: false, changedBy: null, changedAt: null },
       { piece: 'own_numbers', on: false, changedBy: null, changedAt: null },
       { piece: 'invoice_pdfs', on: false, changedBy: null, changedAt: null },
+      { piece: 'stock_counts', on: false, changedBy: null, changedAt: null },
     ]);
     expect(await readSwitches(fakeService().service)).toEqual([
       { piece: 'credit_memos', on: false, changedBy: null, changedAt: null },
@@ -192,6 +202,7 @@ describe('switches', () => {
       { piece: 'adjustment_approvals', on: false, changedBy: null, changedAt: null },
       { piece: 'own_numbers', on: false, changedBy: null, changedAt: null },
       { piece: 'invoice_pdfs', on: false, changedBy: null, changedAt: null },
+      { piece: 'stock_counts', on: false, changedBy: null, changedAt: null },
     ]);
     await expect(readSwitches(fakeService({ error: 'denied' }).service)).rejects.toThrow('denied');
   });
