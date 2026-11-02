@@ -131,14 +131,18 @@ off ("Own numbers"), part 68, FleetSuite's own PDF of each of its invoices
 attached to NetSuite's invoice, built switched off ("Invoice PDFs"), part
 69, stock counted in FleetSuite on count sheets by location, its
 differences reviewed and approved as one adjustment, built switched off
-("Counts"), and part 70, the year's 1099s made as the IRS's own upload file
+("Counts"), part 70, the year's 1099s made as the IRS's own upload file
 for IRIS, its e-file portal, with tax IDs only ever on the device that
-makes it ("Filing the 1099s").
+makes it ("Filing the 1099s"), part 71, the cash flow statement on Reports
+("Reports"), and part 72, the profit and loss with a column for each month,
+quarter, year, division or location, only one division's or location's
+lines when picked ("Report builder").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
 `/admin/books/differences`, the reports at `/admin/books/reports`, an
-account line's detail at `/admin/books/reports/detail`, stock by item at
+account line's detail at `/admin/books/reports/detail`, the report builder
+at `/admin/books/reports/builder`, stock by item at
 `/admin/books/stock`, an item's moves at `/admin/books/stock/item`,
 customer and vendor balances at `/admin/books/balances`, the documents
 behind one at `/admin/books/balances/party`, the agings at
@@ -229,6 +233,8 @@ admins can open it while fixing invoices is switched off.
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
+| The report builder: the profit and loss by month, quarter, year, division or location, with filters | `migrations/500-books-report-builder.sql`, `src/lib/books/report-builder.ts`, `src/lib/books/report-builder-words.ts` (what the page and its file call things), `profitAndLossLines` in `src/lib/books/reports.ts`, `loadBuilder` and `builderAsk` in `src/lib/books/report-data.ts`, `builderWorkbook` in `src/lib/books/report-workbook.ts`, `src/app/(main)/admin/books/reports/builder/page.tsx`, `src/app/api/admin/books/reports/builder/route.ts`, `src/app/api/admin/books/reports/builder/download/route.ts` |
+| Report builder tests | `src/lib/books/report-builder.test.ts`, `src/lib/books/report-builder-sql.test.ts`, `src/lib/books/report-builder-route.test.ts`, `src/lib/books/report-builder-words.test.ts`; `profitAndLossLines`' are in `src/lib/books/reports.test.ts` |
 | Excel downloads of a report and of an account line's documents, with each side's running balance | `migrations/460-books-account-documents-download.sql`, `src/lib/books/report-workbook.ts`, `runningBalances` in `src/lib/books/report-detail.ts`, `yearClosings` in `src/lib/books/reports.ts`, `src/app/api/admin/books/reports/download/route.ts`, `src/app/api/admin/books/reports/detail/download/route.ts`, `saveFile` in `src/lib/native-files.ts`, `src/lib/use-file-download.ts` |
 | Excel download tests | `src/lib/books/report-workbook.test.ts` (each file read back cell by cell), `src/lib/books/report-download-route.test.ts`, `src/lib/use-file-download.test.ts`, `src/lib/native-files.test.ts`; the 20,000 in `src/lib/books/report-detail-sql.test.ts` |
 | Sales by location and class, with returns, discounts and transportation apart (made for the insurance premium audit) | `migrations/426-books-sales-report.sql`, `src/lib/books/sales-report.ts`, `src/app/(main)/admin/books/sales/page.tsx`, `src/app/api/admin/books/sales/route.ts`; tests `src/lib/books/sales-report.test.ts`, `src/lib/books/sales-report-sql.test.ts` |
@@ -2184,6 +2190,61 @@ the button downloads the file; in the iPhone app it opens the share sheet
 `src/lib/native-files.ts`, `src/lib/use-file-download.ts`). Safari opens
 the share sheet only straight after a tap, so when a file takes a while to
 make the button reads "Tap to save the Excel file" for one more tap.
+
+## Report builder
+
+`/admin/books/reports/builder` (`deepLinks.booksReportBuilder`, linked from
+Reports and the Books hub) lays FleetSuite's own profit and loss out with a
+column for each month, quarter, year, division or location, or one for the
+months altogether, and a Total, for any months from January 2025, only one
+division's or one location's lines when picked (the NetSuite Exit
+Checklist's "Report builder": your own reports by rows, columns, filters and
+dates, and the profit and loss by division and by location; owner decision
+2026-10-31). Ready-made ones sit on top: P&L by division, by location and
+by month, every line. It opens on the year to date by division, January of
+last month's year through last month, and keeps what's picked in its
+address. Excel (`/api/admin/books/reports/builder/download`) is the page's
+report, an amount for each column, with the page's warnings at the top:
+`BMG Profit and Loss by Division 2026-01 to 2026-09.xlsx`, with what the
+filters picked in brackets.
+
+It shows FleetSuite's side alone. Migration 500's `gl_books_split_totals`
+sums one company's journal lines on its income and expense accounts per
+account, month, division and location. Per account and month they're the
+lines `gl_books_totals` sums, so the columns come to the profit and loss on
+Reports; the page checks that for the months picked, account by account,
+and says in red when something posted between the two reads.
+
+- A line's division is its own when it has one: the invoice rule files
+  each sale line (owner rule 2026-10-06, `src/lib/division-revenue.ts`):
+  graphics for 3M Vinyl, Graphics Install Labor, Graphics Removal and items
+  starting 06, upfit for any other, freight, shipping and discounts in
+  neither; an entry or a bill can give a line one too. A cost or expense
+  line without one takes its item's by the same rule (`gl_item_division`,
+  which files an item number as `revenueBucket` does), or with no item its
+  document's: the division every sale line of the document that has one
+  shares, other income included. Anything else, an entry made in FleetSuite
+  without one among them, is Not split; one marked shared is Shared.
+- A line's location is its own key when it has one (`gl_lines.location`,
+  as `src/lib/invoice-location.ts` names locations, taken as NetSuite's id
+  for it); else the location NetSuite has on the line of the document it
+  copies, else on the document's first line that has one (by NetSuite's
+  line number); else No location. A reversal's lines take the document it reverses. Names are
+  NetSuite's, from the copy of its lists. Until the copy of NetSuite's
+  ledger has read a document, its lines have no location.
+
+`src/lib/books/report-builder.ts` lays each column out with Reports' own
+layout (`profitAndLossLines` in `reports.ts`), so they all have the same
+lines: an account shows in every column when any has something on it,
+though it may come to nothing altogether. Every month, quarter or year the
+months touch has a column, one with nothing in it too; a quarter or year
+the months cover only part of says which months it has ("Q1 2026
+(Feb–Mar)"). A division or location has a column only when the report has
+lines for it, so one with nothing in the months, or nothing the other
+filter keeps, has none; with one picked, its column alone. The filters
+offer every division and location the company's journal has in any month,
+so they stay put as the months change. Rows by customer or vendor, and
+reports saved by name, come next.
 
 ## Stock by item
 

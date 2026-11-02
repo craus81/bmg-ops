@@ -212,6 +212,8 @@ export default function BooksAccountsPage() {
             )}
             <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
             {' · '}
+            <Link href={deepLinks.booksReportBuilder()} style={{ color: 'var(--text-secondary)' }}>Report builder</Link>
+            {' · '}
             <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>
             {' · '}
             <Link href="/admin/books/lists" style={{ color: 'var(--text-secondary)' }}>NetSuite lists</Link>

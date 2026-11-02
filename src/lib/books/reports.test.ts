@@ -4,7 +4,7 @@ vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
 import {
-  lastReportMonth, lineSpan, report, reportMonths, yearClosings,
+  lastReportMonth, lineSpan, profitAndLossLines, report, reportMonths, yearClosings,
   type ReportAccount, type ReportAmount, type ReportData, type ReportKind, type ReportLine,
 } from './reports';
 import { trialBalance, type TbAmount } from './trial-balance';
@@ -165,6 +165,40 @@ describe('the profit and loss', () => {
     ]);
     expect(pl.differing).toBe(2);
     expect(pl.lines.find((l) => l.label === 'Shop supplies')).toMatchObject({ account: SHOP, number: '6900', inChart: true });
+  });
+});
+
+describe("the profit and loss for a report builder's column", () => {
+  it('is laid out from the amounts given alone, each account asked for showing and no other', () => {
+    const moved = new Map([['40', -100000], ['65', 50000], ['61', 0], ['x99', 700]]);
+    const lines = profitAndLossLines(books(), (key) => moved.get(key) ?? 0, new Set(['40', '65', '61', '90', 'x99']));
+    expect(shape(lines)).toEqual([
+      ['section', 0, 'Income', null, null],
+      ['account', 1, 'Sales', 100000, null],
+      ['total', 0, 'Total income', 100000, null],
+      ['total', 0, 'Gross profit', 100000, null],
+      ['section', 0, 'Expense', null, null],
+      ['heading', 1, 'Payroll', null, null],
+      ['account', 2, 'Wages', 0, null],
+      ['total', 1, 'Total Payroll', 0, null],
+      ['account', 1, 'Rent', 50000, null],
+      ['total', 0, 'Total expense', 50000, null],
+      ['total', 0, 'Net ordinary income', 50000, null],
+      ['section', 0, 'Other expense', null, null],
+      ['account', 1, 'Bank fees', 0, null],
+      ['total', 0, 'Total other expense', 0, null],
+      ['total', 0, 'Net other income', 0, null],
+      ['total', 0, 'Net income', 50000, null],
+      ['section', 0, 'Not in the chart of accounts yet', null, null],
+      ['account', 1, 'NetSuite account x99', 700, null],
+    ]);
+    // FleetSuite's journal and NetSuite's totals in the data don't come into it.
+    expect(lines.every((l) => !l.months)).toBe(true);
+    expect(shape(profitAndLossLines(books(), () => 0, new Set()))).toEqual([
+      ['total', 0, 'Gross profit', 0, null],
+      ['total', 0, 'Net ordinary income', 0, null],
+      ['total', 0, 'Net income', 0, null],
+    ]);
   });
 });
 

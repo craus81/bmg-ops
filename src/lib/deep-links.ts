@@ -485,6 +485,23 @@ export const deepLinks = {
    *  the books. */
   booksReport: (company: string, report: string, from: string, to: string) =>
     `/admin/books/reports?${new URLSearchParams({ company, report, from: from.slice(0, 7), to: to.slice(0, 7) })}`,
+  /** Books → Reports → Report builder: one company's profit and loss with a
+   *  column for each month, quarter, year, division or location (`by`, or
+   *  'total' for the months altogether), for the months from `from` through
+   *  `to` ('YYYY-MM' or 'YYYY-MM-01'), only one division's or location's
+   *  lines when given (src/lib/books/report-builder.ts); the page's own
+   *  defaults for what's left out. Open to whoever opens the books. */
+  booksReportBuilder: (p: { company?: string | null; by?: string | null; from?: string | null; to?: string | null; division?: string | null; location?: string | null } = {}) => {
+    const query = new URLSearchParams({
+      ...(p.company ? { company: p.company } : {}),
+      ...(p.by ? { by: p.by } : {}),
+      ...(p.from ? { from: p.from.slice(0, 7) } : {}),
+      ...(p.to ? { to: p.to.slice(0, 7) } : {}),
+      ...(p.division ? { division: p.division } : {}),
+      ...(p.location ? { location: p.location } : {}),
+    }).toString();
+    return `/admin/books/reports/builder${query ? `?${query}` : ''}`;
+  },
   /** Books → Reports → one account line's detail: the documents behind
    *  the line on `report` for the months from `from` through `to`, only
    *  those that differ from NetSuite with `differs` (docs/books.md "Report

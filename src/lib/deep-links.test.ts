@@ -331,6 +331,11 @@ describe("Books 1084's bank reconciliation links", () => {
 
 describe('Books inventory value links', () => {
   it("opens one company's stock at a month's end, BMG and last month when left out", () => {
+    expect(deepLinks.booksReportBuilder()).toBe('/admin/books/reports/builder');
+    expect(deepLinks.booksReportBuilder({ company: null, by: null, from: null, to: null, division: null, location: null })).toBe('/admin/books/reports/builder');
+    expect(deepLinks.booksReportBuilder({ company: 'BMG', by: 'location', from: '2026-01-01', to: '2026-09', division: 'graphics', location: 'own:denver' }))
+      .toBe('/admin/books/reports/builder?company=BMG&by=location&from=2026-01&to=2026-09&division=graphics&location=own%3Adenver');
+    expect(deepLinks.booksReportBuilder({ by: 'month' })).toBe('/admin/books/reports/builder?by=month');
     expect(deepLinks.booksInventoryValue()).toBe('/admin/books/inventory-value');
     expect(deepLinks.booksInventoryValue(null, null)).toBe('/admin/books/inventory-value');
     expect(deepLinks.booksInventoryValue('1084', '2026-09-01')).toBe('/admin/books/inventory-value?company=1084&month=2026-09');

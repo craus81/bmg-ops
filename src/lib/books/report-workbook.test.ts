@@ -10,8 +10,10 @@ vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok
 import { lineSpan, report, yearClosings, type ReportAccount, type ReportAmount, type ReportData, type ReportKind } from './reports';
 import { runningBalances, type DetailDocument } from './report-detail';
 import type { TbAmount } from './trial-balance';
+import type { BuilderAsk, BuiltReport } from './report-builder';
+import { BUILDER_BY } from './report-builder-words';
 import {
-  accountFileName, accountWorkbook, detailNotes, reportFileName, reportNotes, reportWorkbook, sheetName, XLSX_TYPE,
+  accountFileName, accountWorkbook, builderNotes, builderWorkbook, detailNotes, reportFileName, reportNotes, reportWorkbook, sheetName, XLSX_TYPE,
   type WorkbookFile, type WorkbookNote,
 } from './report-workbook';
 
@@ -428,6 +430,145 @@ describe("what an account line's detail warns about, in its file", () => {
     }]);
     expect(detailNotes({ ...base, lastPosting: { at: '2026-10-31T07:41:00Z', error: null, partial: true } })[0].text)
       .toBe("Still posting: the last run (October 31, 2026 at 2:41 AM Central) stopped for time, so some documents aren't in this account yet. It carries on at the next run.");
+  });
+});
+
+describe("a report from the report builder as an Excel file", () => {
+  const LOCATIONS = [{ key: '1', label: "O'Fallon" }, { key: '3', label: 'Kansas City' }, { key: 'none', label: 'No location' }];
+  const ASK: BuilderAsk = { from: '2026-01-01', to: '2026-03-01', by: 'location', division: 'upfit', location: null };
+  /** The builder's report for Upfit by location: a sale at each of two locations, shop supplies at none, and an account the chart lacks. */
+  const BUILT: BuiltReport = {
+    columns: [...LOCATIONS, { key: 'total', label: 'Total' }],
+    lines: [
+      { kind: 'section', depth: 0, label: 'Income', amounts: null },
+      { kind: 'heading', depth: 1, label: 'Sales', number: '4000', amounts: null },
+      { kind: 'account', depth: 2, label: 'Upfit labor', number: '4010', account: '6', amounts: [100000, 250000, 0, 350000] },
+      { kind: 'total', depth: 1, label: 'Total Sales', amounts: [100000, 250000, 0, 350000] },
+      { kind: 'total', depth: 0, label: 'Total income', amounts: [100000, 250000, 0, 350000] },
+      { kind: 'total', depth: 0, label: 'Gross profit', grand: true, amounts: [100000, 250000, 0, 350000] },
+      { kind: 'section', depth: 0, label: 'Expense', amounts: null },
+      { kind: 'account', depth: 1, label: 'Shop supplies', number: '6900', account: SHOP, amounts: [0, 0, 2500, 2500] },
+      { kind: 'total', depth: 0, label: 'Total expense', amounts: [0, 0, 2500, 2500] },
+      { kind: 'total', depth: 0, label: 'Net ordinary income', grand: true, amounts: [100000, 250000, -2500, 347500] },
+      { kind: 'total', depth: 0, label: 'Net income', grand: true, amounts: [100000, 250000, -2500, 347500] },
+      { kind: 'section', depth: 0, label: 'Not in the chart of accounts yet', amounts: null },
+      { kind: 'account', depth: 1, label: 'NetSuite account 77', account: '77', inChart: false, amounts: [0, 700, 0, 700] },
+    ],
+    divisions: [{ key: 'upfit', label: 'Upfit' }, { key: 'graphics', label: 'Graphics' }],
+    locations: LOCATIONS,
+    division: 'upfit',
+    location: null,
+    ties: true,
+  };
+  // A company whose short name isn't its code: the file is named by the code, as Reports' are.
+  const company = { ...COMPANY, name: 'BMG Fleet' };
+  const builderFile = (ask: BuilderAsk = ASK, built: BuiltReport = BUILT) => builderWorkbook({ company, ask, built, notes: [], now: NOW });
+
+  it("lays the report out as the builder's page does: each line's number, its name, an amount for each column", async () => {
+    const file = await builderFile();
+    expect(file.name).toBe('BMG Profit and Loss by Location (Upfit) 2026-01 to 2026-03.xlsx');
+    const ws = await read(file);
+    expect(ws.name).toBe('Profit and Loss by Location');
+    expect([1, 2, 3, 4].map((r) => cells(ws, r, 1)[0])).toEqual([
+      'Example Fleet Upfitters LLC',
+      'Profit and Loss by Location',
+      'January 1, 2026 to March 31, 2026',
+      "FleetSuite's own books laid out as NetSuite's income statement, a column for each location and a Total. Only Upfit lines.",
+    ]);
+    const head = headerRow(ws, 'Number');
+    expect(cells(ws, head, 6)).toEqual(['Number', 'Account', "O'Fallon", 'Kansas City', 'No location', 'Total']);
+    expect(body(ws, 'Number', 6)).toEqual([
+      [null, 'Income', null, null, null, null],
+      ['4000', 'Sales', null, null, null, null],
+      ['4010', 'Upfit labor', 1000, 2500, 0, 3500],
+      [null, 'Total Sales', 1000, 2500, 0, 3500],
+      [null, 'Total income', 1000, 2500, 0, 3500],
+      [null, 'Gross profit', 1000, 2500, 0, 3500],
+      [null, 'Expense', null, null, null, null],
+      ['6900', 'Shop supplies', 0, 0, 25, 25],
+      [null, 'Total expense', 0, 0, 25, 25],
+      [null, 'Net ordinary income', 1000, 2500, -25, 3475],
+      [null, 'Net income', 1000, 2500, -25, 3475],
+      [null, 'Not in the chart of accounts yet', null, null, null, null],
+      [null, 'NetSuite account 77 (not in the chart yet)', 0, 7, 0, 7],
+    ]);
+    // More than three columns print across the page.
+    expect(ws.pageSetup).toMatchObject({ orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: `${head}:${head}` });
+    expect(ws.views[0]).toMatchObject({ state: 'frozen', ySplit: head });
+  });
+
+  it('styles each line as the page does: parts and totals bold, a line over each total, two over a grand one, every column alike', async () => {
+    const ws = await read(await builderFile());
+    const head = headerRow(ws, 'Number');
+    const at = (label: string) => ws.getRow(body(ws, 'Number', 2).findIndex((r) => r[1] === label) + head + 1);
+    expect(at('Income').getCell(2).font).toMatchObject({ bold: true });
+    expect(at('Sales').getCell(2)).toMatchObject({ font: expect.objectContaining({ bold: true }), alignment: { indent: 1 } });
+    expect(at('Upfit labor').getCell(2).alignment).toEqual({ indent: 2 });
+    expect(at('Upfit labor').getCell(2).font?.bold).toBeFalsy();
+    expect(at('Total Sales').getCell(2).font).toMatchObject({ bold: true });
+    for (const c of [3, 6]) {
+      expect(at('Upfit labor').getCell(c).numFmt).toBe('_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)');
+      expect(at('Total Sales').getCell(c).border).toEqual({ top: { style: 'thin' } });
+      expect(at('Net income').getCell(c).border).toEqual({ top: { style: 'double' } });
+      expect(ws.getRow(head).getCell(c).alignment).toMatchObject({ horizontal: 'right' });
+      expect(ws.getColumn(c).width).toBe(15);
+    }
+    expect(at('Total Sales').getCell(2).border ?? {}).toEqual({});
+    expect(at('Upfit labor').getCell(3).border ?? {}).toEqual({});
+    expect(ws.getRow(head).getCell(2).alignment).toMatchObject({ horizontal: 'left' });
+  });
+
+  it('is named for what it has a column for, says which, and has a Total only beside others', async () => {
+    const titles: Record<string, [string, string]> = {
+      total: ['Profit and Loss', ''],
+      month: ['Profit and Loss by Month', ', a column for each month and a Total'],
+      quarter: ['Profit and Loss by Quarter', ', a column for each quarter and a Total'],
+      year: ['Profit and Loss by Year', ', a column for each year and a Total'],
+      division: ['Profit and Loss by Division', ', a column for each division and a Total'],
+      location: ['Profit and Loss by Location', ', a column for each location and a Total'],
+    };
+    for (const by of BUILDER_BY) {
+      const columns = by === 'total' ? [{ key: 'total', label: 'Total' }] : BUILT.columns;
+      const file = await builderFile({ ...ASK, by, division: null }, { ...BUILT, columns, lines: [], division: null });
+      const [title, about] = titles[by];
+      expect(file.name).toBe(`BMG ${title} 2026-01 to 2026-03.xlsx`);
+      const ws = await read(file);
+      expect([ws.name, cells(ws, 2, 1)[0], cells(ws, 4, 1)[0]]).toEqual([title, title, `FleetSuite's own books laid out as NetSuite's income statement${about}.`]);
+      expect(ws.pageSetup.orientation).toBe(by === 'total' ? 'portrait' : 'landscape');
+    }
+    // Three columns fit upright.
+    const three = await read(await builderFile(ASK, { ...BUILT, columns: BUILT.columns.slice(1), lines: [] }));
+    expect(three.pageSetup.orientation).toBe('portrait');
+  });
+});
+
+describe("what the report builder warns about, in its file", () => {
+  const base = {
+    companyName: 'BMG', posts: true, copied: true, ties: true,
+    lastPosting: { at: '2026-10-31T07:41:00Z', error: null, partial: false }, lastCopy: { at: '2026-10-31T06:29:00Z', error: null },
+  };
+
+  it("says nothing when the split comes to Reports' profit and loss, the last run posted everything and NetSuite's ledger has been read", () => {
+    expect(builderNotes(base)).toEqual([]);
+  });
+
+  it("says when the split doesn't come to it, a company posts nothing, nothing has posted, a run stopped, or the ledger is unread", () => {
+    expect(builderNotes({ ...base, ties: false })).toEqual([{
+      tone: 'red',
+      text: "Something posted to FleetSuite's books while this was read, so its columns may not come to the profit and loss on Reports. Download it again.",
+    }]);
+    expect(builderNotes({ ...base, companyName: 'Example New Co', posts: false, lastPosting: null })).toEqual([
+      { tone: 'amber', text: "Example New Co doesn't post to FleetSuite's books yet, so nothing is in this report." },
+    ]);
+    expect(builderNotes({ ...base, lastPosting: null })).toEqual([{ tone: 'amber', text: "Nothing has posted to FleetSuite's books yet." }]);
+    expect(builderNotes({ ...base, lastPosting: { at: '2026-10-31T07:41:00Z', error: null, partial: true } })).toEqual([{
+      tone: 'amber',
+      text: "Still posting: the last run (October 31, 2026 at 2:41 AM Central) stopped for time, so some documents aren't in this report yet. It carries on at the next run.",
+    }]);
+    expect(builderNotes({ ...base, copied: false, lastCopy: { at: '2026-10-31T06:29:00Z', error: 'Login failed' } })).toEqual([
+      { tone: 'amber', text: "NetSuite's ledger hasn't been copied yet, so lines from its documents have no location." },
+      { tone: 'red', text: "The last copy of NetSuite's ledger failed (October 31, 2026 at 1:29 AM Central): Login failed" },
+    ]);
   });
 });
 
