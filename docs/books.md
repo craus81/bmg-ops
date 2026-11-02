@@ -143,7 +143,11 @@ earnings once all its months are, its months held closed until it's
 reopened ("Year end"), part 75, the year's reports for the CPA as one
 Excel file ("The year-end package"), part 76, the year's general ledger
 in it, part 77, each customer's and vendor's balance at December 31 in it,
-and part 78, each bank account's reconciliation at December 31 in it.
+part 78, each bank account's reconciliation at December 31 in it, and part
+79, the CPA's yearly entries: a check before the year closes that the
+CPA's depreciation and loan interest are made, and the fixed assets and
+loans and the CPA's adjustments in the package ("The CPA's yearly
+entries").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -307,7 +311,7 @@ admins can open it while fixing invoices is switched off.
 | Sales tax: what goes on Missouri's return for a month, location by location, each location's dated rates, and the return as filed held against it | `migrations/496-books-sales-tax.sql`, `src/lib/books/sales-tax-worksheet.ts`, `src/lib/books/sales-tax-data.ts`, `src/lib/books/sales-tax-words.ts`, `salesTaxWorkbook` in `src/lib/books/report-workbook.ts`, `src/app/(main)/admin/books/sales-tax/page.tsx`, `src/app/api/admin/books/sales-tax/route.ts` and its `download`; tests `src/lib/books/sales-tax-worksheet.test.ts`, `src/lib/books/sales-tax-route.test.ts`, `src/lib/books/sales-tax-sql.test.ts` |
 | Own numbers: FleetSuite's number on each sales order, PO, invoice and credit memo it makes in NetSuite, what became of each, and the sales orders and POs made in NetSuite instead | `migrations/497-books-own-numbers.sql`, `src/lib/books/own-numbers.ts`, `ownNumberFor` in `createSalesOrder`, `createPurchaseOrder`, `createDirectInvoice`, `createInvoiceFromSO` and `createCreditMemoFromInvoice` in `src/lib/netsuite.ts`, the drop ship PO's number in `src/app/api/estimates/[id]/drop-ship/route.ts`, `src/app/(main)/admin/books/own-numbers/page.tsx`, `src/app/api/admin/books/own-numbers/route.ts`; tests `src/lib/books/own-numbers.test.ts`, `src/lib/books/own-numbers-route.test.ts`, `src/lib/netsuite-own-numbers.test.ts`, `src/lib/drop-ship-route.test.ts`, and the tables and their functions `src/lib/books/own-numbers-sql.test.ts` |
 | Year end: each company's year closed into retained earnings once all its months are, in order, its months held closed until it's reopened, with what's done before it closes | `migrations/502-books-year-end.sql`, `src/lib/books/year-end.ts`, `src/lib/books/year-end-data.ts` (what the page and its package read), `src/lib/books/year-end-words.ts` (what both call the checks), `yearCloseAmounts` in `src/lib/books/reports.ts`, `readMonthFacts` and the closed year's months in `src/lib/books/months.ts`, `src/app/(main)/admin/books/year-end/page.tsx`, `src/app/api/admin/books/year-end/route.ts`; tests `src/lib/books/year-end.test.ts`, `src/lib/books/year-end-route.test.ts`, `src/lib/books/year-end-sql.test.ts`, the closed year's months in `src/lib/books/months.test.ts` and `src/lib/books/months-route.test.ts`, and `yearCloseAmounts`' in `src/lib/books/reports.test.ts` |
-| The year-end package: a company's year for the CPA as one Excel file | `yearEndWorkbook` in `src/lib/books/report-workbook.ts`, `loadSplit` in `src/lib/books/report-data.ts`, the general ledger in `src/lib/books/general-ledger.ts` and `readLedger` in `src/lib/books/year-end-data.ts`, each customer's and vendor's balance at December 31 from `migrations/503-books-party-balances-through.sql`, `readPartyBalances` in `src/lib/books/year-end-data.ts` and `onTrialBalance` in `src/lib/books/party-balances.ts`, each bank account's reconciliation from `readBankRec` in `src/lib/books/bank-reconciliation-data.ts`, `recYear` in `src/lib/books/bank-reconciliation.ts` and `readBankRecs` in `src/lib/books/year-end-data.ts`, `src/app/api/admin/books/year-end/download/route.ts`; tests `src/lib/books/year-end-workbook.test.ts`, `src/lib/books/general-ledger.test.ts`, `src/lib/books/party-balances-through-sql.test.ts`, `onTrialBalance`'s in `src/lib/books/party-balances.test.ts`, the download's in `src/lib/books/year-end-route.test.ts` |
+| The year-end package: a company's year for the CPA as one Excel file | `yearEndWorkbook` in `src/lib/books/report-workbook.ts`, `loadSplit` in `src/lib/books/report-data.ts`, the general ledger in `src/lib/books/general-ledger.ts` and `readLedger` in `src/lib/books/year-end-data.ts`, each customer's and vendor's balance at December 31 from `migrations/503-books-party-balances-through.sql`, `readPartyBalances` in `src/lib/books/year-end-data.ts` and `onTrialBalance` in `src/lib/books/party-balances.ts`, each bank account's reconciliation from `readBankRec` in `src/lib/books/bank-reconciliation-data.ts`, `recYear` in `src/lib/books/bank-reconciliation.ts` and `readBankRecs` in `src/lib/books/year-end-data.ts`, fixed assets and loans from `rollForward` in `src/lib/books/roll-forward.ts`, the CPA's adjustments from `readYearChecks` in `src/lib/books/year-end.ts`, `src/app/api/admin/books/year-end/download/route.ts`; tests `src/lib/books/year-end-workbook.test.ts`, `src/lib/books/roll-forward.test.ts`, `src/lib/books/general-ledger.test.ts`, `src/lib/books/party-balances-through-sql.test.ts`, `onTrialBalance`'s in `src/lib/books/party-balances.test.ts`, the download's in `src/lib/books/year-end-route.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -4079,6 +4083,11 @@ with the memo "2026 depreciation". A super admin approves it, and NetSuite
 has one journal entry of two lines whose memo is "CPA adjustment: 2026
 depreciation".
 
+The CPA books depreciation and loan interest once a year, dated in
+December, from its own schedules. Year end looks for them before the year
+closes, and the year-end package holds them with the fixed asset and loan
+accounts they tie to ("The CPA's yearly entries").
+
 ### What isn't done yet
 
 - Books' own copies aren't checked against NetSuite's journal entries,
@@ -6432,6 +6441,9 @@ where it's done:
   Months has them.
 - Journal entries: those typed in FleetSuite, dated in the year, that
   aren't made yet, the CPA's adjustments among them.
+- CPA's yearly entries: one of the CPA's adjustments dated in December of
+  the year made, the year's depreciation and loan interest ("The CPA's
+  yearly entries").
 - Bank reconciliations: each account reconciled in FleetSuite through
   December, from the month it starts ("1084's bank reconciliation").
 - Sales tax returns: for BMG, each month's Missouri return typed in on
@@ -6546,6 +6558,10 @@ each, laid out as their own downloads are ("Excel downloads"):
 - For a company with stock, its inventory value at December 31, how it
   ties to each inventory account, and the documents on them with no stocked
   item ("Inventory value at a month's end").
+- Fixed Assets and Loans (part 79): each fixed asset, other asset and long
+  term liability account, by part ("The CPA's yearly entries").
+- CPA Adjustments (part 79): the CPA's adjustments dated in the year and
+  made, line by line ("The CPA's yearly entries").
 
 What the page says about the year is at the top of every sheet but the
 list of documents, above what the sheet's own page warns about: green when
@@ -6561,6 +6577,65 @@ and is open to whoever opens the books.
 
 - How old each customer's and vendor's balance at December 31 was: the
   package has the balances, and the agings are as of today.
+
+### The CPA's yearly entries
+
+Part 79 (the NetSuite Exit Checklist's "CPA's yearly entries", no
+migration). The plan leaves the CPA booking depreciation and loan interest
+once a year, from its own depreciation and loan schedules, on its
+adjustments journal ("The CPA's adjustments journal"), dated in December.
+FleetSuite keeps no list of the assets or loans themselves: the CPA's
+schedules do, and they tie to the accounts.
+
+Year end's CPA's yearly entries check (`yearlyCheck` in
+`src/lib/books/year-end.ts`) is done once one of the company's CPA
+adjustments dated in December of the year is made in NetSuite, and Not yet
+until then, so closing the year without one takes a reason. It's Not here
+before the books are live and for a year before they went live, which the
+CPA books in NetSuite. Year end links it to Journal entries while it's Not
+yet.
+
+The year-end package has two sheets for them:
+
+- Fixed Assets and Loans: each fixed asset, other asset and long term
+  liability account, under its part of the balance sheet, as the balance
+  sheet shows it, assets as debits and liabilities as credits, so
+  accumulated depreciation reads as a negative: where it stood at January
+  1, FleetSuite's debits and credits to it in the year, where it stood at
+  December 31, NetSuite's balance then and the difference, red when it
+  isn't nothing (`rollForward` in `src/lib/books/roll-forward.ts`). Each
+  part's total is the balance sheet's at both ends. An account shows when
+  it has a balance at either end on either side or FleetSuite moved it in
+  the year; one the chart keeps on the income statement starts from
+  nothing, as the trial balance has it. A company with none of these
+  accounts has no sheet.
+- CPA Adjustments: each of the company's CPA adjustments dated in the year
+  and made, oldest first, a row for each line: its date, NetSuite's number
+  once it's read back, its memo as typed, the line's account by the chart's
+  number and name, its note and its debit or credit, with a total. With
+  none made it says so, and an amber note says how many dated in the year
+  aren't made yet (`cpaNotes` in `src/lib/books/report-workbook.ts`). The
+  adjustments are read as typed in FleetSuite (`readYearChecks`), and each
+  reaches FleetSuite's books from the copy of NetSuite's ledger, as any
+  journal entry does.
+
+Made-up example: BMG's 2027 depreciation is a CPA adjustment dated
+December 31, 2027, $9,600.00 to depreciation against accumulated
+depreciation. Once it's made, Year end's CPA's yearly entries reads Done:
+"1 CPA adjustment dated in December 2027 is made." In the package, CPA
+Adjustments lists its two lines, and on Fixed Assets and Loans accumulated
+depreciation goes from ($18,000.00) at January 1 to ($27,600.00) at
+December 31 with $9,600.00 of credits.
+
+#### What isn't done yet
+
+- Only adjustments typed in FleetSuite count: one the CPA makes straight in
+  NetSuite reaches the books from the copy of NetSuite's ledger, but isn't
+  on the CPA Adjustments sheet and doesn't make the check done.
+- A loan kept in a current liability account isn't on Fixed Assets and
+  Loans, only those in long term liability accounts.
+- No register of the assets or loans themselves, or schedules worked out
+  in FleetSuite: the CPA's schedules hold them.
 
 ## NetSuite feed
 

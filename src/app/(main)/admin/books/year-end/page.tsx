@@ -21,13 +21,13 @@ import { useFileDownload } from '@/lib/use-file-download';
  * reason if anything isn't done; its months then stay closed until the year
  * is reopened, for a reason. Years before the books went live close in
  * NetSuite and show as a rehearsal. The year-end package downloads the
- * year's reports, general ledger, customer and vendor balances and bank
- * reconciliations for the CPA as one Excel file. Open to whoever opens the
- * books.
+ * year's reports, general ledger, customer and vendor balances, bank
+ * reconciliations, fixed assets and loans and the CPA's adjustments for the
+ * CPA as one Excel file. Open to whoever opens the books.
  */
 
 type Pair = { fleetsuite: number; netsuite: number };
-type CheckKey = 'months' | 'netsuite' | 'entries' | 'bank' | 'sales_tax';
+type CheckKey = 'months' | 'netsuite' | 'entries' | 'yearly' | 'bank' | 'sales_tax';
 
 interface Check {
   key: CheckKey;
@@ -126,7 +126,7 @@ function checkHref(c: Check, company: string, year: number): string | null {
   const first = c.months?.[0];
   if (c.key === 'months') return `/admin/books/months?${new URLSearchParams({ company })}`;
   if (c.key === 'netsuite') return first ? deepLinks.booksDifferences(company, first) : null;
-  if (c.key === 'entries') return c.state === 'todo' ? deepLinks.journalEntries() : null;
+  if (c.key === 'entries' || c.key === 'yearly') return c.state === 'todo' ? deepLinks.journalEntries() : null;
   if (c.key === 'bank') return c.state === 'none' ? null : deepLinks.booksBankReconciliation();
   return c.state === 'none' ? null : deepLinks.booksSalesTax(first ?? `${year}-12-01`);
 }

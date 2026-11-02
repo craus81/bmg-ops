@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { keptLines, type KeptLine, type TypedLine } from '@/lib/typed-journal-entries';
 import { monthText } from './differences';
 import { differs, type MonthCompared, type PeriodRow, type Refusal } from './months';
 import { monthOfDate, monthsBetween } from './netsuite-gl';
@@ -17,7 +18,9 @@ import type { YearCloseAmounts } from './reports';
  * 502). Years close in order from the one the books went live in, and only
  * the latest one closed reopens, for a reason. A year before the books went
  * live closes in NetSuite, so it shows as a rehearsal with nothing to
- * close.
+ * close. The CPA books depreciation and loan interest once a year, dated
+ * in December, on its own adjustments journal (docs/books.md "The CPA's
+ * yearly entries"), so a year's checks look for those too.
  */
 
 /** FleetSuite's books start in January 2025. */
@@ -27,7 +30,7 @@ export const REASON_MAX = 500;
 
 export type CheckState = 'done' | 'todo' | 'none';
 
-export type CheckKey = 'months' | 'netsuite' | 'entries' | 'bank' | 'sales_tax';
+export type CheckKey = 'months' | 'netsuite' | 'entries' | 'yearly' | 'bank' | 'sales_tax';
 
 /** One thing done before a year closes: done, not yet, or not one for this company or year ('none'). */
 export interface YearCheck {
@@ -66,6 +69,18 @@ export interface WaitingEntry {
   status: 'draft' | 'waiting' | 'sending';
 }
 
+/** One of the CPA's adjustments dated in the year, made in NetSuite: its depreciation, loan interest and other year-end entries. */
+export interface CpaAdjustment {
+  id: string;
+  /** YYYY-MM-DD. */
+  date: string;
+  /** As typed, without the "CPA adjustment: " NetSuite's memo starts with. */
+  memo: string | null;
+  /** NetSuite's number for the journal entry, once it's read back. */
+  number: string | null;
+  lines: TypedLine[];
+}
+
 /** A bank account reconciled on Books → 1084's bank reconciliation: where it starts, and the year's months done. */
 export interface BankYear {
   account: string;
@@ -84,6 +99,8 @@ export interface YearFacts {
   periods: PeriodRow[];
   compared: ReadonlyMap<string, MonthCompared>;
   entries: WaitingEntry[];
+  /** The CPA's adjustments dated in the year that are made, oldest first. */
+  adjustments: CpaAdjustment[];
   banks: BankYear[];
   /** The year's months with Missouri's return typed in; null for a company that makes no sales. */
   returns: string[] | null;
@@ -107,6 +124,7 @@ export interface YearView {
 const yearOf = (iso: string) => Number(iso.slice(0, 4));
 const months = (n: number) => `${n} month${n === 1 ? '' : 's'}`;
 const entries = (n: number) => `${n} journal entr${n === 1 ? 'y' : 'ies'}`;
+const adjustments = (n: number) => `${n} CPA adjustment${n === 1 ? '' : 's'}`;
 const list = (items: string[]) => (items.length < 3 ? items.join(' and ') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
 const monthNames = (ms: string[]) => list(ms.map((m) => monthText(m).split(' ')[0]));
 
@@ -186,6 +204,26 @@ function entriesCheck(f: YearFacts): YearCheck {
   };
 }
 
+function yearlyCheck(f: YearFacts): YearCheck {
+  const live = liveYear(f.liveFrom);
+  if (live === null) {
+    return { key: 'yearly', state: 'none', detail: `${f.name}'s books aren't live yet, so the CPA books ${f.year}'s depreciation and loan interest in NetSuite.` };
+  }
+  if (f.year < live) {
+    return { key: 'yearly', state: 'none', detail: `${f.year} is before ${f.name}'s books went live, so the CPA books its depreciation and loan interest in NetSuite.` };
+  }
+  const december = `${f.year}-12`;
+  const made = f.adjustments.filter((a) => a.date.slice(0, 7) === december).length;
+  if (!made) {
+    return {
+      key: 'yearly',
+      state: 'todo',
+      detail: `No CPA adjustment dated in December ${f.year} is made yet. The CPA types the year's depreciation and loan interest on CPA adjustments.`,
+    };
+  }
+  return { key: 'yearly', state: 'done', detail: `${adjustments(made)} dated in December ${f.year} ${made === 1 ? 'is' : 'are'} made.` };
+}
+
 function bankCheck(f: YearFacts): YearCheck {
   if (!f.banks.length) {
     return { key: 'bank', state: 'none', detail: `${f.name}'s bank accounts aren't reconciled in FleetSuite yet.` };
@@ -226,7 +264,7 @@ function salesTaxCheck(f: YearFacts): YearCheck {
 
 /** What's done before the year closes, in the order the page lists them. */
 export function yearChecks(f: YearFacts): YearCheck[] {
-  return [monthsCheck(f), netsuiteCheck(f), entriesCheck(f), bankCheck(f), salesTaxCheck(f)];
+  return [monthsCheck(f), netsuiteCheck(f), entriesCheck(f), yearlyCheck(f), bankCheck(f), salesTaxCheck(f)];
 }
 
 /** Why the year can't be closed now, or null when it can; a year with anything not done needs a reason. */
@@ -328,19 +366,20 @@ export async function readYears(service: SupabaseClient, companyId: string): Pro
 
 /**
  * What else a year's checks read for a company: journal entries typed in
- * FleetSuite dated in it that aren't made yet, each bank account reconciled
- * on Books → 1084's bank reconciliation with the year's months done, and,
- * for the company that makes sales, the year's months with Missouri's
- * return typed in on Books → Sales tax. `accountName` names a bank account
- * by NetSuite's id.
+ * FleetSuite dated in it that aren't made yet, the CPA's adjustments dated
+ * in it that are, each with its lines, each bank account reconciled on
+ * Books → 1084's bank reconciliation with the year's months done, and, for
+ * the company that makes sales, the year's months with Missouri's return
+ * typed in on Books → Sales tax. `accountName` names a bank account by
+ * NetSuite's id.
  */
 export async function readYearChecks(
   service: SupabaseClient,
   opts: { company: string; year: number; makesSales: boolean; accountName: (netsuiteId: string) => string },
-): Promise<Pick<YearFacts, 'entries' | 'banks' | 'returns'>> {
+): Promise<Pick<YearFacts, 'entries' | 'adjustments' | 'banks' | 'returns'>> {
   const january = `${opts.year}-01-01`;
   const december = `${opts.year}-12-01`;
-  const [typed, starts, recs, returns] = await Promise.all([
+  const [typed, made, starts, recs, returns] = await Promise.all([
     fetchAllRows<{ id: string; journal: WaitingEntry['journal']; status: WaitingEntry['status'] | 'made' }>((from, to) => service
       .from('typed_journal_entries')
       .select('id, journal, status')
@@ -348,6 +387,17 @@ export async function readYearChecks(
       .gte('tran_date', january)
       .lte('tran_date', `${opts.year}-12-31`)
       .neq('status', 'made')
+      .order('id', { ascending: true })
+      .range(from, to)),
+    fetchAllRows<{ id: string; tran_date: string; memo: string | null; netsuite_number: string | null; lines: KeptLine[] | null }>((from, to) => service
+      .from('typed_journal_entries')
+      .select('id, tran_date, memo, netsuite_number, lines')
+      .eq('company', opts.company)
+      .eq('journal', 'cpa_adjustments')
+      .eq('status', 'made')
+      .gte('tran_date', january)
+      .lte('tran_date', `${opts.year}-12-31`)
+      .order('tran_date', { ascending: true })
       .order('id', { ascending: true })
       .range(from, to)),
     service.from('bank_rec_starts').select('account, first_month').eq('company', opts.company).order('account', { ascending: true }),
@@ -365,6 +415,7 @@ export async function readYearChecks(
       : Promise.resolve({ data: null, error: null }),
   ]);
   if (typed.error) throw new Error(`Couldn't read the journal entries: ${typed.error.message}`);
+  if (made.error) throw new Error(`Couldn't read the CPA's adjustments: ${made.error.message}`);
   const error = starts.error || recs.error || returns.error;
   if (error) throw new Error(`Couldn't read what's done before the year closes: ${error.message}`);
 
@@ -375,6 +426,9 @@ export async function readYearChecks(
   return {
     // Made ones aren't read.
     entries: typed.data.map((e) => ({ journal: e.journal, status: e.status as WaitingEntry['status'] })),
+    adjustments: made.data.map((a) => ({
+      id: a.id, date: String(a.tran_date).slice(0, 10), memo: a.memo, number: a.netsuite_number, lines: keptLines(a.lines),
+    })),
     banks: ((starts.data ?? []) as Array<{ account: string; first_month: string }>).map((s) => ({
       account: s.account,
       name: opts.accountName(s.account),
