@@ -336,6 +336,13 @@ describe('Books inventory value links', () => {
     expect(deepLinks.booksReportBuilder({ company: 'BMG', by: 'location', from: '2026-01-01', to: '2026-09', division: 'graphics', location: 'own:denver' }))
       .toBe('/admin/books/reports/builder?company=BMG&by=location&from=2026-01&to=2026-09&division=graphics&location=own%3Adenver');
     expect(deepLinks.booksReportBuilder({ by: 'month' })).toBe('/admin/books/reports/builder?by=month');
+    // Lines by name, months picked, and the saved report it was opened as.
+    expect(deepLinks.booksReportBuilder({ company: '1084', rows: 'vendor', by: 'total', months: 'picked', from: '2025-02-01', to: '2025-04-01', saved: 'abc' }))
+      .toBe('/admin/books/reports/builder?company=1084&rows=vendor&by=total&months=picked&from=2025-02&to=2025-04&saved=abc');
+    // Months that move with the calendar keep moving: no from or to.
+    expect(deepLinks.booksReportBuilder({ rows: 'customer', months: 'last_quarter', from: '2026-07-01', to: '2026-09-01' }))
+      .toBe('/admin/books/reports/builder?rows=customer&months=last_quarter');
+    expect(deepLinks.booksReportBuilder({ rows: null, months: null, saved: null, from: '2026-07-01' })).toBe('/admin/books/reports/builder?from=2026-07');
     expect(deepLinks.booksInventoryValue()).toBe('/admin/books/inventory-value');
     expect(deepLinks.booksInventoryValue(null, null)).toBe('/admin/books/inventory-value');
     expect(deepLinks.booksInventoryValue('1084', '2026-09-01')).toBe('/admin/books/inventory-value?company=1084&month=2026-09');

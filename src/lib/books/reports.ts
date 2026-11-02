@@ -76,6 +76,8 @@ export interface ReportLine {
   number?: string | null;
   /** An account's key: its NetSuite id, or 'fs:<id>'. */
   account?: string;
+  /** On the report builder's lines by customer or vendor (profitAndLossByName), the name's key. */
+  party?: string;
   /** False for a NetSuite account FleetSuite's chart doesn't have yet. */
   inChart?: boolean;
   /** Retained earnings or net income on the balance sheet: a line that's no account. */
@@ -258,17 +260,25 @@ function notInChart(b: Books, value: (key: string) => Pair): ReportLine[] {
     .filter((x) => !isZero(x.amount))
     .sort((x, y) => collator.compare(x.key, y.key))
     .map((x) => ({ kind: 'account', depth: 1, label: `NetSuite account ${x.key}`, account: x.key, inChart: false, ...x.amount }));
-  return lines.length ? [{ kind: 'section', depth: 0, label: 'Not in the chart of accounts yet', fleetsuite: null, netsuite: null }, ...lines] : [];
+  return listedApart(lines);
 }
+
+/** Lines on accounts the chart doesn't have, under their own heading at the report's end. */
+const listedApart = (lines: ReportLine[]): ReportLine[] =>
+  (lines.length ? [{ kind: 'section', depth: 0, label: 'Not in the chart of accounts yet', fleetsuite: null, netsuite: null }, ...lines] : []);
 
 const counted = (lines: ReportLine[]) =>
   lines.filter((l) => l.kind === 'account' && l.fleetsuite !== l.netsuite).length;
 
-/** The profit and loss laid out as NetSuite's income statement, from what each account moved, debit positive. */
-function profitAndLossLayout(b: Books, amount: (key: string) => Pair): ReportLine[] {
-  const value = (sign: number) => (key: string) => times(sign, amount(key));
+/**
+ * The profit and loss's parts in the order NetSuite's income statement has
+ * them, each with what `block` puts in it for its account types (signed by
+ * `sign` to show income and expenses positive), its total, and the totals
+ * over them.
+ */
+function profitAndLossParts(block: (types: readonly string[], sign: number) => Block): ReportLine[] {
   const part = (label: string, types: string[], sign: number) =>
-    section(label, `Total ${label.toLowerCase()}`, 0, [accountBlock(b, types, value(sign), 1)]);
+    section(label, `Total ${label.toLowerCase()}`, 0, [block(types, sign)]);
 
   const income = part('Income', ['income'], -1);
   const cost = part('Cost of sales', ['cost_of_goods_sold'], 1);
@@ -288,8 +298,13 @@ function profitAndLossLayout(b: Books, amount: (key: string) => Pair): ReportLin
     grand('Net ordinary income', ordinary),
     ...(hasOther ? [...otherIncome.lines, ...otherExpense.lines, grand('Net other income', other)] : []),
     grand('Net income', plus(ordinary, other)),
-    ...notInChart(b, amount),
   ];
+}
+
+/** The profit and loss laid out as NetSuite's income statement, from what each account moved, debit positive. */
+function profitAndLossLayout(b: Books, amount: (key: string) => Pair): ReportLine[] {
+  const value = (sign: number) => (key: string) => times(sign, amount(key));
+  return [...profitAndLossParts((types, sign) => accountBlock(b, types, value(sign), 1)), ...notInChart(b, amount)];
 }
 
 /** The profit and loss for the months from `from` through `to`, laid out as NetSuite's income statement. */
@@ -526,6 +541,38 @@ export function profitAndLossLines(data: ReportData, amount: (key: string) => nu
   // A line shows when either side has something, so NetSuite's side carries a mark on each account that shows.
   return profitAndLossLayout({ ...b, keys: [...new Set([...b.keys, ...shows])] }, (key) => ({ fleetsuite: amount(key), netsuite: shows.has(key) ? 1 : 0 }))
     .map((l) => ({ ...l, netsuite: null }));
+}
+
+/** A customer's or vendor's amount on a line of the report builder's profit and loss by name. */
+export interface NamedAmount {
+  /** The name's key: NetSuite's id for the customer or vendor, or 'none'. */
+  key: string;
+  label: string;
+  /** What it moved, debit positive. */
+  cents: number;
+}
+
+/**
+ * The profit and loss laid out as profitAndLossLines lays it out, with a
+ * line for each customer or vendor in place of each account, for one column
+ * of the report builder's lines by name (src/lib/books/report-builder.ts):
+ * `named` gives each part's lines from the accounts of its types, in the
+ * order they show, and `apart` those on accounts the chart doesn't have,
+ * listed apart at the end, debit positive, as on Reports. The parts' totals
+ * and the totals over them are the profit and loss's. The lines have no
+ * NetSuite side.
+ */
+export function profitAndLossByName(named: (types: readonly string[], sign: number) => NamedAmount[], apart: NamedAmount[]): ReportLine[] {
+  const block = (types: readonly string[], sign: number): Block => {
+    const lines = named(types, sign).map((n): ReportLine => ({
+      kind: 'account', depth: 1, label: n.label, party: n.key, fleetsuite: sign * n.cents || 0, netsuite: 0,
+    }));
+    return { lines, total: { fleetsuite: lines.reduce((sum, l) => sum + (l.fleetsuite ?? 0), 0), netsuite: 0 } };
+  };
+  const unplaced = apart.map((n): ReportLine => ({
+    kind: 'account', depth: 1, label: n.label, party: n.key, inChart: false, fleetsuite: n.cents, netsuite: 0,
+  }));
+  return [...profitAndLossParts(block), ...listedApart(unplaced)].map((l) => ({ ...l, netsuite: null }));
 }
 
 /**

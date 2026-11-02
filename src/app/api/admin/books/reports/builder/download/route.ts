@@ -4,16 +4,16 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
 import { POSTING_COMPANIES } from '@/lib/books/invoice-posting';
 import { buildReport } from '@/lib/books/report-builder';
-import { builderAsk, loadBuilder } from '@/lib/books/report-data';
+import { loadBuilder } from '@/lib/books/report-data';
 import { builderNotes, builderWorkbook } from '@/lib/books/report-workbook';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/admin/books/reports/builder/download?company=BMG&by=division&from=2026-01&to=2026-09&division=graphics&location=3
+ * GET /api/admin/books/reports/builder/download?company=BMG&rows=customer&by=division&months=picked&from=2026-01&to=2026-09&division=graphics&location=3
  * — the report /api/admin/books/reports/builder gives for the same company,
- * columns, filters and months, as an Excel file: every line with an amount
- * for each column, and what the page warns about at the top
+ * lines, columns, filters and months, as an Excel file: every line with an
+ * amount for each column, and what the page warns about at the top
  * (src/lib/books/report-workbook.ts, docs/books.md "Report builder").
  *
  * Super admins, the bookkeeper and the CPA, as the rest of the books
@@ -23,12 +23,11 @@ export async function GET(req: NextRequest) {
   const auth = await requireBooks(req, 'read');
   if (auth.error) return auth.error;
 
-  const params = new URL(req.url).searchParams;
-  const loaded = await loadBuilder(createServiceClient(), params.get('company'));
+  const loaded = await loadBuilder(createServiceClient(), new URL(req.url).searchParams);
   if ('error' in loaded) return NextResponse.json({ error: loaded.error }, { status: 500 });
-  const ask = builderAsk(params, loaded);
+  const { ask } = loaded;
   const company = loaded.companies.find((c) => c.code === loaded.company) ?? { code: loaded.company, name: loaded.company, legal_name: null };
-  const built = buildReport(loaded.data, loaded.split, loaded.locationNames, ask);
+  const built = buildReport(loaded.data, loaded.split, loaded.locationNames, ask, loaded.parties);
 
   const file = await builderWorkbook({
     company,

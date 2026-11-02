@@ -2,8 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate, toCents } from './netsuite-gl';
 import { BOOKS_INVOICE_POSTING, type InvoicePostingResult } from './invoice-posting';
-import type { BuilderAsk, SplitAmount } from './report-builder';
-import { BUILDER_BY } from './report-builder-words';
+import type { BuilderAsk, Parties, PartyAmount, SplitAmount } from './report-builder';
+import { BUILDER_BY, BUILDER_MONTHS, BUILDER_ROWS, type BuilderBy, type BuilderMonths, type BuilderRows } from './report-builder-words';
 import type { AccountDocumentsData } from './report-detail';
 import {
   lastReportMonth, lineSpan, REPORT_KINDS,
@@ -105,48 +105,148 @@ export function reportRange(params: URLSearchParams, loaded: LoadedReports): { k
   return { kind, from, to };
 }
 
-/** What the report builder reads for one company: what Reports does, and FleetSuite's journal split by division and location. */
+/**
+ * What the report builder reads for one company: what Reports does, the
+ * report asked for, FleetSuite's journal split by division and location,
+ * and by customer or vendor too when the report has a line for each.
+ */
 export interface LoadedBuilder extends LoadedReports {
+  ask: BuilderAsk;
   /** gl_books_split_totals (migration 500). */
   split: SplitAmount[];
   /** NetSuite's location names by id, from the copy of its lists (migration 363). */
   locationNames: Map<string, string>;
+  /** gl_books_party_totals (migration 501) for the months asked for, with NetSuite's names; null for lines by account. */
+  parties: Parties | null;
 }
 
-/** One company's books for the report builder (src/app/api/admin/books/reports/builder): the one asked for, else BMG, else the first. */
-export async function loadBuilder(service: SupabaseClient, asked: string | null): Promise<LoadedBuilder | { error: string }> {
-  const loaded = await loadReports(service, asked);
+/**
+ * One company's books for the report builder (src/app/api/admin/books/reports/builder):
+ * the one asked for (company=), else BMG, else the first, and the report
+ * the request asks for (builderAsk).
+ */
+export async function loadBuilder(service: SupabaseClient, params: URLSearchParams): Promise<LoadedBuilder | { error: string }> {
+  const loaded = await loadReports(service, params.get('company'));
   if ('error' in loaded) return loaded;
-  const [split, locations] = await Promise.all([
+  const ask = builderAsk(params, loaded);
+  const [split, locations, parties] = await Promise.all([
     service.rpc('gl_books_split_totals', { p_company: loaded.company }),
     service.from('gl_netsuite_lists').select('netsuite_id, name').eq('kind', 'location'),
+    ask.rows === 'account' ? null
+      : service.rpc('gl_books_party_totals', { p_company: loaded.company, p_kind: ask.rows, p_from: ask.from, p_to: ask.to }),
   ]);
-  const error = split.error || locations.error;
+  const error = split.error || locations.error || parties?.error;
   if (error) return { error: error.message };
+  const named = (parties?.data ?? null) as { rows?: PartyAmount[]; names?: Record<string, string> } | null;
   return {
     ...loaded,
+    ask,
     split: (split.data ?? []) as SplitAmount[],
     locationNames: new Map((locations.data ?? []).map((l) => [String(l.netsuite_id), String(l.name)])),
+    parties: parties ? { rows: named?.rows ?? [], names: new Map(Object.entries(named?.names ?? {})) } : null,
   };
 }
 
 /**
- * The report a request asks the builder for (by=, from=, to=, division=,
- * location=): a column for each division by default; its end last month by
- * default, as on Reports; its start January of the end's year by default,
- * or when asked for after the end.
+ * The months that move with the calendar, as of last month (`lastMonth`, a
+ * report's default end): the year to date, last month, the last quarter or
+ * year that has ended, or the 12 months through last month, from January
+ * 2025 at the earliest. Null for months picked by hand.
+ */
+export function monthsFor(months: BuilderMonths, lastMonth: string): { from: string; to: string } | null {
+  const year = Number(lastMonth.slice(0, 4));
+  const m = Number(lastMonth.slice(5, 7));
+  // The first of the month `month` (1 for January) of `year`, a month before January being one of the year before.
+  const first = (month: number) => new Date(Date.UTC(year, month - 1, 1)).toISOString().slice(0, 10);
+  const range = (() => {
+    switch (months) {
+      case 'picked': return null;
+      case 'year_to_date': return { from: first(1), to: lastMonth };
+      case 'last_month': return { from: lastMonth, to: lastMonth };
+      case 'last_quarter': return { from: first(m - (m % 3) - 2), to: first(m - (m % 3)) };
+      case 'last_year': return m === 12 ? { from: first(1), to: lastMonth } : { from: first(-11), to: first(0) };
+      case 'last_12_months': return { from: first(m - 11), to: lastMonth };
+    }
+  })();
+  if (!range) return null;
+  if (range.to < COPY_FROM) return { from: COPY_FROM, to: COPY_FROM };
+  return { from: range.from < COPY_FROM ? COPY_FROM : range.from, to: range.to };
+}
+
+/**
+ * The report a request asks the builder for (rows=, by=, months=, from=,
+ * to=, division=, location=): a line for each account and a column for each
+ * division by default; months that move with the calendar when asked for
+ * (months=last_quarter, say), else those picked: the end last month by
+ * default, as on Reports, the start January of the end's year by default,
+ * or when asked for after the end. With no months asked for or picked, the
+ * year to date.
  */
 export function builderAsk(params: URLSearchParams, loaded: LoadedReports): BuilderAsk {
-  const to = monthParam(params.get('to'), loaded.through) ?? loaded.lastMonth;
+  const askedTo = monthParam(params.get('to'), loaded.through);
   const askedFrom = monthParam(params.get('from'), loaded.through);
+  const askedMonths = params.get('months');
+  const months = BUILDER_MONTHS.find((m) => m === askedMonths) ?? (askedTo || askedFrom ? 'picked' : 'year_to_date');
+  const to = askedTo ?? loaded.lastMonth;
   const by = params.get('by');
+  const rows = params.get('rows');
   return {
-    from: askedFrom && askedFrom <= to ? askedFrom : `${to.slice(0, 4)}-01-01`,
-    to,
+    rows: BUILDER_ROWS.find((r) => r === rows) ?? 'account',
+    months,
+    ...(monthsFor(months, loaded.lastMonth) ?? { from: askedFrom && askedFrom <= to ? askedFrom : `${to.slice(0, 4)}-01-01`, to }),
     by: BUILDER_BY.find((b) => b === by) ?? 'division',
     division: params.get('division') || null,
     location: params.get('location') || null,
   };
+}
+
+/** A report saved by name, as the builder lists it. */
+export interface SavedReport {
+  id: string;
+  name: string;
+  rows: BuilderRows;
+  by: BuilderBy;
+  division: string | null;
+  location: string | null;
+  months: BuilderMonths;
+  /** 'YYYY-MM-01', for months picked by hand; null for months that move with the calendar. */
+  from: string | null;
+  to: string | null;
+  /** Who saved it, by name. */
+  savedBy: string | null;
+  /** When it was last saved, as the books have it: what a change or a delete sends back as `seen`. */
+  updatedAt: string;
+  /** Whether this login can change or delete it: its saver's, or a super admin's. */
+  canChange: boolean;
+}
+
+const nameOrder = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
+/** One company's reports saved by name (books_saved_reports, migration 501), by name; `me` changes the ones it saved, or all of them as `owner`. */
+export async function loadSavedReports(
+  service: SupabaseClient, company: string, me: string, owner: boolean,
+): Promise<SavedReport[] | { error: string }> {
+  const { data, error } = await service.from('books_saved_reports')
+    .select('id, name, rows, columns, division, location, months, from_month, to_month, saved_by, saved_by_name, updated_at')
+    .eq('company', company)
+    .order('id', { ascending: true });
+  if (error) return { error: error.message };
+  return (data ?? [])
+    .map((r) => ({
+      id: r.id as string,
+      name: r.name as string,
+      rows: r.rows as BuilderRows,
+      by: r.columns as BuilderBy,
+      division: (r.division as string | null) ?? null,
+      location: (r.location as string | null) ?? null,
+      months: r.months as BuilderMonths,
+      from: (r.from_month as string | null) ?? null,
+      to: (r.to_month as string | null) ?? null,
+      savedBy: (r.saved_by_name as string | null) ?? null,
+      updatedAt: r.updated_at as string,
+      canChange: owner || r.saved_by === me,
+    }))
+    .sort((x, y) => nameOrder.compare(x.name, y.name));
 }
 
 /** One account line's detail, as its page and its Excel download read it. */

@@ -486,19 +486,30 @@ export const deepLinks = {
   booksReport: (company: string, report: string, from: string, to: string) =>
     `/admin/books/reports?${new URLSearchParams({ company, report, from: from.slice(0, 7), to: to.slice(0, 7) })}`,
   /** Books → Reports → Report builder: one company's profit and loss with a
-   *  column for each month, quarter, year, division or location (`by`, or
-   *  'total' for the months altogether), for the months from `from` through
-   *  `to` ('YYYY-MM' or 'YYYY-MM-01'), only one division's or location's
-   *  lines when given (src/lib/books/report-builder.ts); the page's own
-   *  defaults for what's left out. Open to whoever opens the books. */
-  booksReportBuilder: (p: { company?: string | null; by?: string | null; from?: string | null; to?: string | null; division?: string | null; location?: string | null } = {}) => {
+   *  line for each account, customer or vendor (`rows`), a column for each
+   *  month, quarter, year, division or location (`by`, or 'total' for the
+   *  months altogether), for months that move with the calendar (`months`,
+   *  'last_quarter' say, and no `from` or `to`, so the link keeps moving) or
+   *  the months from `from` through `to` ('YYYY-MM' or 'YYYY-MM-01'), only
+   *  one division's or location's lines when given, and the report saved by
+   *  name it was opened as (`saved`, its id; src/lib/books/report-builder.ts);
+   *  the page's own defaults for what's left out. Open to whoever opens the
+   *  books. */
+  booksReportBuilder: (p: {
+    company?: string | null; rows?: string | null; by?: string | null; months?: string | null; from?: string | null; to?: string | null;
+    division?: string | null; location?: string | null; saved?: string | null;
+  } = {}) => {
+    const moving = !!p.months && p.months !== 'picked';
     const query = new URLSearchParams({
       ...(p.company ? { company: p.company } : {}),
+      ...(p.rows ? { rows: p.rows } : {}),
       ...(p.by ? { by: p.by } : {}),
-      ...(p.from ? { from: p.from.slice(0, 7) } : {}),
-      ...(p.to ? { to: p.to.slice(0, 7) } : {}),
+      ...(p.months ? { months: p.months } : {}),
+      ...(p.from && !moving ? { from: p.from.slice(0, 7) } : {}),
+      ...(p.to && !moving ? { to: p.to.slice(0, 7) } : {}),
       ...(p.division ? { division: p.division } : {}),
       ...(p.location ? { location: p.location } : {}),
+      ...(p.saved ? { saved: p.saved } : {}),
     }).toString();
     return `/admin/books/reports/builder${query ? `?${query}` : ''}`;
   },

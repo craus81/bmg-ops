@@ -1,7 +1,7 @@
 import ExcelJS from 'exceljs';
 import type { CompanyValue } from './inventory-value';
 import type { BuilderAsk, BuiltReport } from './report-builder';
-import { filterWords, type BuilderBy } from './report-builder-words';
+import { builderTitle, filterWords, type BuilderBy, type BuilderRows } from './report-builder-words';
 import type { DetailDocument, LedgerRow } from './report-detail';
 import { coversMonths } from './report-links';
 import type { Pair, Report, ReportKind, ReportLine } from './reports';
@@ -325,14 +325,9 @@ export async function reportWorkbook(input: ReportWorkbookInput): Promise<Workbo
 
 // ── The report builder ─────────────────────────────────────────────────────
 
-const BUILDER_NAMES: Record<BuilderBy, string> = {
-  total: 'Profit and Loss',
-  month: 'Profit and Loss by Month',
-  quarter: 'Profit and Loss by Quarter',
-  year: 'Profit and Loss by Year',
-  division: 'Profit and Loss by Division',
-  location: 'Profit and Loss by Location',
-};
+/** A report's name as NetSuite names its reports: "Profit and Loss by Customer and Month". */
+const builderName = (by: BuilderBy, rows: BuilderRows) =>
+  builderTitle(by, rows).split(' ').map((w) => (w === 'and' || w === 'by' ? w : w[0].toUpperCase() + w.slice(1))).join(' ');
 
 const BUILDER_COLUMNS: Record<BuilderBy, string> = {
   total: '',
@@ -343,7 +338,7 @@ const BUILDER_COLUMNS: Record<BuilderBy, string> = {
   location: ', a column for each location',
 };
 
-type Picked = Pick<BuiltReport, 'divisions' | 'locations' | 'division' | 'location'>;
+type Picked = Pick<BuiltReport, 'rows' | 'divisions' | 'locations' | 'division' | 'location'>;
 
 /** The division and location the filters picked, with their names. */
 const pickedOf = (built: Picked) => ({
@@ -351,19 +346,19 @@ const pickedOf = (built: Picked) => ({
   location: built.locations.find((l) => l.key === built.location) ?? null,
 });
 
-/** The report builder's file: "BMG Profit and Loss by Division 2026-01 to 2026-09.xlsx", naming what the filters picked. */
+/** The report builder's file: "BMG Profit and Loss by Customer and Division 2026-01 to 2026-09.xlsx", naming what the filters picked. */
 export function builderFileName(company: string, ask: BuilderAsk, built: Picked): string {
   const period = ask.from === ask.to ? ask.to.slice(0, 7) : `${ask.from.slice(0, 7)} to ${ask.to.slice(0, 7)}`;
   const { division, location } = pickedOf(built);
   const picked = [division?.label, location?.label].filter(Boolean);
-  return `${cleanName(`${company} ${BUILDER_NAMES[ask.by]}${picked.length ? ` (${picked.join(', ')})` : ''} ${period}`)}.xlsx`;
+  return `${cleanName(`${company} ${builderName(ask.by, built.rows)}${picked.length ? ` (${picked.join(', ')})` : ''} ${period}`)}.xlsx`;
 }
 
 /** The warnings the report builder shows above a report, as they read in its file. */
 export function builderNotes(p: {
   companyName: string;
   posts: boolean;
-  /** Whether the copy of NetSuite's ledger, where a line's location comes from, has been read. */
+  /** Whether the copy of NetSuite's ledger, where a line's location, customer and vendor come from, has been read. */
   copied: boolean;
   /** Whether the report's split of the journal comes to the profit and loss on Reports. */
   ties: boolean;
@@ -384,7 +379,9 @@ export function builderNotes(p: {
     notes.push({ tone: 'amber', text: "Nothing has posted to FleetSuite's books yet." });
   }
   notes.push(...postingNotes(p.lastPosting, 'this report'));
-  if (!p.copied) notes.push({ tone: 'amber', text: "NetSuite's ledger hasn't been copied yet, so lines from its documents have no location." });
+  if (!p.copied) {
+    notes.push({ tone: 'amber', text: "NetSuite's ledger hasn't been copied yet, so lines from its documents have no location, customer or vendor." });
+  }
   if (p.lastCopy?.error) {
     notes.push({ tone: 'red', text: `The last copy of NetSuite's ledger failed (${centralTime(p.lastCopy.at)}): ${p.lastCopy.error}` });
   }
@@ -399,40 +396,49 @@ export interface BuilderWorkbookInput {
   now: Date;
 }
 
-/** A report from the report builder as its page shows it: every line, the account's number and its name indented, then an amount for each column. */
+/**
+ * A report from the report builder as its page shows it: every line, the
+ * account's number and its name indented (or the customer's or vendor's
+ * name, with no number), then an amount for each column.
+ */
 export async function builderWorkbook(input: BuilderWorkbookInput): Promise<WorkbookFile> {
   const { ask, built } = input;
-  const last = 2 + built.columns.length;
+  const byName = built.rows !== 'account';
+  // Lines by name have no number column: the name is the first.
+  const label = byName ? 1 : 2;
+  const last = label + built.columns.length;
+  const name = builderName(ask.by, built.rows);
   const wb = newWorkbook(input.now);
-  const sheet = wb.addWorksheet(sheetName(BUILDER_NAMES[ask.by]), {
+  // A sheet's name is 31 characters at most: "P&L by Customer and Month" for a longer one.
+  const sheet = wb.addWorksheet(sheetName(name.length > 31 ? name.replace('Profit and Loss', 'P&L') : name), {
     pageSetup: { orientation: built.columns.length > 3 ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
-  sheet.getColumn(1).width = 10;
-  sheet.getColumn(2).width = 44;
-  amountColumns(sheet, 3, last, 15);
+  if (!byName) sheet.getColumn(1).width = 10;
+  sheet.getColumn(label).width = 44;
+  amountColumns(sheet, label + 1, last, 15);
 
   const { division, location } = pickedOf(built);
   const filters = filterWords(division, location);
   titleRows(sheet, {
     company: input.company,
-    title: BUILDER_NAMES[ask.by],
+    title: name,
     period: `${monthStart(ask.from)} to ${monthEnd(ask.to)}`,
-    about: `FleetSuite's own books laid out as NetSuite's income statement${BUILDER_COLUMNS[ask.by]}${built.columns.length > 1 ? ' and a Total' : ''}.`
-      + (filters ? ` ${filters}` : ''),
+    about: `FleetSuite's own books laid out as NetSuite's income statement${byName ? `, a line for each ${built.rows}` : ''}`
+      + `${BUILDER_COLUMNS[ask.by]}${built.columns.length > 1 ? ' and a Total' : ''}.${filters ? ` ${filters}` : ''}`,
     notes: input.notes,
     now: input.now,
-    header: ['Number', 'Account', ...built.columns.map((c) => c.label)],
-    amounts: [3, last],
+    header: [...(byName ? [] : ['Number']), byName ? (built.rows === 'customer' ? 'Customer' : 'Vendor') : 'Account', ...built.columns.map((c) => c.label)],
+    amounts: [label + 1, last],
   });
 
   for (const l of built.lines) {
     const amounts = l.amounts ? l.amounts.map(dollars) : built.columns.map(() => null);
-    const row = sheet.addRow([l.number ?? null, lineLabel(l), ...amounts]);
+    const row = sheet.addRow([...(byName ? [] : [l.number ?? null]), lineLabel(l), ...amounts]);
     const font: Partial<ExcelJS.Font> = { bold: l.kind !== 'account' };
     row.eachCell({ includeEmpty: true }, (c) => { c.font = font; });
-    row.getCell(2).alignment = { indent: l.depth };
+    row.getCell(label).alignment = { indent: l.depth };
     if (l.kind === 'total') {
-      for (let c = 3; c <= last; c += 1) row.getCell(c).border = { top: { style: l.grand ? 'double' : 'thin' } };
+      for (let c = label + 1; c <= last; c += 1) row.getCell(c).border = { top: { style: l.grand ? 'double' : 'thin' } };
     }
   }
 

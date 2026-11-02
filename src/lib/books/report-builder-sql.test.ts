@@ -1,6 +1,7 @@
 // Migration 500 sums FleetSuite's journal per account, month, division and
-// location for the report builder. This runs migrations 359–362, 396 and
-// 500 in an in-memory Postgres (PGlite) as the app's server login, posts
+// location for the report builder. This runs migrations 359–363, 396, 500
+// and 501 (which sums its lines through gl_books_split_lines) in an
+// in-memory Postgres (PGlite) as the app's server login, posts
 // made-up invoices, their cost, bills and typed entries with NetSuite's
 // copy of the documents behind them, a reversal in a later month among
 // them, and holds what gl_books_split_totals returns: each line's division
@@ -41,10 +42,13 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
+    -- What migration 501's saved reports point at in the app's own schema.
+    CREATE TABLE public.profiles (id UUID PRIMARY KEY);
   `);
   for (const file of [
     '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
-    '362-books-netsuite-gl-store-totals-where.sql', '396-books-reports.sql', '500-books-report-builder.sql',
+    '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '396-books-reports.sql',
+    '500-books-report-builder.sql', '501-books-saved-reports.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);

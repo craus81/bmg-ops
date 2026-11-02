@@ -2195,18 +2195,26 @@ make the button reads "Tap to save the Excel file" for one more tap.
 
 `/admin/books/reports/builder` (`deepLinks.booksReportBuilder`, linked from
 Reports and the Books hub) lays FleetSuite's own profit and loss out with a
+line for each account, as on Reports, or for each customer or vendor, a
 column for each month, quarter, year, division or location, or one for the
 months altogether, and a Total, for any months from January 2025, only one
 division's or one location's lines when picked (the NetSuite Exit
 Checklist's "Report builder": your own reports by rows, columns, filters and
 dates, and the profit and loss by division and by location; owner decision
 2026-10-31). Ready-made ones sit on top: P&L by division, by location and
-by month, every line. It opens on the year to date by division, January of
-last month's year through last month, and keeps what's picked in its
-address. Excel (`/api/admin/books/reports/builder/download`) is the page's
+by month, a line for each account, and P&L by customer and by vendor. The
+months are picked by hand, or move with the calendar: the year to date,
+last month, last quarter, last year or the last 12 months, each worked out
+from last month (the newest month NetSuite may already have closed, as on
+Reports), so last quarter is the last one that has ended. It opens on the
+year to date by division, January of last month's year through last month,
+and keeps what's picked in its address; months that move keep moving in a
+link. Excel (`/api/admin/books/reports/builder/download`) is the page's
 report, an amount for each column, with the page's warnings at the top:
 `BMG Profit and Loss by Division 2026-01 to 2026-09.xlsx`, with what the
-filters picked in brackets.
+filters picked in brackets, or `BMG Profit and Loss by Customer and Month
+2026-01 to 2026-09.xlsx`, a customer's or vendor's name in the first
+column and no number column.
 
 It shows FleetSuite's side alone. Migration 500's `gl_books_split_totals`
 sums one company's journal lines on its income and expense accounts per
@@ -2232,6 +2240,18 @@ and says in red when something posted between the two reads.
   line number); else No location. A reversal's lines take the document it reverses. Names are
   NetSuite's, from the copy of its lists. Until the copy of NetSuite's
   ledger has read a document, its lines have no location.
+- A line's customer or vendor (migration 501's `gl_books_party_totals`,
+  for the months asked for) is the one NetSuite names on the line of the
+  document it copies, when it's on NetSuite's list of customers or of
+  vendors; else the one the document's lines name, when they name only
+  one; else No customer or No vendor. So an invoice's sales and its cost
+  are its customer's, a bill's expenses its vendor's, and a journal entry's
+  lines each the name NetSuite gives that line. An employee or other name
+  is on neither list, and an entry made in FleetSuite, with no NetSuite
+  document, names none. A reversal's lines take the document it reverses.
+  `gl_books_split_lines` is the one list of lines both functions sum, so
+  the split by name comes to the same as the split, account by account;
+  the page checks that too.
 
 `src/lib/books/report-builder.ts` lays each column out with Reports' own
 layout (`profitAndLossLines` in `reports.ts`), so they all have the same
@@ -2243,8 +2263,33 @@ the months cover only part of says which months it has ("Q1 2026
 lines for it, so one with nothing in the months, or nothing the other
 filter keeps, has none; with one picked, its column alone. The filters
 offer every division and location the company's journal has in any month,
-so they stay put as the months change. Rows by customer or vendor, and
-reports saved by name, come next.
+so they stay put as the months change.
+
+With a line for each customer or vendor, each part of the profit and loss
+(income, cost of sales, expense, other income and expense) has a line for
+each name with something in it in any column, the biggest first as the
+Total has them, then by name, No customer or No vendor last; the parts'
+totals, gross profit and net income are the same as by account. One on an
+account the chart doesn't have yet is listed apart at the end, as on
+Reports.
+
+### Saved reports
+
+Save report keeps the report shown under a name (`books_saved_reports`,
+migration 501): the company, lines, columns, filters and months, the
+months picked or the ones that move with the calendar, which stay moving.
+The company's saved reports sit under the ready-made ones for everyone
+who opens its books; tapping one opens it, and the address names it
+(`saved=`), so a link opens it too. Anyone who opens the books, the CPA
+too, saves one, since a saved report changes nothing in the books. Only
+whoever saved it, or a super admin, changes it (Save changes, which can
+rename it too) or deletes it; anyone saves a copy as a new report. A name
+is used once per company, in any case, 60 characters at most. A change or
+a delete goes only as the page last saw the report: one saved or deleted
+since, from another page, is refused, to open it again. Each save and
+delete is in the audit log. POST `/api/admin/books/reports/builder` with
+`action: 'save'` or `'remove'` does it (`books_saved_report_save`,
+`books_saved_report_remove`).
 
 ## Stock by item
 
