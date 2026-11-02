@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ENTRY_MAX_CENTS, MODIFIERS, RECORD, achFileName, achText, addendaText, bankHolidays, buildAchFile, chicagoClock, dayText, effectiveDate,
-  fileProblems, isBankDay, modifierFor, nextBankDay, originField, readAchFile, setupOf, setupProblems, type AchFileInput, type AchSetup,
-  type SetupTyped,
+  ENTRY_MAX_CENTS, MODIFIERS, RECORD, SETUP_WORDS, achFileName, achText, addendaText, bankHolidays, buildAchFile, chicagoClock, dayText,
+  effectiveDate, fileProblems, isBankDay, modifierFor, nextBankDay, originField, readAchFile, setupAlert, setupDifferences, setupOf,
+  setupProblems, type AchFileInput, type AchSetup, type SetupTyped,
 } from '@/lib/ach-file';
 
 // Made-up banks, IDs and accounts throughout.
@@ -281,6 +281,75 @@ describe('setupOf', () => {
     expect(lines[1].slice(40, 50)).toBe('ABC123    ');
     expect(lines[6].slice(44, 54)).toBe('ABC123    ');
     expect(originField('1431234567')).toBe('1431234567');
+  });
+});
+
+describe('setupDifferences', () => {
+  it("names every part of a setup in the Pay vendors page's words", () => {
+    expect(Object.keys(SETUP_WORDS).sort()).toEqual(Object.keys(SETUP).sort());
+  });
+
+  it('lists the parts that changed, in the order the page shows them', () => {
+    expect(setupDifferences(SETUP, { ...SETUP })).toEqual([]);
+    expect(setupDifferences(SETUP, { ...SETUP, lineEnding: 'lf', destination: '071200004', balanced: true }))
+      .toEqual(['destination', 'balanced', 'lineEnding']);
+  });
+});
+
+describe('setupAlert', () => {
+  const OFFSET = { routing: '081999994', last4: '2345', type: 'checking' };
+  const alert = (over: Partial<Parameters<typeof setupAlert>[0]> = {}) =>
+    setupAlert({ was: SETUP, now: SETUP, offset: null, offsetChanged: false, account: '10100 Operating Checking', who: 'Pat Admin', ...over });
+
+  it("tells about a setup made, with First Bank's routing number and BMG's account only by type, last four digits and routing", () => {
+    expect(alert({ was: null })).toEqual({
+      type: 'books_ach_setup_changed',
+      title: 'ACH setup made for 10100 Operating Checking',
+      body: "Pat Admin set up how the ACH file for First Bank from 10100 Operating Checking starts: First Bank's routing number 081999994. "
+        + "Nothing is paid with it until a payment run's file is made and uploaded.",
+    });
+    expect(alert({ was: null, now: { ...SETUP, balanced: true }, offset: OFFSET, offsetChanged: true })?.body).toBe(
+      "Pat Admin set up how the ACH file for First Bank from 10100 Operating Checking starts: First Bank's routing number 081999994, "
+        + "balanced with a debit to BMG's checking account ending 2345 (routing number 081999994). Nothing is paid with it until a "
+        + "payment run's file is made and uploaded.",
+    );
+  });
+
+  it('names each part that changed, and nothing when nothing did', () => {
+    expect(alert()).toBeNull();
+    expect(alert({ now: { ...SETUP, entryDescription: 'BMG PAY', companyId: '1999999999' } })).toEqual({
+      type: 'books_ach_setup_changed',
+      title: 'ACH setup changed for 10100 Operating Checking',
+      body: "Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: BMG's company ID for ACH and the "
+        + 'description vendors see. Books → Change history shows what each was before.',
+    });
+    expect(alert({ now: { ...SETUP, destination: '071200004' } })?.body)
+      .toBe("Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: First Bank's routing number. "
+        + 'Books → Change history shows what each was before.');
+  });
+
+  it("says BMG's account for the offsetting debit changed, and what it is now, whether or not the file was balanced before", () => {
+    const balanced = { ...SETUP, balanced: true };
+    expect(alert({ was: balanced, now: balanced, offset: { ...OFFSET, type: 'savings' }, offsetChanged: true })?.body).toBe(
+      "Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: BMG's account for the offsetting debit. "
+        + "The offsetting debit now comes from BMG's savings account ending 2345 (routing number 081999994). "
+        + 'Books → Change history shows what each was before.',
+    );
+    expect(alert({ now: balanced, offset: OFFSET, offsetChanged: true })?.body).toBe(
+      "Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: a debit to BMG's account in the file. "
+        + "The offsetting debit now comes from BMG's checking account ending 2345 (routing number 081999994). "
+        + 'Books → Change history shows what each was before.',
+    );
+    // The same account typed again changes nothing; one no longer balanced only says so.
+    expect(alert({ was: balanced, now: balanced, offset: OFFSET, offsetChanged: false })).toBeNull();
+    expect(alert({ was: balanced, now: SETUP, offset: null, offsetChanged: false })?.body)
+      .toBe("Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: a debit to BMG's account in the file. "
+        + 'Books → Change history shows what each was before.');
+    // A file no longer balanced names no account of BMG's, whatever it's handed.
+    expect(alert({ was: balanced, now: SETUP, offset: OFFSET, offsetChanged: true })?.body)
+      .toBe("Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: a debit to BMG's account in the file. "
+        + 'Books → Change history shows what each was before.');
+    expect(alert({ was: null, now: SETUP, offset: OFFSET, offsetChanged: true })?.body).not.toContain('2345');
   });
 });
 

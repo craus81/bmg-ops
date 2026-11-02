@@ -225,6 +225,8 @@ export default function BooksBackupsPage() {
           {' · '}
           <Link href="/admin/books/netsuite-feed" style={{ color: 'var(--text-secondary)' }}>NetSuite feed</Link>
           {' · '}
+          <Link href="/admin/books/change-history" style={{ color: 'var(--text-secondary)' }}>Change history</Link>
+          {' · '}
           <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
         </div>
       </div>

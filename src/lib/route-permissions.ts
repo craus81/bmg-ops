@@ -89,6 +89,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/bank-reconciliation/route.ts': books(['read', 'keep']),
   'src/app/api/admin/books/bill-payments/route.ts': books(['keep']),
   'src/app/api/admin/books/bills/route.ts': books(['keep']),
+  // The vendors' bank numbers and the ACH setups and files are super admins' only, as on Pay Vendors.
+  'src/app/api/admin/books/change-history/route.ts': books(['read'], "auth.access === 'owner'"),
   'src/app/api/admin/books/changed-in-netsuite/route.ts': books(['read', 'owner']),
   'src/app/api/admin/books/deposits/route.ts': books(['keep']),
   'src/app/api/admin/books/differences/route.ts': books(['read']),

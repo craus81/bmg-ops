@@ -29,6 +29,7 @@ import { lookAtOwnNumbers, markOwnNumbersTold, OWN_NUMBER_KINDS, type NumberAler
 import { lookAtInvoicePdfs, markInvoicePdfsTold, type PdfAlertItem } from './invoice-pdfs';
 import { lookAtBackups, type BackupAlertItem } from './backups';
 import { lookAtDrills, type DrillAlertItem } from './restore-drill';
+import { centralTime, lookAtOutsideChanges, markOutsideChangesTold, TABLES, type OutsideChanges } from './money-changes';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -132,6 +133,11 @@ import { lookAtDrills, type DrillAlertItem } from './restore-drill';
  * the night's test, the newest good backup's if it didn't pass, or that it
  * has had none.
  *
+ * And the changes made to the books outside FleetSuite (part 86,
+ * src/lib/books/money-changes.ts): straight in the database, or from a
+ * browser signed in to it, around FleetSuite's own screens and checks, told
+ * about at the first look that finds them, once.
+ *
  * In-app and push only (books_month_differs, books_stock_differs,
  * books_balance_differs, books_own_invoice_differs,
  * books_own_fulfillment_differs, books_own_bill_differs,
@@ -139,8 +145,9 @@ import { lookAtDrills, type DrillAlertItem } from './restore-drill';
  * Adjusts (books_own_adjustment_differs), the sends
  * (books_netsuite_send_unsure), what changed in NetSuite
  * (books_record_changed_in_netsuite), own numbers (books_own_number),
- * invoice PDFs (books_invoice_pdf), backups (books_backup) and their restore test
- * (books_restore_drill), which are emailed too to a super admin
+ * invoice PDFs (books_invoice_pdf), backups (books_backup), their restore test
+ * (books_restore_drill) and changes made outside FleetSuite
+ * (books_changed_outside), which are emailed too to a super admin
  * with "Copy me on new alerts" ticked (Craig, 2026-10-28). The record in
  * sync_state, 'books_daily_check', holds which months differ and how many of
  * their documents, which items' counts differ and by about how many, whose
@@ -336,11 +343,12 @@ export interface CheckAlert {
    * (books_own_receipt_differs), the Inventory Adjusts (books_own_adjustment_differs), likely mistakes
    * (books_mistake_found), sends to NetSuite FleetSuite isn't sure about (books_netsuite_send_unsure), what changed
    * in NetSuite (books_record_changed_in_netsuite), FleetSuite's own numbers (books_own_number), its invoice PDFs
-   * (books_invoice_pdf), the backups of the books (books_backup) or their restore test (books_restore_drill); one
-   * about months has none (books_month_differs).
+   * (books_invoice_pdf), the backups of the books (books_backup), their restore test (books_restore_drill) or
+   * changes made to the books outside FleetSuite (books_changed_outside); one about months has none
+   * (books_month_differs).
    */
   about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change' | 'number' | 'pdf'
-    | 'backup' | 'drill';
+    | 'backup' | 'drill' | 'outside';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -974,6 +982,40 @@ export function drillAlertsFor(item: DrillAlertItem | null): CheckAlert[] {
   }];
 }
 
+/** How changes made outside FleetSuite were made, in words: straight in the database, with what, and from a browser. */
+function outsideWays(ways: OutsideChanges['ways']): string {
+  const apps = [...new Set(ways.flatMap((w) => (w.via === 'database' && w.app ? [w.app] : [])))];
+  const words = [
+    ...(ways.some((w) => w.via === 'database') ? [`straight in the database${apps.length ? ` with ${apps.join(' or ')}` : ''}`] : []),
+    ...(ways.some((w) => w.via === 'screen') ? ['from a browser signed in to the database'] : []),
+  ];
+  return words.join(', and ');
+}
+
+/** The tables told about by name, the most changed first; the rest counted. */
+const OUTSIDE_TABLES_NAMED = 3;
+
+/**
+ * What the super admins are told about the changes made to the books outside FleetSuite since they were last told
+ * (src/lib/books/money-changes.ts): how they were made, when, and to what, opening them on Books → Change history.
+ */
+export function outsideAlertsFor(item: OutsideChanges | null): CheckAlert[] {
+  if (!item) return [];
+  const count = item.changes.toLocaleString('en-US');
+  const named = item.tables.slice(0, OUTSIDE_TABLES_NAMED).map((t) => `${TABLES[t.table]?.what ?? t.table} (${t.changes.toLocaleString('en-US')})`);
+  const rest = item.tables.length - named.length;
+  const what = rest > 0 ? `${named.join(', ')} and ${rest} more` : named.join(', ');
+  const [first, last] = [centralTime(item.firstAt), centralTime(item.lastAt)];
+  const at = first === last ? `at ${last}` : `between ${first} and ${last}`;
+  return [{
+    title: item.changes === 1 ? 'Books: a change made outside FleetSuite' : `Books: ${count} changes made outside FleetSuite`,
+    body: `Made ${outsideWays(item.ways)}, ${at}, around FleetSuite's own checks: ${what}. `
+      + 'Books → Change history shows what each one changed.',
+    url: deepLinks.booksChangeHistory('outside'),
+    about: 'outside',
+  }];
+}
+
 // ── Looking ────────────────────────────────────────────────────────────────
 
 /** Months whose documents are looked up at once. */
@@ -1525,6 +1567,17 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     errors.push(`Restore test: ${reason(err)}`);
   }
 
+  // The changes made to the books outside FleetSuite, told about at the first look that finds them, once.
+  let outside: OutsideChanges | null = null;
+  try {
+    outside = await lookAtOutsideChanges(service);
+    const said = outsideAlertsFor(outside);
+    alerts.push(...said);
+    told += said.length;
+  } catch (err) {
+    errors.push(`Change history: ${reason(err)}`);
+  }
+
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.
   if (alerts.length) await opts.tell(alerts);
   if (sends.length) {
@@ -1553,6 +1606,13 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
       await markInvoicePdfsTold(service, pdfs);
     } catch (err) {
       errors.push(`Invoice PDFs: ${reason(err)}`);
+    }
+  }
+  if (outside) {
+    try {
+      await markOutsideChangesTold(service, outside);
+    } catch (err) {
+      errors.push(`Change history: ${reason(err)}`);
     }
   }
   const result: DailyCheckResult = { look: opts.look, told, ...(errors.length ? { error: errors.join(' ') } : {}) };

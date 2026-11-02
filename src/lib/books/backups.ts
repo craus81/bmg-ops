@@ -85,7 +85,7 @@ export const BACKUP_TABLES: readonly string[] = [
   'rent_mortgage_setups', 'rent_mortgage_months', 'bank_rec_starts', 'bank_recs', 'bank_rec_ticks', 'bank_rec_events',
   'inventory_adjustment_asks', 'sales_tax_rates', 'sales_tax_returns',
   'own_number_series', 'own_numbers', 'own_number_outside_told', 'own_invoice_pdfs', 'stock_counts', 'stock_count_lines',
-  'books_saved_reports', 'gl_year_closes', 'gl_year_close_events',
+  'books_saved_reports', 'gl_year_closes', 'gl_year_close_events', 'books_money_changes',
 ];
 
 /** Tables migrations from 359 on make that aren't the books, and what they are instead. */

@@ -370,6 +370,18 @@ describe('Books backups links', () => {
   });
 });
 
+describe('Books change history links', () => {
+  it('opens every change, the ones made outside FleetSuite, or one record\'s history', () => {
+    expect(deepLinks.booksChangeHistory()).toBe('/admin/books/change-history');
+    expect(deepLinks.booksChangeHistory(null, null)).toBe('/admin/books/change-history');
+    expect(deepLinks.booksChangeHistory('outside')).toBe('/admin/books/change-history?show=outside');
+    expect(deepLinks.booksChangeHistory(null, { table: 'vendor_ach_setups', key: { bank_account_netsuite_id: '211' } }))
+      .toBe('/admin/books/change-history?table=vendor_ach_setups&key=%7B%22bank_account_netsuite_id%22%3A%22211%22%7D');
+    expect(deepLinks.booksChangeHistory('outside', { table: 'bank_recs', key: { company: '1084', account: '1000', month: '2026-01-01' } }))
+      .toBe('/admin/books/change-history?show=outside&table=bank_recs&key=%7B%22company%22%3A%221084%22%2C%22account%22%3A%221000%22%2C%22month%22%3A%222026-01-01%22%7D');
+  });
+});
+
 describe('Books sales tax links', () => {
   it("opens one month's return, last month when left out", () => {
     expect(deepLinks.booksSalesTax()).toBe('/admin/books/sales-tax');

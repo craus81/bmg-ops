@@ -19,7 +19,7 @@
  */
 
 import { formatCents } from '@/lib/pay-vendors';
-import { digitsOf, routingProblem, isAccountType, type AccountType, type BankNumbers } from '@/lib/vendor-bank';
+import { ACCOUNT_TYPES, digitsOf, routingProblem, isAccountType, type AccountType, type BankNumbers } from '@/lib/vendor-bank';
 
 export { formatCents };
 
@@ -96,6 +96,70 @@ export const originField = (origin: string) => (/^\d{9}$/.test(origin) ? ` ${ori
 
 /** A setup as it's typed on the page or read from NetSuite's file. */
 export type SetupTyped = { [K in keyof AchSetup]: AchSetup[K] extends boolean ? boolean : string };
+
+/** Each part of a setup in the page's words (src/components/PayVendorAch.tsx), for telling about a change to one. */
+export const SETUP_WORDS: Readonly<Record<keyof AchSetup, string>> = {
+  destination: "First Bank's routing number",
+  destinationName: "the bank's name in the file",
+  origin: "BMG's ACH ID with First Bank",
+  originName: "BMG's name for First Bank",
+  odfi: 'the sending bank',
+  companyName: 'the company name',
+  companyId: "BMG's company ID for ACH",
+  entryDescription: 'the description vendors see',
+  secCode: 'who the payments go to',
+  addenda: 'the bills each payment pays',
+  balanced: "a debit to BMG's account in the file",
+  lineEnding: 'how lines end',
+};
+
+/** The parts of a setup that differ from how it was, in the page's order. */
+export function setupDifferences(was: AchSetup, now: AchSetup): Array<keyof AchSetup> {
+  return (Object.keys(SETUP_WORDS) as Array<keyof AchSetup>).filter((k) => was[k] !== now[k]);
+}
+
+/** BMG's account for a balanced file's offsetting debit as an alert names it: its routing number, last four digits and type. */
+export interface OffsetNamed { routing: string; last4: string; type: string }
+
+/** "a, b and c". */
+const listed = (items: string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+
+/**
+ * What the super admins and whoever's copied on new alerts are told when a bank account's ACH setup is made or
+ * changed (Books part 86, docs/books.md "Change history"), or null when a save changed nothing: each part changed in
+ * the page's words, and BMG's own account only as its type, last four digits and routing number.
+ */
+export function setupAlert(opts: {
+  was: AchSetup | null;
+  now: AchSetup;
+  offset: OffsetNamed | null;
+  offsetChanged: boolean;
+  account: string;
+  who: string;
+}): { type: 'books_ach_setup_changed'; title: string; body: string } | null {
+  const { was, now, offset, account, who } = opts;
+  const bmg = now.balanced && offset
+    ? `BMG's ${isAccountType(offset.type) ? ACCOUNT_TYPES[offset.type].toLowerCase() : 'bank'} account ending ${offset.last4} (routing number ${offset.routing})`
+    : null;
+  if (!was) {
+    return {
+      type: 'books_ach_setup_changed',
+      title: `ACH setup made for ${account}`,
+      body: `${who} set up how the ACH file for First Bank from ${account} starts: First Bank's routing number ${now.destination}`
+        + `${bmg ? `, balanced with a debit to ${bmg}` : ''}. Nothing is paid with it until a payment run's file is made and uploaded.`,
+    };
+  }
+  const changed = setupDifferences(was, now).map((k) => SETUP_WORDS[k]);
+  const offsetNow = opts.offsetChanged && bmg ? ` The offsetting debit now comes from ${bmg}.` : '';
+  if (offsetNow && !changed.includes(SETUP_WORDS.balanced)) changed.push("BMG's account for the offsetting debit");
+  if (changed.length === 0) return null;
+  return {
+    type: 'books_ach_setup_changed',
+    title: `ACH setup changed for ${account}`,
+    body: `${who} changed how the ACH file for First Bank from ${account} starts: ${listed(changed)}.${offsetNow}`
+      + ' Books → Change history shows what each was before.',
+  };
+}
 
 /** What's wrong with a setup, in the page's words; none when the file can be made with it. */
 export function setupProblems(s: SetupTyped): string[] {

@@ -40,13 +40,14 @@ beforeEach(() => {
 });
 
 describe('the books daily check cron', () => {
-  it('tells every super admin of each alert as its kind, emailing only an Inventory Adjust, an unsure send, a change in NetSuite, own numbers, invoice PDFs, backups and their restore test (to whoever is copied)', async () => {
+  it('tells every super admin of each alert as its kind, emailing only an Inventory Adjust, an unsure send, a change in NetSuite, own numbers, invoice PDFs, backups and their restore test, and a change made outside FleetSuite (to whoever is copied)', async () => {
     alerts = [
       alert(undefined), alert('stock'), alert('balance'), alert('own'), alert('fulfillment'), alert('bill'), alert('receipt'),
       alert('adjustment'), alert('mistake'), alert('send'), alert('change'), alert('number'), alert('pdf'), alert('backup'), alert('drill'),
+      alert('outside'),
     ];
     const res = await GET(cron());
-    expect(await res.json()).toEqual({ booksDailyCheck: 'ok', look: 'second', told: 15 });
+    expect(await res.json()).toEqual({ booksDailyCheck: 'ok', look: 'second', told: 16 });
     expect(sent.map((s) => [s.payload.type, s.payload.channels])).toEqual([
       ['books_month_differs', ['in_app', 'push']],
       ['books_stock_differs', ['in_app', 'push']],
@@ -63,6 +64,7 @@ describe('the books daily check cron', () => {
       ['books_invoice_pdf', ['in_app', 'push', 'email']],
       ['books_backup', ['in_app', 'push', 'email']],
       ['books_restore_drill', ['in_app', 'push', 'email']],
+      ['books_changed_outside', ['in_app', 'push', 'email']],
     ]);
     expect(sent.every((s) => s.ids.join() === 'craig,harold')).toBe(true);
     expect(sent[7].payload).toMatchObject({ title: 'About adjustment', body: 'Why.', url: '/admin/books' });

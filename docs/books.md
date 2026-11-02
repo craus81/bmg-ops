@@ -169,7 +169,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, the year end at `/admin/books/year-end`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, the own numbers at `/admin/books/own-numbers`, the 1099s at `/admin/books/1099s`, and filing them at `/admin/books/1099s/file`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, the year end at `/admin/books/year-end`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, the own numbers at `/admin/books/own-numbers`, the backups at `/admin/books/backups`, the change history at `/admin/books/change-history`, the 1099s at `/admin/books/1099s`, and filing them at `/admin/books/1099s/file`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
 the accounts page, and Home opens it for a bookkeeper or CPA with no other
 role; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
@@ -2024,6 +2024,16 @@ look, after the night's test, the newest good backup's latest test if it
 didn't pass, saying why, or that it has had none 90 minutes after it began,
 both opening the backup on Books → Backups (`books_restore_drill`, sent as
 `books_backup` is). It's told each morning until one passes.
+
+And the changes made to the books outside FleetSuite (part 86, "Change
+history"): at each look, those nobody has been told about, in one
+notification (`books_changed_outside`, sent as `books_backup` is) saying how
+many, how they were made (straight in the database and with what program,
+or from a browser signed in to the database), when, and which kinds of
+record, opening Change history on the changes made outside FleetSuite. Each
+is told once. It's marked told only after the notification goes, and only
+when the look saw it, so one that couldn't go, or one still being saved
+while the check looked, is told at the next look.
 
 ## Reports
 
@@ -5501,7 +5511,12 @@ send it:
 Read NetSuite's last ACH file, picked or pasted, fills all of it from the
 last file NetSuite made for that bank account. The file is read in the
 browser, and only how it starts leaves it: its payments are only counted.
-Each save is audited, with routing numbers and no account number.
+Each save is audited, with routing numbers and no account number. A save
+that sets one up or changes it tells the other super admins and Craig
+(`books_ach_setup_changed`): who, which bank account, and each part changed,
+naming BMG's account for the offsetting debit only by its type, last four
+digits and routing number, opening that setup's own history on Change
+history ("Change history"). A save that changes nothing says nothing.
 
 **A balanced file.** When First Bank wants the offsetting debit in the file,
 BMG's account the payments come from is typed from BMG's own records,
@@ -7310,7 +7325,7 @@ A backup is one zip in BMG's private file storage (Cloudflare R2, at
 `books-backups/<year>/fleetsuite-books-<date>-<time>Z.zip`), a folder of
 the same name inside holding:
 
-- `tables/<table>.csv`: each of the books' tables (`BACKUP_TABLES`, 90 of
+- `tables/<table>.csv`: each of the books' tables (`BACKUP_TABLES`, 91 of
   them) as Postgres's COPY reads it back, its first line naming the
   columns, a value in quotes that text and an empty field without quotes
   NULL, times in UTC;
@@ -7366,7 +7381,7 @@ Into an empty Postgres, as its superuser, with psql:
    (`migration`) on the empty database.
 2. Unzip the backup and check each file's SHA-256 against the manifest.
 3. `SET session_replication_role = replica;` so triggers (the journal's
-   guards among them) and foreign keys wait, then
+   guards and the change history's among them) and foreign keys wait, then
    `TRUNCATE <every table in load_order> CASCADE;` to empty what the
    migrations filled in.
 4. For each table in `load_order`, with its columns as the manifest lists
@@ -7454,6 +7469,100 @@ each is caught and said.
   PGlite's Postgres 18, which proves the files and the migrations, not the
   time a real restore takes.
 
+## Change history
+
+Part 86 (migration 508, `src/lib/books/money-changes.ts`,
+`/api/admin/books/change-history`) writes down every change to a row of the
+books, the NetSuite Exit Checklist's Controls: what the row was before and
+after, how the change was made and, where FleetSuite knows, who made it.
+FleetSuite already asks a second person before money goes out (payment runs,
+typed journal entries, a vendor's bank numbers, inventory adjustments) and
+audits each step; what it couldn't say was what a record looked like before
+someone changed it, or that someone changed it around FleetSuite altogether,
+straight in the database, where none of FleetSuite's checks run. It only
+writes down, so it needs no switch.
+
+**What's written down** (`books_money_changes`, by a trigger on each of the
+books' tables, `books_money_change()`):
+
+- Every change to the money settings and the money documents people make,
+  approve and send, however it's made (36 tables): the switches, the
+  companies, the chart, the months and years, payment runs and their
+  payments, checks and check layouts, vendors' bank numbers, the ACH setups
+  and files and their payments, customer payments and deposits, bank
+  deposits, typed journal entries, vendor credits, credit memos, invoice and
+  bill fixes, customer and vendor details, card merchants' accounts, card
+  charges and their months, snapped bills, sales tax rates and returns, own
+  number series, 1084's rent and mortgage, bank reconciliations, and
+  inventory adjustments for approval, transfers and counts.
+- For the rest of the books (the journal, NetSuite's copies, FleetSuite's
+  own copies, the logs, saved reports), a change made outside FleetSuite
+  only: FleetSuite writes those itself, many rows at a time, and records
+  each step in them already.
+
+Each change keeps the table, the row's key and the columns that name it (a
+vendor, a company, a month), each column it changed from what to what (every
+column of a row added or taken away), how it was made, who where FleetSuite
+knows, the database login and program, and the database transaction, so
+changes made together read together. A change to nothing but a row's
+`updated_at` isn't written down.
+
+**How a change was made** (`books_change_via()`):
+
+| How | What it is | Who |
+| --- | --- | --- |
+| In FleetSuite | FleetSuite's server, with its service key | Whoever the change stamped on the row (an `approved_by` set with its `approved_at`), the latest when it stamped several |
+| Outside FleetSuite | A browser signed in as a person, talking to the database without FleetSuite's server in between | The person signed in |
+| Outside FleetSuite | Anything else, straight in the database: Supabase's dashboard, a SQL window, psql | Nobody: the database login and the program it named are kept |
+| FleetSuite update | A migration `scripts/migrate.mjs` ran, which it names | Nobody: the update's file is kept |
+
+**What stays.**
+
+- A locked column (a vendor's account number, BMG's account for an ACH
+  file's offsetting debit, the file itself, a call-back's seal: each column
+  ending `_locked` or `_seal`) is named as changed, set or emptied, and its
+  value never copied.
+- A change's record can't be changed or taken away. The only thing ever
+  written to one afterward is when the super admins were told about it,
+  once, and only for a change made outside FleetSuite.
+- The history can't be emptied once a company's books are live.
+- Only FleetSuite's server reads and writes it (the service role).
+
+**Books → Change history** (`/admin/books/change-history`, linked from the
+Books page and Books → Backups) shows the changes newest first, 50 at a
+time: which record, whether it was added, changed or removed, how and by
+whom, and each column from what to what (six, then Show all). A change made
+outside FleetSuite is marked in red, saying when the super admins were told
+about it or that they're told at the daily check's next look. It narrows to
+how changes were made (All, Outside FleetSuite, In FleetSuite, FleetSuite
+updates) and to a kind of record, and This record's history opens one
+record's changes. The top counts the last 30 days' changes each way.
+Whoever opens the books sees it ("Who can open the books"), but the vendors'
+bank numbers and the ACH setups and files only super admins, as Pay Vendors
+shows them.
+
+**Alerts.** The daily check tells the super admins about the changes made
+outside FleetSuite at its next look, once each ("Daily check"). Setting up
+or changing an ACH setup tells the other super admins and Craig at once
+("The ACH file for First Bank"), as a vendor's new bank numbers already did
+("Vendor bank numbers kept encrypted").
+
+The history is one of the books' tables, so each backup holds it
+("Backups"). Restoring one loads with the triggers held, so a restore adds
+nothing to it.
+
+`src/lib/books/money-changes-sql.test.ts` makes changes all four ways and
+holds what's written down and what isn't, who it names, what it hides, that
+it stays, and what the page shows to whom; `src/lib/books/money-changes.test.ts`
+holds how each change reads.
+
+### What isn't done yet
+
+- Someone with the database owner's password can switch a trigger off, and
+  that isn't written down: the history holds every change made any other
+  way.
+- Two-step sign-in for the money roles (part 87).
+
 ## Who can open the books
 
 Part 52 (migration 483, `src/lib/books/access.ts`) opens the books to two
@@ -7463,7 +7572,7 @@ a staff one:
 
 | Who | Level | What they can do |
 | --- | --- | --- |
-| Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, reopening a closed month, closing and reopening a year, and making and downloading backups |
+| Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, reopening a closed month, closing and reopening a year, making and downloading backups, and the change history of the vendors' bank numbers and the ACH setups and files |
 | Bookkeeper | `keep` | Everything else: Sync now and Copy now, Post now, Look now, closing a month, clearing and reopening mistake checks, Looked at it on the NetSuite feed, Snap a bill, NetSuite's 1099 report, and checking the 1099s in NetSuite and making their file |
 | CPA | `read` | Every Books page and Excel download, changing nothing, and its own adjustments journal on Journal entries ("The CPA's adjustments journal") |
 
