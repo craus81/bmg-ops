@@ -121,6 +121,27 @@ export interface LoadedBuilder extends LoadedReports {
 }
 
 /**
+ * FleetSuite's journal for one company split by division and location
+ * (gl_books_split_totals, migration 500), with NetSuite's location names
+ * by id from the copy of its lists (migration 363): what the report builder
+ * lays its lines out from.
+ */
+export async function loadSplit(
+  service: SupabaseClient, company: string,
+): Promise<Pick<LoadedBuilder, 'split' | 'locationNames'> | { error: string }> {
+  const [split, locations] = await Promise.all([
+    service.rpc('gl_books_split_totals', { p_company: company }),
+    service.from('gl_netsuite_lists').select('netsuite_id, name').eq('kind', 'location'),
+  ]);
+  const error = split.error || locations.error;
+  if (error) return { error: error.message };
+  return {
+    split: (split.data ?? []) as SplitAmount[],
+    locationNames: new Map((locations.data ?? []).map((l) => [String(l.netsuite_id), String(l.name)])),
+  };
+}
+
+/**
  * One company's books for the report builder (src/app/api/admin/books/reports/builder):
  * the one asked for (company=), else BMG, else the first, and the report
  * the request asks for (builderAsk).
@@ -129,20 +150,18 @@ export async function loadBuilder(service: SupabaseClient, params: URLSearchPara
   const loaded = await loadReports(service, params.get('company'));
   if ('error' in loaded) return loaded;
   const ask = builderAsk(params, loaded);
-  const [split, locations, parties] = await Promise.all([
-    service.rpc('gl_books_split_totals', { p_company: loaded.company }),
-    service.from('gl_netsuite_lists').select('netsuite_id, name').eq('kind', 'location'),
+  const [split, parties] = await Promise.all([
+    loadSplit(service, loaded.company),
     ask.rows === 'account' ? null
       : service.rpc('gl_books_party_totals', { p_company: loaded.company, p_kind: ask.rows, p_from: ask.from, p_to: ask.to }),
   ]);
-  const error = split.error || locations.error || parties?.error;
-  if (error) return { error: error.message };
+  if ('error' in split) return split;
+  if (parties?.error) return { error: parties.error.message };
   const named = (parties?.data ?? null) as { rows?: PartyAmount[]; names?: Record<string, string> } | null;
   return {
     ...loaded,
     ask,
-    split: (split.data ?? []) as SplitAmount[],
-    locationNames: new Map((locations.data ?? []).map((l) => [String(l.netsuite_id), String(l.name)])),
+    ...split,
     parties: parties ? { rows: named?.rows ?? [], names: new Map(Object.entries(named?.names ?? {})) } : null,
   };
 }

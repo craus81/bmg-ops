@@ -1,61 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import { requireBooks } from '@/lib/api-auth';
 import { booksAllows } from '@/lib/books/access';
 import { createServiceClient } from '@/lib/supabase-service';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
-import { readCompanies, type CompanyRow } from '@/lib/books/going-live';
-import { BOOKS_COMPANIES, booksErrorFrom } from '@/lib/books/journal';
+import { booksErrorFrom } from '@/lib/books/journal';
 import { centralDate } from '@/lib/books/mistake-checks';
-import { readMonthFacts } from '@/lib/books/months';
 import { PLANNED_LIVE_FROM } from '@/lib/books/opening-balances';
-import { loadReports } from '@/lib/books/report-data';
-import { yearCloseAmounts, type YearCloseAmounts } from '@/lib/books/reports';
-import { SALES_TAX_COMPANY } from '@/lib/books/sales-tax-data';
-import {
-  closeYearRefusal, defaultYear, readYearChecks, readYears, reopenYearRefusal, yearsShown, yearView, REASON_MAX,
-  type YearFacts,
-} from '@/lib/books/year-end';
+import { closeYearRefusal, reopenYearRefusal, yearView, REASON_MAX } from '@/lib/books/year-end';
+import { booksCompanies, pickYear, readYear } from '@/lib/books/year-end-data';
 
 export const dynamic = 'force-dynamic';
 
 const failed = (err: unknown) => NextResponse.json({ error: String((err as any)?.message || err) }, { status: 500 });
-
-interface YearRead {
-  companies: CompanyRow[];
-  company: CompanyRow;
-  facts: YearFacts;
-  amounts: YearCloseAmounts;
-  /** NetSuite's side is known: a copy has read its totals. */
-  checked: boolean;
-}
-
-/** Everything a company's year shows, read as it is now: the close's amounts both sides, its months, checks and closes. */
-async function readYear(service: SupabaseClient, company: CompanyRow, companies: CompanyRow[], year: number, today: string): Promise<YearRead> {
-  const loaded = await loadReports(service, company.code);
-  if ('error' in loaded) throw new Error(loaded.error);
-  const chart = new Map(loaded.data.accounts.filter((a) => a.netsuite_account_id).map((a) => [a.netsuite_account_id!, a]));
-  const accountName = (id: string) => {
-    const a = chart.get(id);
-    return a ? [a.number, a.name].filter(Boolean).join(' ') : `NetSuite account ${id}`;
-  };
-  const [{ periods, compared }, years, checks] = await Promise.all([
-    readMonthFacts(service, company),
-    readYears(service, company.id),
-    readYearChecks(service, { company: company.code, year, makesSales: company.code === SALES_TAX_COMPANY, accountName }),
-  ]);
-  return {
-    companies,
-    company,
-    facts: { name: company.name, liveFrom: company.books_live_from, year, today, periods, compared, years, ...checks },
-    amounts: yearCloseAmounts(loaded.data, year),
-    checked: loaded.data.opening.length > 0 || loaded.data.netsuite.length > 0,
-  };
-}
-
-const booksCompanies = async (service: SupabaseClient) =>
-  (await readCompanies(service)).filter((c) => (BOOKS_COMPANIES as readonly string[]).includes(c.code));
 
 /**
  * GET /api/admin/books/year-end?company=BMG&year=2027 — one company's year
@@ -85,21 +42,18 @@ export async function GET(req: NextRequest) {
   const service = createServiceClient();
   try {
     const companies = await booksCompanies(service);
-    const asked = params.get('company');
-    const company = companies.find((c) => c.code === asked) ?? companies.find((c) => c.code === 'BMG') ?? companies[0];
-    if (!company) return NextResponse.json({ error: 'No companies set up' }, { status: 500 });
     const today = centralDate(new Date());
-    const shown = yearsShown(today);
-    const askedYear = Number(params.get('year'));
-    const year = shown.includes(askedYear) ? askedYear : defaultYear(today);
-    const read = await readYear(service, company, companies, year, today);
+    const picked = pickYear(companies, params, today);
+    if (!picked) return NextResponse.json({ error: 'No companies set up' }, { status: 500 });
+    const { company, year } = picked;
+    const read = await readYear(service, company, year, today);
     return NextResponse.json({
       companies: companies.map((c) => ({ code: c.code, name: c.name, liveFrom: c.books_live_from ?? null })),
       company: company.code,
       liveFrom: company.books_live_from ?? null,
       plannedLiveFrom: PLANNED_LIVE_FROM,
       today,
-      years: shown,
+      years: picked.years,
       year,
       close: read.amounts,
       checked: read.checked,
@@ -134,7 +88,7 @@ export async function POST(req: NextRequest) {
     const company = companies.find((c) => c.code === parsed.data.company);
     if (!company) return NextResponse.json({ error: `There's no company called ${parsed.data.company}.` }, { status: 400 });
     // The year as it is now, not when the page was opened.
-    const read = await readYear(service, company, companies, year, centralDate(new Date()));
+    const read = await readYear(service, company, year, centralDate(new Date()));
     const refused = action === 'close' ? closeYearRefusal(read.facts, reason) : reopenYearRefusal(read.facts, reason);
     if (refused) return NextResponse.json({ error: refused.message }, { status: refused.status });
 

@@ -4,9 +4,11 @@ import type { BuilderAsk, BuiltReport } from './report-builder';
 import { builderTitle, filterWords, type BuilderBy, type BuilderRows } from './report-builder-words';
 import type { DetailDocument, LedgerRow } from './report-detail';
 import { coversMonths } from './report-links';
-import type { Pair, Report, ReportKind, ReportLine } from './reports';
+import type { Pair, Report, ReportKind, ReportLine, YearCloseAmounts } from './reports';
 import type { FiledReturn, OtherMoves, ReturnHeld, SalesTaxWorksheet } from './sales-tax-worksheet';
 import { BASIS_WORDS, RETURN_FIELD_WORDS } from './sales-tax-words';
+import type { YearView } from './year-end';
+import { CHECK_LABELS, STATE_WORDS } from './year-end-words';
 
 /**
  * Books → Reports and an account line's detail as Excel files (docs/books.md
@@ -21,7 +23,9 @@ import { BASIS_WORDS, RETURN_FIELD_WORDS } from './sales-tax-words';
  * inventory-value.ts); and a month's Missouri sales tax worksheet with every
  * document behind it (part 65, sales-tax-worksheet.ts). Built on the server
  * by the download routes, as is a report from the report builder (part 72,
- * report-builder.ts); amounts
+ * report-builder.ts) and a company's year-end package for the CPA, those
+ * reports and its stock at the year's end in one file (part 75, Books →
+ * Year end); amounts
  * are dollars in Excel's own Accounting format, read as the report shows
  * them, and anything the page warns about is written at the top, in red
  * when it's a failure.
@@ -42,9 +46,9 @@ export interface WorkbookCompany {
   legal_name: string | null;
 }
 
-/** Something the page warns about, written above the table: red for a failure, amber for a gap. */
+/** Something the page warns about, written above the table: red for a failure, amber for a gap, green for what's settled (a closed year). */
 export interface WorkbookNote {
-  tone: 'red' | 'amber';
+  tone: 'red' | 'amber' | 'green';
   text: string;
 }
 
@@ -59,7 +63,10 @@ const AMOUNT = '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)';
 const DATE = 'm/d/yyyy';
 const RED = 'FFC00000';
 const AMBER = 'FF9C5700';
+const GREEN = 'FF006100';
 const MUTED = 'FF595959';
+const LINK = 'FF0563C1';
+const NOTE_COLORS: Record<WorkbookNote['tone'], string> = { red: RED, amber: AMBER, green: GREEN };
 const HEAD_FILL: ExcelJS.Fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -193,11 +200,12 @@ function postingNotes(run: (Run & { partial: boolean }) | null, what: string): W
 /**
  * The rows above a sheet's table: who, what, when, how to read it, and its
  * notes, then the table's header, its amount columns' headings (`amounts`,
- * first and last) to the right over them. Returns the header's row number.
+ * first and last, when it has any) to the right over them. Returns the
+ * header's row number.
  */
 function titleRows(sheet: ExcelJS.Worksheet, p: {
   company: WorkbookCompany; title: string; period: string; about: string; notes: WorkbookNote[]; now: Date;
-  header: string[]; amounts: [number, number];
+  header: string[]; amounts?: [number, number];
 }): number {
   const title = (text: string, font: Partial<ExcelJS.Font>) => { sheet.addRow([text]).getCell(1).font = font; };
   title(p.company.legal_name || p.company.name, { bold: true, size: 14 });
@@ -205,14 +213,15 @@ function titleRows(sheet: ExcelJS.Worksheet, p: {
   title(p.period, {});
   title(p.about, { color: { argb: MUTED } });
   title(`Downloaded ${centralTime(p.now)}.`, { color: { argb: MUTED } });
-  for (const n of p.notes) title(n.text, { bold: true, color: { argb: n.tone === 'red' ? RED : AMBER } });
+  for (const n of p.notes) title(n.text, { bold: true, color: { argb: NOTE_COLORS[n.tone] } });
   sheet.addRow([]);
   const head = sheet.addRow(p.header);
   head.eachCell((c, col) => {
     c.font = { bold: true };
     c.fill = HEAD_FILL;
     c.border = { bottom: { style: 'thin' } };
-    c.alignment = { horizontal: col >= p.amounts[0] && col <= p.amounts[1] ? 'right' : 'left', vertical: 'bottom', wrapText: true };
+    const amount = !!p.amounts && col >= p.amounts[0] && col <= p.amounts[1];
+    c.alignment = { horizontal: amount ? 'right' : 'left', vertical: 'bottom', wrapText: true };
   });
   sheet.views = [{ state: 'frozen', ySplit: head.number }];
   sheet.pageSetup.printTitlesRow = `${head.number}:${head.number}`;
@@ -259,11 +268,17 @@ export interface ReportWorkbookInput {
 
 const lineLabel = (l: Pick<ReportLine, 'label' | 'inChart'>) => `${l.label}${l.inChart === false ? ' (not in the chart yet)' : ''}`;
 
-/** One report as Reports shows it, every line: the account's number, its name indented under its parent, then its amounts. */
+/** One report as Reports shows it, in a file of its own. */
 export async function reportWorkbook(input: ReportWorkbookInput): Promise<WorkbookFile> {
+  const wb = newWorkbook(input.now);
+  addReportSheet(wb, input);
+  return fileOf(wb, reportFileName(input.company.code, input.kind, input.from, input.to));
+}
+
+/** One report's sheet as Reports shows it, every line: the account's number, its name indented under its parent, then its amounts. */
+function addReportSheet(wb: ExcelJS.Workbook, input: ReportWorkbookInput): ExcelJS.Worksheet {
   const { kind, from, to, report } = input;
   const trial = kind === 'trial_balance';
-  const wb = newWorkbook(input.now);
   const sheet = wb.addWorksheet(REPORT_NAMES[kind], {
     pageSetup: { orientation: trial ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
@@ -320,7 +335,7 @@ export async function reportWorkbook(input: ReportWorkbookInput): Promise<Workbo
     });
   }
 
-  return fileOf(wb, reportFileName(input.company.code, kind, from, to));
+  return sheet;
 }
 
 // ── The report builder ─────────────────────────────────────────────────────
@@ -396,19 +411,25 @@ export interface BuilderWorkbookInput {
   now: Date;
 }
 
-/**
- * A report from the report builder as its page shows it: every line, the
- * account's number and its name indented (or the customer's or vendor's
- * name, with no number), then an amount for each column.
- */
+/** A report from the report builder as its page shows it, in a file of its own. */
 export async function builderWorkbook(input: BuilderWorkbookInput): Promise<WorkbookFile> {
+  const wb = newWorkbook(input.now);
+  addBuilderSheet(wb, input);
+  return fileOf(wb, builderFileName(input.company.code, input.ask, input.built));
+}
+
+/**
+ * A report from the report builder's sheet as its page shows it: every
+ * line, the account's number and its name indented (or the customer's or
+ * vendor's name, with no number), then an amount for each column.
+ */
+function addBuilderSheet(wb: ExcelJS.Workbook, input: BuilderWorkbookInput): ExcelJS.Worksheet {
   const { ask, built } = input;
   const byName = built.rows !== 'account';
   // Lines by name have no number column: the name is the first.
   const label = byName ? 1 : 2;
   const last = label + built.columns.length;
   const name = builderName(ask.by, built.rows);
-  const wb = newWorkbook(input.now);
   // A sheet's name is 31 characters at most: "P&L by Customer and Month" for a longer one.
   const sheet = wb.addWorksheet(sheetName(name.length > 31 ? name.replace('Profit and Loss', 'P&L') : name), {
     pageSetup: { orientation: built.columns.length > 3 ? 'landscape' : 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
@@ -442,7 +463,7 @@ export async function builderWorkbook(input: BuilderWorkbookInput): Promise<Work
     }
   }
 
-  return fileOf(wb, builderFileName(input.company.code, ask, built));
+  return sheet;
 }
 
 // ── An account's documents ─────────────────────────────────────────────────
@@ -612,20 +633,36 @@ const QUANTITY = '#,##0.#####';
 // What one cost on average: dollars to four places, as NetSuite keeps it, in the Accounting format's shape.
 const AVERAGE = '_($* #,##0.00##_);_($* (#,##0.00##);_($* "-"??_);_(@_)';
 
+/** What the inventory value's sheets are called: the items, how they tie to the accounts, and the documents with no item. */
+interface InventorySheetNames {
+  items: string;
+  ties: string;
+  docs: string;
+}
+
+const INVENTORY_SHEETS: InventorySheetNames = { items: 'Inventory value', ties: 'Ties to the accounts', docs: 'Documents with no item' };
+
+/** One company's inventory value at a month's end, as Inventory value shows it, in a file of its own. */
+export async function inventoryWorkbook(input: InventoryWorkbookInput): Promise<WorkbookFile> {
+  const wb = newWorkbook(input.now);
+  addInventorySheets(wb, input, INVENTORY_SHEETS);
+  return fileOf(wb, inventoryFileName(input.company.code, input.month));
+}
+
 /**
  * One company's inventory value at a month's end, as Inventory value shows
  * it: each item at each location with its count, average cost and value; each
  * inventory account from the stocked items on it to FleetSuite's balance
- * sheet, every cent between them on a line of its own; and the documents
- * with no stocked item behind them, the month's first.
+ * sheet, every cent between them on a line of its own; and, when there are
+ * any, the documents with no stocked item behind them, the month's first.
+ * Returns the sheets in that order.
  */
-export async function inventoryWorkbook(input: InventoryWorkbookInput): Promise<WorkbookFile> {
+function addInventorySheets(wb: ExcelJS.Workbook, input: InventoryWorkbookInput, names: InventorySheetNames): ExcelJS.Worksheet[] {
   const { month, value } = input;
-  const wb = newWorkbook(input.now);
   const period = `As of ${monthEnd(month)}`;
   const setup = { pageSetup: { orientation: 'portrait' as const, fitToPage: true, fitToWidth: 1, fitToHeight: 0 } };
 
-  const items = wb.addWorksheet('Inventory value', setup);
+  const items = wb.addWorksheet(names.items, setup);
   [16, 34, 16, 12, 14, 17, 34].forEach((w, i) => { items.getColumn(i + 1).width = w; });
   items.getColumn(4).numFmt = QUANTITY;
   items.getColumn(5).numFmt = AVERAGE;
@@ -654,7 +691,7 @@ export async function inventoryWorkbook(input: InventoryWorkbookInput): Promise<
   total.getCell(6).border = { top: { style: 'double' } };
   if (value.lines.length) items.autoFilter = { from: { row: head, column: 1 }, to: { row: head + value.lines.length, column: 7 } };
 
-  const ties = wb.addWorksheet('Ties to the accounts', setup);
+  const ties = wb.addWorksheet(names.ties, setup);
   ties.getColumn(1).width = 80;
   amountColumns(ties, 2, 2, 18);
   titleRows(ties, {
@@ -696,7 +733,7 @@ export async function inventoryWorkbook(input: InventoryWorkbookInput): Promise<
 
   const entries = value.accounts.filter((a) => a.entries.count > 0);
   if (entries.length) {
-    const docs = wb.addWorksheet('Documents with no item', { pageSetup: { ...setup.pageSetup, orientation: 'landscape' } });
+    const docs = wb.addWorksheet(names.docs, { pageSetup: { ...setup.pageSetup, orientation: 'landscape' } });
     [30, 11, 20, 14, 28, 40, 16, 14].forEach((w, i) => { docs.getColumn(i + 1).width = w; });
     docs.getColumn(2).numFmt = DATE;
     docs.getColumn(7).numFmt = AMOUNT;
@@ -724,9 +761,10 @@ export async function inventoryWorkbook(input: InventoryWorkbookInput): Promise<
       }
     }
     docs.autoFilter = { from: { row: top, column: 1 }, to: { row: docs.rowCount, column: 8 } };
+    return [items, ties, docs];
   }
 
-  return fileOf(wb, inventoryFileName(input.company.code, month));
+  return [items, ties];
 }
 
 // ── Missouri sales tax ─────────────────────────────────────────────────────
@@ -976,4 +1014,197 @@ export async function salesTaxWorkbook(input: SalesTaxWorkbookInput): Promise<Wo
   }
 
   return fileOf(wb, salesTaxFileName(input.company.code, month));
+}
+
+// ── The year-end package ───────────────────────────────────────────────────
+
+/** The year-end package's file: "BMG Year-end package 2027.xlsx". */
+export function yearEndFileName(company: string, year: number): string {
+  return `${cleanName(`${company} Year-end package ${year}`)}.xlsx`;
+}
+
+/** The year as Year end shows it (yearView in year-end.ts), which the package reads. */
+export type YearEndView = Pick<YearView, 'own' | 'over' | 'checks' | 'closed' | 'changedSince' | 'events'>;
+
+/**
+ * What Year end says about the year, as it reads at the top of each of the
+ * package's sheets: that it isn't over yet, that it closes in NetSuite, so
+ * FleetSuite's side is the rehearsal, that it's closed, by whom and when,
+ * and that FleetSuite's books have changed since.
+ */
+export function yearEndNotes(p: {
+  name: string;
+  year: number;
+  liveFrom: string | null;
+  view: Pick<YearEndView, 'own' | 'over' | 'closed' | 'changedSince'>;
+}): WorkbookNote[] {
+  const { year, view } = p;
+  const notes: WorkbookNote[] = [];
+  if (!view.over) notes.push({ tone: 'amber', text: `${year} isn't over yet, so this is where it stood when the file was made.` });
+  if (!view.own) {
+    notes.push({
+      tone: 'amber',
+      text: `${p.liveFrom ? `${year} is before ${p.name}'s books went live, so it` : `${p.name}'s books aren't live yet, so ${year}`} closes in NetSuite: `
+        + "FleetSuite's side here is the rehearsal.",
+    });
+  }
+  if (view.closed) {
+    const { at, by } = view.closed;
+    notes.push({ tone: 'green', text: `${year} is closed${by ? ` by ${by}` : ''}${at ? `, ${centralTime(at)}` : ''}.` });
+    if (view.changedSince) {
+      notes.push({
+        tone: 'red',
+        text: `FleetSuite's books have changed since ${year} closed: it closed at ${fmt(view.closed.netIncome ?? 0)} of net income and `
+          + `${fmt(view.closed.retainedEarnings ?? 0)} of retained earnings. An account's type may have changed in the chart.`,
+      });
+    }
+  }
+  return notes;
+}
+
+export interface YearEndWorkbookInput {
+  company: WorkbookCompany;
+  year: number;
+  /** The last month the reports cover, 'YYYY-MM-01': December, or this month while the year isn't over. */
+  to: string;
+  liveFrom: string | null;
+  view: YearEndView;
+  /** How the year closes into retained earnings, both sides (yearCloseAmounts in reports.ts). */
+  close: YearCloseAmounts;
+  /** The trial balance and balance sheet at `to`'s end, the profit and loss and cash flow statement from January through it. */
+  reports: Record<ReportKind, Report>;
+  /** What Reports warns about (reportNotes). */
+  reportNotes: WorkbookNote[];
+  /** The profit and loss by month from the report builder, with what it warns about (builderNotes). */
+  byMonth: { ask: BuilderAsk; built: BuiltReport; notes: WorkbookNote[] };
+  /** The company's stock at `to`'s end, with what Inventory value warns about (inventoryNotes); null for a company with none. */
+  inventory: { value: CompanyValue; notes: WorkbookNote[] } | null;
+  now: Date;
+}
+
+const PACKAGE_INVENTORY: InventorySheetNames = {
+  items: 'Inventory value', ties: 'Inventory ties to accounts', docs: 'Inventory documents, no item',
+};
+
+/**
+ * A company's year for the CPA in one file, as Books shows it: a contents
+ * sheet listing the others, each linked, with what's done before the year
+ * closes; the trial balance and balance sheet at the year's end, the profit
+ * and loss for the year and by month, the cash flow statement and how the
+ * year closes into retained earnings, FleetSuite's books next to NetSuite's
+ * own totals; and, for a company with stock, its inventory value at the
+ * year's end. What Year end says about the year is at the top of each sheet,
+ * above what the sheet's own page warns about.
+ */
+export async function yearEndWorkbook(input: YearEndWorkbookInput): Promise<WorkbookFile> {
+  const { company, year, to, view, now } = input;
+  const january = `${year}-01-01`;
+  const end = monthEnd(to);
+  const period = `${monthStart(january)} to ${end}`;
+  const wb = newWorkbook(now);
+  const yearNotes = yearEndNotes({ name: company.name, year, liveFrom: input.liveFrom, view });
+  const reportNotes = [...yearNotes, ...input.reportNotes];
+  // First in the file; filled once the sheets it lists are in.
+  const contents = wb.addWorksheet('Contents', { pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
+
+  const listed: Array<{ sheet: ExcelJS.Worksheet; holds: string }> = [];
+  const add = (sheet: ExcelJS.Worksheet, holds: string) => { listed.push({ sheet, holds }); };
+  const statement = (kind: ReportKind) => addReportSheet(wb, { company, kind, from: january, to, report: input.reports[kind], notes: reportNotes, now });
+  add(statement('trial_balance'), `Each account at ${end}, income and expenses for the year, FleetSuite's books next to NetSuite's.`);
+  add(statement('balance_sheet'), `At ${end}, FleetSuite's books next to NetSuite's.`);
+  add(statement('profit_and_loss'), `${period}, FleetSuite's books next to NetSuite's.`);
+  add(
+    addBuilderSheet(wb, { company, ask: input.byMonth.ask, built: input.byMonth.built, notes: [...yearNotes, ...input.byMonth.notes], now }),
+    "The profit and loss with a column for each month and a Total, FleetSuite's books.",
+  );
+  add(statement('cash_flow'), `${period}, FleetSuite's books next to NetSuite's.`);
+  add(retainedEarningsSheet(wb, input, reportNotes), `How ${year} closes into retained earnings, both sides, and each time it was closed or reopened.`);
+  if (input.inventory) {
+    // Inventory value's own notes say when its month isn't over, so the year's first note, which says it of the year, is left off.
+    const notes = [...yearNotes.slice(view.over ? 0 : 1), ...input.inventory.notes];
+    const [items, ties, docs] = addInventorySheets(wb, { company, month: to, value: input.inventory.value, notes, now }, PACKAGE_INVENTORY);
+    add(items, `Each item at each location at ${end}: on hand, average cost and value.`);
+    add(ties, `How the items come to each inventory account on the balance sheet at ${end}.`);
+    if (docs) add(docs, `Documents on the inventory accounts with no stocked item, from January 1, 2025 to ${end}.`);
+  }
+
+  contents.getColumn(1).width = 30;
+  contents.getColumn(2).width = 100;
+  titleRows(contents, {
+    company,
+    title: `Year-end package ${year}`,
+    period,
+    about: "FleetSuite's books at the year's end for the CPA, a sheet for each report as Books shows it, with what to know about it at its top.",
+    notes: yearNotes,
+    now,
+    header: ['Sheet', 'What it holds'],
+  });
+  const entry = (cells: ExcelJS.CellValue[]) => {
+    const row = contents.addRow(cells);
+    row.getCell(1).alignment = { vertical: 'top' };
+    row.getCell(2).alignment = { vertical: 'top', wrapText: true };
+    return row;
+  };
+  for (const { sheet, holds } of listed) {
+    entry([{ text: sheet.name, hyperlink: `#'${sheet.name}'!A1` }, holds]).getCell(1).font = { color: { argb: LINK }, underline: true };
+  }
+  contents.addRow([]);
+  contents.addRow([`Before ${year} closes`]).font = { bold: true, size: 12 };
+  for (const c of view.checks) {
+    const row = entry([`${CHECK_LABELS[c.key]}: ${STATE_WORDS[c.state]}`, c.detail]);
+    if (c.state === 'todo') row.font = { bold: true, color: { argb: AMBER } };
+  }
+
+  return fileOf(wb, yearEndFileName(company.code, year));
+}
+
+/**
+ * How the year closes into retained earnings, as Year end shows it, both
+ * sides and the difference: retained earnings at January 1, what was posted
+ * to them in the year, its net income and retained earnings once it closes;
+ * then which account they're on, and each time the year was closed or
+ * reopened, oldest first.
+ */
+function retainedEarningsSheet(wb: ExcelJS.Workbook, input: YearEndWorkbookInput, notes: WorkbookNote[]): ExcelJS.Worksheet {
+  const { year, close, view } = input;
+  const sheet = wb.addWorksheet('Retained Earnings', { pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
+  sheet.getColumn(1).width = 62;
+  amountColumns(sheet, 2, 4);
+  titleRows(sheet, {
+    company: input.company,
+    title: 'Retained earnings',
+    period: `${monthStart(`${year}-01-01`)} to ${monthEnd(`${year}-12-01`)}`,
+    about: "How the year closes into retained earnings, FleetSuite's books next to NetSuite's own totals. Nothing is posted to close a year: "
+      + "the balance sheet takes its net income into retained earnings on January 1, as NetSuite's does.",
+    notes,
+    now: input.now,
+    header: ['', 'FleetSuite', 'NetSuite', 'Difference'],
+    amounts: [2, 4],
+  });
+  const line = (label: string, pair: Pair, total = false) => {
+    const row = sheet.addRow([label, dollars(pair.fleetsuite), dollars(pair.netsuite), dollars(pair.fleetsuite - pair.netsuite)]);
+    if (total) {
+      row.font = { bold: true };
+      for (let c = 2; c <= 4; c += 1) row.getCell(c).border = { top: { style: 'double' } };
+    }
+    redIf(row.getCell(4), pair.fleetsuite !== pair.netsuite);
+  };
+  line(`Retained earnings, January 1, ${year}`, close.starting);
+  line(`Posted to retained earnings in ${year}`, close.posted);
+  line(`Net income for ${year}`, close.netIncome);
+  line(`Retained earnings once ${year} closes, January 1, ${year + 1}`, close.closed, true);
+
+  sheet.addRow([]);
+  sheet.addRow([close.account
+    ? `Retained earnings is ${[close.account.number, close.account.name].filter(Boolean).join(' ')}.`
+    : "The chart has no retained earnings account, so they're the balance sheet's own line of earlier years' net income."]).font = { color: { argb: MUTED } };
+  if (view.events.length) {
+    sheet.addRow([]);
+    sheet.addRow([`${year} closed and reopened`]).font = { bold: true, size: 12 };
+    for (const e of view.events) {
+      const amounts = e.action === 'closed' && e.netIncome !== null ? `, at ${fmt(e.netIncome)} of net income` : '';
+      sheet.addRow([`${e.action === 'closed' ? 'Closed' : 'Reopened'}${e.by ? ` by ${e.by}` : ''}, ${centralTime(e.at)}${amounts}${e.reason ? `: ${e.reason}` : ''}`]);
+    }
+  }
+  return sheet;
 }
