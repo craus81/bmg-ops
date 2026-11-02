@@ -168,7 +168,9 @@ export function due1099(year: Year1099, taxYear: number, opts: { yearOver: boole
   for (const p of year.forms) {
     const hand = (why: string) => byHand.push({ payee: p.payee, name: p.name, total: p.total, why });
     if (p.unsplit !== 0) {
-      hand(`FleetSuite can't split ${usd(p.unsplit)} of what it was paid, so its boxes may be short.`);
+      hand(p.unsplit > 0
+        ? `FleetSuite can't split ${usd(p.unsplit)} of what it was paid, so its boxes may be short.`
+        : `FleetSuite can't split ${usd(-p.unsplit)} it paid back, so its boxes may be too high.`);
       continue;
     }
     const others: string[] = [];
@@ -191,7 +193,7 @@ export function due1099(year: Year1099, taxYear: number, opts: { yearOver: boole
     const belowNothing = [...byForm].flatMap(([form, boxes]) =>
       Object.entries(boxes).filter(([, c]) => c < 0).map(([box]) => boxOf(form, box)!.label.toLowerCase()));
     if (belowNothing.length) {
-      hand(`Its ${belowNothing.join(' and ')} ${belowNothing.length === 1 ? 'comes' : 'come'} to less than nothing.`);
+      hand(`Its ${belowNothing.join(' and ')} ${belowNothing.length === 1 ? 'box comes' : 'boxes come'} to less than nothing.`);
       continue;
     }
     for (const form of FORMS) {
@@ -359,7 +361,7 @@ export const maskedTin = (digits: string) => `•••••${digits.slice(-4)}
 export function checkTin(tin: Tin | null | undefined, details: PayeeDetails | null | undefined): { ok: boolean; why: string } {
   if (!tin) return { ok: false, why: 'No tax ID yet: type it, or drop a NetSuite export with it.' };
   if (!details) return { ok: false, why: 'Check it in NetSuite first.' };
-  if (!details.taxIdEnding) return { ok: true, why: `Ends ${tin.digits.slice(-4)}. NetSuite didn't say what its ends with.` };
+  if (!details.taxIdEnding) return { ok: true, why: `Ends ${tin.digits.slice(-4)}. NetSuite didn't say what its tax ID ends with.` };
   if (tin.digits.slice(-4) !== details.taxIdEnding) {
     return { ok: false, why: `It ends ${tin.digits.slice(-4)}, and the one NetSuite has ends ${details.taxIdEnding}.` };
   }
@@ -527,12 +529,12 @@ export function matchTins(read: TinRead, year: Year1099, due: ReadonlySet<string
 const ascii = (s: string) => s.normalize('NFKD').replace(/[̀-ͯ]/g, '');
 const tidy = (s: string) => s.replace(/\s+/g, ' ').trim();
 
-/** A name line as the IRS takes one: letters, digits, & - ( ) ' and single spaces; periods and commas dropped, other marks a space. */
-export const nameLine = (s: string) => tidy(ascii(s).replace(/[.,]/g, '').replace(/[^A-Za-z0-9&\-()' ]/g, ' '));
-/** A person's name: letters, hyphens, apostrophes and single spaces. */
-export const personName = (s: string) => tidy(ascii(s).replace(/[.,]/g, '').replace(/[^A-Za-z\-' ]/g, ' '));
-/** A street line: letters, digits, hyphens, slashes and single spaces; periods, commas and # dropped. */
-export const streetLine = (s: string) => tidy(ascii(s).replace(/[.,#]/g, '').replace(/[^A-Za-z0-9\-/ ]/g, ' '));
+/** A name line as the IRS takes one: letters, digits, & - ( ) ' and single spaces; periods dropped (L.L.C. as LLC), other marks a space. */
+export const nameLine = (s: string) => tidy(ascii(s).replace(/\./g, '').replace(/[^A-Za-z0-9&\-()' ]/g, ' '));
+/** A person's name: letters, hyphens, apostrophes and single spaces; periods dropped, other marks a space. */
+export const personName = (s: string) => tidy(ascii(s).replace(/\./g, '').replace(/[^A-Za-z\-' ]/g, ' '));
+/** A street line: letters, digits, hyphens, slashes and single spaces; periods dropped (P.O. as PO), other marks, # and commas too, a space. */
+export const streetLine = (s: string) => tidy(ascii(s).replace(/\./g, '').replace(/[^A-Za-z0-9\-/ ]/g, ' '));
 /** A city: letters and single spaces, so St. Louis as St Louis and O'Fallon as O Fallon. */
 export const cityName = (s: string) => tidy(ascii(s).replace(/[^A-Za-z]/g, ' '));
 
@@ -710,7 +712,7 @@ export function readHeadings(headings: readonly string[], form: Form1099): Colum
     const has = (...xs: string[]) => xs.some((x) => w.includes(x));
 
     const key = boxKey(h);
-    const exact = key ? own.find((b) => boxKey(b.category) === key || boxKey(b.label) === key) : undefined;
+    const exact = key ? own.find((b) => boxKey(b.label) === key) : undefined;
     if (exact) return { kind: 'box', box: exact.box };
     if (key && KNOWN_BOXES.has(key)) return BLANK;
     const number = h.match(/\bbox\s*(\d{1,2}[a-z]?)\b/i)?.[1]?.toLowerCase();
@@ -990,7 +992,7 @@ export function makeFiles(
     const chunk = lines.slice(i * FORMS_PER_FILE, (i + 1) * FORMS_PER_FILE);
     files.push({
       name: `${baseName}${count > 1 ? `-${i + 1}-of-${count}` : ''}.csv`,
-      text: (t.bom ? '﻿' : '') + t.head + chunk.join(t.newline) + t.newline,
+      text: (t.bom ? '\uFEFF' : '') + t.head + chunk.join(t.newline) + t.newline,
       forms: chunk.length,
     });
   }

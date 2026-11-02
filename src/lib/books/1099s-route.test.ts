@@ -475,6 +475,8 @@ describe('filing the 1099s', () => {
       [[], "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
       [['V-60'], "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
       [[60], "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
+      [null, "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
+      ['', "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
       [Array.from({ length: 26 }, () => '60'), "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
       [['60', '61'], 'Not getting a 1099 for 2025: 61'],
     ] as Array<[unknown, string]>) {

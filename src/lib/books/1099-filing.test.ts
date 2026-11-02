@@ -8,7 +8,7 @@ import type { Payee1099, Year1099 } from './1099s';
 import {
   amountText, boxOf, checkTin, cityName, csvRecords, due1099, fileProblems, filedBox, fillChoices, fillFromKey, fillKey,
   fillLabel, formName, isTinHeading, makeFiles, maskedTin, matchTins, minimumFor, nameLine, payeeDetails, payerProblems,
-  personName, phoneOf, previewColumn, readHeadings, readTaxIds, readTemplate, readTin, stateCode, streetLine, tinTypeOf,
+  personName, phoneOf, previewColumn, readHeadings, readTaxIds, readTemplate, readTemplateFile, readTin, stateCode, streetLine, tinTypeOf,
   zipOf, FORMS_PER_FILE, type ColumnFill, type FileRow, type Payer, type PayeeDetails, type Template,
 } from './1099-filing';
 
@@ -104,12 +104,27 @@ describe('who gets a 1099', () => {
     expect(d.forms).toEqual([]);
     expect(d.under).toEqual([]);
     expect(d.byHand.map((b) => [b.name, b.why])).toEqual([
-      ['Demo Rentals', 'Its rents comes to less than nothing.'],
-      ['Demo Two Below', 'Its rents and royalties come to less than nothing.'],
+      ['Demo Rentals', 'Its rents box comes to less than nothing.'],
+      ['Demo Two Below', 'Its rents and royalties boxes come to less than nothing.'],
       ['Example Electric', "It was paid in Federal Income Tax Withheld and Fishing Boat Proceeds, which FleetSuite doesn't fill in."],
       ['Sample Painting', "FleetSuite can't split $250.00 of what it was paid, so its boxes may be short."],
     ]);
     expect(d.byHand[3].total).toBe(5000_00);
+  });
+
+  it("adds up a box NetSuite names two ways, and leaves to be filed by hand one paid back what it can't split or paid in one category it doesn't fill in", () => {
+    const y = year([
+      // NetSuite's categories are compared as part 51 compares headings, so these are one box.
+      payee('1', 'Sample Painting', { Rents: 1000_00, RENTS: 1000_00 }),
+      payee('2', 'Example Electric', { [NEC]: 5000_00 }, { unsplit: -75_00 }),
+      payee('3', 'Demo Boats', { [NEC]: 5000_00, 'Fishing Boat Proceeds': 1_00 }),
+    ]);
+    const d = due1099(y, 2026, { yearOver: true });
+    expect(d.forms.map((f) => [f.form, f.name, f.boxes])).toEqual([['MISC', 'Sample Painting', { 1: 2000_00 }]]);
+    expect(d.byHand.map((b) => [b.name, b.why])).toEqual([
+      ['Demo Boats', "It was paid in Fishing Boat Proceeds, which FleetSuite doesn't fill in."],
+      ['Example Electric', "FleetSuite can't split $75.00 it paid back, so its boxes may be too high."],
+    ]);
   });
 
   it('says why no file can be made yet: the year isn\'t over, payments aren\'t copied, or the 1099 flags aren\'t', () => {
@@ -197,6 +212,8 @@ describe("a payee's name and address as NetSuite has them", () => {
     expect(unsaid).toMatchObject({ hasTaxId: null, taxIdEnding: null, problems: [] });
     expect(unsaid.notes).toEqual(["NetSuite didn't say what its tax ID ends with, so the one used can't be checked against it."]);
     expect(payeeDetails('60', record({ is1099Eligible: false })).problems).toEqual(["NetSuite doesn't mark it to get a 1099 any more."]);
+    // Saying nothing about it isn't saying it no longer gets one.
+    expect(payeeDetails('60', record({ is1099Eligible: undefined })).problems).toEqual([]);
     // Only the four digits it ends with ever come back, whole or masked.
     expect(payeeDetails('60', record({ taxIdNum: '98-7654321' })).taxIdEnding).toBe('4321');
     expect(JSON.stringify(payeeDetails('60', record({ taxIdNum: '98-7654321' })))).not.toMatch(/765/);
@@ -209,6 +226,9 @@ describe('tax IDs', () => {
     expect(readTin(' 234-56-7890 ')).toEqual({ digits: '234567890', looks: 'SSN' });
     expect(readTin('912-70-1234')).toEqual({ digits: '912701234', looks: 'ITIN' });
     expect(readTin('987654320')).toEqual({ digits: '987654320', looks: null });
+    // Spaces typed or pasted inside one don't count.
+    expect(readTin('12 - 3456780')).toEqual({ digits: '123456780', looks: 'EIN' });
+    expect(readTin('98 765 4320')).toEqual({ digits: '987654320', looks: null });
     for (const bad of ['12345678', '1234567890', '12-34567800', 'ab-cdefghi', '***-**-6789', '111111111', '123456789', '12-3456-789', '']) {
       expect(readTin(bad)).toBeNull();
     }
@@ -230,11 +250,11 @@ describe('tax IDs', () => {
     expect(checkTin({ digits: '987656789', looks: 'EIN' }, d)).toEqual({ ok: true, why: "Ends 6789, as NetSuite's does." });
     expect(checkTin({ digits: '987651234', looks: 'EIN' }, d)).toEqual({ ok: false, why: 'It ends 1234, and the one NetSuite has ends 6789.' });
     expect(checkTin({ digits: '987651234', looks: 'EIN' }, { ...d, taxIdEnding: null }))
-      .toEqual({ ok: true, why: "Ends 1234. NetSuite didn't say what its ends with." });
+      .toEqual({ ok: true, why: "Ends 1234. NetSuite didn't say what its tax ID ends with." });
   });
 
   it('knows a tax ID heading', () => {
-    for (const h of ['Tax ID', 'TIN', 'SSN/EIN', 'Federal ID', 'Taxpayer ID Number', 'Tax Number', 'Recipient TIN', 'FEIN', 'Tax ID No.']) expect(isTinHeading(h)).toBe(true);
+    for (const h of ['Tax ID', 'TIN', 'SSN', 'SSN/EIN', 'Federal ID', 'Taxpayer ID Number', 'Tax Number', 'Recipient TIN', 'FEIN', 'Tax ID No.']) expect(isTinHeading(h)).toBe(true);
     for (const h of ['Vendor ID', 'Tax Year', 'Name', 'Entity ID', 'Federal Income Tax Withheld']) expect(isTinHeading(h)).toBe(false);
   });
 
@@ -260,6 +280,17 @@ describe('tax IDs', () => {
     ]);
     expect(read.unreadable).toBe(2);
     expect(read.padded).toBe(1);
+
+    // Eight zeros given back their ninth are still no tax ID.
+    expect(readTaxIds([['Vendor', 'Tax ID'], ['Demo Zeros', '00000000'], ['Example Electric', '98-7656789']])).toMatchObject({ unreadable: 1, padded: 0 });
+    // A title, the company, the dates and a blank line can come above the headings.
+    const titled = readTaxIds([['Sample Fleet'], ['1099 Report'], ['All Vendors'], ['January 2026 - December 2026'], [''], ['Vendor', 'Tax ID'], ['Example Electric', '98-7656789']]);
+    expect(titled.rows.map((r) => r.label)).toEqual(['Example Electric']);
+    // The vendor's own column names the row, wherever its legal name is and whether or not it has one.
+    const legalFirst = readTaxIds([['Legal Name', 'Vendor', 'Tax ID'], ['', 'Sam Sample', '234-56-7890'], ['Example Electric, LLC', 'Example Electric', '98-7656789']]);
+    expect(legalFirst.rows.map((r) => [r.label, r.names])).toEqual([['Sam Sample', []], ['Example Electric', ['Example Electric, LLC']]]);
+    const many = readTaxIds([['Vendor', 'Tax ID'], ...Array.from({ length: 5001 }, (_, i) => [`Vendor ${i}`, `98-${7600000 + i}`])]);
+    expect(many).toMatchObject({ rows: [], problems: ['It lists 5,001 vendors; FleetSuite reads up to 5,000.'] });
   });
 
   it('finds a column of tax IDs no heading names, and says when it can\'t find any', () => {
@@ -271,6 +302,14 @@ describe('tax IDs', () => {
     ]);
     expect(read.column).toBe('Number');
     expect(read.rows.map((r) => r.tin.digits)).toEqual(['987656789']);
+    // A column empty all the way down, or with something else in it too, isn't the tax IDs.
+    const past = readTaxIds([
+      ['Vendor', 'Memo', 'Account No', 'Number'],
+      ['Example Electric', '', '987650001', '98-7656789'],
+      ['Demo Rentals', '', 'ACCT-7', '98-7651111'],
+    ]);
+    expect(past.column).toBe('Number');
+    expect(past.rows.map((r) => r.tin.digits)).toEqual(['987656789', '987651111']);
 
     expect(readTaxIds([['Amount', 'Tax ID'], ['1', '98-7656789']]).problems[0]).toMatch(/^Couldn't find a vendor and its tax ID/);
     expect(readTaxIds([['Vendor', 'Amount'], ['Example Electric', '12']]).problems[0]).toMatch(/^Couldn't find a vendor and its tax ID/);
@@ -301,6 +340,18 @@ describe('tax IDs', () => {
     expect([...found.byPayee]).toEqual([['60', { digits: '987656789', looks: 'EIN' }], ['61', { digits: '234567890', looks: 'SSN' }]]);
     expect(found.twice).toEqual(['62']);
     expect(found.unmatched).toBe(2);
+
+    // A name that fits a vendor paid only by card, or only on other accounts, too is no one's.
+    const shared = matchTins({
+      rows: [
+        { label: 'Demo Rentals', names: [], tin: { digits: '987650001', looks: 'EIN' } },
+        { label: 'Example Electric', names: [], tin: { digits: '987650002', looks: 'EIN' } },
+      ],
+      column: 'Tax ID', unreadable: 0, padded: 0, problems: [],
+    }, year([payee('62', 'Demo Rentals', {}), payee('60', 'Example Electric', {})], {
+      byCard: [payee('80', 'Demo Rentals', {})], nothingCounted: [payee('81', 'Example Electric', {})],
+    }), new Set(['60', '62']));
+    expect(shared).toEqual({ byPayee: new Map(), twice: [], unmatched: 2 });
   });
 });
 
@@ -312,6 +363,12 @@ describe('what the IRS takes', () => {
     expect(personName('Sam2')).toBe('Sam');
     expect(streetLine('100 Sample St., Suite #2')).toBe('100 Sample St Suite 2');
     expect(streetLine('12 1/2 Main Rd · Unit B-4')).toBe('12 1/2 Main Rd Unit B-4');
+    // Periods go; a comma or # between two words leaves them two.
+    expect(nameLine('Doe,Smith & Co.')).toBe('Doe Smith & Co');
+    expect(personName('Sample,Jr.')).toBe('Sample Jr');
+    expect(personName('J.R.')).toBe('JR');
+    expect(streetLine('12 Main St.,Suite#4')).toBe('12 Main St Suite 4');
+    expect(streetLine('P.O. Box 12')).toBe('PO Box 12');
     expect(cityName("O'Fallon")).toBe('O Fallon');
     expect(cityName('St. Louis')).toBe('St Louis');
     expect(cityName('Winston-Salem 2')).toBe('Winston Salem');
@@ -409,6 +466,22 @@ describe("reading the IRS's template", () => {
       { kind: 'blank', read: true }, { kind: 'party', party: 'recipient', field: 'country' }, { kind: 'form' },
       { kind: 'blank', read: false }, { kind: 'blank', read: false }, { kind: 'blank', read: true },
     ]);
+  });
+
+  it("knows another form's box, a corrected form, a combined filing, a foreign address's parts and second lines, however they're worded", () => {
+    const blank = { kind: 'blank', read: true };
+    expect(readHeadings([
+      'Fishing Boat Proceeds', 'Corrected Form', 'Combined Federal/State', 'Recipient Foreign Postal Code', 'Recipient Foreign Province/State', 'Foreign Country',
+    ], 'MISC')).toEqual([blank, blank, blank, blank, blank, { kind: 'party', party: 'recipient', field: 'country' }]);
+    expect(keys(readHeadings(['Recipient Address Line Two', 'Recipient Second Name Line', '2nd Address Line', 'Payer Name Line 2'], 'NEC')))
+      .toEqual(['recipient.address2', 'recipient.name2', 'recipient.address2', 'payer.name2']);
+  });
+
+  it('takes only a .csv file, and notes a byte order mark at its start', async () => {
+    await expect(readTemplateFile(new File(['Recipient TIN,Recipient Name,Recipient ZIP'], 'nec.xlsx'))).rejects.toThrow("IRIS's templates are .csv files");
+    const text = 'Recipient TIN,Recipient Name,Recipient ZIP\n';
+    expect((await readTemplateFile(new File([new Uint8Array([0xef, 0xbb, 0xbf]), text], 'nec.csv'))).template).toMatchObject({ bom: true, head: text });
+    expect((await readTemplateFile(new File([text], 'NEC.CSV'))).template).toMatchObject({ bom: false, head: text });
   });
 
   it('finds the headings, with whatever is above them, and keeps the rows under them out', () => {
@@ -519,7 +592,7 @@ describe('filling in the template', () => {
     const fills = readHeadings(t.headings, 'NEC');
     fills[13] = { kind: 'same', value: 'Made, by "FleetSuite"' };
     const { files } = makeFiles(t, fills, 'NEC', 2026, { ...PAYER, zip: '63366-0001' }, [COMPANY, PERSON], { dashes: true }, 'f');
-    expect(files[0].text.startsWith(`﻿${t.head}`)).toBe(true);
+    expect(files[0].text.startsWith(`\uFEFF${t.head}`)).toBe(true);
     const rows = files[0].text.slice(1 + t.head.length).split('\r\n');
     expect(rows).toEqual([
       '98-7656789,Example Electric LLC,100 Sample St,O Fallon,MO,63366-1234,98-7600001,Sample Fleet Installations LLC,100 Example Dr,O Fallon,MO,63366-0001,2500.00,"Made, by ""FleetSuite"""',
@@ -564,6 +637,20 @@ describe('filling in the template', () => {
     expect(fileProblems(names, readHeadings(names.headings, 'NEC'), 'NEC', PAYER, [PERSON])).toEqual([]);
     expect(fileProblems(names, readHeadings(names.headings, 'NEC'), 'NEC', PAYER, [COMPANY]))
       .toEqual(["No column is filled with the recipient's name: pick it under Columns."]);
+    const firstOnly = templateOf(['Recipient TIN', 'Recipient First Name', 'Recipient Address', 'Recipient City', 'Recipient State', 'Recipient ZIP', 'Box 1']);
+    expect(fileProblems(firstOnly, readHeadings(firstOnly.headings, 'NEC'), 'NEC', PAYER, [PERSON]))
+      .toEqual(["No column is filled with the recipient's first and last name: pick it under Columns."]);
+    // Each box paid in needs its own column.
+    const rentsOnly = templateOf(['Recipient TIN', 'Recipient Name', 'Recipient Address', 'Recipient City', 'Recipient State', 'Recipient ZIP', 'Box 1 - Rents']);
+    const both: FileRow = { ...COMPANY, form: { ...COMPANY.form, form: 'MISC', boxes: { 1: 2500_00, 2: 10_00 } } };
+    expect(fileProblems(rentsOnly, readHeadings(rentsOnly.headings, 'MISC'), 'MISC', PAYER, [both]))
+      .toEqual(["No column is filled with box 2, royalties: is this the IRS's 1099-MISC template?"]);
+    // With a first name column and no last, a person's whole name goes on the name line.
+    const nameAndFirst = templateOf(['Recipient TIN', 'Recipient Name', 'Recipient First Name', 'Recipient Address', 'Recipient City', 'Recipient State', 'Recipient ZIP', 'Box 1']);
+    const made = makeFiles(nameAndFirst, readHeadings(nameAndFirst.headings, 'NEC'), 'NEC', 2026, PAYER, [PERSON], { dashes: false }, 'f');
+    expect(made.files[0].text.split('\n')[1].split(',').slice(0, 3)).toEqual(['234567890', "Sam Q O'Sample", 'Sam']);
+    const nameAndFirstFills = readHeadings(nameAndFirst.headings, 'NEC');
+    expect(previewColumn(nameAndFirstFills[1], PERSON, nameAndFirst, nameAndFirstFills, 'NEC', 2026, PAYER, { dashes: false })).toBe("Sam Q O'Sample");
   });
 
   it("goes by the template's example row for what the form and tax ID types are called, and refuses another form's", () => {
@@ -576,6 +663,26 @@ describe('filling in the template', () => {
     const misc = templateOf(headings, { below: [['1099-MISC', '', '', '', '', '', '', '', '']] });
     expect(fileProblems(misc, fills, 'NEC', PAYER, [COMPANY]))
       .toEqual(["The template's example is a 1099-MISC form, and this is the 1099-NEC file: use the 1099-NEC template."]);
+    // The payer's EIN in the template's words, an ITIN with the individuals', the account at 20 letters, a box not paid in blank, and a quote or a line break quoted.
+    const miscHeadings = [
+      'Form Type', 'Payer TIN Type', 'Payer TIN', 'Payer Name', 'Payer Address', 'Payer City', 'Payer State', 'Payer ZIP', 'Recipient TIN Type',
+      'Recipient TIN', 'Recipient Name', 'Recipient Address', 'Recipient City', 'Recipient State', 'Recipient ZIP', 'Account Number', 'Box 1 - Rents',
+      'Box 2 - Royalties', 'Note',
+    ];
+    const miscT = templateOf(miscHeadings, { below: [['1099-MISC', 'BUSINESS_TIN']] });
+    const miscFills = readHeadings(miscHeadings, 'MISC');
+    miscFills[18] = { kind: 'same', value: 'Say "hi"\nthere' };
+    const itin: FileRow = {
+      ...PERSON, form: { ...PERSON.form, form: 'MISC', payee: 'V-61-SAMPLE-ODD-JOBS-LONG', boxes: { 1: 2500_00 } }, tin: { digits: '934567890', looks: 'ITIN' }, tinType: 'ITIN',
+    };
+    const misced = makeFiles(miscT, miscFills, 'MISC', 2026, PAYER, [itin], { dashes: false }, 'f');
+    expect(misced.problems).toEqual([]);
+    const cells = csvRecords(misced.files[0].text.slice(miscT.head.length))[0].cells;
+    expect(Object.fromEntries(cells.map((c, i) => [miscHeadings[i], c]))).toMatchObject({
+      'Form Type': '1099-MISC', 'Payer TIN Type': 'BUSINESS_TIN', 'Recipient TIN Type': 'INDIVIDUAL_TIN', 'Account Number': 'V-61-SAMPLE-ODD-JOBS',
+      'Box 1 - Rents': '2500.00', 'Box 2 - Royalties': '', Note: 'Say "hi"\nthere',
+    });
+    expect(misced.files[0].text.endsWith(',"Say ""hi""\nthere"\n')).toBe(true);
     const plain = templateOf(headings, { below: [['Sample', 'EIN', '', '', '', '', '', '', '']] });
     expect(makeFiles(plain, fills, 'NEC', 2026, PAYER, [PERSON], { dashes: false }, 'f').files[0].text.split('\n')[1].split(',').slice(0, 2))
       .toEqual(['1099-NEC', 'SSN']);
@@ -622,6 +729,9 @@ describe('the columns on the page', () => {
     const show = (row: FileRow | null) => fills.map((f) => previewColumn(f, row, t, fills, 'NEC', 2026, PAYER, { dashes: true }));
     expect(show(COMPANY)).toEqual(['•••••6789', 'Example Electric LLC', '•••••0001', '2500.00', '2026']);
     expect(show(null)).toEqual(['', '', '•••••0001', '', '2026']);
+    const typed = templateOf(['Recipient TIN Type', 'Recipient State']);
+    const typedFills = readHeadings(typed.headings, 'NEC');
+    expect(typedFills.map((f) => previewColumn(f, null, typed, typedFills, 'NEC', 2026, PAYER, { dashes: true }))).toEqual(['', '']);
     expect(fills.map((f) => previewColumn(f, COMPANY, t, fills, 'NEC', 2026, { ...PAYER, tin: '' }, { dashes: true }))[2]).toBe('');
   });
 });
