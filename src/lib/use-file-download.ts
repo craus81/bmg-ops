@@ -11,8 +11,9 @@ interface Fetched {
 }
 
 /**
- * A button that downloads a file a route makes (Books' Excel downloads):
- * fetch it with the session, then hand it over with saveFile, a download on
+ * A button that downloads a file a route makes (Books' Excel downloads) or
+ * links to (a backup of the books, kept in BMG's file storage): fetch it
+ * with the session, then hand it over with saveFile, a download on
  * a computer and the share sheet in the iPhone app. Safari opens the share
  * sheet only straight after a tap, and a file that took a while to make
  * arrives too late for it, so then the file waits and `ready` asks for one
@@ -45,6 +46,17 @@ export function useFileDownload(onError: (message: string) => void) {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `The download failed (${res.status})`);
+      }
+      // A file kept in BMG's file storage (a backup of the books) comes as
+      // { url, fileName }: a short-lived link, fetched without the session
+      // so R2's CORS rule applies, and the file never passes through the route.
+      if ((res.headers.get('content-type') || '').includes('application/json')) {
+        const stored = await res.json().catch(() => ({}));
+        if (!stored?.url) throw new Error(stored?.error || "The download didn't say where the file is");
+        const file = await fetch(stored.url, { credentials: 'omit' });
+        if (!file.ok) throw new Error(`The download failed (${file.status})`);
+        await hand({ url, blob: await file.blob(), name: stored.fileName || fallbackName });
+        return;
       }
       const blob = await res.blob();
       await hand({ url, blob, name: fileNameFromDisposition(res.headers.get('content-disposition')) || fallbackName });

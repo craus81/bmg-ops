@@ -60,7 +60,11 @@ export const ALLOWED_STORAGE_PREFIXES = new Set<string>([
 //                      customer and installer accounts send too; served only
 //                      by /api/requests/files/[id] (who can see the request)
 //                      and the agent route.
-const DENIED_STORAGE_PREFIXES = new Set<string>(['signed-documents', 'ledger', 'books-bills', 'app-requests']);
+//   books-backups    — the nightly backups of FleetSuite's books (migration
+//                      506), every table of them in one zip, written only by
+//                      src/lib/books/backups.ts and handed out only by the
+//                      super admins' /api/admin/books/backups/download.
+const DENIED_STORAGE_PREFIXES = new Set<string>(['signed-documents', 'ledger', 'books-bills', 'app-requests', 'books-backups']);
 
 // Top-level prefixes are lowercase kebab tokens (photos, graphics-proofs, …).
 const PREFIX_RE = /^[a-z0-9][a-z0-9-]{0,79}$/;

@@ -27,6 +27,7 @@ import { describeSend, isInvoicePdfSend, NO_ANSWER_MS, type SendAction } from '@
 import { FIELD_NAMES, isBlank, keepSends, KIND_NAMES, recordsWin, shownValue, type DifferenceRow } from '@/lib/fleetsuite-records';
 import { lookAtOwnNumbers, markOwnNumbersTold, OWN_NUMBER_KINDS, type NumberAlertItem } from './own-numbers';
 import { lookAtInvoicePdfs, markInvoicePdfsTold, type PdfAlertItem } from './invoice-pdfs';
+import { lookAtBackups, type BackupAlertItem } from './backups';
 
 /**
  * The daily books check (owner decision 2026-10-18, thread "Replacing
@@ -123,14 +124,18 @@ import { lookAtInvoicePdfs, markInvoicePdfsTold, type PdfAlertItem } from './inv
  * The PDF script's sends aren't told about as sends FleetSuite isn't sure
  * about: FleetSuite sends those again itself.
  *
+ * And the backups of the books (part 84, src/lib/books/backups.ts): at each
+ * day's first look, after the night's backup, the newest one if it didn't
+ * work, or that none good has been made in 26 hours.
+ *
  * In-app and push only (books_month_differs, books_stock_differs,
  * books_balance_differs, books_own_invoice_differs,
  * books_own_fulfillment_differs, books_own_bill_differs,
  * books_own_receipt_differs, books_mistake_found), but for the Inventory
  * Adjusts (books_own_adjustment_differs), the sends
  * (books_netsuite_send_unsure), what changed in NetSuite
- * (books_record_changed_in_netsuite), own numbers (books_own_number) and
- * invoice PDFs (books_invoice_pdf), which are emailed too to a super admin
+ * (books_record_changed_in_netsuite), own numbers (books_own_number),
+ * invoice PDFs (books_invoice_pdf) and backups (books_backup), which are emailed too to a super admin
  * with "Copy me on new alerts" ticked (Craig, 2026-10-28). The record in
  * sync_state, 'books_daily_check', holds which months differ and how many of
  * their documents, which items' counts differ and by about how many, whose
@@ -325,10 +330,11 @@ export interface CheckAlert {
    * (books_own_fulfillment_differs), Books' own bills (books_own_bill_differs) and receipts
    * (books_own_receipt_differs), the Inventory Adjusts (books_own_adjustment_differs), likely mistakes
    * (books_mistake_found), sends to NetSuite FleetSuite isn't sure about (books_netsuite_send_unsure), what changed
-   * in NetSuite (books_record_changed_in_netsuite), FleetSuite's own numbers (books_own_number) or its invoice PDFs
-   * (books_invoice_pdf); one about months has none (books_month_differs).
+   * in NetSuite (books_record_changed_in_netsuite), FleetSuite's own numbers (books_own_number), its invoice PDFs
+   * (books_invoice_pdf) or the backups of the books (books_backup); one about months has none (books_month_differs).
    */
-  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change' | 'number' | 'pdf';
+  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change' | 'number' | 'pdf'
+    | 'backup';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -903,6 +909,42 @@ export function invoicePdfAlertsFor(items: PdfAlertItem[], blocked: string | nul
   return alerts;
 }
 
+const backupTime = (iso: string) => new Date(iso).toLocaleString('en-US', {
+  month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago',
+});
+
+/**
+ * What the super admins are told about the backups of the books at the day's first look (src/lib/books/backups.ts):
+ * the newest one didn't work, opening it on Books → Backups; none good in BACKUP_DUE_HOURS; or none ever.
+ */
+export function backupAlertsFor(item: BackupAlertItem | null): CheckAlert[] {
+  if (!item) return [];
+  const last = item.lastMadeAt ? `The last good backup is from ${backupTime(item.lastMadeAt)}.` : "There's no good backup yet.";
+  const now = 'Books → Backups can make one now.';
+  if (item.kind === 'failed') {
+    return [{
+      title: "Backups: the books' backup didn't work",
+      body: `${shortReason(item.error || 'It stopped without saying why.')} ${last} ${now}`,
+      url: deepLinks.booksBackups(item.id),
+      about: 'backup',
+    }];
+  }
+  if (item.kind === 'missed') {
+    return [{
+      title: item.lastMadeAt ? `Backups: no backup of the books since ${backupTime(item.lastMadeAt)}` : 'Backups: no good backup of the books yet',
+      body: `The nightly backup, at 2:11 AM Central, hasn't made a good one in a day. ${now}`,
+      url: deepLinks.booksBackups(),
+      about: 'backup',
+    }];
+  }
+  return [{
+    title: "Backups: FleetSuite hasn't backed up the books yet",
+    body: `The nightly backup, at 2:11 AM Central, hasn't run. ${now}`,
+    url: deepLinks.booksBackups(),
+    about: 'backup',
+  }];
+}
+
 // ── Looking ────────────────────────────────────────────────────────────────
 
 /** Months whose documents are looked up at once. */
@@ -1432,6 +1474,16 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     told += pdfs.length + (found.blocked ? 1 : 0);
   } catch (err) {
     errors.push(`Invoice PDFs: ${reason(err)}`);
+  }
+
+  // The backups of the books: at the day's first look, after the night's backup, the newest one if it didn't work, or
+  // none good in a day. Told each morning until a good one is made.
+  try {
+    const backup = backupAlertsFor(await lookAtBackups(service, opts.look === 'first'));
+    alerts.push(...backup);
+    told += backup.length;
+  } catch (err) {
+    errors.push(`Backups: ${reason(err)}`);
   }
 
   // Told before it's recorded: a send that fails leaves the record as it was, and the next morning tells again.

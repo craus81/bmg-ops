@@ -81,6 +81,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/1099s/route.ts': books(['read', 'keep']),
   'src/app/api/admin/books/accounts/route.ts': books(['read', 'keep']),
   'src/app/api/admin/books/agings/route.ts': books(['read', 'keep']),
+  // Making and downloading a backup are super admins' only: it holds every table of the books.
+  'src/app/api/admin/books/backups/route.ts': books(['read', 'owner']),
+  'src/app/api/admin/books/backups/download/route.ts': books(['owner']),
   'src/app/api/admin/books/balances/route.ts': books(['read']),
   'src/app/api/admin/books/balances/party/route.ts': books(['read']),
   'src/app/api/admin/books/bank-reconciliation/route.ts': books(['read', 'keep']),
@@ -127,6 +130,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/books-invoice-posting/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-daily-check/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-invoice-pdfs/route.ts': cron('requireSuperAdmin('),
+  'src/app/api/cron/books-backup/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-netsuite-deposits/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-netsuite-bills/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-netsuite-bill-payments/route.ts': cron('requireSuperAdmin('),

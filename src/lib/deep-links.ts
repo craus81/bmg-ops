@@ -711,6 +711,13 @@ export const deepLinks = {
     const query = new URLSearchParams({ ...(company ? { company } : {}), ...(year ? { year: String(year) } : {}) }).toString();
     return `/admin/books/year-end${query ? `?${query}` : ''}`;
   },
+  /** Books → Backups: each night's copy of FleetSuite's books kept in BMG's
+   *  private file storage, whether it checked out, and Back up now
+   *  (src/lib/books/backups.ts); one backup picked out by its id when it's
+   *  given. The landing for the daily books check's notification about a
+   *  backup that didn't work. Open to whoever opens the books; only a super
+   *  admin downloads one or makes one. */
+  booksBackups: (backup?: string | null) => `/admin/books/backups${backup ? `?${new URLSearchParams({ backup })}` : ''}`,
   /** Books → Own numbers: the numbers FleetSuite gives each sales order, PO,
    *  invoice and credit memo it makes in NetSuite once FleetSuite's own
    *  numbers is on (src/lib/books/own-numbers.ts), the numbers of one kind

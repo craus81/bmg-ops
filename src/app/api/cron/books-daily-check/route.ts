@@ -21,9 +21,10 @@ export const maxDuration = 300;
  * Own adjustments does, and tells the super admins in FleetSuite, in the app
  * and by push, when a month, an item, a balance, an own invoice,
  * fulfillment, bill, receipt or adjustment stops matching, when the
- * night's mistake checks found a likely mistake nobody has cleared, or when
- * FleetSuite isn't sure NetSuite took a send nobody has looked for yet, with a
- * link to it there
+ * night's mistake checks found a likely mistake nobody has cleared, when
+ * FleetSuite isn't sure NetSuite took a send nobody has looked for yet, or
+ * when the night's backup of the books didn't work (08:11), with a link to it
+ * there
  * (src/lib/books/daily-check.ts, docs/books.md "Daily check"). The
  * 09:58 run notes what newly differs and the 13:58 run tells about what of
  * it still does. Minute 58 is free in vercel.json, and both runs come after
@@ -49,10 +50,10 @@ export async function GET(req: NextRequest) {
   // Super admins only, not the bookkeeper or the CPA; never by email, but
   // for an Inventory Adjust, a send to NetSuite FleetSuite isn't sure about,
   // a change made in NetSuite to a customer or vendor, FleetSuite's own
-  // numbers, or its invoice PDFs, to one with "Copy me on new alerts" ticked
-  // (the email books_own_adjustment_differs, books_netsuite_send_unsure,
-  // books_record_changed_in_netsuite, books_own_number and books_invoice_pdf
-  // fix in the registry).
+  // numbers, its invoice PDFs or the backups of the books, to one with "Copy
+  // me on new alerts" ticked (the email books_own_adjustment_differs,
+  // books_netsuite_send_unsure, books_record_changed_in_netsuite,
+  // books_own_number, books_invoice_pdf and books_backup fix in the registry).
   const tell = async (alerts: CheckAlert[]) => {
     const ids = await getSuperAdminIds();
     for (const alert of alerts) {
@@ -69,6 +70,7 @@ export async function GET(req: NextRequest) {
       else if (alert.about === 'change') await notifyMany(ids, { type: 'books_record_changed_in_netsuite', ...sent, channels: ['in_app', 'push', 'email'] });
       else if (alert.about === 'number') await notifyMany(ids, { type: 'books_own_number', ...sent, channels: ['in_app', 'push', 'email'] });
       else if (alert.about === 'pdf') await notifyMany(ids, { type: 'books_invoice_pdf', ...sent, channels: ['in_app', 'push', 'email'] });
+      else if (alert.about === 'backup') await notifyMany(ids, { type: 'books_backup', ...sent, channels: ['in_app', 'push', 'email'] });
       else await notifyMany(ids, { type: 'books_month_differs', ...sent, channels: ['in_app', 'push'] });
     }
   };

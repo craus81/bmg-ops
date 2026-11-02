@@ -67,7 +67,8 @@ date. After that, `npm run migrate` applies only genuinely new files.
   tables it writes, run on Supabase's API connections, which load the
   `safeupdate` extension: there a `DELETE` or `UPDATE` without a `WHERE`
   fails with "DELETE requires a WHERE clause". PGlite doesn't load it, so
-  a test only catches one by reading the function bodies, as
+  a test only catches one by reading the function bodies with
+  `unguardedWrites` (`src/lib/books/sql-writes.ts`), as
   `src/lib/books/netsuite-gl-sql.test.ts` does for the books functions
   (migration 362 fixed one that reached production).
 

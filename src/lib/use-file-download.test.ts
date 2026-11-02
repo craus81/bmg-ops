@@ -93,6 +93,57 @@ describe('useFileDownload', () => {
     expect(render().ready(URL1)).toBe(false);
   });
 
+  it("fetches a file kept in storage from the route's link, without the session, under the route's name", async () => {
+    const stored = vi.fn(async (_url: string, _init?: RequestInit) => new Response('PK zip'));
+    vi.stubGlobal('fetch', stored);
+    try {
+      const BACKUP = '/api/admin/books/backups/download?id=b1';
+      apiFetch.mockResolvedValueOnce(Response.json({ url: 'https://r2.example/books-backups/x.zip?sig=1', fileName: 'fleetsuite-books-2026-11-03-081100Z.zip' }));
+      await render().download(BACKUP, 'Backup.zip');
+      expect(apiFetch).toHaveBeenCalledWith(BACKUP);
+      expect(stored).toHaveBeenCalledWith('https://r2.example/books-backups/x.zip?sig=1', { credentials: 'omit' });
+      expect(saveFile.mock.calls[0][1]).toBe('fleetsuite-books-2026-11-03-081100Z.zip');
+      expect(await (saveFile.mock.calls[0][0] as Blob).text()).toBe('PK zip');
+
+      // No name: the fallback. No link, or storage refusing it: an error, nothing saved.
+      apiFetch.mockResolvedValueOnce(Response.json({ url: 'https://r2.example/y.zip' }));
+      await render().download(BACKUP, 'Backup.zip');
+      expect(saveFile.mock.calls[1][1]).toBe('Backup.zip');
+      apiFetch.mockResolvedValueOnce(Response.json({}));
+      await render().download(BACKUP, 'Backup.zip');
+      apiFetch.mockResolvedValueOnce(Response.json({ url: 'https://r2.example/z.zip' }));
+      stored.mockResolvedValueOnce(new Response('denied', { status: 403 }));
+      await render().download(BACKUP, 'Backup.zip');
+      expect(errors).toEqual(["The download didn't say where the file is", 'The download failed (403)']);
+      expect(saveFile).toHaveBeenCalledTimes(2);
+      expect(render().busy).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps a file from storage for one more tap too, without asking for it again', async () => {
+    const stored = vi.fn(async () => new Response('PK zip'));
+    vi.stubGlobal('fetch', stored);
+    try {
+      const BACKUP = '/api/admin/books/backups/download?id=b1';
+      apiFetch.mockResolvedValueOnce(Response.json({ url: 'https://r2.example/books-backups/x.zip?sig=1', fileName: 'fleetsuite-books-2026-11-03-081100Z.zip' }));
+      saveFile.mockRejectedValueOnce(refused());
+      await render().download(BACKUP, 'Backup.zip');
+      expect(render().ready(BACKUP)).toBe(true);
+
+      saveFile.mockResolvedValueOnce(undefined);
+      await render().download(BACKUP, 'Backup.zip');
+      expect(apiFetch).toHaveBeenCalledTimes(1);
+      expect(stored).toHaveBeenCalledTimes(1);
+      expect(saveFile.mock.calls.map((c) => c[1])).toEqual(['fleetsuite-books-2026-11-03-081100Z.zip', 'fleetsuite-books-2026-11-03-081100Z.zip']);
+      expect(render().ready(BACKUP)).toBe(false);
+      expect(errors).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('makes a fresh file for different months, and any other save failure is an error', async () => {
     apiFetch.mockResolvedValueOnce(xlsx('a.xlsx'));
     saveFile.mockRejectedValueOnce(refused());

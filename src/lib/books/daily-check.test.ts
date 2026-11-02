@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  adjustmentAlertsFor, alertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, fulfillmentAlertsFor, invoicePdfAlertsFor, lookOf,
+  adjustmentAlertsFor, alertsFor, backupAlertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, fulfillmentAlertsFor,
+  invoicePdfAlertsFor, lookOf,
   mistakeAlertsFor, nextCheck, numberAlertsFor, ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
   type BalanceNews, type ChangeAlertItem, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews,
   type SendAlertItem, type StockNews,
@@ -994,5 +995,40 @@ describe('changeAlertsFor', () => {
     expect(changeAlertsFor([...four.slice(1), { ...labor, id: ids[0] }])[0].body)
       .toMatch(/\. FleetSuite's stays until someone keeps it or takes NetSuite's\.$/);
     expect(changeAlertsFor(four)[0].body).toMatch(/which sends it on to NetSuite, or takes NetSuite's\.$/);
+  });
+});
+
+describe('backupAlertsFor', () => {
+  it("says why the newest backup didn't work and when the last good one is from, opening it on Books → Backups", () => {
+    expect(backupAlertsFor({ kind: 'failed', id: 'b-1', error: "BMG's file storage holds 10 bytes of the 20 sent", lastMadeAt: '2026-11-02T08:11:00Z' })).toEqual([{
+      title: "Backups: the books' backup didn't work",
+      body: "BMG's file storage holds 10 bytes of the 20 sent. The last good backup is from Nov 2, 2026, 2:11 AM. Books → Backups can make one now.",
+      url: '/admin/books/backups?backup=b-1',
+      about: 'backup',
+    }]);
+    expect(backupAlertsFor({ kind: 'failed', id: 'b-2', error: null, lastMadeAt: null })[0].body)
+      .toBe("It stopped without saying why. There's no good backup yet. Books → Backups can make one now.");
+    expect(backupAlertsFor({ kind: 'failed', id: 'b-3', error: `${'x'.repeat(170)} y`, lastMadeAt: null })[0].body)
+      .toMatch(/^x{160}… There's no good backup yet\./);
+  });
+
+  it('says since when no good backup was made, or that none ever was', () => {
+    expect(backupAlertsFor({ kind: 'missed', id: null, error: null, lastMadeAt: '2026-07-01T08:11:00Z' })).toEqual([{
+      title: 'Backups: no backup of the books since Jul 1, 2026, 3:11 AM',
+      body: "The nightly backup, at 2:11 AM Central, hasn't made a good one in a day. Books → Backups can make one now.",
+      url: '/admin/books/backups',
+      about: 'backup',
+    }]);
+    expect(backupAlertsFor({ kind: 'missed', id: null, error: null, lastMadeAt: null })[0].title).toBe('Backups: no good backup of the books yet');
+    expect(backupAlertsFor({ kind: 'never', id: null, error: null, lastMadeAt: null })).toEqual([{
+      title: "Backups: FleetSuite hasn't backed up the books yet",
+      body: "The nightly backup, at 2:11 AM Central, hasn't run. Books → Backups can make one now.",
+      url: '/admin/books/backups',
+      about: 'backup',
+    }]);
+  });
+
+  it('tells nothing when the backups are fine', () => {
+    expect(backupAlertsFor(null)).toEqual([]);
   });
 });
