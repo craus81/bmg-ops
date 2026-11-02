@@ -8,6 +8,7 @@ import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { useFileDownload } from '@/lib/use-file-download';
+import { coversMonths } from '@/lib/books/report-links';
 import type { DetailDocument } from '@/lib/books/report-detail';
 
 /**
@@ -23,7 +24,7 @@ import type { DetailDocument } from '@/lib/books/report-detail';
  * books; opened from a line on Reports.
  */
 
-type Kind = 'profit_and_loss' | 'balance_sheet' | 'trial_balance';
+type Kind = 'profit_and_loss' | 'balance_sheet' | 'trial_balance' | 'cash_flow';
 
 interface Pair {
   fleetsuite: number;
@@ -67,6 +68,7 @@ const REPORT_NAMES: Record<Kind, string> = {
   profit_and_loss: 'profit and loss',
   balance_sheet: 'balance sheet',
   trial_balance: 'trial balance',
+  cash_flow: 'cash flow statement',
 };
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' });
@@ -253,8 +255,8 @@ export default function BooksReportDetailPage() {
   const show = data?.report === 'trial_balance' ? drCr : fmt;
   const listed = data ? (data.only === 'differs' ? data.differing : data.documents) : 0;
   const lineDiffers = !!data && data.ending.fleetsuite !== data.ending.netsuite;
-  // Back to the report the line is on: the profit and loss for these months, the others at the end of `to`.
-  const back = data && deepLinks.booksReport(data.company, data.report, data.report === 'profit_and_loss' ? data.from : data.to, data.to);
+  // Back to the report the line is on: the profit and loss or cash flow for these months, the others at the end of `to`.
+  const back = data && deepLinks.booksReport(data.company, data.report, coversMonths(data.report) ? data.from : data.to, data.to);
   // Every document of the months, whichever the page lists, with running balances (src/lib/books/report-workbook.ts).
   const excelUrl = data && `/api/admin/books/reports/detail/download?${new URLSearchParams({
     company: data.company, account: data.account.key, report: data.report, from: data.from.slice(0, 7), to: data.to.slice(0, 7),

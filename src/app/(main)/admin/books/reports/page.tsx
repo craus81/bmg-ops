@@ -7,19 +7,20 @@ import { useAuth } from '@/components/AuthProvider';
 import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
-import { detailMonths } from '@/lib/books/report-links';
+import { coversMonths, detailMonths } from '@/lib/books/report-links';
 import { useFileDownload } from '@/lib/use-file-download';
 
 /**
  * Books → Reports (src/lib/books/reports.ts, migration 396, docs/books.md).
  *
- * FleetSuite's own profit and loss, balance sheet and trial balance, each
- * line next to NetSuite's own totals, for every month from January 2025,
+ * FleetSuite's own profit and loss, balance sheet, trial balance and cash
+ * flow statement, each line next to NetSuite's own totals, for every month
+ * from January 2025,
  * and the report shown as an Excel file (docs/books.md "Excel downloads").
  * Open to whoever opens the books, linked from the other books pages.
  */
 
-type Kind = 'profit_and_loss' | 'balance_sheet' | 'trial_balance';
+type Kind = 'profit_and_loss' | 'balance_sheet' | 'trial_balance' | 'cash_flow';
 
 interface Company {
   code: string;
@@ -66,7 +67,7 @@ interface Payload {
   company: string;
   posts: boolean;
   report: Kind;
-  /** The profit and loss covers from through to; the balance sheet and trial balance are at to's end. */
+  /** The profit and loss and cash flow cover from through to; the balance sheet and trial balance are at to's end. */
   from: string;
   to: string;
   months: MonthStatus[];
@@ -82,6 +83,7 @@ const KINDS: Array<[Kind, string]> = [
   ['profit_and_loss', 'Profit and loss'],
   ['balance_sheet', 'Balance sheet'],
   ['trial_balance', 'Trial balance'],
+  ['cash_flow', 'Cash flow'],
 ];
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' });
@@ -104,9 +106,10 @@ const monthEnd = (month: string) => {
 function title(kind: Kind, from: string, to: string): string {
   if (kind === 'balance_sheet') return `Balance sheet, ${monthEnd(to)}`;
   if (kind === 'trial_balance') return `Trial balance, ${monthEnd(to)}`;
-  if (from === to) return `Profit and loss, ${monthName(to)}`;
-  if (from.slice(0, 4) === to.slice(0, 4)) return `Profit and loss, ${monthOf(from)} to ${monthName(to)}`;
-  return `Profit and loss, ${monthName(from)} to ${monthName(to)}`;
+  const name = kind === 'cash_flow' ? 'Cash flow' : 'Profit and loss';
+  if (from === to) return `${name}, ${monthName(to)}`;
+  if (from.slice(0, 4) === to.slice(0, 4)) return `${name}, ${monthOf(from)} to ${monthName(to)}`;
+  return `${name}, ${monthName(from)} to ${monthName(to)}`;
 }
 
 function ago(iso: string): string {
@@ -158,12 +161,19 @@ function printPeriod(kind: Kind, from: string, to: string): string {
     const d = last ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).getUTCDate() : 1;
     return `${Number(month.slice(5, 7))}/${d}/${month.slice(0, 4)}`;
   };
-  return kind === 'profit_and_loss' ? `${day(from, false)} to ${day(to, true)}` : `As of ${day(to, true)}`;
+  return coversMonths(kind) ? `${day(from, false)} to ${day(to, true)}` : `As of ${day(to, true)}`;
 }
+
+const PRINTED_NAMES: Record<Kind, string> = {
+  profit_and_loss: 'Profit and Loss',
+  balance_sheet: 'Balance Sheet',
+  trial_balance: 'Trial Balance',
+  cash_flow: 'Statement of Cash Flows',
+};
 
 /** The statement alone, one amount per line, for Print / Save PDF. */
 function PrintedStatement({ data, company }: { data: Payload; company: Company | undefined }) {
-  const name = data.report === 'profit_and_loss' ? 'Profit and Loss' : data.report === 'balance_sheet' ? 'Balance Sheet' : 'Trial Balance';
+  const name = PRINTED_NAMES[data.report];
   const trial = data.report === 'trial_balance';
   return (
     <div className="rep-print">
@@ -385,9 +395,11 @@ export default function BooksReportsPage() {
   const companyName = data?.companies.find((c) => c.code === data.company)?.name ?? data?.company;
   const matching = data?.months.filter((m) => m.matches).length ?? 0;
   const isProfitAndLoss = data?.report === 'profit_and_loss';
+  // The profit and loss and cash flow cover the months picked; the others are at To's end.
+  const ofMonths = !!data && coversMonths(data.report);
   // Where a difference starts: the first month that differs in the range, or by its end.
-  const firstDiffering = data?.months.find((m) => !m.matches && m.month <= data.to && (!isProfitAndLoss || m.month >= data.from));
-  const picked = (month: string) => !!data && month <= data.to && month >= (isProfitAndLoss ? data.from : data.to);
+  const firstDiffering = data?.months.find((m) => !m.matches && m.month <= data.to && (!ofMonths || m.month >= data.from));
+  const picked = (month: string) => !!data && month <= data.to && month >= (ofMonths ? data.from : data.to);
   const years = [...new Set((data?.months ?? []).map((m) => m.month.slice(0, 4)))];
   const shown = (data?.lines ?? []).filter((l) => !onlyDifferences
     || ((l.kind === 'account' || l.kind === 'total') && l.fleetsuite !== l.netsuite));
@@ -490,7 +502,7 @@ export default function BooksReportsPage() {
           </div>
 
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-            {isProfitAndLoss ? (
+            {ofMonths ? (
               <>
                 <label style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                   From
@@ -524,7 +536,7 @@ export default function BooksReportsPage() {
                   return (
                     <button
                       key={m.month}
-                      onClick={() => pick(isProfitAndLoss ? { from: m.month, to: m.month } : { to: m.month })}
+                      onClick={() => pick(ofMonths ? { from: m.month, to: m.month } : { to: m.month })}
                       disabled={loading}
                       title={!data.checked ? 'Not checked yet' : m.matches ? 'Matches NetSuite' : lines(m.differing)}
                       style={{ ...button(picked(m.month)), borderColor: picked(m.month) ? 'var(--text-primary)' : `${color}88`, color }}
@@ -591,6 +603,13 @@ export default function BooksReportsPage() {
                 years&apos; net income in retained earnings, as on NetSuite&apos;s Trial Balance report.
               </>
             )}
+            {data.report === 'cash_flow' && (
+              <>
+                Net income for the months picked, then what each other account&apos;s change did to cash, as on NetSuite&apos;s
+                Statement of Cash Flows, coming to the change in the bank accounts. Cash coming in is positive. The ✓ and ✗
+                on the months above are for each month&apos;s own cash flow.
+              </>
+            )}
             {data.checked && data.differing > 0 && firstDiffering && (
               <>
                 {' '}
@@ -631,7 +650,7 @@ export default function BooksReportsPage() {
               <tbody>
                 {!shown.some((l) => l.kind === 'account') && (
                   <tr><td colSpan={isTrialBalance ? 6 : 4} style={{ padding: '12px', color: 'var(--text-muted)' }}>
-                    {onlyDifferences ? 'Every line matches NetSuite.' : `Nothing on either side for ${data.from === data.to || !isProfitAndLoss ? 'this month' : 'these months'}.`}
+                    {onlyDifferences ? 'Every line matches NetSuite.' : `Nothing on either side for ${data.from === data.to || !ofMonths ? 'this month' : 'these months'}.`}
                   </td></tr>
                 )}
                 {isTrialBalance && shown.map((l) => <TrialBalanceRow key={l.account ?? l.label} line={l} company={data.company} detail={detailOf(l)} />)}

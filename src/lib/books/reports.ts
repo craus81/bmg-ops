@@ -1,10 +1,12 @@
 import { COPY_FROM, monthsBetween, toCents } from './netsuite-gl';
+import { coversMonths } from './report-links';
 import { retainedEarningsAccount, type TbAccount, type TbAmount, type TbTotals } from './trial-balance';
 
 /**
  * Reports from FleetSuite's own books (docs/books.md, "Reports"): the profit
- * and loss for any months from January 2025, and the balance sheet and trial
- * balance at a month's end, each line next to NetSuite's.
+ * and loss and the cash flow statement for any months from January 2025, and
+ * the balance sheet and trial balance at a month's end, each line next to
+ * NetSuite's.
  *
  * FleetSuite's side is its journal, summed per account and month by
  * migration 396's gl_books_totals; NetSuite's is NetSuite's own totals
@@ -16,7 +18,8 @@ import { retainedEarningsAccount, type TbAccount, type TbAmount, type TbTotals }
  * the parent, earlier years' net income in retained earnings and this
  * year's as net income. Amounts are whole cents as each report shows them:
  * on the profit and loss and the balance sheet, income, liabilities and
- * equity are positive; on the trial balance, debits are.
+ * equity are positive; on the trial balance, debits are; on the cash flow
+ * statement, cash coming in is.
  */
 
 export interface ReportAccount extends TbAccount {
@@ -46,14 +49,14 @@ export interface ReportData {
   fleetsuite: ReportAmount[];
 }
 
-export const REPORT_KINDS = ['profit_and_loss', 'balance_sheet', 'trial_balance'] as const;
+export const REPORT_KINDS = ['profit_and_loss', 'balance_sheet', 'trial_balance', 'cash_flow'] as const;
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
 /**
- * What a report covers, as NetSuite's reports have it: the profit and loss,
- * the months from `from` through `to` (`to` alone without a `from`, or with
- * one after it); the balance sheet and trial balance, the end of `to`.
- * Months are 'YYYY-MM-01'.
+ * What a report covers, as NetSuite's reports have it: the profit and loss
+ * and the cash flow statement, the months from `from` through `to` (`to`
+ * alone without a `from`, or with one after it); the balance sheet and
+ * trial balance, the end of `to`. Months are 'YYYY-MM-01'.
  */
 export interface ReportRange {
   from?: string;
@@ -400,12 +403,62 @@ function trialBalanceOf(b: Books, month: string): Report {
   return { lines, differing: counted(lines), totals: { fleetsuite: total('fleetsuite'), netsuite: total('netsuite') } };
 }
 
-/** The first month the profit and loss covers: `from`, unless it's missing or after `to`. */
+/**
+ * Where the cash flow statement puts the change in each kind of balance
+ * sheet account, as NetSuite's Statement of Cash Flows does by account type.
+ * Bank accounts are the cash itself.
+ */
+const OPERATING = [
+  'accounts_receivable', 'other_current_asset', 'unbilled_receivable', 'deferred_expense',
+  'accounts_payable', 'credit_card', 'other_current_liability', 'deferred_revenue',
+];
+const INVESTING = ['fixed_asset', 'other_asset'];
+const FINANCING = ['long_term_liability', 'equity'];
+
+/**
+ * The cash flow statement for the months from `from` through `to`, laid out
+ * as NetSuite's Statement of Cash Flows (the indirect method): net income,
+ * then what the change in every other account did to cash, in operating,
+ * investing or financing activities by its type, which comes to the change
+ * in the bank accounts. Cash coming in is positive: an asset that grew took
+ * cash, a liability or equity that grew brought it in. A NetSuite account
+ * the chart doesn't have yet can't be placed, so its change has a part of
+ * its own before the change in cash, which it still counts in.
+ */
+function cashFlowOf(b: Books, from: string, to: string): Report {
+  const cash = (key: string) => times(-1, pairOf((side) => moved(b, side, key, from, to)));
+  const sum = (keys: string[], value: (key: string) => Pair) => keys.reduce((total, k) => plus(total, value(k)), ZERO);
+  const netIncome = sum(b.keys.filter((k) => isIncomeStatement(b, k)), cash);
+
+  const operating = section('Operating activities', 'Net cash from operating activities', 0, [
+    { lines: [{ kind: 'account', depth: 1, label: 'Net income', derived: true, ...netIncome }], total: netIncome },
+    section('Adjustments to net income', 'Total adjustments to net income', 1, [accountBlock(b, OPERATING, cash, 2)]),
+  ]);
+  const investing = section('Investing activities', 'Net cash from investing activities', 0, [accountBlock(b, INVESTING, cash, 1)]);
+  const financing = section('Financing activities', 'Net cash from financing activities', 0, [accountBlock(b, FINANCING, cash, 1)]);
+  const unplaced = notInChart(b, cash);
+  const unplacedTotal = sum(b.keys.filter((k) => !b.chart.has(k)), cash);
+
+  const banks = b.data.accounts.filter((a) => a.account_type === 'bank').map(keyOf);
+  const lines: ReportLine[] = [
+    ...operating.lines,
+    ...investing.lines,
+    ...financing.lines,
+    ...(unplaced.length ? [...unplaced, { kind: 'total' as const, depth: 0, label: 'Net cash from accounts not in the chart yet', ...unplacedTotal }] : []),
+    grand('Net change in cash for the period', plus(plus(operating.total, investing.total), plus(financing.total, unplacedTotal))),
+    { kind: 'total', depth: 0, label: 'Cash at the beginning of the period', ...sum(banks, (k) => pairOf((side) => before(b, side, k, from))) },
+    grand('Cash at the end of the period', sum(banks, (k) => balanceAt(b, k, to))),
+  ];
+  return { lines, differing: counted(lines) };
+}
+
+/** The first month the profit and loss or cash flow statement covers: `from`, unless it's missing or after `to`. */
 const firstMonth = (range: ReportRange) => (range.from && range.from <= range.to ? range.from : range.to);
 
 function reportOf(b: Books, kind: ReportKind, range: ReportRange): Report {
   if (kind === 'balance_sheet') return balanceSheetOf(b, range.to);
   if (kind === 'trial_balance') return trialBalanceOf(b, range.to);
+  if (kind === 'cash_flow') return cashFlowOf(b, firstMonth(range), range.to);
   return profitAndLossOf(b, firstMonth(range), range.to);
 }
 
@@ -431,7 +484,7 @@ const lineKey = (l: ReportLine) => l.account ?? `derived:${l.label}`;
  */
 function withMonths(b: Books, kind: ReportKind, range: ReportRange, r: Report): Report {
   if (!r.lines.some(differs)) return r;
-  const from = kind === 'profit_and_loss' ? firstMonth(range) : '';
+  const from = coversMonths(kind) ? firstMonth(range) : '';
   const months = [...new Set(SIDES.flatMap((side) => [...b.moves[side].values()].flatMap((list) => list.map(([m]) => m))))]
     .filter((m) => m >= from && m <= range.to)
     .sort();
@@ -445,9 +498,9 @@ function withMonths(b: Books, kind: ReportKind, range: ReportRange, r: Report): 
 }
 
 /**
- * One report: the profit and loss for the months of the range, or the
- * balance sheet or trial balance at its end, each line that differs with the
- * months that make up its difference.
+ * One report: the profit and loss or cash flow statement for the months of
+ * the range, or the balance sheet or trial balance at its end, each line
+ * that differs with the months that make up its difference.
  */
 export function report(data: ReportData, kind: ReportKind, range: ReportRange): Report {
   const b = books(data);
@@ -456,9 +509,9 @@ export function report(data: ReportData, kind: ReportKind, range: ReportRange): 
 
 /**
  * For each month from January 2025 through `through`: does the report for
- * that month alone (its profit and loss, or the balance sheet or trial
- * balance at its end), as report() lays it out, match NetSuite's line for
- * line?
+ * that month alone (its profit and loss or cash flow statement, or the
+ * balance sheet or trial balance at its end), as report() lays it out, match
+ * NetSuite's line for line?
  */
 export function reportMonths(data: ReportData, kind: ReportKind, through: string): ReportMonth[] {
   const b = books(data);
@@ -484,7 +537,9 @@ const CREDIT_TYPES: ReadonlySet<string> = new Set([
  * (income and expenses on the trial balance cover its year from `from`, a
  * January). A NetSuite account the chart doesn't have yet counts as the
  * report lists it, debit positive: what moved on the profit and loss, a
- * balance on the others.
+ * balance on the others. On the cash flow statement a line is what the
+ * account's change in the months did to cash, cash in positive, so it has
+ * no balance before: a bank account's is the change in cash itself.
  */
 export interface LineSpan {
   /** -1 where the report shows the account's credits as positive. */
@@ -506,6 +561,11 @@ const monthBefore = (month: string) => {
 export function lineSpan(data: ReportData, kind: ReportKind, key: string, range: { from: string; to: string }): LineSpan {
   const b = books(data);
   const account = b.chart.get(key);
+  if (kind === 'cash_flow') {
+    const sign = account?.account_type === 'bank' ? 1 : -1;
+    const own = times(sign, pairOf((side) => moved(b, side, key, range.from, range.to)));
+    return { sign, starting: null, moved: own, closed: null, ending: own };
+  }
   const sign = kind !== 'trial_balance' && account && CREDIT_TYPES.has(account.account_type) ? -1 : 1;
   const own = times(sign, pairOf((side) => moved(b, side, key, range.from, range.to)));
   const balanceSheet = account ? account.statement !== 'income_statement' : kind !== 'profit_and_loss';
