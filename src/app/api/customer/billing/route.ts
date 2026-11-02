@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     }
     if (!netsuiteId) return NextResponse.json({ linked: false });
 
-    const { billing } = await loadPortalBilling(netsuiteId);
+    const { billing } = await loadPortalBilling(service, netsuiteId);
     return NextResponse.json({ linked: true, ...billing });
   } catch (e: any) {
     console.error('customer billing failed:', e);

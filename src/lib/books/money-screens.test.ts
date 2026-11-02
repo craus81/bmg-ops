@@ -4,8 +4,8 @@ vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok
 
 import { buildAgings, type OpenDocumentData, type OpenDocumentsData } from './agings';
 import {
-  accountGroups, apRows, arAging, arRows, booksFinancials, booksMonths, booksPnl, booksPnlPeriod, notOpenOf,
-  type BooksSource, type DocLink,
+  accountGroups, apRows, arAging, arRows, booksFinancials, booksMonths, booksPnl, booksPnlPeriod, notOpenOf, portalAsOf, portalInvoices,
+  PORTAL_FRESH_MS, type BooksSource, type DocLink,
 } from './money-screens';
 import { UNNAMED, type PartyBalance, type PartyBalances, type PartyKind } from './party-balances';
 import { report, type ReportAccount, type ReportAmount, type ReportData } from './reports';
@@ -448,5 +448,82 @@ describe('booksMonths', () => {
     expect(months.get('2026-11')).toMatchObject({ income: 0, expense: -15, netProfit: 15 });
     expect(months.get('2026-08')).toMatchObject({ income: 0, netProfit: 0, accountCount: 0 });
     expect(booksMonths(books(), []).size).toBe(0);
+  });
+});
+
+describe('portalInvoices', () => {
+  // NetSuite's customers: Acme is 9001, Bravo 9002, Credit Only 9003. The invoice no FleetSuite customer is named on is Acme's.
+  const customerOf = new Map([['101', '9001'], ['102', '9001'], ['103', '9001'], ['107', '9001'], ['201', '9002'], ['309', '9003'], ['401', '9001']]);
+  const facts = new Map([['101', { total: 1000, note: 'PO-77' }], ['201', { total: 400, note: null }]]);
+
+  it("lists the open invoices NetSuite names the customer on, with FleetSuite's open amount, whoever the books have them under", () => {
+    expect(portalInvoices(customers(), '9001', customerOf, facts, link)).toEqual([
+      {
+        id: '101', tranid: 'INV101', date: '2026-09-01', dueDate: '2026-10-01', po: 'PO-77', customer: '', entityId: '9001',
+        total: 1000, unpaid: 800, daysPastDue: 32, bucket: 'd31_60', nsUrl: 'ns:custinvc:101', status: 'open',
+      },
+      {
+        id: '102', tranid: 'INV102', date: '2026-10-21', dueDate: '2026-11-20', po: null, customer: '', entityId: '9001',
+        total: 500, unpaid: 500, daysPastDue: 0, bucket: 'current', nsUrl: 'ns:custinvc:102', status: 'open',
+      },
+      {
+        id: '401', tranid: '401', date: '2026-09-25', dueDate: '2026-10-25', po: null, customer: '', entityId: '9001',
+        total: 75, unpaid: 75, daysPastDue: 8, bucket: 'd1_30', nsUrl: 'ns:custinvc:401', status: 'open',
+      },
+    ]);
+    // Not the invoice FleetSuite's books paid that NetSuite has open, nor the credit memo, nor another customer's.
+    expect(portalInvoices(customers(), '9002', customerOf, facts, link).map((r) => [r.id, r.unpaid])).toEqual([['201', 400]]);
+    expect(portalInvoices(customers(), '9003', customerOf, facts, link)).toEqual([]);
+  });
+
+  it('lists nothing for a customer NetSuite names on none, nor an invoice NetSuite names nobody on', () => {
+    expect(portalInvoices(customers(), '9009', customerOf, facts, link)).toEqual([]);
+    expect(portalInvoices(customers(), '9001', new Map([['101', '9001']]), facts, link).map((r) => r.id)).toEqual(['101']);
+  });
+
+  it("adds up what's open on an invoice the books have under two customers, and leaves it out when that's nothing or less", () => {
+    // INV501's invoice is under Acme, its $100 payment under no one, as the ledger mirror's match changed in between; INV502 is
+    // paid, INV503 paid $30 too much, and CM8 is a credit memo, put on more than it was for.
+    const split = buildAgings(
+      balances('customer', [balance(ACME, 'Acme Fleet', 34000), balance('', UNNAMED.customer, -16000)]),
+      documents([
+        doc({ party: ACME, doc: '501', number: 'INV501', fleetsuite_due: '2026-10-20', fleetsuite: '300.00' }),
+        doc({ party: '', doc: '501', number: 'INV501', fleetsuite_due: '2026-10-20', netsuite: '200.00', fleetsuite: '-100.00' }),
+        doc({ party: ACME, doc: '502', number: 'INV502', fleetsuite: '50.00' }),
+        doc({ party: '', doc: '502', number: 'INV502', fleetsuite: '-50.00' }),
+        doc({ party: ACME, doc: '503', number: 'INV503', fleetsuite: '50.00' }),
+        doc({ party: '', doc: '503', number: 'INV503', fleetsuite: '-80.00' }),
+        doc({ party: ACME, doc: '108', number: 'CM8', type: 'CustCred', fleetsuite: '-30.00' }),
+        doc({ party: '', doc: '108', number: 'CM8', type: 'CustCred', fleetsuite: '50.00' }),
+      ]),
+      'customer',
+      TODAY,
+    );
+    const theirs = new Map([['501', '9001'], ['502', '9001'], ['503', '9001'], ['108', '9001']]);
+    expect(portalInvoices(split, '9001', theirs, new Map(), link)).toEqual([{
+      id: '501', tranid: 'INV501', date: '2026-09-01', dueDate: '2026-10-20', po: null, customer: '', entityId: '9001',
+      total: 200, unpaid: 200, daysPastDue: 13, bucket: 'd1_30', nsUrl: 'ns:custinvc:501', status: 'open',
+    }]);
+  });
+});
+
+describe('portalAsOf', () => {
+  const NOW = Date.parse('2026-11-02T18:00:00Z');
+  const times = { copied: '2026-11-02T17:05:00+00:00', posted: '2026-11-02T17:48:00+00:00', open: '2026-11-02T17:29:00+00:00' };
+
+  it("is the earliest of the general ledger copy's, the posting run's and the open items copy's last full runs", () => {
+    expect(portalAsOf(times, NOW)).toBe('2026-11-02T17:05:00.000Z');
+    expect(portalAsOf({ ...times, posted: '2026-11-02T16:48:00Z' }, NOW)).toBe('2026-11-02T16:48:00.000Z');
+    expect(portalAsOf({ ...times, open: '2026-11-02T15:29:00Z' }, NOW)).toBe('2026-11-02T15:29:00.000Z');
+  });
+
+  it("refuses books that never caught up, or haven't in the last day", () => {
+    expect(() => portalAsOf({ ...times, copied: null }, NOW)).toThrow("the copy of NetSuite's general ledger hasn't finished a run");
+    expect(() => portalAsOf({ ...times, posted: null }, NOW)).toThrow("the posting run hasn't finished a run");
+    expect(() => portalAsOf({ ...times, open: null }, NOW)).toThrow("the copy of NetSuite's open invoices hasn't finished a run");
+    expect(PORTAL_FRESH_MS).toBe(24 * 60 * 60 * 1000);
+    expect(portalAsOf(times, Date.parse(times.copied) + PORTAL_FRESH_MS)).toBe('2026-11-02T17:05:00.000Z');
+    expect(() => portalAsOf(times, Date.parse(times.copied) + PORTAL_FRESH_MS + 1))
+      .toThrow("the books haven't caught up with NetSuite since 2026-11-02T17:05:00.000Z");
   });
 });

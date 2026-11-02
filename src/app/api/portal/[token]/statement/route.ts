@@ -38,12 +38,12 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   if (!customer) return NextResponse.json({ status: 'invalid' }, { status: 404 });
 
   try {
-    const { raw } = await loadPortalBilling(customer.netsuite_id);
+    const { billing, raw } = await loadPortalBilling(service, customer.netsuite_id);
     if (raw.length === 0) {
       return NextResponse.json({ error: 'No open invoices — nothing to put on a statement.' }, { status: 400 });
     }
     const customerName = raw[0].customer || customer.company_name || 'Customer';
-    const pdf = await generateStatementPdf(service, { customer: customerName, invoices: raw, scope: 'open' });
+    const pdf = await generateStatementPdf(service, { customer: customerName, invoices: raw, scope: 'open', asOf: billing.asOf });
     if (!pdf.ok) {
       return NextResponse.json({ error: 'The statement is temporarily unavailable — try again shortly.' }, { status: 502 });
     }
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
       }, { status: 400 });
     }
 
-    const { raw } = await loadPortalBilling(customer.netsuite_id);
+    const { billing, raw } = await loadPortalBilling(service, customer.netsuite_id);
     if (raw.length === 0) {
       return NextResponse.json({ error: 'No open invoices — nothing to put on a statement.' }, { status: 400 });
     }
@@ -98,7 +98,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
 
     // Statement PDF first and mandatory (the body names it — a render
     // failure fails the send before anything goes out).
-    const pdf = await generateStatementPdf(service, { customer: customerName, invoices: raw, scope: 'open' });
+    const pdf = await generateStatementPdf(service, { customer: customerName, invoices: raw, scope: 'open', asOf: billing.asOf });
     if (!pdf.ok) {
       return NextResponse.json({ error: 'Could not generate the statement PDF — nothing was sent. Try again shortly.' }, { status: 502 });
     }

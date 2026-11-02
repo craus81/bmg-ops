@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, 478 to 480, 485 to 488, 494, 497 to 499 and 504, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 to 480, 485 to 488, 494, 497 to 499, 504 and 505, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -21,19 +21,22 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * read it rather than post one unapproved (src/app/api/inventory/adjust).
  * Financials on FleetSuite's books sends nothing anywhere: on, Home →
  * Financials and Financial History read BMG's books in FleetSuite rather
- * than NetSuite (src/lib/books/money-screens.ts).
+ * than NetSuite (src/lib/books/money-screens.ts). Nor does Portal billing on
+ * FleetSuite's books: on, the customer portal's billing reads them
+ * (src/lib/portal-billing.ts).
  * Receiving payments, taking deposits, bank deposits and paying vendors stay
  * off past January 1, until they move into FleetSuite during 2027,
  * approving adjustments until the plan adds it in 2027, FleetSuite's own
- * numbers and invoice PDFs until the second quarter of 2027, and counts until
- * the third (`later` says so).
+ * numbers and invoice PDFs until the second quarter of 2027, counts until
+ * the third, and the portal's billing until the full cutover (`later` says
+ * so).
  */
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
   | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments'
   | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals' | 'own_numbers' | 'invoice_pdfs' | 'stock_counts'
-  | 'money_screens';
+  | 'money_screens' | 'portal_books';
 
 export interface SwitchInfo {
   name: string;
@@ -168,6 +171,14 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     where: 'Home → Financials, and Reports → Financial History',
     turnOn: "Switch on Financials on FleetSuite's books? Home → Financials and Financial History then show BMG's numbers from FleetSuite's books, without 1084's, as of the last posting run (every two hours). Nothing is sent to NetSuite.",
     turnOff: "Switch off Financials on FleetSuite's books? Home → Financials and Financial History go back to reading NetSuite.",
+  },
+  portal_books: {
+    name: "Portal billing on FleetSuite's books",
+    what: "The customer portal's Billing and the billing card on a customer's dashboard list each customer's open invoices from BMG's books in FleetSuite instead of NetSuite: what's open on each and when it's due, the balance, how late it is, and the statement made from them.",
+    where: "The customer portal's Billing, and the billing card on a customer's dashboard",
+    turnOn: "Switch on Portal billing on FleetSuite's books? Customers then see their open invoices from FleetSuite's books, as of when the books last caught up with NetSuite (every two hours), rather than NetSuite's live. Nothing is sent to NetSuite and no customer is emailed.",
+    turnOff: "Switch off Portal billing on FleetSuite's books? The portal goes back to reading NetSuite live.",
+    later: 'Stays off on January 1: NetSuite has every invoice and payment, live, through 2027, so the portal reads NetSuite until the full cutover.',
   },
 };
 

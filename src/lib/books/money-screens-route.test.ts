@@ -52,11 +52,16 @@ const TABLES: Record<string, Array<Record<string, unknown>>> = {
     account('a61', '61', '6010', 'Wages', 'expense'),
     account('a65', '65', '6500', 'Rent', 'expense'),
   ],
+  // The ledger mirror keeps NetSuite's invoices and credit memos by type and id; QuickBooks' have ids of their own.
   ledger_invoices: [
-    { id: 'li1', source: 'netsuite', external_id: '101', total: 1000, po_number: 'PO-77' },
-    { id: 'li2', source: 'quickbooks', external_id: '102', total: 999, po_number: 'Not this one' },
+    { id: 'li1', source: 'netsuite', external_id: 'CustInvc/101', external_ref: '101', total: 1000, po_number: 'PO-77' },
+    { id: 'li2', source: 'quickbooks', external_id: 'CustInvc/102', external_ref: '102', total: 999, po_number: 'Not this one' },
+    { id: 'li3', source: 'netsuite', external_id: 'CustCred/107', external_ref: '107', total: 50, po_number: 'RMA-9' },
+    { id: 'li4', source: 'netsuite', external_id: 'CustCred/201', external_ref: '201', total: 999, po_number: 'Not this one' },
   ],
-  ledger_bills: [{ id: 'lb1', source: 'netsuite', external_id: '4001', total: 900, memo: 'Oct parts' }],
+  // The books' copy of NetSuite's bills; ledger_bills is QuickBooks'.
+  gl_netsuite_bills: [{ netsuite_id: '4001', tran_type: 'VendBill', total: 900, memo: 'Oct parts' }],
+  ledger_bills: [{ id: 'lb1', source: 'netsuite', external_id: '4003', total: 999, memo: 'Not this one' }],
 };
 
 let switchOn = true;
@@ -218,9 +223,9 @@ describe("Financials on FleetSuite's books, switched on", () => {
       unpaidColumn: true,
       notOpen: -80,
       invoices: [
-        expect.objectContaining({ id: '107', tranid: 'CM7', total: -50, unpaid: -50, daysPastDue: 62, bucket: 'd61_90', creditMemo: true, nsUrl: 'https://ns.example/custcred/107' }),
+        expect.objectContaining({ id: '107', tranid: 'CM7', po: 'RMA-9', total: -50, unpaid: -50, daysPastDue: 62, bucket: 'd61_90', creditMemo: true, nsUrl: 'https://ns.example/custcred/107' }),
         expect.objectContaining({ id: '101', tranid: 'INV101', po: 'PO-77', total: 1000, unpaid: 800, daysPastDue: 32, entityId: ACME, nsUrl: 'https://ns.example/custinvc/101' }),
-        expect.objectContaining({ id: '201', tranid: 'INV201', customer: 'Bravo Trucking', total: 900, unpaid: 900, daysPastDue: 0, entityId: BRAVO }),
+        expect.objectContaining({ id: '201', tranid: 'INV201', customer: 'Bravo Trucking', po: null, total: 900, unpaid: 900, daysPastDue: 0, entityId: BRAVO }),
         // Only NetSuite's copy of a document gives its total and PO.
         expect.objectContaining({ id: '102', po: null, total: 500, unpaid: 500, daysPastDue: 0, bucket: 'current' }),
       ],
@@ -304,6 +309,8 @@ describe("Financials on FleetSuite's books, switched on", () => {
     expect((await apRoute(get('/api/reports/financials/ap-bills'))).status).toBe(500);
     failing = 'ledger_invoices';
     expect(await (await arRoute(get('/api/reports/financials/ar-invoices'))).json()).toEqual({ error: "Couldn't read FleetSuite's books: Couldn't read ledger_invoices" });
+    failing = 'gl_netsuite_bills';
+    expect(await (await apRoute(get('/api/reports/financials/ap-bills'))).json()).toEqual({ error: "Couldn't read FleetSuite's books: Couldn't read gl_netsuite_bills" });
     failing = 'sync_state';
     expect((await accountsRoute(get('/api/reports/financials/accounts'))).status).toBe(500);
     failing = 'gl_books_collections';

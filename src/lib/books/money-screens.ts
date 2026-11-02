@@ -1,7 +1,10 @@
-import { arCustomerKey, type AccountBalance, type AgingBucketKey, type ArAging, type OpenArInvoice, type OpenVendorBill, type OverdueAccount } from '@/lib/financials-data';
+import {
+  arCustomerKey, type AccountBalance, type AgingBucketKey, type ArAging, type OpenArInvoice, type OpenVendorBill, type OverdueAccount,
+  type StatementInvoice,
+} from '@/lib/financials-data';
 import { pnlSummaryOf, type PnlPeriod, type PnlPeriodDef, type PnlSummary } from '@/lib/pnl';
 import { BUCKETS } from './aging-buckets';
-import type { Agings } from './agings';
+import type { AgedDocument, Agings } from './agings';
 import { toCents } from './netsuite-gl';
 import { lineSpan, type ReportAccount, type ReportData } from './reports';
 
@@ -25,6 +28,9 @@ import { lineSpan, type ReportAccount, type ReportData } from './reports';
  *  - The profit and loss band sums each income and expense account's
  *    entries for the period's months, as Books → Reports does; collections
  *    are gl_books_collections'.
+ *
+ * The customer portal's billing reads the customers' agings here too, with
+ * a switch of its own (migration 505, portalInvoices below).
  *
  * Amounts here are dollars, as the tab shows them; the books keep cents.
  */
@@ -184,6 +190,30 @@ export function booksFinancials(groups: BooksAccountGroups, customers: Agings, p
 export interface DocumentFacts {
   total: number;
   note: string | null;
+  /** NetSuite's id for an invoice's or credit memo's customer, as the ledger mirror copied it. */
+  customer?: string | null;
+}
+
+/** One open invoice or credit memo, as the A/R list shows it, its customer named `customer` (`entityId`). */
+function arRow(d: AgedDocument, customer: string, entityId: string | null, facts: ReadonlyMap<string, DocumentFacts>, link: DocLink): OpenArInvoice {
+  const credit = d.type === 'CustCred';
+  const unpaid = dollars(d.open.fleetsuite);
+  const fact = facts.get(d.doc);
+  return {
+    id: d.doc,
+    tranid: d.number ?? d.doc,
+    date: d.date,
+    dueDate: d.due.fleetsuite,
+    po: fact?.note ?? null,
+    customer,
+    entityId,
+    total: fact ? (credit ? -fact.total : fact.total) : unpaid,
+    unpaid,
+    daysPastDue: Math.max(0, d.days.fleetsuite ?? 0),
+    bucket: d.bucket.fleetsuite,
+    nsUrl: link(credit ? 'custcred' : 'custinvc', d.doc),
+    ...(credit ? { creditMemo: true } : {}),
+  };
 }
 
 /**
@@ -194,26 +224,7 @@ export interface DocumentFacts {
  * is what's open.
  */
 export function arRows(customers: Agings, facts: ReadonlyMap<string, DocumentFacts>, link: DocLink): OpenArInvoice[] {
-  return customers.parties.flatMap((p) => p.documents.filter((d) => d.open.fleetsuite).map((d): OpenArInvoice => {
-    const credit = d.type === 'CustCred';
-    const unpaid = dollars(d.open.fleetsuite);
-    const fact = facts.get(d.doc);
-    return {
-      id: d.doc,
-      tranid: d.number ?? d.doc,
-      date: d.date,
-      dueDate: d.due.fleetsuite,
-      po: fact?.note ?? null,
-      customer: p.name,
-      entityId: p.party || null,
-      total: fact ? (credit ? -fact.total : fact.total) : unpaid,
-      unpaid,
-      daysPastDue: Math.max(0, d.days.fleetsuite ?? 0),
-      bucket: d.bucket.fleetsuite,
-      nsUrl: link(credit ? 'custcred' : 'custinvc', d.doc),
-      ...(credit ? { creditMemo: true } : {}),
-    };
-  }));
+  return customers.parties.flatMap((p) => p.documents.filter((d) => d.open.fleetsuite).map((d) => arRow(d, p.name, p.party || null, facts, link)));
 }
 
 /** Every open bill and bill credit in the vendors' agings, as the A/P list shows them; `facts` holds each one's total and memo. */
@@ -236,6 +247,51 @@ export function apRows(vendors: Agings, facts: ReadonlyMap<string, DocumentFacts
       ...(credit ? { billCredit: true } : {}),
     };
   }));
+}
+
+/**
+ * One customer's open invoices in FleetSuite's books, for the customer
+ * portal (migration 505, docs/books.md "The portal"), keyed as NetSuite's
+ * open invoices are: on the customer's NetSuite id, never a name. An
+ * invoice is theirs when NetSuite names them on it (`customerOf`, NetSuite's
+ * id for each invoice's customer), whichever customer the agings have it
+ * under, and what's open on it is FleetSuite's, added up over every one it's
+ * under: while the ledger mirror's match of a NetSuite customer to a
+ * FleetSuite one changes, an invoice's lines can sit under two. The portal
+ * shows open invoices alone, as it does NetSuite's: credit memos, what's not
+ * in an open invoice and an invoice NetSuite doesn't have aren't in it.
+ */
+export function portalInvoices(customers: Agings, netsuiteId: string, customerOf: ReadonlyMap<string, string>,
+  facts: ReadonlyMap<string, DocumentFacts>, link: DocLink): StatementInvoice[] {
+  const theirs = new Map<string, AgedDocument>();
+  for (const d of customers.parties.flatMap((p) => p.documents)) {
+    if (d.type !== 'CustInvc' || customerOf.get(d.doc) !== netsuiteId) continue;
+    const seen = theirs.get(d.doc);
+    theirs.set(d.doc, seen ? { ...seen, open: { ...seen.open, fleetsuite: seen.open.fleetsuite + d.open.fleetsuite } } : d);
+  }
+  return [...theirs.values()].filter((d) => d.open.fleetsuite > 0)
+    .map((d) => ({ ...arRow(d, '', netsuiteId, facts, link), status: 'open' as const }));
+}
+
+/** How long after BMG's books last caught up with NetSuite the portal shows them: a day, a dozen runs missed. */
+export const PORTAL_FRESH_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * When BMG's books last caught up with NetSuite, the portal's "as of": the
+ * earliest of the last full runs of the copy of NetSuite's general ledger,
+ * the posting run and the copy of NetSuite's open items (each every two
+ * hours; one that fails or stops for time leaves its time as it was).
+ * Books that never caught up, or not in the last day, throw: the portal
+ * says billing is unavailable rather than show what was owed days ago.
+ */
+export function portalAsOf(times: { copied: string | null; posted: string | null; open: string | null }, now: number): string {
+  if (!times.copied) throw new Error("the copy of NetSuite's general ledger hasn't finished a run");
+  if (!times.posted) throw new Error("the posting run hasn't finished a run");
+  if (!times.open) throw new Error("the copy of NetSuite's open invoices hasn't finished a run");
+  const at = Math.min(Date.parse(times.copied), Date.parse(times.posted), Date.parse(times.open));
+  const asOf = new Date(at).toISOString();
+  if (now - at > PORTAL_FRESH_MS) throw new Error(`the books haven't caught up with NetSuite since ${asOf}`);
+  return asOf;
 }
 
 /** What the open documents leave of the accounts' balance, in dollars: the list's "not in an open invoice (bill)". */

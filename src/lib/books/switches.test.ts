@@ -38,7 +38,7 @@ describe('switches', () => {
       'credit_memos', 'vendor_credits', 'card_charges', 'journal_entries', 'inventory_transfers', 'invoice_fixes', 'bill_fixes',
       'customer_vendor_details', 'item_accounts', 'estimates_in_fleetsuite', 'fleetsuite_records', 'customer_payments',
       'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'stock_counts',
-      'money_screens',
+      'money_screens', 'portal_books',
     ]);
     expect(SWITCHES.credit_memos.where).toBe('Invoicing → Invoiced → Credit on an invoice');
     expect(SWITCHES.vendor_credits.where).toBe('More → Purchasing → Vendor Credits');
@@ -136,15 +136,24 @@ describe('switches', () => {
       turnOn: "Switch on Financials on FleetSuite's books? Home → Financials and Financial History then show BMG's numbers from FleetSuite's books, without 1084's, as of the last posting run (every two hours). Nothing is sent to NetSuite.",
       turnOff: "Switch off Financials on FleetSuite's books? Home → Financials and Financial History go back to reading NetSuite.",
     });
+    expect(SWITCHES.portal_books).toEqual({
+      name: "Portal billing on FleetSuite's books",
+      what: "The customer portal's Billing and the billing card on a customer's dashboard list each customer's open invoices from BMG's books in FleetSuite instead of NetSuite: what's open on each and when it's due, the balance, how late it is, and the statement made from them.",
+      where: "The customer portal's Billing, and the billing card on a customer's dashboard",
+      turnOn: "Switch on Portal billing on FleetSuite's books? Customers then see their open invoices from FleetSuite's books, as of when the books last caught up with NetSuite (every two hours), rather than NetSuite's live. Nothing is sent to NetSuite and no customer is emailed.",
+      turnOff: "Switch off Portal billing on FleetSuite's books? The portal goes back to reading NetSuite live.",
+      later: 'Stays off on January 1: NetSuite has every invoice and payment, live, through 2027, so the portal reads NetSuite until the full cutover.',
+    });
     // Only receiving payments, taking deposits, bank deposits, paying vendors, approving adjustments, own numbers,
-    // invoice PDFs and counts wait past January 1.
+    // invoice PDFs, counts and the portal's billing wait past January 1.
     expect(SWITCH_PIECES.filter((p) => SWITCHES[p].later !== undefined)).toEqual([
       'customer_payments', 'customer_deposits', 'bank_deposits', 'vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs',
-      'stock_counts',
+      'stock_counts', 'portal_books',
     ]);
     // Only the pieces that are the other way round, need a step in NetSuite first, or send nothing, ask in their own words.
-    expect(SWITCH_PIECES.filter((p) => SWITCHES[p].turnOn !== undefined || SWITCHES[p].turnOff !== undefined))
-      .toEqual(['estimates_in_fleetsuite', 'fleetsuite_records', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'money_screens']);
+    expect(SWITCH_PIECES.filter((p) => SWITCHES[p].turnOn !== undefined || SWITCHES[p].turnOff !== undefined)).toEqual([
+      'estimates_in_fleetsuite', 'fleetsuite_records', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'money_screens', 'portal_books',
+    ]);
     expect(isSwitchPiece('credit_memos')).toBe(true);
     expect(isSwitchPiece('vendor_credits')).toBe(true);
     expect(isSwitchPiece('card_charges')).toBe(true);
@@ -165,6 +174,7 @@ describe('switches', () => {
     expect(isSwitchPiece('invoice_pdfs')).toBe(true);
     expect(isSwitchPiece('stock_counts')).toBe(true);
     expect(isSwitchPiece('money_screens')).toBe(true);
+    expect(isSwitchPiece('portal_books')).toBe(true);
     expect(isSwitchPiece('payroll')).toBe(false);
     expect(isSwitchPiece('toString')).toBe(false);
     expect(isSwitchPiece(null)).toBe(false);
@@ -192,6 +202,7 @@ describe('switches', () => {
       { piece: 'invoice_pdfs', on: false, changedBy: null, changedAt: null },
       { piece: 'stock_counts', on: false, changedBy: null, changedAt: null },
       { piece: 'money_screens', on: false, changedBy: null, changedAt: null },
+      { piece: 'portal_books', on: false, changedBy: null, changedAt: null },
     ]);
     expect(await readSwitches(fakeService().service)).toEqual([
       { piece: 'credit_memos', on: false, changedBy: null, changedAt: null },
@@ -214,6 +225,7 @@ describe('switches', () => {
       { piece: 'invoice_pdfs', on: false, changedBy: null, changedAt: null },
       { piece: 'stock_counts', on: false, changedBy: null, changedAt: null },
       { piece: 'money_screens', on: false, changedBy: null, changedAt: null },
+      { piece: 'portal_books', on: false, changedBy: null, changedAt: null },
     ]);
     await expect(readSwitches(fakeService({ error: 'denied' }).service)).rejects.toThrow('denied');
   });
