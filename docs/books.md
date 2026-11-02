@@ -124,10 +124,16 @@ sales tax return worked out month by month, location by location, with
 each return as filed held against it ("Sales tax"), part 66,
 FleetSuite's own copy of each invoice taxed at its location's rate on its
 date, and a warning at billing when an exempt customer's certificate has
-expired ("FleetSuite's own invoices"), and part 67, FleetSuite's own number
+expired ("FleetSuite's own invoices"), part 67, FleetSuite's own number
 on each sales order, PO, invoice and credit memo it makes in NetSuite, with
 the sales orders and POs made in NetSuite instead listed, built switched
-off ("Own numbers").
+off ("Own numbers"), part 68, FleetSuite's own PDF of each of its invoices
+attached to NetSuite's invoice, built switched off ("Invoice PDFs"), part
+69, stock counted in FleetSuite on count sheets by location, its
+differences reviewed and approved as one adjustment, built switched off
+("Counts"), and part 70, the year's 1099s made as the IRS's own upload file
+for IRIS, its e-file portal, with tax IDs only ever on the device that
+makes it ("Filing the 1099s").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -147,7 +153,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, the own numbers at `/admin/books/own-numbers`, and the 1099s at `/admin/books/1099s`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, the own numbers at `/admin/books/own-numbers`, the 1099s at `/admin/books/1099s`, and filing them at `/admin/books/1099s/file`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
 the accounts page, and Home opens it for a bookkeeper or CPA with no other
 role; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
@@ -281,6 +287,7 @@ admins can open it while fixing invoices is switched off.
 | Going live: the entry that opens the books at NetSuite's balances (what still differs on the day, customer by customer and vendor by vendor), what would stop it posting, the rehearsal, the tap that sets the books live, and the posting run posting the entry | `migrations/476-books-going-live.sql`, `src/lib/books/opening-balances.ts`, `src/lib/books/going-live.ts`, `postInvoices`, `liveDecision` and `standingDates` in `src/lib/books/invoice-posting.ts`, the daily check's months in `src/lib/books/daily-check.ts`, `src/app/(main)/admin/books/going-live/page.tsx`, `src/app/api/admin/books/going-live/route.ts`; tests `src/lib/books/opening-balances.test.ts`, `src/lib/books/going-live.test.ts`, `src/lib/books/going-live-route.test.ts`, `src/lib/books/going-live-sql.test.ts`, `src/lib/books/invoice-posting.test.ts`, and the live-books tests in `src/lib/books/invoice-posting-sql.test.ts` and `src/lib/books/daily-check-sql.test.ts` |
 | 1099s: what each vendor marked to get a 1099 was paid in a year on the accounts that count toward one, by category, from the copy of NetSuite | `migrations/481-books-1099s.sql`, `src/lib/books/1099s.ts`, `ACCOUNT_1099_QUERY` and `mapAccount1099s` in `src/lib/books/netsuite-accounts.ts`, the vendors' `is_1099` and `legal_name` in `src/lib/books/netsuite-lists.ts`, `src/app/(main)/admin/books/1099s/page.tsx`, `src/app/api/admin/books/1099s/route.ts`; tests `src/lib/books/1099s.test.ts`, `src/lib/books/1099s-route.test.ts`, `src/lib/books/1099s-sql.test.ts` |
 | 1099s: NetSuite's 1099 report uploaded and held against FleetSuite's totals, vendor by vendor and box by box, never keeping a tax ID | `migrations/482-books-1099-report.sql`, `src/lib/books/1099-report.ts`, the `POST` and the report in `src/app/api/admin/books/1099s/route.ts`, `NetSuiteReport` in `src/app/(main)/admin/books/1099s/page.tsx`; tests `src/lib/books/1099-report.test.ts`, `src/lib/books/1099-report-sql.test.ts`, `src/lib/books/1099s-route.test.ts` |
+| 1099s filed: who gets which 1099 under the year's minimums, each one's name and address read live from NetSuite, and the IRS's IRIS upload template filled in on the device, tax IDs never reaching FleetSuite | `src/lib/books/1099-filing.ts`, `yearPayees` and `payeeFinder` in `src/lib/books/1099-report.ts`, the `payees` and `madeFile` posts in `src/app/api/admin/books/1099s/route.ts`, `src/app/(main)/admin/books/1099s/file/page.tsx`; tests `src/lib/books/1099-filing.test.ts`, `src/lib/books/1099s-route.test.ts` |
 | 1084 Cool Springs' rent and mortgage: the rent checked against BMG's books, the lender's statement against 1084's, and the month's two entries made for Journal entries | `migrations/492-rent-and-mortgage-for-1084.sql`, `src/lib/books/rent-and-mortgage.ts`, `src/app/(main)/admin/books/rent-and-mortgage/page.tsx`, `src/app/api/admin/books/rent-and-mortgage/route.ts`; tests `src/lib/books/rent-and-mortgage.test.ts`, `src/lib/books/rent-and-mortgage-route.test.ts`, `src/lib/books/rent-mortgage-sql.test.ts` |
 | 1084's bank reconciliation: each statement's entries ticked as they clear, month by month | `migrations/493-bank-reconciliation-for-1084.sql`, `src/lib/books/bank-reconciliation.ts`, `src/app/(main)/admin/books/bank-reconciliation/page.tsx`, `src/app/api/admin/books/bank-reconciliation/route.ts`; tests `src/lib/books/bank-reconciliation.test.ts`, `src/lib/books/bank-reconciliation-route.test.ts`, `src/lib/books/bank-rec-sql.test.ts` |
 | Inventory value: each stocked item's value at a month's end, tied to each inventory account | `migrations/495-inventory-value-at-a-months-end.sql`, `src/lib/books/inventory-value.ts`, `src/lib/books/inventory-value-data.ts`, `src/app/(main)/admin/books/inventory-value/page.tsx`, `src/app/api/admin/books/inventory-value/route.ts` and its `download`; tests `src/lib/books/inventory-value.test.ts`, `src/lib/books/inventory-value-route.test.ts`, `src/lib/books/inventory-value-sql.test.ts` |
@@ -6552,10 +6559,111 @@ it follows the copies as they come up to date:
   under $600; FleetSuite applies no minimum); the matches; and what was
   read and left out. A title naming another year is pointed out.
 
+### Filing the 1099s (part 70)
+
+Books → 1099s → File the 1099s (`/admin/books/1099s/file`,
+`deepLinks.books1099Filing`, linked from the 1099s page) makes the year's
+1099s as the IRS's own upload file for IRIS, its e-file portal: the NetSuite
+Exit Checklist's "1099s and e-filing". No migration, nothing kept but an
+audit line, and nothing sent to the IRS.
+
+Who gets one (`due1099`, `src/lib/books/1099-filing.ts`), from part 50's
+totals for the year:
+
+- Each category goes in its box (`FILED_BOXES`): Nonemployee Compensation
+  in box 1 of the 1099-NEC; Rents, Royalties, Other Income, Medical and
+  Health Care Payments and Gross Proceeds Paid to an Attorney in boxes 1, 2,
+  3, 6 and 10 of the 1099-MISC.
+- A form is due when one of its boxes reaches that box's minimum, and then
+  has every box it was paid in. The minimum is $600 up to 2025 and $2,000
+  from 2026 (the One Big Beautiful Bill Act), raised for inflation from 2027
+  (`minimumFor`); royalties keep $10 and an attorney's gross proceeds $600.
+  Until a year's raised amount is put in `MINIMUM_FROM`, the last one known
+  is used and the page says so: someone paid just under the real minimum
+  can show as getting one, but nobody who should is left out.
+- Left to file by hand in IRIS, and listed in red with why: a payee
+  FleetSuite can't split some of what it was paid (its boxes may be short)
+  or paid back (they may be too high), one paid in a category FleetSuite
+  doesn't fill in (tax withheld, say), and one with a box below nothing.
+  Those under the minimums are listed too.
+- No file is made while the year isn't over (make it in January), while
+  checks or bill payments for it aren't in FleetSuite's copies yet, or
+  before the vendors' 1099 flags are copied.
+
+Check them in NetSuite (`POST /api/admin/books/1099s` with `{ company,
+year, payees }`, 25 at a time, the bookkeeper's and super admins' only)
+reads each payee's vendor record live (`getEntityRecord`) and hands back
+its name and billing address as they go on the form (`payeeDetails`): a
+company's legal name, its name as a second line when that differs, or a
+person's first, middle and last names; the billing address, or the only
+one. What stops it is shown in red: no name, no address or several with
+none for billing, an address outside the US (file it by hand), a missing
+street, city, state or ZIP, no tax ID in NetSuite (ask for the W-9), or no
+longer marked to get a 1099. Only a payee getting a 1099 for the year is
+read, and the read is audited with counts only.
+
+**Tax IDs never reach FleetSuite.** NetSuite's tax ID comes back only as the
+four digits it ends with (`parseDetailsVendor`). The whole one is typed on
+the page for each payee, or read on the device from a NetSuite export
+dropped on it (NetSuite's 1099 report, or a vendor search with the Tax ID
+column, as CSV or `.xlsx`; `readTaxIdFile`): the headings row names the
+vendor and its tax ID, a 7 or 8 digit one gets back the leading 0 Excel
+drops, a masked one (`***-**-6789`) is left out and counted, and each row is
+matched to a payee by part 51's rule (`payeeFinder`); one given two
+different tax IDs gets neither. Each is held against the four digits
+NetSuite has (`checkTin`), and its type is EIN, SSN or ITIN, from how it's
+written or picked. One read from an export shows only as `•••••6789`. They
+live in the page's memory and go only into the file saved on the device,
+never in a request, and go when the page is closed. The payer's EIN is
+typed the same way.
+
+The file:
+
+- The template is the IRS's own, downloaded in IRIS for the form and year
+  (Upload CSV with form data) and dropped on the page, so the file has
+  exactly its headings and text above them, its line endings and byte
+  order mark (`readTemplateFile`). The headings row is the first, within
+  ten, naming the recipient's fields.
+- Each heading is read for what goes under it (`readHeadings`): a box by
+  what it's for or its number, a party's field by its words (Recipient TIN,
+  Payer City/Town...), a heading naming no party taking the one before
+  it's. Checkboxes, codes, state boxes and boxes FleetSuite doesn't fill
+  are left blank, and one FleetSuite can't read is left blank and pointed
+  out. Columns on the page shows each with what goes under it for the
+  first form, and each can be changed, or set to the same text in every
+  row. The template's example row, when it has one, gives the words for the
+  form and the tax ID types (`BUSINESS_TIN`).
+- Names, streets and cities are written as the IRS takes them
+  (`nameLine`, `streetLine`, `cityName`: periods dropped, so L.L.C. as LLC
+  and P.O. as PO, and other marks a space, so O'Fallon as O Fallon), states as
+  their two letters, amounts as `1234.56`, the account number as NetSuite's
+  id for the vendor, tax IDs and ZIP+4s without dashes unless ticked.
+- A form goes in the file once it's checked, has nothing stopping it, and
+  has a tax ID matching NetSuite's four digits; the rest are listed with
+  why and left out. Nothing is made while a column the form needs (the
+  recipient's tax ID, name, street, city, state and ZIP, each box paid in,
+  the payer's when the template has them) has nothing under it
+  (`fileProblems`). Up to 100 forms go in a file (`FORMS_PER_FILE`), within
+  IRIS's limit (100 until the 2026 filing season, 250 since), so more make
+  more files, each saved with its own tap.
+- The payer is the company, typed on the page: BMG's legal name and the
+  letterhead's address to start with, 1084's blank.
+- Made again, the file leaves out the forms in one made before on the page,
+  unless that's unticked; the page remembers that only until it's closed.
+- Making it is audited with counts only (`{ company, year, madeFile }`).
+
+Then the file is uploaded in IRIS, where each form is checked before it's
+submitted, and IRIS gives the recipients' copies. Filing in IRIS takes a
+Transmitter Control Code, and applying for one can take up to 45 days.
+
 ### What isn't done yet
 
-- Making the 1099s and e-filing them (the checklist's July to September
-  2027), with this rule. FleetSuite keeps no vendor's tax ID.
+- The totals still come from FleetSuite's copy of NetSuite, so they follow
+  the books only while NetSuite has the year's payments.
+- Tax IDs need a home of their own once NetSuite is gone: today they're
+  typed or read from NetSuite's export each time.
+- State filing, corrections, and the forms FleetSuite doesn't fill in are
+  done by hand in IRIS.
 
 ## Who can open the books
 
@@ -6567,7 +6675,7 @@ a staff one:
 | Who | Level | What they can do |
 | --- | --- | --- |
 | Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, and reopening a closed month |
-| Bookkeeper | `keep` | Everything else: Sync now and Copy now, Post now, Look now, closing a month, clearing and reopening mistake checks, Looked at it on the NetSuite feed, Snap a bill, and NetSuite's 1099 report |
+| Bookkeeper | `keep` | Everything else: Sync now and Copy now, Post now, Look now, closing a month, clearing and reopening mistake checks, Looked at it on the NetSuite feed, Snap a bill, NetSuite's 1099 report, and checking the 1099s in NetSuite and making their file |
 | CPA | `read` | Every Books page and Excel download, changing nothing, and its own adjustments journal on Journal entries ("The CPA's adjustments journal") |
 
 How it's held:

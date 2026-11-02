@@ -84,7 +84,8 @@ export function scrub(s: string): string {
 }
 
 const plain = (s: string) => s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-const words = (s: string) => plain(s).replace(/&/g, ' and ').split(/[^a-z0-9]+/).filter(Boolean);
+/** A heading's or name's words: without case, accents or punctuation, "&" as "and". */
+export const words = (s: string) => plain(s).replace(/&/g, ' and ').split(/[^a-z0-9]+/).filter(Boolean);
 
 /** A name as compared: without its case, accents, spacing or punctuation, "&" as "and". */
 export const nameKey = (s: string) => words(scrub(s)).join('');
@@ -112,6 +113,12 @@ const OTHER_NAME_HEADERS = new Set([
   'legalname', 'vendorlegalname', 'recipientlegalname', 'printoncheckas', 'printas', 'dba', 'doingbusinessas',
   'businessname', 'vendorid', 'entityid', 'vendornumber', 'vendorno',
 ]);
+
+/** A heading naming the vendor ('vendor'), or another name it goes by, its legal name say ('name'); null for neither. */
+export function nameHeading(h: string): 'vendor' | 'name' | null {
+  const k = words(h).join('');
+  return VENDOR_HEADERS.has(k) ? 'vendor' : OTHER_NAME_HEADERS.has(k) ? 'name' : null;
+}
 
 /**
  * The 1099-MISC and 1099-NEC boxes NetSuite's categories are named for,
@@ -162,10 +169,8 @@ export function read1099Report(cells: string[][], boxes: readonly string[]): Rep
     const box = known.get(boxKey(h));
     if (box) return { kind: 'box', box };
     if (isTotalHeader(h)) return { kind: 'total' };
-    const k = words(h).join('');
-    if (VENDOR_HEADERS.has(k)) return { kind: 'vendor' };
-    if (OTHER_NAME_HEADERS.has(k)) return { kind: 'name' };
-    return { kind: 'out' };
+    const named = nameHeading(h);
+    return named ? { kind: named } : { kind: 'out' };
   };
 
   let at = -1;
@@ -444,6 +449,43 @@ function payeeKeys(p: Payee1099): string[] {
   return [...new Set(names.map(nameKey).filter(Boolean))];
 }
 
+/** Each of a year's payees once, by NetSuite's id: its 1099s, those not marked, paid only on other accounts or by card. */
+export function yearPayees(year: Year1099): Map<string, Payee1099> {
+  const payees = new Map<string, Payee1099>();
+  for (const p of [...year.forms, ...year.notMarked, ...year.nothingCounted, ...year.byCard]) if (!payees.has(p.payee)) payees.set(p.payee, p);
+  return payees;
+}
+
+/**
+ * Which of `payees` a row of a NetSuite export is, by the rule compare1099 says: the payee's id when exactly one
+ * fits, else none, with the ids of those it could be. Also how the 1099 filing page (part 70,
+ * src/lib/books/1099-filing.ts) finds whose tax ID a row of NetSuite's export holds.
+ */
+export function payeeFinder(payees: Iterable<Payee1099>): (label: string, names: readonly string[]) => { payee: string | null; could: string[] } {
+  const index = new Map<string, Set<string>>();
+  for (const p of payees) {
+    for (const k of payeeKeys(p)) {
+      if (!index.has(k)) index.set(k, new Set());
+      index.get(k)!.add(p.payee);
+    }
+  }
+  const find = (s: string) => index.get(nameKey(s)) ?? new Set<string>();
+  const byId = (label: string) => {
+    const first = label.trim().split(/\s+/)[0];
+    return /\d/.test(first) ? find(first) : new Set<string>();
+  };
+  return (label, names) => {
+    const byLabel = find(label);
+    const byNames = new Set(names.flatMap((n) => [...find(n)]));
+    let fits: Set<string>;
+    if (byLabel.size === 1) fits = byLabel;
+    else if (byLabel.size > 1) fits = new Set([...byLabel].filter((p) => byNames.has(p)));
+    else fits = byNames.size ? byNames : byId(label);
+    if (fits.size === 1) return { payee: [...fits][0], could: [] };
+    return { payee: null, could: [...(byLabel.size > 1 ? byLabel : fits)] };
+  };
+}
+
 /**
  * NetSuite's report held against FleetSuite's year, vendor by vendor and box
  * by box. A report vendor is FleetSuite's when its name, or failing that one
@@ -456,20 +498,8 @@ function payeeKeys(p: Payee1099): string[] {
  * with the category of the same name; the total with all FleetSuite counted.
  */
 export function compare1099(year: Year1099, report: Report1099): Comparison1099 {
-  const payees = new Map<string, Payee1099>();
-  for (const p of [...year.forms, ...year.notMarked, ...year.nothingCounted, ...year.byCard]) if (!payees.has(p.payee)) payees.set(p.payee, p);
-  const index = new Map<string, Set<string>>();
-  for (const p of payees.values()) {
-    for (const k of payeeKeys(p)) {
-      if (!index.has(k)) index.set(k, new Set());
-      index.get(k)!.add(p.payee);
-    }
-  }
-  const find = (s: string) => index.get(nameKey(s)) ?? new Set<string>();
-  const byId = (label: string) => {
-    const first = label.trim().split(/\s+/)[0];
-    return /\d/.test(first) ? find(first) : new Set<string>();
-  };
+  const payees = yearPayees(year);
+  const fit = payeeFinder(payees.values());
 
   // Each column's box by FleetSuite's name for it when FleetSuite has the category.
   const fleetBoxes = new Map<string, string>();
@@ -495,24 +525,17 @@ export function compare1099(year: Year1099, report: Report1099): Comparison1099 
   const matched = new Map<string, { labels: string[]; netsuite: Amounts1099 }>();
   const onlyInReport: OnlyInReport[] = [];
   for (const v of report.vendors) {
-    const byLabel = find(v.label);
-    const byNames = new Set(v.names.flatMap((n) => [...find(n)]));
-    let fits: Set<string>;
-    if (byLabel.size === 1) fits = byLabel;
-    else if (byLabel.size > 1) fits = new Set([...byLabel].filter((p) => byNames.has(p)));
-    else fits = byNames.size ? byNames : byId(v.label);
+    const { payee, could } = fit(v.label, v.names);
     const amounts = amountsOf(v);
-    if (fits.size !== 1) {
-      const could = byLabel.size > 1 ? byLabel : fits;
+    if (payee === null) {
       onlyInReport.push({
         label: v.label,
         names: v.names,
         netsuite: amounts,
-        candidates: [...could].map((p) => payees.get(p)!.name).sort((a, b) => a.localeCompare(b, 'en-US')),
+        candidates: could.map((p) => payees.get(p)!.name).sort((a, b) => a.localeCompare(b, 'en-US')),
       });
       continue;
     }
-    const [payee] = fits;
     const seen = matched.get(payee);
     if (!seen) {
       matched.set(payee, { labels: [v.label], netsuite: amounts });

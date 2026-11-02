@@ -31,6 +31,9 @@ import {
  * migration 482, src/lib/books/1099-report.ts): it's read here on the
  * device, only each vendor's names and amounts are kept (never a tax ID),
  * and the two are shown side by side, vendor by vendor and box by box.
+ *
+ * File the 1099s (part 70, ./file/page.tsx) makes the year's 1099s from the
+ * same totals as the IRS's upload file for IRIS.
  */
 
 type Copy = { at: string | null; tried: string | null; error: string | null } | null;
@@ -624,6 +627,10 @@ export default function Books1099sPage() {
           >
             {introOpen ? 'Less' : 'More'}
           </button>
+          {' · '}
+          <Link href={data ? deepLinks.books1099Filing(data.company, data.year) : '/admin/books/1099s/file'} style={{ color: 'var(--text-secondary)' }}>
+            File the 1099s
+          </Link>
           {' · '}
           <Link href="/admin/books/lists" style={{ color: 'var(--text-secondary)' }}>NetSuite lists</Link>
           {' · '}
