@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, 478 to 480, 485 to 488, 494 and 497 to 499, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 to 480, 485 to 488, 494, 497 to 499 and 504, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -19,6 +19,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * Approving adjustments: on, an adjustment made with Adjust waits for a super
  * admin's approval before it goes to NetSuite, so Adjust refuses when it can't
  * read it rather than post one unapproved (src/app/api/inventory/adjust).
+ * Financials on FleetSuite's books sends nothing anywhere: on, Home →
+ * Financials reads BMG's books in FleetSuite rather than NetSuite
+ * (src/lib/books/money-screens.ts).
  * Receiving payments, taking deposits, bank deposits and paying vendors stay
  * off past January 1, until they move into FleetSuite during 2027,
  * approving adjustments until the plan adds it in 2027, FleetSuite's own
@@ -29,7 +32,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
   | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments'
-  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals' | 'own_numbers' | 'invoice_pdfs' | 'stock_counts';
+  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals' | 'own_numbers' | 'invoice_pdfs' | 'stock_counts'
+  | 'money_screens';
 
 export interface SwitchInfo {
   name: string;
@@ -157,6 +161,13 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     what: "Admins count a location's stock in FleetSuite, all of it or a part, on a printed sheet or a phone, and ask for approval of what differs from NetSuite; a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as one Inventory Adjustment.",
     where: 'Counts on the Inventory page',
     later: 'Stays off on January 1: counts start in the third quarter of 2027, tried on a partial count in September.',
+  },
+  money_screens: {
+    name: "Financials on FleetSuite's books",
+    what: "Home → Financials reads BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, and the lists behind them, BMG's alone, without 1084's.",
+    where: 'Home → Financials',
+    turnOn: "Switch on Financials on FleetSuite's books? Home → Financials then shows BMG's numbers from FleetSuite's books, without 1084's, as of the last posting run (every two hours). Nothing is sent to NetSuite.",
+    turnOff: "Switch off Financials on FleetSuite's books? Home → Financials goes back to reading NetSuite.",
   },
 };
 

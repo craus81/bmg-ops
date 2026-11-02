@@ -37,6 +37,8 @@ export interface OpenArInvoice {
   daysPastDue: number; // 0 = current (no due date, or not yet due)
   bucket: AgingBucketKey;
   nsUrl: string;
+  /** An open credit memo, on FleetSuite's books (src/lib/books/money-screens.ts): its amounts are negative and it has no PDF here. */
+  creditMemo?: boolean;
 }
 
 export interface OpenVendorBill {
@@ -50,6 +52,8 @@ export interface OpenVendorBill {
   unpaid: number;
   daysPastDue: number;
   nsUrl: string;
+  /** An open bill credit, on FleetSuite's books (src/lib/books/money-screens.ts): its amounts are negative and it doesn't print. */
+  billCredit?: boolean;
 }
 
 export interface AccountBalance {

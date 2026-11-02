@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireFinancials } from '@/lib/api-auth';
+import { createServiceClient } from '@/lib/supabase-service';
 import { fetchOpenArInvoices, computeArAging, fetchAccountGroups } from '@/lib/financials-data';
+import { loadBooksFinancials } from '@/lib/books/money-screens-data';
+import { switchIsOn } from '@/lib/books/switches';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 /**
  * GET /api/reports/financials
@@ -33,6 +37,13 @@ export const dynamic = 'force-dynamic';
  *    runs an account search under its own role and returns the CoA balance.
  *    Until it's deployed, the balance tiles report "unavailable" rather than a
  *    wrong number; A/R is unaffected.
+ *
+ * With Books → Switches' "Financials on FleetSuite's books" on (migration
+ * 504), every number here reads BMG's books in FleetSuite instead, without
+ * 1084's (src/lib/books/money-screens.ts, docs/books.md "Money screens"):
+ * the same shape, with `books` naming whose books and when the posting run
+ * last ran, and `ar.notOpen`, what the receivable accounts hold beyond their
+ * open invoices and credit memos.
  */
 
 async function loadFinancials(debug: boolean) {
@@ -89,6 +100,13 @@ async function loadFinancials(debug: boolean) {
 export async function GET(req: NextRequest) {
   const auth = await requireFinancials(req);
   if (auth.error) return auth.error;
+
+  const service = createServiceClient();
+  if (await switchIsOn(service, 'money_screens')) {
+    const books = await loadBooksFinancials(service);
+    if ('error' in books) return NextResponse.json({ error: books.error }, { status: 500 });
+    return NextResponse.json(books);
+  }
 
   const roles: string[] = auth.profile?.roles?.length ? auth.profile.roles : [auth.profile?.role];
   const debug = req.nextUrl.searchParams.get('debug') === '1' && roles.includes('super_admin');

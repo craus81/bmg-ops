@@ -68,6 +68,19 @@ export function summarizePnl(rows: RestletPnlRow[], payrollIds: Set<string>): Pn
     else expense += v;
   }
 
+  return pnlSummaryOf({ income, cogs, expense, payroll, otherIncome, otherExpense }, rows.length);
+}
+
+/** Each part of the profit and loss, income and costs alike as positive amounts. */
+export type PnlParts = Pick<PnlSummary, 'income' | 'cogs' | 'expense' | 'payroll' | 'otherIncome' | 'otherExpense'>;
+
+/**
+ * The band's figures from the profit and loss's parts: gross margin, net
+ * profit and each as a share of revenue. Shared by NetSuite's income
+ * statement (summarizePnl) and FleetSuite's books (src/lib/books/money-screens.ts).
+ */
+export function pnlSummaryOf(parts: PnlParts, accountCount: number): PnlSummary {
+  const { income, cogs, expense, payroll, otherIncome, otherExpense } = parts;
   const grossMargin = income - cogs;
   const netProfit = income - cogs - expense - payroll + otherIncome - otherExpense;
   return {
@@ -82,7 +95,7 @@ export function summarizePnl(rows: RestletPnlRow[], payrollIds: Set<string>): Pn
     netProfit: round2(netProfit),
     netProfitPct: income > 0 ? round2((netProfit / income) * 100) : null,
     laborPct: income > 0 ? round2((payroll / income) * 100) : null,
-    accountCount: rows.length,
+    accountCount,
   };
 }
 

@@ -89,18 +89,24 @@ function statementBody(customer: string, invoices: OpenArInvoice[], letterhead?:
   const buckets: Record<AgingBucketKey, number> = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
   for (const i of invoices) buckets[i.bucket as AgingBucketKey] += i.unpaid;
 
+  // An open credit memo (FleetSuite's books) takes off the balance; it isn't late.
+  const credits = invoices.filter(i => i.creditMemo).length;
+  const open = invoices.length - credits;
   const rows = [...invoices]
     .sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.tranid.localeCompare(b.tranid))
-    .map(i => `
+    .map(i => {
+      const late = i.daysPastDue > 0 && !i.creditMemo;
+      return `
     <tr>
       <td>${escapeHtml(fmtDate(i.date))}</td>
-      <td>${escapeHtml(i.tranid)}</td>
+      <td>${escapeHtml(i.creditMemo ? `Credit memo ${i.tranid}` : i.tranid)}</td>
       <td>${escapeHtml(i.po || '—')}</td>
       <td>${escapeHtml(fmtDate(i.dueDate))}</td>
-      <td class="num${i.daysPastDue > 0 ? ' late' : ''}">${i.daysPastDue > 0 ? i.daysPastDue : '—'}</td>
+      <td class="num${late ? ' late' : ''}">${late ? i.daysPastDue : '—'}</td>
       <td class="num">${usd2(i.total)}</td>
       <td class="num">${usd2(i.unpaid)}</td>
-    </tr>`).join('');
+    </tr>`;
+    }).join('');
 
   const agingCells = AGING_LABELS.map(([k]) => `<td class="num">${usd2(buckets[k])}</td>`).join('');
   const agingHead = AGING_LABELS.map(([, label]) => `<th class="num">${label}</th>`).join('');
@@ -125,7 +131,7 @@ function statementBody(customer: string, invoices: OpenArInvoice[], letterhead?:
     <div class="box">
       <h3>Customer</h3>
       <div class="v">${escapeHtml(customer)}
-${invoices.length} open invoice${invoices.length === 1 ? '' : 's'}
+${open} open invoice${open === 1 ? '' : 's'}${credits ? `, ${credits} credit memo${credits === 1 ? '' : 's'}` : ''}
 Balance due: ${usd2(total)}${pastDue > 0.005 ? `\nPast due: ${usd2(pastDue)}` : ''}</div>
     </div>
   </div>
@@ -178,12 +184,13 @@ export async function printStatements(
  * bills and the integration role can't read their lines, so this is the
  * header-level record with a pointer to NetSuite for full detail.
  * `unpaidKnown: false` = NetSuite didn't return open balances, so the amount
- * is the full bill total.
+ * is the full bill total. `books` = the balance is FleetSuite's books' (Home →
+ * Financials with "Financials on FleetSuite's books" on).
  */
 export async function printBill(
   bill: OpenVendorBill,
   alertFn: (message: string) => Promise<void>,
-  opts?: { unpaidKnown?: boolean; letterhead?: CompanyLetterhead | null },
+  opts?: { unpaidKnown?: boolean; letterhead?: CompanyLetterhead | null; books?: boolean },
 ) {
   const unpaidKnown = opts?.unpaidKnown !== false;
   const partial = unpaidKnown && Math.abs(bill.total - bill.unpaid) > 0.005;
@@ -223,7 +230,9 @@ Due date: ${escapeHtml(fmtDate(bill.dueDate))}${bill.daysPastDue > 0 ? `\n${bill
       <tr><td colspan="3" class="num">Balance due</td><td class="num">${usd2(bill.unpaid)}</td></tr>
     </tfoot>
   </table>
-  <div class="note">Header summary from NetSuite${partial ? ' (partially paid)' : ''}.${unpaidKnown ? '' : ' Amounts are full bill totals — partial payments may not be reflected.'} Line-level detail on vendor bills isn't visible to the FleetSuite integration — open the bill in NetSuite for the full record.</div>`;
+  <div class="note">${opts?.books
+    ? `Balance due from FleetSuite's books${partial ? ' (partially paid)' : ''}; the bill total and memo are NetSuite's. Open the bill in NetSuite for its lines.`
+    : `Header summary from NetSuite${partial ? ' (partially paid)' : ''}.${unpaidKnown ? '' : ' Amounts are full bill totals — partial payments may not be reflected.'} Line-level detail on vendor bills isn't visible to the FleetSuite integration — open the bill in NetSuite for the full record.`}</div>`;
   await openPrintWindow(`Vendor Bill ${bill.tranid}`, body, alertFn);
 }
 
