@@ -16,8 +16,8 @@ vi.mock('next/headers', () => ({
 }));
 
 import {
-  createDropShipPoViaRestlet, createInventoryAdjustment, createJournalEntry, createVendorCredit, getIncomeStatementFromRestlet,
-  patchInvoice, updateItemDescription,
+  createCountAdjustment, createDropShipPoViaRestlet, createInventoryAdjustment, createJournalEntry, createVendorCredit,
+  getIncomeStatementFromRestlet, patchInvoice, updateItemDescription,
 } from './netsuite';
 import { pingRestlet } from './restlet-probe';
 import { setSendWriter, type SendRow } from './netsuite-sends';
@@ -79,6 +79,32 @@ describe("the NetSuite client's sends on the feed", () => {
       made_id: '7001', outcome: 'took', http_status: 204, error: null, user_id: JESSIE,
     })]);
     expect(JSON.stringify(kept)).not.toContain('Counted');
+  });
+
+  it("keeps a count's adjustment under FleetSuite's own name for it: one NetSuite took, and one it refused", async () => {
+    const count = {
+      externalId: 'fleetsuite-count-c0000000-0000-4000-8000-000000000001', subsidiaryId: '2', accountId: '501', locationId: '1',
+      tranDate: '2027-09-15', memo: "FleetSuite count CNT-0001 at O'Fallon · by Jessie Test, approved by Craig Test",
+      lines: [{ itemId: '812', adjustQtyBy: -2 }, { itemId: '813', adjustQtyBy: 3 }],
+    };
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 204, headers: { Location: `${REST}/record/v1/inventoryAdjustment/7002` } }))
+      .mockResolvedValueOnce(json({ title: 'Bad Request', 'o:errorDetails': [{ detail: 'Invalid item reference key 813.' }] }, 400));
+    expect(await createCountAdjustment(count)).toEqual({ success: true, adjustmentId: '7002' });
+    expect(await createCountAdjustment(count)).toEqual({
+      success: false, error: 'NetSuite refused the adjustment (400): Invalid item reference key 813.',
+    });
+    expect(finishes()).toEqual([
+      expect.objectContaining({
+        method: 'POST', action: 'create', record_type: 'inventoryAdjustment', made_type: 'inventoryAdjustment', made_id: '7002',
+        doc_ref: count.externalId, outcome: 'took', http_status: 204, error: null, user_id: JESSIE,
+      }),
+      expect.objectContaining({
+        action: 'create', record_type: 'inventoryAdjustment', doc_ref: count.externalId, outcome: 'refused', http_status: 400,
+        error: 'Invalid item reference key 813.', made_id: null,
+      }),
+    ]);
+    expect(JSON.stringify(kept)).not.toContain('approved by');
   });
 
   it("keeps a vendor credit NetSuite refused, with its reason, and the client's error is unchanged", async () => {

@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * The pieces that take the team out of NetSuite, each built switched off
- * (migrations 466 to 473, 478 to 480, 485 to 488, 494, 497 and 498, docs/books.md "Switches"; owner decisions 2026-10-31,
+ * (migrations 466 to 473, 478 to 480, 485 to 488, 494 and 497 to 499, docs/books.md "Switches"; owner decisions 2026-10-31,
  * thread "Replacing NetSuite with FleetSuite": the team works only in
  * FleetSuite from January 1, 2027, apart from payments, deposits and
  * banking, and each piece waits for its switch).
@@ -21,14 +21,15 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * read it rather than post one unapproved (src/app/api/inventory/adjust).
  * Receiving payments, taking deposits, bank deposits and paying vendors stay
  * off past January 1, until they move into FleetSuite during 2027,
- * approving adjustments until the plan adds it in 2027, and FleetSuite's own
- * numbers and invoice PDFs until the second quarter of 2027 (`later` says so).
+ * approving adjustments until the plan adds it in 2027, FleetSuite's own
+ * numbers and invoice PDFs until the second quarter of 2027, and counts until
+ * the third (`later` says so).
  */
 
 export type SwitchPiece =
   | 'credit_memos' | 'vendor_credits' | 'card_charges' | 'journal_entries' | 'inventory_transfers' | 'invoice_fixes' | 'bill_fixes'
   | 'customer_vendor_details' | 'item_accounts' | 'estimates_in_fleetsuite' | 'fleetsuite_records' | 'customer_payments'
-  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals' | 'own_numbers' | 'invoice_pdfs';
+  | 'customer_deposits' | 'bank_deposits' | 'vendor_payments' | 'adjustment_approvals' | 'own_numbers' | 'invoice_pdfs' | 'stock_counts';
 
 export interface SwitchInfo {
   name: string;
@@ -150,6 +151,12 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
     turnOn: "Switch on Invoice PDFs? First upload the newest PDF script (scripts/netsuite-pdf-restlet.js) in NetSuite and save its script record, or NetSuite can't take the PDFs. From now on each invoice FleetSuite makes gets FleetSuite's own PDF attached in NetSuite once FleetSuite's copy matches it.",
     turnOff: "Switch off Invoice PDFs? FleetSuite stops sending its PDFs to NetSuite. The ones already attached stay on their invoices.",
     later: "Stays off on January 1: FleetSuite's invoice PDFs go to NetSuite from the second quarter of 2027, with FleetSuite's own numbers.",
+  },
+  stock_counts: {
+    name: 'Counts',
+    what: "Admins count a location's stock in FleetSuite, all of it or a part, on a printed sheet or a phone, and ask for approval of what differs from NetSuite; a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as one Inventory Adjustment.",
+    where: 'Counts on the Inventory page',
+    later: 'Stays off on January 1: counts start in the third quarter of 2027, tried on a partial count in September.',
   },
 };
 

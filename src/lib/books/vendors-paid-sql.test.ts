@@ -123,7 +123,7 @@ describe('migration 488', () => {
     ]);
     // Every piece the app named then is one the column takes, and nothing else is (494 adds approving adjustments, 497
     // FleetSuite's own numbers, 498 invoice PDFs).
-    const then = SWITCH_PIECES.filter((piece) => !['adjustment_approvals', 'own_numbers', 'invoice_pdfs'].includes(piece));
+    const then = SWITCH_PIECES.filter((piece) => !['adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'stock_counts'].includes(piece));
     expect(then).toHaveLength(15);
     await pg.exec('BEGIN');
     try {

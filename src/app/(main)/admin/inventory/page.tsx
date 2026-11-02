@@ -53,6 +53,8 @@ export default function InventoryPage() {
   const [refreshErr, setRefreshErr] = useState('');
   // Adjustments waiting for approval (Books → Switches → Approving adjustments), for admins.
   const [approvals, setApprovals] = useState<{ on: boolean | null; open: number } | null>(null);
+  // Counts (Books → Switches → Counts): super admins until they're on, then admins.
+  const [counts, setCounts] = useState<{ canUse: boolean; open: number } | null>(null);
   const [, setTick] = useState(0);
   const [rows, setRows] = useState<InvRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -136,6 +138,15 @@ export default function InventoryPage() {
       .catch(() => {});
   }, []);
   useEffect(() => { if (isAdmin) loadApprovals(); }, [isAdmin, loadApprovals]);
+  useEffect(() => {
+    if (!isAdmin) return;
+    fetch('/api/inventory/counts?status=1')
+      .then(async r => {
+        const d = await r.json().catch(() => ({}));
+        if (r.ok) setCounts({ canUse: !!d.canUse, open: Number(d.open) || 0 });
+      })
+      .catch(() => {});
+  }, [isAdmin]);
 
   // When stock last came from NetSuite (every 15 minutes, or Refresh).
   useEffect(() => {
@@ -192,6 +203,11 @@ export default function InventoryPage() {
           {approvals && (approvals.on || approvals.open > 0) && (
             <Link href={deepLinks.adjustmentsToApprove()} style={{ fontSize: '11px', fontWeight: 700, color: approvals.open > 0 ? 'var(--warning)' : '#60a5fa' }}>
               Adjustments to approve{approvals.open > 0 ? ` · ${approvals.open}` : ''} →
+            </Link>
+          )}
+          {counts?.canUse && (
+            <Link href={deepLinks.stockCounts()} style={{ fontSize: '11px', fontWeight: 700, color: '#60a5fa' }}>
+              Counts{counts.open > 0 ? ` · ${counts.open} open` : ''} →
             </Link>
           )}
           {isAdmin && (

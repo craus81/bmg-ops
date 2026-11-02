@@ -363,6 +363,12 @@ export const deepLinks = {
    *  Books → Switches, each adjustment made with Adjust waits there for a
    *  super admin who didn't ask; with an id, that one flashed. */
   adjustmentsToApprove: (id?: string | null) => `/admin/inventory/approvals${id ? `?${new URLSearchParams({ id })}` : ''}`,
+  /** Counts (src/lib/stock-counts.ts), linked from the Inventory page: a
+   *  count sheet for one location, typed in blind, then one adjustment in
+   *  NetSuite once a super admin who didn't ask approves its differences;
+   *  with an id, that count open. Admins once counts are switched on in
+   *  Books → Switches; until then super admins only. */
+  stockCounts: (id?: string | null) => `/admin/inventory/counts${id ? `?${new URLSearchParams({ id })}` : ''}`,
   /** Invoices hub — opens the create-invoice dialog for a shipped graphics job.
    *  NOTE: this exact string doubles as the match key that marks the prompt
    *  read once the invoice exists (graphics-invoice-notify.ts) — change both

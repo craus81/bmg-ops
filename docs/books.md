@@ -6021,19 +6021,107 @@ While it's off, nothing goes to NetSuite, and the invoice's page says so.
   NetSuite's own PDF.
 - Credit memos get no PDF of FleetSuite's own.
 
+## Counts
+
+The plan counts stock in FleetSuite from the third quarter of 2027, tried
+on a partial count in September (the NetSuite Exit Checklist's Count
+screen). Part 69 builds it, switched off (`stock_counts`, migration 499,
+`src/lib/stock-counts.ts`, `/api/inventory/counts`). Counts
+(`/admin/inventory/counts`, `deepLinks.stockCounts`) is linked from the
+Inventory page for whoever can use it: admins once it's on, as Adjust, and
+until then only super admins.
+
+**Starting.** A count is at one of Books' locations and takes one of three
+sets of items: everything NetSuite has on hand there as Books last read it,
+the items matching a search of the parts list (the search every search box
+uses), or items picked one by one. Only items NetSuite keeps stock of go on
+it, in shelf order (BK-2 before BK-10), 500 at most. An item is on one open
+count per location at a time, so two counts of a shelf can't both be
+posted: Start leaves off items another open count has, and says which.
+Everything on hand at a big location is counted a part at a time: a count
+takes the first 500 not on another count, named by its first and last item
+("Everything NetSuite has on hand, BALL-2 to HITCH-9"), and starting again
+takes the next part. Before Start, the page says how many it would take,
+without asking NetSuite. Start reads NetSuite's live count of each item, and
+starts nothing when it can't. Its id is made by the page, so a press sent
+twice starts one count. The count day, today unless it's changed, is the
+date its adjustment gets in NetSuite, and can't be after today.
+
+**Counting.** Print the sheet (the items in order, a Counted box each, no
+NetSuite counts or prices), or Print what's left once some are counted, and
+type the counts in on a phone or at a desk. Typing is blind: NetSuite's
+count isn't shown before a count is saved. Save sends only the boxes
+changed; each count saved is kept with NetSuite's live count at that moment
+(`on_hand_then`), and its difference is the count less that, so it stays
+right when stock moves afterwards, as Adjust's shelf count does. Nothing is
+saved when NetSuite's live count can't be read. A blank box is not counted,
+and stays as NetSuite has it. Items can be added while it's being counted,
+and whoever started it, or a super admin, can stop it, which posts nothing.
+
+**The review.** Once something is counted, the count shows how many match
+and how many differ, the units over and short, each difference ("+3 (12
+counted, NetSuite 9)"), and, for whoever sees prices, what they come to at
+NetSuite's average cost at the location (from Books' copy of NetSuite's
+values; never kept on the count or in its audit records). An item whose
+NetSuite count moved between going on the count and being counted is
+marked, to check it was counted after that. An item that differs and was
+adjusted with Adjust after it was counted, or has an adjustment asked for
+there, holds the count up until it's counted again
+(`stock_count_blocked`), since its difference may be corrected already.
+
+**Asking and approving.** A count where everything counted matches is
+finished, posting nothing. One that differs is asked for as one
+(`stock_count_ask`), and can't be changed while it waits; whoever asked can
+withdraw it. A super admin who didn't ask approves it, or turns it down
+saying why (300 characters at most), which puts it back to be counted.
+Approving takes the claim (`stock_count_claim`), asks NetSuite whether it
+has the count's adjustment already, under the count's own External ID
+(`fleetsuite-count-<id>`), then makes one Inventory Adjustment at the
+location to 52000 Inventory Adjustment, dated the count day, a line for
+each item that differs (`createCountAdjustment`), with the memo "FleetSuite
+count CNT-0007 at O'Fallon · by Jessie, approved by Craig". It never takes
+NetSuite's count of an item below 0: when stock moved and it would, nothing
+is posted and it waits again, saying which item. NetSuite refusing it puts
+it back to wait with why (`stock_count_let_go`); NetSuite not answering
+keeps it as not known (`stock_count_unsure`), and Ask NetSuite, for a super
+admin, finds the adjustment by its External ID or puts it back to wait. A
+press still posting after five minutes is asked about the same way. Each
+send is on the NetSuite feed. Once made, its items are free for the next
+count. Nobody is alerted (Craig, 2026-10-30: no alerts for adjustments),
+and the audit records name the count, the location and how many items, with
+no amounts.
+
+While it's off, super admins can start, count and ask, to see what a count
+would post; Approve is refused for everyone, and nothing goes to NetSuite.
+
+Made-up example: Jessie counts the hitch shelf at O'Fallon in September,
+everything matching "hitch": 12 HITCH-2 where NetSuite has 9, and 4
+HITCH-10 where it has 4. She asks for +3 HITCH-2. Craig approves it, and
+NetSuite gets one adjustment of +3 HITCH-2, dated the count day, even though
+NetSuite's count had moved to 8 by then.
+
+### What isn't done yet
+
+- A count's adjustment isn't in Adjust's history, so Books posts it from
+  NetSuite's document, as it does an adjustment made in NetSuite, rather
+  than from a FleetSuite copy.
+- More than 500 items are counted a part at a time, one count each.
+- Before switching on, agree who approves, since only super admins can.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
 row each in `books_switches` (migrations 466 to 473, 478 to 480, 485 to
-488, 494 and 497, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
+488, 494 and 497 to 499, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
 in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
 which whoever opens the books can read. The plan turns them on on January 1,
 2027, asking the owner once in late December, all but `customer_payments`,
 `customer_deposits`, `bank_deposits` and `vendor_payments`, which stay off
 until receiving payments, taking deposits, bank deposits and paying vendors
 move into FleetSuite during 2027, `adjustment_approvals`, which the plan
-adds during 2027, from April, and `own_numbers`, which starts in the second
-quarter of 2027; their cards on the page say so (`later`).
+adds during 2027, from April, `own_numbers` and `invoice_pdfs`, which start
+in the second quarter of 2027, and `stock_counts`, which starts in the third;
+their cards on the page say so (`later`).
 
 While a piece is off, the people who'd use it don't see it at all; super
 admins can open its screen and see what it would send, and its route
@@ -6070,6 +6158,8 @@ page asks with its own words too.
 | `vendor_payments` | Anyone with Payments pays the company's open bills in a payment run, ticked from what NetSuite has open, from one of its bank accounts, vendor by vendor by check or ACH, and asks for approval; a super admin who didn't ask approves it, and FleetSuite makes each vendor's bill payment in NetSuite ("Vendors paid in FleetSuite"); its checks print on BMG's check stock from the run, each number set in NetSuite ("Checks printed on BMG's stock"), and its ACH payments are paid from a file made for First Bank from the run ("The ACH file for First Bank") | More → Money & Books → Pay Vendors |
 | `adjustment_approvals` | An inventory adjustment made with Adjust waits for approval: a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as an Inventory Adjustment, or turns it down saying why ("Adjustments approved before they're posted") | Adjust on the Inventory page or a part's details, and Adjustments to approve on the Inventory page |
 | `own_numbers` | Each sales order, PO, invoice and credit memo FleetSuite makes in NetSuite gets FleetSuite's next number of its kind, and NetSuite keeps it as the document's number once Allow Override is ticked there ("Own numbers") | Every sales order, PO, invoice and credit memo FleetSuite makes, and Books → Own numbers |
+| `invoice_pdfs` | Each invoice FleetSuite makes gets FleetSuite's own PDF of it attached in NetSuite, once FleetSuite's copy matches NetSuite's invoice ("Invoice PDFs") | Books → Own invoices, on each invoice |
+| `stock_counts` | Admins count a location's stock, all of it or a part, on a printed sheet or a phone, and ask for approval of what differs from NetSuite; a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as one Inventory Adjustment ("Counts") | Counts on the Inventory page |
 
 ## Posting
 
