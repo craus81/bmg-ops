@@ -138,9 +138,10 @@ makes it ("Filing the 1099s"), part 71, the cash flow statement on Reports
 quarter, year, division or location, only one division's or location's
 lines when picked ("Report builder"), part 73, its lines by customer or
 vendor, months that move with the calendar and reports saved by name
-("Saved reports"), and part 74, each company's year closed into retained
+("Saved reports"), part 74, each company's year closed into retained
 earnings once all its months are, its months held closed until it's
-reopened ("Year end").
+reopened ("Year end"), and part 75, the year's reports for the CPA as one
+Excel file ("The year-end package").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -303,7 +304,8 @@ admins can open it while fixing invoices is switched off.
 | Inventory value: each stocked item's value at a month's end, tied to each inventory account | `migrations/495-inventory-value-at-a-months-end.sql`, `src/lib/books/inventory-value.ts`, `src/lib/books/inventory-value-data.ts`, `src/app/(main)/admin/books/inventory-value/page.tsx`, `src/app/api/admin/books/inventory-value/route.ts` and its `download`; tests `src/lib/books/inventory-value.test.ts`, `src/lib/books/inventory-value-route.test.ts`, `src/lib/books/inventory-value-sql.test.ts` |
 | Sales tax: what goes on Missouri's return for a month, location by location, each location's dated rates, and the return as filed held against it | `migrations/496-books-sales-tax.sql`, `src/lib/books/sales-tax-worksheet.ts`, `src/lib/books/sales-tax-data.ts`, `src/lib/books/sales-tax-words.ts`, `salesTaxWorkbook` in `src/lib/books/report-workbook.ts`, `src/app/(main)/admin/books/sales-tax/page.tsx`, `src/app/api/admin/books/sales-tax/route.ts` and its `download`; tests `src/lib/books/sales-tax-worksheet.test.ts`, `src/lib/books/sales-tax-route.test.ts`, `src/lib/books/sales-tax-sql.test.ts` |
 | Own numbers: FleetSuite's number on each sales order, PO, invoice and credit memo it makes in NetSuite, what became of each, and the sales orders and POs made in NetSuite instead | `migrations/497-books-own-numbers.sql`, `src/lib/books/own-numbers.ts`, `ownNumberFor` in `createSalesOrder`, `createPurchaseOrder`, `createDirectInvoice`, `createInvoiceFromSO` and `createCreditMemoFromInvoice` in `src/lib/netsuite.ts`, the drop ship PO's number in `src/app/api/estimates/[id]/drop-ship/route.ts`, `src/app/(main)/admin/books/own-numbers/page.tsx`, `src/app/api/admin/books/own-numbers/route.ts`; tests `src/lib/books/own-numbers.test.ts`, `src/lib/books/own-numbers-route.test.ts`, `src/lib/netsuite-own-numbers.test.ts`, `src/lib/drop-ship-route.test.ts`, and the tables and their functions `src/lib/books/own-numbers-sql.test.ts` |
-| Year end: each company's year closed into retained earnings once all its months are, in order, its months held closed until it's reopened, with what's done before it closes | `migrations/502-books-year-end.sql`, `src/lib/books/year-end.ts`, `yearCloseAmounts` in `src/lib/books/reports.ts`, `readMonthFacts` and the closed year's months in `src/lib/books/months.ts`, `src/app/(main)/admin/books/year-end/page.tsx`, `src/app/api/admin/books/year-end/route.ts`; tests `src/lib/books/year-end.test.ts`, `src/lib/books/year-end-route.test.ts`, `src/lib/books/year-end-sql.test.ts`, the closed year's months in `src/lib/books/months.test.ts` and `src/lib/books/months-route.test.ts`, and `yearCloseAmounts`' in `src/lib/books/reports.test.ts` |
+| Year end: each company's year closed into retained earnings once all its months are, in order, its months held closed until it's reopened, with what's done before it closes | `migrations/502-books-year-end.sql`, `src/lib/books/year-end.ts`, `src/lib/books/year-end-data.ts` (what the page and its package read), `src/lib/books/year-end-words.ts` (what both call the checks), `yearCloseAmounts` in `src/lib/books/reports.ts`, `readMonthFacts` and the closed year's months in `src/lib/books/months.ts`, `src/app/(main)/admin/books/year-end/page.tsx`, `src/app/api/admin/books/year-end/route.ts`; tests `src/lib/books/year-end.test.ts`, `src/lib/books/year-end-route.test.ts`, `src/lib/books/year-end-sql.test.ts`, the closed year's months in `src/lib/books/months.test.ts` and `src/lib/books/months-route.test.ts`, and `yearCloseAmounts`' in `src/lib/books/reports.test.ts` |
+| The year-end package: a company's year for the CPA as one Excel file | `yearEndWorkbook` in `src/lib/books/report-workbook.ts`, `loadSplit` in `src/lib/books/report-data.ts`, `src/app/api/admin/books/year-end/download/route.ts`; tests `src/lib/books/year-end-workbook.test.ts`, the download's in `src/lib/books/year-end-route.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -6456,9 +6458,46 @@ when, why and the amounts (`gl_year_close_events`). Both are audited
 Closing a year here doesn't close it in NetSuite, where its months close
 as before.
 
+### The year-end package
+
+The page's Year-end package button (part 75, the NetSuite Exit Checklist's
+"Year-end close") downloads the company's year for the CPA as one Excel
+file, `BMG Year-end package 2027.xlsx` (`yearEndWorkbook` in
+`src/lib/books/report-workbook.ts`, `GET
+/api/admin/books/year-end/download?company=BMG&year=2027`), a sheet for
+each, laid out as their own downloads are ("Excel downloads"):
+
+- Contents: each sheet below, linked, with what it holds, then what's done
+  before the year closes, as on the page, those not done yet in amber.
+- Trial Balance and Balance Sheet at December 31; Profit and Loss and
+  Statement of Cash Flows for January through December, as Reports shows
+  them, FleetSuite's books next to NetSuite's own totals.
+- Profit and Loss by Month, FleetSuite's own, as the report builder lays it
+  out ("Report builder").
+- Retained Earnings: the close as the page shows it, both sides, which
+  account retained earnings is on, and each time the year was closed or
+  reopened, with who, when and why.
+- For a company with stock, its inventory value at December 31, how it
+  ties to each inventory account, and the documents on them with no stocked
+  item ("Inventory value at a month's end").
+
+What the page says about the year is at the top of every sheet but the
+list of documents, above what the sheet's own page warns about: green when
+it's closed, by whom and when;
+red when FleetSuite's books have changed since; amber for a year before the
+books went live, which closes in NetSuite, so FleetSuite's side is the
+rehearsal. A year that isn't over yet runs through this month, and each
+sheet says it's where the year stood when the file was made. The package
+reads what the page does (`readYear` in `src/lib/books/year-end-data.ts`)
+and is open to whoever opens the books.
+
 ### What isn't done yet
 
-- The CPA's year-end package in Excel.
+- The general ledger for the year in the package, every document on every
+  account.
+- Each customer's and vendor's balance at December 31: the agings are as of
+  today.
+- The bank reconciliations at December 31 in the package.
 
 ## NetSuite feed
 

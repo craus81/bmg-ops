@@ -1,8 +1,10 @@
 // Books → Year end (src/app/api/admin/books/year-end): a made-up company's
 // year closing into retained earnings next to NetSuite's, what's done before
-// it closes, and closing and reopening it in order (src/lib/books/year-end.ts).
+// it closes, closing and reopening it in order (src/lib/books/year-end.ts),
+// and its year-end package for the CPA (the download).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
+import ExcelJS from 'exceljs';
 
 let roles = ['admin', 'super_admin'];
 let fullName: string | null = 'Craig';
@@ -23,6 +25,7 @@ vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
 import { GET, POST } from '../../app/api/admin/books/year-end/route';
+import { GET as DOWNLOAD } from '../../app/api/admin/books/year-end/download/route';
 import { PLANNED_LIVE_FROM } from './opening-balances';
 import { monthsBetween } from './netsuite-gl';
 
@@ -42,6 +45,26 @@ const account = (id: string, nsId: string, number: string, name: string, type: s
 });
 
 const MONTHS_2027 = monthsBetween('2027-01-01', '2027-12-01');
+
+/** FleetSuite's journal on BMG's income and expense accounts by division and location, as gl_books_split_totals has it. */
+const split = (acct: string, month: string, cents: number) => ({
+  account: acct, month, division: 'upfit', location: 'ofallon', netsuite_location: null, ...sides(cents),
+});
+const BMG_SPLIT = [split('40', '2027-03-01', -1000000), split('60', '2027-04-01', 210000)];
+
+/** BMG's four ladder racks at any month's end, as gl_stock_month_end has them; 1084 has no stock. */
+const stockAt = (month: string) => ({
+  month,
+  rows: [{ company: 'BMG', item_id: '9001', location_id: '11', quantity: '4', value: '400.00' }],
+  items: [{ netsuite_id: '9001', name: 'LDR-24', display_name: 'Ladder rack 24 in', active: true }],
+  locations: [{ netsuite_id: '11', name: 'Wentzville' }],
+  parts: [{
+    company: 'BMG', account_id: '19', number: '1200', name: 'Inventory', type: 'other_current_asset',
+    ledger_start: '400.00', ledger_moves: '0', items_start: '400.00', items_moves_before: '0', items_moves: '0', netsuite_moves: '0', books_moves: '0',
+    moves: [], entries: 0, entries_total: '0', month_entries: 0, month_entries_total: '0', kinds: [], rows: [], usual: true,
+  }],
+  netsuite_through: [{ company: 'BMG', month }],
+});
 
 /**
  * Made-up books for BMG, live from January 2027: 4,000.00 of retained
@@ -114,6 +137,8 @@ const service = {
     if (name === 'gl_books_totals') return { data: bmg ? booksTotals : [], error: null };
     if (name === 'gl_books_differences') return { data: bmg ? BMG_DIFFERENCES : {}, error: null };
     if (name === 'gl_set_year_status') return { data: setYearStatus(args), error: null };
+    if (name === 'gl_books_split_totals') return { data: bmg ? BMG_SPLIT : [], error: null };
+    if (name === 'gl_stock_month_end') return { data: stockAt(args.p_month), error: null };
     return { data: null, error: { message: `No ${name}` } };
   },
 };
@@ -318,6 +343,13 @@ describe('Books → Year end: closing and reopening', () => {
     service.rpc = async (name, args) => (name === 'gl_books_differences' ? { data: matched, error: null } : real(name, args));
     try {
       expect((await get()).body.checks.map((c: any) => c.state)).toEqual(['done', 'done', 'done', 'done', 'done']);
+      // As of today, with December over, its sales tax return is due: without it, closing needs a reason.
+      const returns = tables.sales_tax_returns;
+      tables.sales_tax_returns = returns.slice(0, 11);
+      expect(await post({ company: 'BMG', year: 2027, action: 'close' })).toEqual({
+        status: 400, body: { error: "Not everything's done before 2027 closes, so say why it's closed anyway." },
+      });
+      tables.sales_tax_returns = returns;
       expect(await post({ company: 'BMG', year: 2027, action: 'close' })).toEqual({ status: 200, body: { company: 'BMG', year: 2027, status: 'closed' } });
     } finally {
       service.rpc = real;
@@ -421,5 +453,165 @@ describe('Books → Year end: closing and reopening', () => {
     errors = { gl_set_year_status: { message: 'connection reset' } };
     expect(await post({ company: 'BMG', year: 2027, action: 'close', reason: 'Checked' })).toEqual({ status: 500, body: { error: 'connection reset' } });
     expect(audits).toEqual([]);
+  });
+});
+
+describe('Books → Year end: the year-end package', () => {
+  const download = (params = '') => DOWNLOAD(new NextRequest(`https://go.bmgfleet.com/api/admin/books/year-end/download${params ? `?${params}` : ''}`));
+  const sheetsOf = async (res: Response) => {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(Buffer.from(await res.arrayBuffer()) as any);
+    return wb.worksheets;
+  };
+  /** A sheet's first column from the top, as Excel holds it. */
+  const column = (ws: ExcelJS.Worksheet) => Array.from({ length: ws.rowCount }, (_, i) => {
+    const v = ws.getRow(i + 1).getCell(1).value;
+    return v && typeof v === 'object' && 'text' in v ? v.text : v ?? null;
+  });
+  const row = (ws: ExcelJS.Worksheet, first: string) => {
+    const at = column(ws).indexOf(first);
+    return Array.from({ length: ws.getRow(at + 1).cellCount }, (_, i) => ws.getRow(at + 1).getCell(i + 1).value ?? null);
+  };
+  const named = (all: ExcelJS.Worksheet[], name: string) => all.find((s) => s.name === name)!;
+  /** A line's amounts on a report's sheet, by its label in the second column. */
+  const amounts = (ws: ExcelJS.Worksheet, label: string) => {
+    for (let r = 1; r <= ws.rowCount; r += 1) {
+      const cells = Array.from({ length: ws.getRow(r).cellCount }, (_, i) => ws.getRow(r).getCell(i + 1).value ?? null);
+      if (cells[1] === label) return cells.slice(2);
+    }
+    throw new Error(`no ${label} on ${ws.name}`);
+  };
+  /** The notes above a sheet's table: the rows after its download time, up to the blank row over the header. */
+  const notesOf = (ws: ExcelJS.Worksheet) => {
+    const col = column(ws);
+    return col.slice(5, col.indexOf(null, 5));
+  };
+  const NOT_POSTED = "Nothing has posted to FleetSuite's books yet.";
+
+  it("gives BMG's last year as one Excel file: its reports at December 31, how it closes, its stock and what's done before it closes", async () => {
+    const res = await download();
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(res.headers.get('content-disposition')).toContain('filename="BMG Year-end package 2027.xlsx"');
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    const all = await sheetsOf(res);
+    expect(all.map((s) => s.name)).toEqual([
+      'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows',
+      'Retained Earnings', 'Inventory value', 'Inventory ties to accounts',
+    ]);
+    const contents = column(all[0]);
+    expect(contents.slice(0, 3)).toEqual(['Example Fleet Upfitters LLC', 'Year-end package 2027', 'January 1, 2027 to December 31, 2027']);
+    // What's done before it closes, as the page has it.
+    expect(contents.slice(-5)).toEqual([
+      'Months closed: Done', 'Matches NetSuite: Not yet', 'Journal entries: Not yet', 'Bank reconciliations: Not yet', 'Sales tax returns: Done',
+    ]);
+    expect(row(all[0], 'Bank reconciliations: Not yet')).toEqual(['Bank reconciliations: Not yet', '1010 First Bank checking: 11 of 12 months reconciled.']);
+    // Nothing about the year to say, only what Reports says.
+    expect(column(named(all, 'Trial Balance')).slice(1, 6)).toEqual([
+      'Trial Balance', 'As of December 31, 2027', expect.any(String), 'Downloaded January 20, 2028 at 9:00 AM Central.', NOT_POSTED,
+    ]);
+    expect(row(named(all, 'Profit and Loss'), '4000')).toEqual(['4000', 'Sales', 10000, 10000, 0]);
+    // The trial balance and balance sheet at December 31, the cash flows for the whole year.
+    expect(amounts(named(all, 'Trial Balance'), 'First Bank checking')).toEqual([11900, null, 12000, null, -100]);
+    expect(amounts(named(all, 'Balance Sheet'), 'First Bank checking')).toEqual([11900, 12000, -100]);
+    expect(amounts(named(all, 'Statement of Cash Flows'), 'Cash at the beginning of the period')).toEqual([4000, 4000, 0]);
+    expect(amounts(named(all, 'Statement of Cash Flows'), 'Net change in cash for the period')).toEqual([7900, 8000, -100]);
+    expect(row(named(all, 'Retained Earnings'), 'Retained earnings once 2027 closes, January 1, 2028')).toEqual([
+      'Retained earnings once 2027 closes, January 1, 2028', 11900, 12000, -100,
+    ]);
+    // The builder's split, by month, comes to Reports: no red note.
+    expect(column(named(all, 'Profit and Loss by Month'))[5]).toBe(NOT_POSTED);
+    expect(row(named(all, 'Profit and Loss by Month'), '4000').slice(4, 5)).toEqual([10000]);
+    expect(row(named(all, 'Inventory value'), 'LDR-24')).toEqual(['LDR-24', 'Ladder rack 24 in', 'Wentzville', 4, 100, 400]);
+    expect(rpcs.filter(([name]) => name === 'gl_books_split_totals' || name === 'gl_stock_month_end')).toEqual([
+      ['gl_books_split_totals', { p_company: 'BMG' }], ['gl_stock_month_end', { p_month: '2027-12-01', p_limit: 100 }],
+    ]);
+  });
+
+  it('says on every sheet that the year is closed, by whom and when', async () => {
+    expect((await post({ company: 'BMG', year: 2027, action: 'close', reason: 'Checked' })).status).toBe(200);
+    const all = await sheetsOf(await download('company=BMG&year=2027'));
+    for (const ws of all) expect([ws.name, column(ws)[5]]).toEqual([ws.name, '2027 is closed by Craig, January 20, 2028 at 9:00 AM Central.']);
+    expect(column(named(all, 'Retained Earnings')).at(-1)).toBe('Closed by Craig, January 20, 2028 at 9:00 AM Central, at $7,900.00 of net income: Checked');
+  });
+
+  it("runs this year through this month, and gives the company asked for, with no stock sheets when it has none", async () => {
+    const now = await sheetsOf(await download('year=2028'));
+    expect(column(now[0]).slice(2, 6)).toEqual([
+      'January 1, 2028 to January 31, 2028', expect.any(String), 'Downloaded January 20, 2028 at 9:00 AM Central.',
+      "2028 isn't over yet, so this is where it stood when the file was made.",
+    ]);
+    expect(rpcs.filter(([name]) => name === 'gl_stock_month_end').at(-1)).toEqual(['gl_stock_month_end', { p_month: '2028-01-01', p_limit: 100 }]);
+    expect(column(named(now, 'Inventory value')).slice(2, 6)).toEqual([
+      'As of January 31, 2028', expect.any(String), 'Downloaded January 20, 2028 at 9:00 AM Central.',
+      "January 2028 isn't over yet, so this is where it stood when the file was made.",
+    ]);
+
+    const res = await download('company=1084&year=2026');
+    expect(res.headers.get('content-disposition')).toContain('filename="1084 Year-end package 2026.xlsx"');
+    const other = await sheetsOf(res);
+    expect(other.map((s) => s.name).at(-1)).toBe('Retained Earnings');
+    expect(column(other[0]).slice(0, 6)).toEqual([
+      '1084', 'Year-end package 2026', 'January 1, 2026 to December 31, 2026', expect.any(String),
+      'Downloaded January 20, 2028 at 9:00 AM Central.',
+      "1084's books aren't live yet, so 2026 closes in NetSuite: FleetSuite's side here is the rehearsal.",
+    ]);
+    expect(rpcs.filter(([name]) => name === 'gl_books_split_totals').at(-1)).toEqual(['gl_books_split_totals', { p_company: '1084' }]);
+    // Nothing of 1084's has posted, and NetSuite's totals and ledger for it haven't been read.
+    const rehearsal = "1084's books aren't live yet, so 2026 closes in NetSuite: FleetSuite's side here is the rehearsal.";
+    expect(notesOf(named(other, 'Trial Balance'))).toEqual([rehearsal, NOT_POSTED, "NetSuite's totals haven't been read yet, so NetSuite's side is empty."]);
+    expect(notesOf(named(other, 'Profit and Loss by Month'))).toEqual([
+      rehearsal, NOT_POSTED, "NetSuite's ledger hasn't been copied yet, so lines from its documents have no location, customer or vendor.",
+    ]);
+
+    // A year before BMG's books went live.
+    const before = await sheetsOf(await download('company=BMG&year=2026'));
+    expect(notesOf(before[0])).toEqual(["2026 is before BMG's books went live, so it closes in NetSuite: FleetSuite's side here is the rehearsal."]);
+  });
+
+  it("says when the profit and loss by month doesn't come to Reports", async () => {
+    const real = service.rpc;
+    service.rpc = async (name, args) => (name === 'gl_books_split_totals' ? { data: [], error: null } : real(name, args));
+    try {
+      const all = await sheetsOf(await download());
+      expect(notesOf(named(all, 'Profit and Loss by Month'))).toEqual([
+        "Something posted to FleetSuite's books while this was read, so its columns may not come to the profit and loss on Reports. Download it again.",
+        NOT_POSTED,
+      ]);
+      // Reports' own statements don't read the split.
+      expect(notesOf(named(all, 'Profit and Loss'))).toEqual([NOT_POSTED]);
+    } finally {
+      service.rpc = real;
+    }
+  });
+
+  it('is for whoever opens the books: the bookkeeper and the CPA too, not an admin who does not', async () => {
+    for (const r of [['bookkeeper'], ['cpa']]) {
+      roles = r;
+      expect([r, (await download()).status]).toEqual([r, 200]);
+    }
+    roles = ['admin'];
+    rpcs.length = 0;
+    expect((await download()).status).toBe(403);
+    expect(rpcs).toEqual([]);
+  });
+
+  it('says what failed', async () => {
+    const said: Record<string, string> = {
+      gl_companies: 'gl_companies is down',
+      gl_year_closes: "Couldn't read the years closed: gl_year_closes is down",
+      gl_books_split_totals: 'gl_books_split_totals is down',
+      gl_netsuite_lists: 'gl_netsuite_lists is down',
+      gl_stock_month_end: 'gl_stock_month_end is down',
+    };
+    for (const [table, error] of Object.entries(said)) {
+      errors = { [table]: { message: `${table} is down` } };
+      const res = await download();
+      expect([table, res.status, await res.json()]).toEqual([table, 500, { error }]);
+    }
+    errors = {};
+    tables.gl_companies = [];
+    const res = await download();
+    expect([res.status, await res.json()]).toEqual([500, { error: 'No companies set up' }]);
   });
 });

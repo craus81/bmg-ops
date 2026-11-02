@@ -6,7 +6,9 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
+import { CHECK_LABELS, STATE_WORDS } from '@/lib/books/year-end-words';
 import { deepLinks } from '@/lib/deep-links';
+import { useFileDownload } from '@/lib/use-file-download';
 
 /**
  * Books → Year end (docs/books.md "Year end").
@@ -18,7 +20,9 @@ import { deepLinks } from '@/lib/deep-links';
  * of the year is closed on Months, a super admin closes the year, with a
  * reason if anything isn't done; its months then stay closed until the year
  * is reopened, for a reason. Years before the books went live close in
- * NetSuite and show as a rehearsal. Open to whoever opens the books.
+ * NetSuite and show as a rehearsal. The year-end package downloads the
+ * year's reports for the CPA as one Excel file. Open to whoever opens the
+ * books.
  */
 
 type Pair = { fleetsuite: number; netsuite: number };
@@ -78,19 +82,7 @@ const when = (iso: string) => new Date(iso).toLocaleString('en-US', {
   month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago',
 });
 
-const CHECK_LABELS: Record<CheckKey, string> = {
-  months: 'Months closed',
-  netsuite: 'Matches NetSuite',
-  entries: 'Journal entries',
-  bank: 'Bank reconciliations',
-  sales_tax: 'Sales tax returns',
-};
-
-const STATES: Record<Check['state'], { label: string; color: string }> = {
-  done: { label: 'Done', color: GREEN },
-  todo: { label: 'Not yet', color: AMBER },
-  none: { label: 'Not here', color: GREY },
-};
+const STATE_COLORS: Record<Check['state'], string> = { done: GREEN, todo: AMBER, none: GREY };
 
 const banner = (color: string): React.CSSProperties => ({
   padding: '10px 14px', borderRadius: '8px', marginBottom: '10px', fontSize: '12px', fontWeight: 600,
@@ -177,6 +169,7 @@ export default function BooksYearEndPage() {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [actError, setActError] = useState('');
+  const excel = useFileDownload(setError);
 
   const load = useCallback(async (company: string, year: number | null) => {
     try {
@@ -239,6 +232,7 @@ export default function BooksYearEndPage() {
   const todo = data?.checks.some((c) => c.state === 'todo') ?? false;
   const needsReason = reopening || (data?.can === 'close' && todo);
   const ready = !busy && (!needsReason || !!reason.trim());
+  const excelUrl = data && `/api/admin/books/year-end/download?${new URLSearchParams({ company: data.company, year: String(year) })}`;
 
   return (
     <div>
@@ -294,6 +288,16 @@ export default function BooksYearEndPage() {
             {data.years.map((y) => (
               <button key={y} onClick={() => pick(data.company, y)} disabled={loading} style={button(y === year)}>{y}</button>
             ))}
+            {excelUrl && (
+              <button
+                onClick={() => excel.download(excelUrl, `${data.company} Year-end package ${year}.xlsx`)}
+                disabled={loading || excel.busy}
+                title="The trial balance, balance sheet, profit and loss, cash flows, retained earnings and inventory value at the year's end, as one Excel file for the CPA"
+                style={button(false)}
+              >
+                {excel.busy ? 'Making the file…' : excel.ready(excelUrl) ? '⬇ Tap to save the Excel file' : '⬇ Year-end package'}
+              </button>
+            )}
           </div>
 
           {!data.own && (
@@ -350,7 +354,6 @@ export default function BooksYearEndPage() {
             <div style={{ fontSize: '14px', fontWeight: 800, marginBottom: '6px' }}>Before {year} closes</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {data.checks.map((c) => {
-                const state = STATES[c.state];
                 const href = checkHref(c, data.company, year);
                 return (
                   <div key={c.key}>
@@ -358,7 +361,7 @@ export default function BooksYearEndPage() {
                       <span style={{ fontSize: '13px', fontWeight: 700 }}>
                         {href ? <Link href={href} style={{ color: 'inherit' }}>{CHECK_LABELS[c.key]}</Link> : CHECK_LABELS[c.key]}
                       </span>
-                      <span style={chip(state.color)}>{state.label}</span>
+                      <span style={chip(STATE_COLORS[c.state])}>{STATE_WORDS[c.state]}</span>
                     </div>
                     <div style={{ fontSize: '12px', color: c.state === 'todo' ? AMBER : 'var(--text-muted)', fontWeight: c.state === 'todo' ? 600 : 400 }}>
                       {c.detail}
