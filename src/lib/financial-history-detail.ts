@@ -3,7 +3,12 @@ import type { RestletPnlRow } from '@/lib/netsuite';
 import { parseReportLines } from '@/lib/quickbooks/reports';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { readLedgerSettings } from '@/lib/ledger/pdf-gate';
-import type { HistorySource } from '@/lib/financial-history';
+import { chicagoDay } from '@/lib/exec-metrics';
+import { BOOKS_FROM, booksFromMonth, type HistorySource } from '@/lib/financial-history';
+import { booksMonths } from '@/lib/books/money-screens';
+import { loadBooksForHistory } from '@/lib/books/money-screens-data';
+import { toCents } from '@/lib/books/netsuite-gl';
+import type { ReportData } from '@/lib/books/reports';
 
 /**
  * One year of Financial History taken apart, so a total that looks wrong can
@@ -16,6 +21,10 @@ import type { HistorySource } from '@/lib/financial-history';
  *     revenue (totals include sales tax: NetSuite's mirror has no tax split);
  *   - QuickBooks' own yearly P&L beside the sum of its months;
  *   - revenue, cost and expense by account, for the system(s) the year uses.
+ * With "Financials on FleetSuite's books" on, BMG's books in FleetSuite are
+ * read too (they aren't stored apart, so they're read whole): each month's
+ * revenue there from January 2025 through this month, and the months the
+ * report takes from them by account.
  */
 
 export const SECTION_ORDER = ['Income', 'Cost of Goods Sold', 'Expenses', 'Other Income', 'Other Expenses'] as const;
@@ -41,6 +50,8 @@ export interface DetailMonth {
   /** Revenue on each system's monthly P&L; null when none is stored. */
   quickbooksPnl: number | null;
   netsuitePnl: number | null;
+  /** Revenue in FleetSuite's books, with the switch on, from January 2025 through this month; null otherwise. */
+  fleetsuitePnl: number | null;
   /** Invoices + sales receipts − credits dated this month, tax included. */
   quickbooksInvoiced: number;
   netsuiteInvoiced: number;
@@ -100,6 +111,38 @@ export function netsuiteAccountSections(months: RestletPnlRow[][]): AccountSecti
   return toSections(map);
 }
 
+/** FleetSuite's account types → the same section names, each with the sign that reads it as its months' totals do. */
+const BOOKS_SECTION: Record<string, { section: SectionName; sign: number }> = {
+  income: { section: 'Income', sign: -1 },
+  cost_of_goods_sold: { section: 'Cost of Goods Sold', sign: 1 },
+  expense: { section: 'Expenses', sign: 1 },
+  other_income: { section: 'Other Income', sign: -1 },
+  other_expense: { section: 'Other Expenses', sign: 1 },
+};
+
+/**
+ * FleetSuite's books by account over the months given ('YYYY-MM'), income
+ * and costs positive as their months' totals are (src/lib/books/money-screens.ts
+ * booksPnl), so these lines add up to them. Labelled by number and name; an
+ * account outside the chart counts in no total, so it isn't listed either.
+ */
+export function booksAccountSections(data: ReportData, months: readonly string[]): AccountSection[] {
+  const wanted = new Set(months.map(m => `${m}-01`));
+  const cents = new Map<string, number>();
+  for (const r of data.fleetsuite) {
+    if (wanted.has(r.month)) cents.set(r.account, (cents.get(r.account) || 0) + toCents(r.debit) - toCents(r.credit));
+  }
+  const accountOf = new Map(data.accounts.map(a => [a.netsuite_account_id ?? `fs:${a.id}`, a]));
+  const map = new Map<SectionName, Map<string, number>>();
+  for (const [key, amount] of cents) {
+    const account = accountOf.get(key);
+    const kind = account ? BOOKS_SECTION[account.account_type] : undefined;
+    if (!account || !kind) continue;
+    add(map, kind.section, [account.number, account.name].filter(Boolean).join(' '), (amount * kind.sign) / 100);
+  }
+  return toSections(map);
+}
+
 /**
  * QuickBooks accounts from one stored P&L report. Only data rows count:
  * a parent account's own postings are a data row inside its section, and
@@ -146,7 +189,7 @@ const qboIncome = (summary: Record<string, unknown> | null | undefined): number 
 
 type SnapRow = { period_start: string; summary: Record<string, unknown> | null; payload: any };
 
-async function readYearSnapshots(service: SupabaseClient, source: HistorySource, kind: 'month' | 'year', year: number) {
+async function readYearSnapshots(service: SupabaseClient, source: 'quickbooks' | 'netsuite', kind: 'month' | 'year', year: number) {
   const { data, error } = await service.from('ledger_report_snapshots')
     .select('period_start, summary, payload')
     .eq('source', source)
@@ -162,12 +205,19 @@ async function readYearSnapshots(service: SupabaseClient, source: HistorySource,
   return (data || []) as SnapRow[];
 }
 
-export async function loadYearDetail(service: SupabaseClient, year: number): Promise<YearDetail> {
+/** One year taken apart; with `books` (the switch on), FleetSuite's books too, and a read of them that fails throws. */
+export async function loadYearDetail(service: SupabaseClient, year: number, opts: { books?: boolean } = {}): Promise<YearDetail> {
   const settings = await readLedgerSettings(service);
   const cutover = settings.cutover?.date || null;
   const cutoverMonth = cutover ? cutover.slice(0, 7) : null;
+  const booksFrom = booksFromMonth(cutoverMonth, opts.books === true);
+  const thisMonth = chicagoDay().slice(0, 7);
+  // The year's months FleetSuite's books have, whichever system the report uses for each.
+  const booksMonthsOfYear = booksFrom
+    ? Array.from({ length: 12 }, (_, i) => `${year}-${pad(i + 1)}`).filter(m => m >= BOOKS_FROM && m <= thisMonth)
+    : [];
 
-  const [qboMonths, qboYears, nsMonths, invoices] = await Promise.all([
+  const [qboMonths, qboYears, nsMonths, invoices, books] = await Promise.all([
     readYearSnapshots(service, 'quickbooks', 'month', year),
     readYearSnapshots(service, 'quickbooks', 'year', year),
     readYearSnapshots(service, 'netsuite', 'month', year),
@@ -181,8 +231,10 @@ export async function loadYearDetail(service: SupabaseClient, year: number): Pro
       .order('doc_date')
       .order('id')
       .range(lo, hi)),
+    booksMonthsOfYear.length > 0 ? loadBooksForHistory(service) : null,
   ]);
   if (invoices.error) throw new Error(`Could not read invoices: ${invoices.error.message}`);
+  const booksByMonth = books ? booksMonths(books.data, booksMonthsOfYear) : null;
 
   const qboByMonth = new Map(qboMonths.map(r => [r.period_start.slice(0, 7), r]));
   const nsByMonth = new Map(nsMonths.map(r => [r.period_start.slice(0, 7), r]));
@@ -192,7 +244,8 @@ export async function loadYearDetail(service: SupabaseClient, year: number): Pro
   const netsuiteMonthsMissing: string[] = [];
   for (let m = 1; m <= 12; m++) {
     const month = `${year}-${pad(m)}`;
-    const used: HistorySource = cutoverMonth && month < cutoverMonth ? 'quickbooks' : 'netsuite';
+    const used: HistorySource = cutoverMonth && month < cutoverMonth ? 'quickbooks'
+      : booksFrom && month >= booksFrom ? 'fleetsuite' : 'netsuite';
     const ns = nsByMonth.get(month);
     const nsIncome = ns?.summary && typeof ns.summary.income === 'number' ? ns.summary.income : null;
     if (used === 'netsuite' && nsIncome === null) netsuiteMonthsMissing.push(month);
@@ -201,6 +254,7 @@ export async function loadYearDetail(service: SupabaseClient, year: number): Pro
       used,
       quickbooksPnl: qboIncome(qboByMonth.get(month)?.summary),
       netsuitePnl: nsIncome,
+      fleetsuitePnl: booksByMonth?.get(month)?.income ?? null,
       quickbooksInvoiced: invoiced.get(month)?.quickbooks || 0,
       netsuiteInvoiced: invoiced.get(month)?.netsuite || 0,
     });
@@ -225,6 +279,10 @@ export async function loadYearDetail(service: SupabaseClient, year: number): Pro
       .filter((r): r is RestletPnlRow[] => Array.isArray(r));
     if (rows.length > 0) accounts.push({ source: 'netsuite', sections: netsuiteAccountSections(rows) });
   }
+  // The months the report takes from FleetSuite's books: none after this month.
+  const fromBooks = months.filter(m => m.used === 'fleetsuite' && m.fleetsuitePnl !== null).map(m => m.month);
+  const booksSections = books ? booksAccountSections(books.data, fromBooks) : [];
+  if (booksSections.length > 0) accounts.push({ source: 'fleetsuite', sections: booksSections });
 
   return {
     year,

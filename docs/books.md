@@ -6279,7 +6279,8 @@ The plan has Home → Financials, Financial History, the portal and the AI
 assistant read FleetSuite's books instead of NetSuite (the NetSuite Exit
 Checklist's "Money screens on FleetSuite's books"). Part 80 does Home →
 Financials, switched off (`money_screens`, migration 504,
-`src/lib/books/money-screens.ts`, `src/lib/books/money-screens-data.ts`).
+`src/lib/books/money-screens.ts`, `src/lib/books/money-screens-data.ts`),
+and part 81 Financial History, on the same switch (below).
 NetSuite's income statement read behind the tab's profit and loss has no
 company in it, so today's band most likely has 1084's rent and mortgage in
 BMG's. With the switch on, the tab reads BMG's books alone.
@@ -6344,16 +6345,58 @@ past due, A/P $1,570, and a net position of $8,780. Last month's band
 shows revenue of $1,000, $600 of expenses and $300 of payroll: net income
 of $100, 10% of revenue.
 
+### Financial History
+
+Reports → Financial History (`src/lib/financial-history.ts`, and its year
+cross-check `src/lib/financial-history-detail.ts`) lays every month's profit
+and loss in one series: QuickBooks before the cutover, NetSuite from it on,
+each month from one system only. With `money_screens` on, BMG's books in
+FleetSuite take NetSuite's place (part 81):
+
+- **The months from the cutover** come from BMG's books, each worked out
+  as the Financials band works a month out (`booksMonths`), payroll in
+  expenses as Financial History has it, without 1084's. This month is
+  marked in progress, as now. The books are read whole on each visit
+  (`loadBooksForHistory`), so nothing is cached and no NetSuite month is
+  fetched or kept.
+- **FleetSuite's books start in January 2025** (their first month,
+  `BOOKS_FROM`). With a cutover before that, NetSuite still gives the
+  months between, from its copy or fetched as now; with no cutover
+  confirmed, the books' months are shown from January 2025.
+- **A year's cross-check** adds a FleetSuite P&L column beside QuickBooks'
+  and NetSuite's: the books' revenue for each month from January 2025
+  through this month, whichever system the report uses for it, bold where
+  it's the books. The year by account lists the books' income and expense
+  accounts for the months the report takes from them, by number and name,
+  adding up to those months' totals; an account outside the chart counts
+  in neither.
+- The page names whose books they are and when they were last posted,
+  shows a red line when the last posting run failed and an amber one when
+  it stopped for time, and puts FleetSuite in the chart's legend.
+
+A read of the books that fails answers "Couldn't read FleetSuite's books"
+and why, in red, without falling back to NetSuite. With the switch off the
+page reads NetSuite as before and nothing from the books; its loading line
+now reads "Loading… the first visit can take a minute."
+
+Made-up example: QuickBooks gives 2024; BMG's books have $1,000 of sales
+less a $50 discount in January 2025, $400 of materials and $425 of
+expenses. January 2025 shows revenue of $950, gross profit of $550 and net
+income of $125, and 1084's rent income in October 2026 isn't in it.
+
 ### Before switching on
 
 - Look at Books → Differences for BMG: where FleetSuite's books still
-  differ from NetSuite's, the tab will show FleetSuite's.
+  differ from NetSuite's, the tab and Financial History will show
+  FleetSuite's.
 
 ### What isn't done yet
 
-- Financial History, the portal and the AI assistant still read NetSuite.
+- The portal and the AI assistant still read NetSuite.
 - The revenue, receivables trend, sales and operations bands still read
   NetSuite, and the trend lines are NetSuite's nightly snapshots.
+- Reports' card for Financial History still reads "QuickBooks before the
+  cutover, NetSuite after".
 
 ## Switches
 
@@ -6385,8 +6428,8 @@ approval before it goes to NetSuite, so off leaves Adjust as now, and Adjust
 stops when it can't read it rather than post one unapproved.
 `own_numbers` needs a step in NetSuite first, ticking Allow Override, so the
 page asks with its own words too. `money_screens` sends nothing anywhere:
-off, Home → Financials reads NetSuite, as now, and on, BMG's books in
-FleetSuite, so the page asks with its own words too.
+off, Home → Financials and Financial History read NetSuite, as now, and
+on, BMG's books in FleetSuite, so the page asks with its own words too.
 
 | Piece | What it does once it's on | Where |
 | --- | --- | --- |
@@ -6409,7 +6452,7 @@ FleetSuite, so the page asks with its own words too.
 | `own_numbers` | Each sales order, PO, invoice and credit memo FleetSuite makes in NetSuite gets FleetSuite's next number of its kind, and NetSuite keeps it as the document's number once Allow Override is ticked there ("Own numbers") | Every sales order, PO, invoice and credit memo FleetSuite makes, and Books → Own numbers |
 | `invoice_pdfs` | Each invoice FleetSuite makes gets FleetSuite's own PDF of it attached in NetSuite, once FleetSuite's copy matches NetSuite's invoice ("Invoice PDFs") | Books → Own invoices, on each invoice |
 | `stock_counts` | Admins count a location's stock, all of it or a part, on a printed sheet or a phone, and ask for approval of what differs from NetSuite; a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as one Inventory Adjustment ("Counts") | Counts on the Inventory page |
-| `money_screens` | Home → Financials reads BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, and the lists behind them, without 1084's ("Money screens") | Home → Financials |
+| `money_screens` | Home → Financials and Financial History read BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, the lists behind them, and each month's profit and loss from the QuickBooks cutover on, without 1084's ("Money screens") | Home → Financials, and Reports → Financial History |
 
 ## Posting
 

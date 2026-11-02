@@ -10,6 +10,7 @@ import {
 import { chicagoDate } from './own-invoices';
 import { partyBalances, type PartyBalancesData, type PartyKind } from './party-balances';
 import { loadReports, type LoadedReports } from './report-data';
+import type { ReportData } from './reports';
 import { readTaxAccounts } from './sales-tax-data';
 import type { OpenArInvoice, OpenVendorBill } from '@/lib/financials-data';
 
@@ -17,7 +18,8 @@ import type { OpenArInvoice, OpenVendorBill } from '@/lib/financials-data';
  * What Home → Financials reads from FleetSuite's books with the switch on
  * (src/lib/books/money-screens.ts): the tab's summary, the lists behind its
  * tiles, and one period of its profit and loss band, each for BMG alone.
- * A read that fails comes back as { error }.
+ * A read that fails comes back as { error }. Financial History reads BMG's
+ * books here too (loadBooksForHistory).
  */
 
 const COMPANY = MONEY_SCREENS_COMPANY;
@@ -173,5 +175,19 @@ export async function loadBooksPnlPeriod(service: SupabaseClient, key: PnlPeriod
       ...shared,
       books: { company: COMPANY, name: COMPANY, postedAt: null, postingError: null, postingPartial: false },
     };
+  }
+}
+
+/**
+ * BMG's books as Books → Reports reads them, and whose they are, for
+ * Financial History (src/lib/financial-history.ts and its year
+ * cross-check). A read that fails throws, naming FleetSuite's books.
+ */
+export async function loadBooksForHistory(service: SupabaseClient): Promise<{ data: ReportData; books: BooksSource }> {
+  try {
+    const loaded = await readBooks(service);
+    return { data: loaded.data, books: sourceOf(loaded) };
+  } catch (err) {
+    throw new Error(`Couldn't read FleetSuite's books: ${message(err)}`);
   }
 }
