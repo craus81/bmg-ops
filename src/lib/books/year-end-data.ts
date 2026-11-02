@@ -18,10 +18,11 @@ import { defaultYear, readYearChecks, readYears, yearsShown, type YearFacts } fr
  * What Books → Year end and its year-end package read for one company's
  * year (src/app/api/admin/books/year-end and its download; docs/books.md
  * "Year end"): the company and year asked for, the year's close both sides,
- * its months, checks and closes, and the books Reports reads, which the
- * package's statements come from; and for the package, the general ledger,
- * each customer's and vendor's balance and each bank account's
- * reconciliation at the year's end.
+ * its months, checks and closes (the CPA's adjustments made among them),
+ * and the books Reports reads, which the package's statements and fixed
+ * assets and loans come from; and for the package, the general ledger, each
+ * customer's and vendor's balance and each bank account's reconciliation at
+ * the year's end.
  */
 
 export interface YearRead {
@@ -32,6 +33,8 @@ export interface YearRead {
   checked: boolean;
   /** What Reports reads for the company. */
   loaded: LoadedReports;
+  /** An account by NetSuite's id, as the chart names it. */
+  accountName: (netsuiteId: string) => string;
 }
 
 /** The companies with books of their own, by code. */
@@ -72,6 +75,7 @@ export async function readYear(service: SupabaseClient, company: CompanyRow, yea
     amounts: yearCloseAmounts(loaded.data, year),
     checked: loaded.data.opening.length > 0 || loaded.data.netsuite.length > 0,
     loaded,
+    accountName,
   };
 }
 

@@ -20,10 +20,11 @@ const failed = (err: unknown) => NextResponse.json({ error: String((err as any)?
  * (src/lib/books/reports.ts's yearCloseAmounts): retained earnings at
  * January 1, what was posted to them in the year, its net income and
  * retained earnings once it closes; what's done before it closes (its
- * months closed, matching NetSuite, journal entries made, bank accounts
- * reconciled, sales tax returns typed in); whether it's closed, every close
- * and reopen, and what can be done with it now (src/lib/books/year-end.ts,
- * docs/books.md "Year end"). Last year by default.
+ * months closed, matching NetSuite, journal entries made, the CPA's yearly
+ * entries made, bank accounts reconciled, sales tax returns typed in);
+ * whether it's closed, every close and reopen, and what can be done with it
+ * now (src/lib/books/year-end.ts, docs/books.md "Year end"). Last year by
+ * default.
  *
  * POST { company, year, action: 'close' | 'reopen', reason } — closes the
  * year once every month of it is closed, years in order, or reopens the

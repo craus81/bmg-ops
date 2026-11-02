@@ -3,7 +3,7 @@ import type { MonthCompared, PeriodRow } from './months';
 import { monthsBetween } from './netsuite-gl';
 import {
   closedYears, closeYearRefusal, defaultYear, liveYear, ownMonths, readYearChecks, readYears, reopenYearRefusal, yearChecks,
-  yearsShown, yearView, type BankYear, type CheckKey, type WaitingEntry, type YearFacts, type YearRow,
+  yearsShown, yearView, type BankYear, type CheckKey, type CpaAdjustment, type WaitingEntry, type YearFacts, type YearRow,
 } from './year-end';
 
 const MATCHES: MonthCompared = { status: 'matches', differing: 0, notPosted: false };
@@ -21,6 +21,19 @@ const closedYear = (year: number, over: Partial<YearRow> = {}): YearRow => ({
   ...over,
 });
 
+/** A made-up CPA adjustment made in NetSuite: a year's depreciation on the shop truck. */
+const adjustment = (date: string, over: Partial<CpaAdjustment> = {}): CpaAdjustment => ({
+  id: `a-${date}`,
+  date,
+  memo: `${date.slice(0, 4)} depreciation`,
+  number: 'JE1207',
+  lines: [
+    { accountId: '610', debitCents: 960000, creditCents: 0, memo: null },
+    { accountId: '161', debitCents: 0, creditCents: 960000, memo: 'Shop truck' },
+  ],
+  ...over,
+});
+
 /** Made-up BMG books live from January 2027, with all of 2027 done by January 20, 2028. */
 const facts = (over: Partial<YearFacts> = {}): YearFacts => ({
   name: 'BMG',
@@ -30,6 +43,7 @@ const facts = (over: Partial<YearFacts> = {}): YearFacts => ({
   periods: monthsOf(2027).map(closedMonth),
   compared: new Map(monthsOf(2027).map((m) => [m, MATCHES])),
   entries: [],
+  adjustments: [adjustment('2027-12-31')],
   banks: [],
   returns: monthsOf(2027),
   years: [],
@@ -72,7 +86,7 @@ describe('the years and months a year end covers', () => {
 describe("what's done before a year closes", () => {
   it('lists the checks in the order the page shows them, all done for a finished year', () => {
     expect(yearChecks(facts()).map((c) => [c.key, c.state])).toEqual([
-      ['months', 'done'], ['netsuite', 'done'], ['entries', 'done'], ['bank', 'none'], ['sales_tax', 'done'],
+      ['months', 'done'], ['netsuite', 'done'], ['entries', 'done'], ['yearly', 'done'], ['bank', 'none'], ['sales_tax', 'done'],
     ]);
   });
 
@@ -133,6 +147,28 @@ describe("what's done before a year closes", () => {
       .toBe("3 journal entries dated in 2027 aren't made yet: 1 still a draft, 1 waiting for approval and 1 being made in NetSuite, 1 of them the CPA's.");
     expect(check('entries', facts({ entries: [entry('draft', 'cpa_adjustments'), entry('draft', 'cpa_adjustments')] })).detail)
       .toBe("2 journal entries dated in 2027 aren't made yet: 2 still drafts, all the CPA's.");
+  });
+
+  it("wants the CPA's adjustments dated in December made: the year's depreciation and loan interest", () => {
+    expect(check('yearly', facts())).toEqual({ key: 'yearly', state: 'done', detail: '1 CPA adjustment dated in December 2027 is made.' });
+    expect(check('yearly', facts({ adjustments: [adjustment('2027-06-30'), adjustment('2027-12-01'), adjustment('2027-12-31')] })).detail)
+      .toBe('2 CPA adjustments dated in December 2027 are made.');
+    expect(check('yearly', facts({ adjustments: [] }))).toEqual({
+      key: 'yearly',
+      state: 'todo',
+      detail: "No CPA adjustment dated in December 2027 is made yet. The CPA types the year's depreciation and loan interest on CPA adjustments.",
+    });
+    // One dated earlier in the year, or in another year's December, isn't the year's.
+    expect(check('yearly', facts({ adjustments: [adjustment('2027-11-30')] })).state).toBe('todo');
+    expect(check('yearly', facts({ adjustments: [adjustment('2026-12-31')] })).state).toBe('todo');
+    // Books live from March still close 2027 themselves.
+    expect(check('yearly', facts({ liveFrom: '2027-03-01' })).state).toBe('done');
+    expect(check('yearly', facts({ liveFrom: null, adjustments: [] }))).toEqual({
+      key: 'yearly', state: 'none', detail: "BMG's books aren't live yet, so the CPA books 2027's depreciation and loan interest in NetSuite.",
+    });
+    expect(check('yearly', facts({ year: 2026, adjustments: [] }))).toEqual({
+      key: 'yearly', state: 'none', detail: "2026 is before BMG's books went live, so the CPA books its depreciation and loan interest in NetSuite.",
+    });
   });
 
   it('wants each bank account reconciled through December, from the month it starts', () => {
@@ -199,7 +235,9 @@ describe('closing and reopening a year', () => {
   });
 
   it('closes years in order, each once all its months are', () => {
-    const y2028 = facts({ year: 2028, today: '2029-01-20', periods: monthsOf(2028).map(closedMonth), compared: new Map(), returns: monthsOf(2028) });
+    const y2028 = facts({
+      year: 2028, today: '2029-01-20', periods: monthsOf(2028).map(closedMonth), compared: new Map(), adjustments: [adjustment('2028-12-31')], returns: monthsOf(2028),
+    });
     expect(closeYearRefusal(y2028, 'x')).toEqual({ message: 'Close 2027 first: years close in order.', status: 409 });
     expect(closeYearRefusal({ ...y2028, years: [closedYear(2027)] }, '')).toBeNull();
     // A year reopened since is open again.
@@ -222,6 +260,8 @@ describe('closing and reopening a year', () => {
     expect(closeYearRefusal(off, '')?.status).toBe(400);
     expect(closeYearRefusal(facts({ returns: ['2027-01-01'] }), '')?.status).toBe(400);
     expect(closeYearRefusal(facts({ banks: [bank({ done: [] })] }), '')?.status).toBe(400);
+    expect(closeYearRefusal(facts({ adjustments: [] }), '')?.status).toBe(400);
+    expect(closeYearRefusal(facts({ adjustments: [] }), 'The CPA booked depreciation in the general journal')).toBeNull();
     // Nothing posted, no bank accounts and no sales: nothing to say.
     expect(closeYearRefusal(facts({ name: '1084', compared: new Map(), returns: null }), '')).toBeNull();
   });
@@ -290,19 +330,27 @@ describe('the year as the page shows it', () => {
 
 type Row = Record<string, any>;
 
-/** Just enough of supabase-js for the readers: filters, every table read noted, and a table that fails when told to. */
+/**
+ * Just enough of supabase-js for the readers: filters, every table read
+ * noted, and a table that fails when told to, or one read of it, named by
+ * a filter it has ('typed_journal_entries?journal=cpa_adjustments').
+ */
 function fakeService(tables: Record<string, Row[]>, errors: Record<string, string> = {}) {
   const read: string[] = [];
   const from = (table: string) => {
     read.push(table);
     const filters: Array<(r: Row) => boolean> = [];
-    const result = () => (errors[table]
-      ? { data: null, error: { message: errors[table] } }
-      : { data: (tables[table] ?? []).filter((r) => filters.every((f) => f(r))), error: null });
+    const named: string[] = [];
+    const result = () => {
+      const error = errors[table] ?? named.map((n) => errors[`${table}?${n}`]).find(Boolean);
+      return error
+        ? { data: null, error: { message: error } }
+        : { data: (tables[table] ?? []).filter((r) => filters.every((f) => f(r))), error: null };
+    };
     const q: any = {
       select: () => q,
       order: () => q,
-      eq: (col: string, v: unknown) => { filters.push((r) => r[col] === v); return q; },
+      eq: (col: string, v: unknown) => { filters.push((r) => r[col] === v); named.push(`${col}=${v}`); return q; },
       neq: (col: string, v: unknown) => { filters.push((r) => r[col] !== v); return q; },
       gte: (col: string, v: string) => { filters.push((r) => r[col] >= v); return q; },
       lte: (col: string, v: string) => { filters.push((r) => r[col] <= v); return q; },
@@ -361,6 +409,21 @@ describe("reading what's done before a year closes", () => {
       { id: 'j4', company: 'BMG', tran_date: '2028-01-01', journal: 'general', status: 'draft' },
       { id: 'j5', company: 'BMG', tran_date: '2026-12-31', journal: 'general', status: 'sending' },
       { id: 'j6', company: '1084', tran_date: '2027-05-01', journal: 'general', status: 'draft' },
+      {
+        id: 'j7', company: 'BMG', tran_date: '2027-06-30T00:00:00+00:00', journal: 'cpa_adjustments', status: 'made', memo: 'Loan interest to June',
+        netsuite_number: null,
+        lines: [
+          { account_netsuite_id: '720', debit_cents: '41250', credit_cents: '0', memo: null },
+          { account_netsuite_id: '2370', debit_cents: 0, credit_cents: 41250, memo: 'Apex Commercial printer loan' },
+        ],
+      },
+      {
+        id: 'j8', company: 'BMG', tran_date: '2027-12-31', journal: 'cpa_adjustments', status: 'made', memo: '2027 depreciation',
+        netsuite_number: 'JE1207', lines: [{ account_netsuite_id: '610', debit_cents: 960000, credit_cents: 0, memo: null }],
+      },
+      { id: 'j9', company: 'BMG', tran_date: '2028-12-31', journal: 'cpa_adjustments', status: 'made', memo: '2028 depreciation', netsuite_number: 'JE1300', lines: [] },
+      { id: 'j10', company: '1084', tran_date: '2027-12-31', journal: 'cpa_adjustments', status: 'made', memo: 'Building depreciation', netsuite_number: 'JE1208', lines: null },
+      { id: 'j11', company: 'BMG', tran_date: '2026-12-31', journal: 'cpa_adjustments', status: 'made', memo: '2026 depreciation', netsuite_number: 'JE1100', lines: [] },
     ],
     bank_rec_starts: [
       { company: 'BMG', account: '11', first_month: '2027-01-01' },
@@ -382,23 +445,34 @@ describe("reading what's done before a year closes", () => {
   };
   const accountName = (id: string) => (id === '11' ? '1010 First Bank checking' : `NetSuite account ${id}`);
 
-  it("reads the year's waiting journal entries, each bank account with its months done, and the returns typed in", async () => {
+  it("reads the year's waiting journal entries, the CPA's made, each bank account with its months done, and the returns typed in", async () => {
     const { service, read } = fakeService(TABLES);
     expect(await readYearChecks(service, { company: 'BMG', year: 2027, makesSales: true, accountName })).toEqual({
       entries: [{ journal: 'cpa_adjustments', status: 'draft' }, { journal: 'general', status: 'waiting' }],
+      adjustments: [
+        {
+          id: 'j7', date: '2027-06-30', memo: 'Loan interest to June', number: null,
+          lines: [
+            { accountId: '720', debitCents: 41250, creditCents: 0, memo: null },
+            { accountId: '2370', debitCents: 0, creditCents: 41250, memo: 'Apex Commercial printer loan' },
+          ],
+        },
+        { id: 'j8', date: '2027-12-31', memo: '2027 depreciation', number: 'JE1207', lines: [{ accountId: '610', debitCents: 960000, creditCents: 0, memo: null }] },
+      ],
       banks: [
         { account: '11', name: '1010 First Bank checking', firstMonth: '2027-01-01', done: ['2027-01-01', '2027-12-01'] },
         { account: '99', name: 'NetSuite account 99', firstMonth: '2027-06-01', done: [] },
       ],
       returns: ['2027-01-01', '2027-12-01'],
     });
-    expect(read).toEqual(['typed_journal_entries', 'bank_rec_starts', 'bank_recs', 'sales_tax_returns']);
+    expect(read).toEqual(['typed_journal_entries', 'typed_journal_entries', 'bank_rec_starts', 'bank_recs', 'sales_tax_returns']);
   });
 
   it("doesn't read returns for a company that makes no sales", async () => {
     const { service, read } = fakeService(TABLES);
     expect(await readYearChecks(service, { company: '1084', year: 2027, makesSales: false, accountName })).toEqual({
       entries: [{ journal: 'general', status: 'draft' }],
+      adjustments: [{ id: 'j10', date: '2027-12-31', memo: 'Building depreciation', number: 'JE1208', lines: [] }],
       banks: [{ account: '21', name: 'NetSuite account 21', firstMonth: '2027-01-01', done: ['2027-01-01'] }],
       returns: null,
     });
@@ -409,6 +483,8 @@ describe("reading what's done before a year closes", () => {
     const opts = { company: 'BMG', year: 2027, makesSales: true, accountName };
     await expect(readYearChecks(fakeService(TABLES, { typed_journal_entries: 'down' }).service, opts))
       .rejects.toThrow("Couldn't read the journal entries: down");
+    await expect(readYearChecks(fakeService(TABLES, { 'typed_journal_entries?journal=cpa_adjustments': 'down' }).service, opts))
+      .rejects.toThrow("Couldn't read the CPA's adjustments: down");
     for (const table of ['bank_rec_starts', 'bank_recs', 'sales_tax_returns']) {
       await expect(readYearChecks(fakeService(TABLES, { [table]: `${table} down` }).service, opts))
         .rejects.toThrow(`Couldn't read what's done before the year closes: ${table} down`);

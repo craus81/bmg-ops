@@ -10,6 +10,7 @@ export const CHECK_LABELS: Record<CheckKey, string> = {
   months: 'Months closed',
   netsuite: 'Matches NetSuite',
   entries: 'Journal entries',
+  yearly: "CPA's yearly entries",
   bank: 'Bank reconciliations',
   sales_tax: 'Sales tax returns',
 };

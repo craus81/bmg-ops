@@ -14,10 +14,11 @@ import { partyBalances, type PartyBalanceData, type PartyBalancesAt } from './pa
 import { buildReport, type BuilderAsk, type SplitAmount } from './report-builder';
 import type { AccountDocumentData, AccountDocumentsData } from './report-detail';
 import { report, yearCloseAmounts, type ReportAccount, type ReportAmount, type ReportData } from './reports';
+import { rollForward } from './roll-forward';
 import type { TbAmount } from './trial-balance';
-import type { YearCheck, YearEvent } from './year-end';
+import type { CpaAdjustment, YearCheck, YearEvent } from './year-end';
 import {
-  bankRecNotes, ledgerNotes, partyNotes, XLSX_TYPE, yearEndFileName, yearEndNotes, yearEndWorkbook,
+  bankRecNotes, cpaNotes, ledgerNotes, partyNotes, XLSX_TYPE, yearEndFileName, yearEndNotes, yearEndWorkbook,
   type WorkbookFile, type WorkbookNote, type YearEndView, type YearEndWorkbookInput,
 } from './report-workbook';
 
@@ -177,10 +178,71 @@ const bankYear = (over: Partial<RecBooks> = {}, to = '2027-12-01', thisMonth = '
 };
 const BANK_NOTE: WorkbookNote = { tone: 'amber', text: "1010 First Bank checking: 1 entry NetSuite has isn't posted to FleetSuite's books yet, so it isn't here." };
 
+/**
+ * BMG's fixed assets and loans in 2027: the shop truck from before, a box
+ * van bought in June, their accumulated depreciation with the CPA's 9,600.00
+ * for the year, loan costs, 240.00 of which NetSuite's books amortized in 2026
+ * and FleetSuite's didn't, and the truck loan, paid down 1,000.00 in June,
+ * with the CPA's 412.50 of interest in NetSuite's books but not yet
+ * FleetSuite's.
+ */
+const twice = (acct: string, month: string, cents: number) => ({ netsuite: [ns(acct, month, cents)], fleetsuite: [fs(acct, month, cents)] });
+const ASSET_MOVES = [
+  twice('151', '2027-06-01', 3000000), twice('10', '2027-06-01', -3000000),
+  twice('159', '2027-12-01', -960000), twice('610', '2027-12-01', 960000),
+  twice('270', '2027-06-01', 100000), twice('10', '2027-06-01', -100000),
+];
+const ASSETS: ReportData = {
+  company: 'BMG',
+  accounts: [
+    account('a10', '10', '1010', 'First Bank checking', 'bank'),
+    account('a150', '150', '1500', 'Shop truck', 'fixed_asset'),
+    account('a151', '151', '1510', 'Box van', 'fixed_asset'),
+    account('a159', '159', '1590', 'Accumulated depreciation', 'fixed_asset'),
+    account('a180', '180', '1800', 'Loan costs', 'other_asset'),
+    account('a270', '270', '2700', 'Truck loan', 'long_term_liability'),
+    account('a39', '39', '3900', 'Retained Earnings', 'equity'),
+    account('a610', '610', '6100', 'Depreciation', 'expense'),
+    account('a720', '720', '7200', 'Interest', 'expense'),
+  ],
+  opening: [
+    ns('10', undefined, 4000000), ns('150', undefined, 4500000), ns('159', undefined, -1800000), ns('180', undefined, 120000),
+    ns('270', undefined, -3000000), ns('39', undefined, -3820000),
+  ],
+  netsuite: [
+    ...ASSET_MOVES.flatMap((m) => m.netsuite), ns('180', '2026-12-01', -24000), ns('610', '2026-12-01', 24000),
+    ns('270', '2027-12-01', -41250), ns('720', '2027-12-01', 41250),
+  ],
+  fleetsuite: ASSET_MOVES.flatMap((m) => m.fleetsuite),
+};
+
+/** The CPA's adjustments made for BMG's 2027: June's loan interest, NetSuite's number not read back yet, December's depreciation, and one whose lines weren't kept. */
+const ADJUSTMENTS: CpaAdjustment[] = [
+  {
+    id: 'a1', date: '2027-06-30', memo: 'Loan interest to June', number: null,
+    lines: [
+      { accountId: '720', debitCents: 41250, creditCents: 0, memo: null },
+      { accountId: '270', debitCents: 0, creditCents: 41250, memo: 'Example Bank truck loan' },
+    ],
+  },
+  {
+    id: 'a2', date: '2027-12-31', memo: '2027 depreciation', number: 'JE1207',
+    lines: [
+      { accountId: '610', debitCents: 960000, creditCents: 0, memo: null },
+      { accountId: '159', debitCents: 0, creditCents: 960000, memo: 'Shop truck and box van' },
+    ],
+  },
+  { id: 'a3', date: '2027-12-31', memo: 'Building depreciation', number: 'JE1208', lines: [] },
+];
+
 const CHECKS: YearCheck[] = [
   { key: 'months', state: 'done', detail: 'All 12 months are closed.' },
   { key: 'netsuite', state: 'todo', detail: "1 month doesn't match NetSuite: April.", months: ['2027-04-01'] },
   { key: 'entries', state: 'done', detail: 'None dated in 2027 is waiting.' },
+  {
+    key: 'yearly', state: 'todo',
+    detail: "No CPA adjustment dated in December 2027 is made yet. The CPA types the year's depreciation and loan interest on CPA adjustments.",
+  },
   { key: 'bank', state: 'none', detail: "BMG's bank accounts aren't reconciled in FleetSuite yet." },
   { key: 'sales_tax', state: 'done', detail: "Every month's return is typed in." },
 ];
@@ -205,6 +267,12 @@ const STOCK_NOTE: WorkbookNote = { tone: 'amber', text: "NetSuite's stock moves 
 const LEDGER_NOTE: WorkbookNote = { tone: 'red', text: '1 account has more than 20,000 documents in these months.' };
 const CUSTOMER_NOTE: WorkbookNote = { tone: 'amber', text: "NetSuite's customers don't come to its receivable accounts on the trial balance." };
 
+/** An account by NetSuite's id as readYear names it: by the chart's number and name. */
+const accountName = (accounts: readonly ReportAccount[]) => (id: string) => {
+  const a = accounts.find((x) => x.netsuite_account_id === id);
+  return a ? `${a.number} ${a.name}` : `NetSuite account ${id}`;
+};
+
 /** The package for BMG's 2027 as the download makes it, through `to`, with what's asked changed. */
 function input(over: Partial<YearEndWorkbookInput> = {}, to = '2027-12-01'): YearEndWorkbookInput {
   const ask: BuilderAsk = { rows: 'account', months: 'picked', from: '2027-01-01', to, by: 'month', division: null, location: null };
@@ -227,6 +295,8 @@ function input(over: Partial<YearEndWorkbookInput> = {}, to = '2027-12-01'): Yea
     parties: { customer: { balances: CUSTOMERS, notes: [CUSTOMER_NOTE] }, vendor: { balances: VENDORS, notes: [] } },
     banks: { accounts: [], notes: [] },
     inventory: { value: stock(), notes: [STOCK_NOTE] },
+    rollForward: rollForward(DATA, { from: '2027-01-01', to }),
+    cpa: { adjustments: [], accountName: accountName(DATA.accounts), notes: [] },
     now: NOW,
     ...over,
   };
@@ -282,7 +352,7 @@ describe('the year-end package file', () => {
     expect(all.map((s) => s.name)).toEqual([
       'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows',
       'Retained Earnings', 'General Ledger', 'Customer Balances', 'Vendor Balances', 'Inventory value', 'Inventory ties to accounts',
-      'Inventory documents, no item',
+      'Inventory documents, no item', 'CPA Adjustments',
     ]);
     const ws = all[0];
     expect([1, 2, 3, 4, 5].map((r) => cells(ws, r, 1)[0])).toEqual([
@@ -322,11 +392,19 @@ describe('the year-end package file', () => {
       [link('Inventory value'), 'Each item at each location at December 31, 2027: on hand, average cost and value.'],
       [link('Inventory ties to accounts'), 'How the items come to each inventory account on the balance sheet at December 31, 2027.'],
       [link('Inventory documents, no item'), 'Documents on the inventory accounts with no stocked item, from January 1, 2025 to December 31, 2027.'],
+      [
+        link('CPA Adjustments'),
+        "Each of the CPA's adjustments dated in 2027 and made in NetSuite, line by line: the year's depreciation, loan interest and other year-end entries.",
+      ],
       [null, null],
       ['Before 2027 closes', null],
       ['Months closed: Done', 'All 12 months are closed.'],
       ['Matches NetSuite: Not yet', "1 month doesn't match NetSuite: April."],
       ['Journal entries: Done', 'None dated in 2027 is waiting.'],
+      [
+        "CPA's yearly entries: Not yet",
+        "No CPA adjustment dated in December 2027 is made yet. The CPA types the year's depreciation and loan interest on CPA adjustments.",
+      ],
       ['Bank reconciliations: Not here', "BMG's bank accounts aren't reconciled in FleetSuite yet."],
       ['Sales tax returns: Done', "Every month's return is typed in."],
     ]);
@@ -335,14 +413,16 @@ describe('the year-end package file', () => {
     expect(at(0).getCell(1).font).toMatchObject({ color: { argb: 'FF0563C1' }, underline: true });
     expect(at(0).getCell(1).alignment).toMatchObject({ vertical: 'top' });
     expect(at(0).getCell(2).alignment).toMatchObject({ vertical: 'top', wrapText: true });
-    expect(at(13).getCell(1).font).toMatchObject({ bold: true, size: 12 });
+    expect(at(14).getCell(1).font).toMatchObject({ bold: true, size: 12 });
     // What's not done yet stands out; the rest is plain.
-    expect(at(15).getCell(1).font).toMatchObject({ bold: true, color: { argb: AMBER } });
-    expect(at(15).getCell(2).font).toMatchObject({ bold: true, color: { argb: AMBER } });
+    for (const i of [16, 18]) {
+      expect(at(i).getCell(1).font).toMatchObject({ bold: true, color: { argb: AMBER } });
+      expect(at(i).getCell(2).font).toMatchObject({ bold: true, color: { argb: AMBER } });
+    }
     // Done, or not here at all: Excel's own text color.
-    expect(at(14).getCell(1).font?.color?.argb).toBeUndefined();
-    expect(at(17).getCell(1).font?.color?.argb).toBeUndefined();
-    expect(at(17).getCell(2).alignment).toMatchObject({ vertical: 'top', wrapText: true });
+    expect(at(15).getCell(1).font?.color?.argb).toBeUndefined();
+    expect(at(19).getCell(1).font?.color?.argb).toBeUndefined();
+    expect(at(19).getCell(2).alignment).toMatchObject({ vertical: 'top', wrapText: true });
     expect(ws.getColumn(1).width).toBe(30);
     expect(ws.getColumn(2).width).toBe(100);
   });
@@ -445,9 +525,9 @@ describe('the year-end package file', () => {
 
     const none = { ...INVENTORY, entries: 0, entries_total: '0', month_entries: 0, month_entries_total: '0', kinds: [], rows: [], ledger_moves: '0', netsuite_moves: '0', books_moves: '0' };
     const without = await sheets(await yearEndWorkbook(input({ inventory: { value: stock(none), notes: [] } })));
-    expect(without.slice(10).map((s) => s.name)).toEqual(['Inventory value', 'Inventory ties to accounts']);
-    expect(body(without[0], 'Sheet', 1).map((r) => (r[0] as { text: string } | null)?.text ?? r[0]).slice(9, 12)).toEqual([
-      'Inventory value', 'Inventory ties to accounts', null,
+    expect(without.slice(10).map((s) => s.name)).toEqual(['Inventory value', 'Inventory ties to accounts', 'CPA Adjustments']);
+    expect(body(without[0], 'Sheet', 1).map((r) => (r[0] as { text: string } | null)?.text ?? r[0]).slice(9, 13)).toEqual([
+      'Inventory value', 'Inventory ties to accounts', 'CPA Adjustments', null,
     ]);
   });
 
@@ -455,9 +535,9 @@ describe('the year-end package file', () => {
     const all = await sheets(await yearEndWorkbook(input({ inventory: null })));
     expect(all.map((s) => s.name)).toEqual([
       'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows', 'Retained Earnings',
-      'General Ledger', 'Customer Balances', 'Vendor Balances',
+      'General Ledger', 'Customer Balances', 'Vendor Balances', 'CPA Adjustments',
     ]);
-    expect(body(all[0], 'Sheet', 1)[10]).toEqual(['Before 2027 closes']);
+    expect(body(all[0], 'Sheet', 1)[11]).toEqual(['Before 2027 closes']);
   });
 
   it("runs a year that isn't over through this month and says so on each sheet, once on the stock's, which says it of its month", async () => {
@@ -917,6 +997,145 @@ describe('the year-end package file', () => {
     expect(body(all[0], 'Sheet', 2)[9][1]).toMatch(/^Each bank account reconciled in FleetSuite at November 30, 2027: /);
   });
 
+  it("rolls each fixed asset, other asset and long term liability account forward over the year under the year's notes and Reports', each part the balance sheet's", async () => {
+    const to = '2027-12-01';
+    const all = await sheets(await yearEndWorkbook(input({
+      reports: { ...input().reports, balance_sheet: report(ASSETS, 'balance_sheet', { to }) },
+      rollForward: rollForward(ASSETS, { from: '2027-01-01', to }),
+    })));
+    expect(all.map((s) => s.name).slice(-3)).toEqual(['Inventory documents, no item', 'Fixed Assets and Loans', 'CPA Adjustments']);
+    const link = (name: string) => ({ text: name, hyperlink: `#'${name}'!A1` });
+    expect(body(all[0], 'Sheet', 2)[12]).toEqual([
+      link('Fixed Assets and Loans'),
+      "Each fixed asset, other asset and long term liability account: where it stood at January 1, 2027, its debits and credits, "
+        + "and where it stood at December 31, 2027, FleetSuite's books next to NetSuite's. Each part comes to the balance sheet's.",
+    ]);
+
+    const ws = sheet(all, 'Fixed Assets and Loans');
+    expect([2, 3, 4].map((r) => cells(ws, r, 1)[0])).toEqual([
+      'Fixed Assets and Loans',
+      'January 1, 2027 to December 31, 2027',
+      "Each fixed asset, other asset and long term liability account as the balance sheet shows it, accumulated depreciation as a negative: "
+        + "where it stood at January 1, 2027, FleetSuite's debits and credits to it since, and where it stood at December 31, 2027, next to NetSuite's. "
+        + "Each part's total is the balance sheet's. The documents are on the General Ledger sheet, and the CPA's own entries on CPA Adjustments.",
+    ]);
+    expect(notesOf(ws)).toEqual([[CLOSED_NOTE, GREEN], [REPORT_NOTE.text, AMBER]]);
+    const head = headerRow(ws, 'Account');
+    expect(cells(ws, head, 7)).toEqual(['Account', 'January 1, 2027', 'Debits', 'Credits', 'December 31, 2027', 'NetSuite, December 31, 2027', 'Difference']);
+    expect(Array.from({ length: 7 }, (_, i) => ws.getRow(head).getCell(i + 1).alignment?.horizontal)).toEqual([
+      'left', 'right', 'right', 'right', 'right', 'right', 'right',
+    ]);
+    const none = [null, null, null, null, null, null];
+    expect(body(ws, 'Account', 7)).toEqual([
+      ['Fixed assets', ...none],
+      ['1500 Shop truck', 45000, 0, 0, 45000, 45000, 0],
+      ['1510 Box van', 0, 30000, 0, 30000, 30000, 0],
+      ['1590 Accumulated depreciation', -18000, 0, 9600, -27600, -27600, 0],
+      ['Total fixed assets', 27000, 30000, 9600, 47400, 47400, 0],
+      [null, ...none],
+      ['Other assets', ...none],
+      ['1800 Loan costs', 1200, 0, 0, 1200, 960, 240],
+      ['Total other assets', 1200, 0, 0, 1200, 960, 240],
+      [null, ...none],
+      ['Long term liabilities', ...none],
+      ['2700 Truck loan', 30000, 1000, 0, 29000, 29412.5, -412.5],
+      ['Total long term liabilities', 30000, 1000, 0, 29000, 29412.5, -412.5],
+    ]);
+    // Each part's total is the balance sheet's own line, both sides.
+    const balanceSheet = body(sheet(all, 'Balance Sheet'), 'Number', 4);
+    for (const label of ['Total fixed assets', 'Total other assets', 'Total long term liabilities']) {
+      const line = body(ws, 'Account', 7).find((r) => r[0] === label)!;
+      expect([label, line[4], line[5]]).toEqual([label, ...balanceSheet.find((r) => r[1] === label)!.slice(2, 4)]);
+    }
+    const at = (i: number) => ws.getRow(head + 1 + i);
+    // Each part's name in bold; its accounts plain, a difference in red.
+    expect(at(0).getCell(1).font).toMatchObject({ bold: true });
+    expect(at(1).getCell(1).font?.bold).toBeFalsy();
+    expect(at(1).getCell(7).font?.color?.argb).toBeUndefined();
+    expect(at(7).getCell(7).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect(at(11).getCell(7).font).toMatchObject({ bold: true, color: { argb: RED } });
+    // Each part's total in bold over a line, its difference red where it isn't nothing.
+    expect(at(4).getCell(1).font).toMatchObject({ bold: true });
+    expect([2, 3, 4, 5, 6, 7].map((c) => at(4).getCell(c).border)).toEqual([2, 3, 4, 5, 6, 7].map(() => ({ top: { style: 'thin' } })));
+    expect(at(4).getCell(2).font).toEqual({ bold: true });
+    expect(at(4).getCell(7).font).toEqual({ bold: true });
+    expect(at(12).getCell(7).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect(at(12).getCell(1).border?.top).toBeUndefined();
+    expect([2, 3, 4, 5, 6, 7].map((c) => at(1).getCell(c).numFmt)).toEqual([2, 3, 4, 5, 6, 7].map(() => '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)'));
+    expect(ws.views[0]).toMatchObject({ state: 'frozen', ySplit: head });
+    expect([1, 2, 7].map((c) => ws.getColumn(c).width)).toEqual([44, 17, 17]);
+    expect(ws.pageSetup).toMatchObject({ orientation: 'landscape', fitToWidth: 1 });
+
+    // A year not over runs through this month and says so; a company with none of these accounts has no sheet.
+    const view: YearEndView = { ...CLOSED, over: false, closed: null, events: [] };
+    const november = await sheets(await yearEndWorkbook(input({ view, rollForward: rollForward(ASSETS, { from: '2027-01-01', to: '2027-11-01' }) }, '2027-11-01')));
+    const early = sheet(november, 'Fixed Assets and Loans');
+    expect(cells(early, 3, 1)).toEqual(['January 1, 2027 to November 30, 2027']);
+    expect(notesOf(early)[0]).toEqual(["2027 isn't over yet, so this is where it stood when the file was made.", AMBER]);
+    expect(cells(early, headerRow(early, 'Account'), 7).slice(4)).toEqual(['November 30, 2027', 'NetSuite, November 30, 2027', 'Difference']);
+    expect(body(early, 'Account', 7)[3]).toEqual(['1590 Accumulated depreciation', -18000, 0, 0, -18000, -18000, 0]);
+    expect((await sheets(await yearEndWorkbook(input()))).map((s) => s.name)).not.toContain('Fixed Assets and Loans');
+  });
+
+  it("lists the CPA's adjustments dated in the year and made, a row for each line, under the year's notes and its own", async () => {
+    const notes = cpaNotes({ year: 2027, waiting: 1 });
+    const all = await sheets(await yearEndWorkbook(input({ cpa: { adjustments: ADJUSTMENTS, accountName: accountName(ASSETS.accounts), notes } })));
+    const ws = sheet(all, 'CPA Adjustments');
+    expect([2, 3, 4].map((r) => cells(ws, r, 1)[0])).toEqual([
+      'CPA Adjustments',
+      'January 1, 2027 to December 31, 2027',
+      "Each of the CPA's adjustments dated in the year and made in NetSuite, as typed in FleetSuite, a row for each line: the year's "
+        + "depreciation, loan interest and other year-end entries. Each reaches FleetSuite's books from the copy of NetSuite's ledger, as any "
+        + 'journal entry does.',
+    ]);
+    // The year's notes, not Reports': the adjustments are read as typed in FleetSuite.
+    expect(notesOf(ws)).toEqual([[CLOSED_NOTE, GREEN], ["1 of the CPA's adjustments dated in 2027 isn't made yet, so it isn't here.", AMBER]]);
+    const head = headerRow(ws, 'Date');
+    expect(cells(ws, head, 7)).toEqual(['Date', 'Number', 'Memo', 'Account', 'Line note', 'Debit', 'Credit']);
+    expect(Array.from({ length: 7 }, (_, i) => ws.getRow(head).getCell(i + 1).alignment?.horizontal)).toEqual([
+      'left', 'left', 'left', 'left', 'left', 'right', 'right',
+    ]);
+    const june = new Date('2027-06-30T00:00:00Z');
+    const december = new Date('2027-12-31T00:00:00Z');
+    expect(body(ws, 'Date', 7)).toEqual([
+      [june, null, 'Loan interest to June', '7200 Interest', null, 412.5, null],
+      [june, null, 'Loan interest to June', '2700 Truck loan', 'Example Bank truck loan', null, 412.5],
+      [december, 'JE1207', '2027 depreciation', '6100 Depreciation', null, 9600, null],
+      [december, 'JE1207', '2027 depreciation', '1590 Accumulated depreciation', 'Shop truck and box van', null, 9600],
+      [december, 'JE1208', 'Building depreciation', null, null, null, null],
+      [null, null, 'Total, 3 CPA adjustments', null, null, 10012.5, 10012.5],
+    ]);
+    const at = (i: number) => ws.getRow(head + 1 + i);
+    expect(at(0).getCell(1).numFmt).toBe('m/d/yyyy');
+    expect([6, 7].map((c) => at(0).getCell(c).numFmt)).toEqual([6, 7].map(() => '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)'));
+    expect(at(0).getCell(3).font?.bold).toBeFalsy();
+    // The total in bold, its amounts over a double line.
+    expect([3, 6, 7].map((c) => at(5).getCell(c).font?.bold)).toEqual([true, true, true]);
+    expect([6, 7].map((c) => at(5).getCell(c).border)).toEqual([6, 7].map(() => ({ top: { style: 'double' } })));
+    expect(at(5).getCell(3).border?.top).toBeUndefined();
+    expect([1, 2, 3, 4, 5, 6, 7].map((c) => ws.getColumn(c).width)).toEqual([12, 12, 40, 40, 30, 17, 17]);
+    expect(ws.views[0]).toMatchObject({ state: 'frozen', ySplit: head });
+    expect(ws.pageSetup).toMatchObject({ orientation: 'landscape', fitToWidth: 1 });
+
+    // Each column adds up on its own: a made adjustment balances, but the sheet doesn't count on it.
+    const uneven = sheet(await sheets(await yearEndWorkbook(input({
+      cpa: { adjustments: [{ ...ADJUSTMENTS[0], lines: ADJUSTMENTS[0].lines.slice(0, 1) }], accountName: accountName(ASSETS.accounts), notes: [] },
+    }))), 'CPA Adjustments');
+    expect(body(uneven, 'Date', 7)).toEqual([
+      [june, null, 'Loan interest to June', '7200 Interest', null, 412.5, null],
+      [null, null, 'Total, 1 CPA adjustment', null, null, 412.5, 0],
+    ]);
+  });
+
+  it("says so when no CPA adjustment dated in the year is made, the whole year's whatever the month", async () => {
+    const view: YearEndView = { ...CLOSED, over: false, closed: null, events: [] };
+    const ws = sheet(await sheets(await yearEndWorkbook(input({ view }, '2027-11-01'))), 'CPA Adjustments');
+    expect(cells(ws, 3, 1)).toEqual(['January 1, 2027 to December 31, 2027']);
+    expect(notesOf(ws)).toEqual([["2027 isn't over yet, so this is where it stood when the file was made.", AMBER]]);
+    expect(body(ws, 'Date', 7)).toEqual([[null, null, 'No CPA adjustment dated in 2027 is made yet.', null, null, null, null]]);
+    expect(ws.getRow(headerRow(ws, 'Date') + 1).getCell(3).font).toEqual({ color: { argb: 'FF595959' } });
+  });
+
   it("says a year before the books went live is the rehearsal, and when FleetSuite's books have changed since it closed", async () => {
     const rehearsal = await sheets(await yearEndWorkbook(input({ year: 2026, view: { ...CLOSED, own: false, closed: null, events: [] } })));
     expect(notesOf(rehearsal[0])).toEqual([["2026 is before BMG's books went live, so it closes in NetSuite: FleetSuite's side here is the rehearsal.", AMBER]]);
@@ -1125,5 +1344,16 @@ describe('what the bank reconciliations warn about', () => {
       ['red', '1010 First Bank checking: the books chan'],
       ['amber', '1010 First Bank checking: 1 entry NetSui'],
     ]);
+  });
+});
+
+describe("what the CPA's adjustments warn about, beyond the year's notes", () => {
+  it('says nothing when none dated in the year is waiting', () => {
+    expect(cpaNotes({ year: 2027, waiting: 0 })).toEqual([]);
+  });
+
+  it("says how many dated in the year aren't made yet, which the sheet doesn't list", () => {
+    expect(cpaNotes({ year: 2027, waiting: 1 })).toEqual([{ tone: 'amber', text: "1 of the CPA's adjustments dated in 2027 isn't made yet, so it isn't here." }]);
+    expect(cpaNotes({ year: 2028, waiting: 3 })).toEqual([{ tone: 'amber', text: "3 of the CPA's adjustments dated in 2028 aren't made yet, so they aren't here." }]);
   });
 });

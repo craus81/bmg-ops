@@ -8,9 +8,10 @@ import { builderTitle, filterWords, type BuilderBy, type BuilderRows } from './r
 import { DOCUMENTS_LISTED, type DetailDocument, type LedgerRow } from './report-detail';
 import { coversMonths } from './report-links';
 import type { Pair, Report, ReportKind, ReportLine, YearCloseAmounts } from './reports';
+import type { RollForwardAmounts, RollForwardPart } from './roll-forward';
 import type { FiledReturn, OtherMoves, ReturnHeld, SalesTaxWorksheet } from './sales-tax-worksheet';
 import { BASIS_WORDS, RETURN_FIELD_WORDS } from './sales-tax-words';
-import type { YearView } from './year-end';
+import type { CpaAdjustment, YearView } from './year-end';
 import { CHECK_LABELS, STATE_WORDS } from './year-end-words';
 
 /**
@@ -28,8 +29,9 @@ import { CHECK_LABELS, STATE_WORDS } from './year-end-words';
  * by the download routes, as is a report from the report builder (part 72,
  * report-builder.ts) and a company's year-end package for the CPA, those
  * reports, its general ledger, what each customer and vendor was owed, its
- * bank reconciliations and its stock at the year's end in one file (parts
- * 75 to 78, Books → Year end); amounts are dollars in Excel's own
+ * bank reconciliations, its stock, fixed assets and loans at the year's end
+ * and the CPA's adjustments in one file (parts 75 to 79, Books → Year end);
+ * amounts are dollars in Excel's own
  * Accounting format, read as the report shows them, and anything the page
  * warns about is written at the top, in red when it's a failure.
  */
@@ -1102,6 +1104,13 @@ export interface YearEndWorkbookInput {
   banks: { accounts: BankRecYear[]; notes: WorkbookNote[] };
   /** The company's stock at `to`'s end, with what Inventory value warns about (inventoryNotes); null for a company with none. */
   inventory: { value: CompanyValue; notes: WorkbookNote[] } | null;
+  /** Each fixed asset, other asset and long term liability account from January through `to` (rollForward in roll-forward.ts); none for a company with none. */
+  rollForward: RollForwardPart[];
+  /**
+   * The CPA's adjustments dated in the year that are made (readYearChecks in year-end.ts), each line's account named by NetSuite's id, with
+   * what they warn about (cpaNotes).
+   */
+  cpa: { adjustments: CpaAdjustment[]; accountName: (netsuiteId: string) => string; notes: WorkbookNote[] };
   now: Date;
 }
 
@@ -1119,10 +1128,13 @@ const PACKAGE_INVENTORY: InventorySheetNames = {
  * each side's running balance; what each customer owed and each vendor was
  * owed at the year's end, both sides, and how they come to the trial
  * balance; each bank account reconciled in FleetSuite, its statement at the
- * year's end held against the books and each month of the year; and, for a
- * company with stock, its inventory value at the year's end. What Year end
- * says about the year is at the top of each sheet, above what the sheet's
- * own page warns about.
+ * year's end held against the books and each month of the year; for a
+ * company with stock, its inventory value at the year's end; each fixed
+ * asset, other asset and long term liability account's year, which the
+ * CPA's schedules of depreciation and loans tie to; and the CPA's
+ * adjustments dated in the year, line by line. What Year end says about the
+ * year is at the top of each sheet, above what the sheet's own page warns
+ * about.
  */
 export async function yearEndWorkbook(input: YearEndWorkbookInput): Promise<WorkbookFile> {
   const { company, year, to, view, now } = input;
@@ -1174,6 +1186,17 @@ export async function yearEndWorkbook(input: YearEndWorkbookInput): Promise<Work
     add(ties, `How the items come to each inventory account on the balance sheet at ${end}.`);
     if (docs) add(docs, `Documents on the inventory accounts with no stocked item, from January 1, 2025 to ${end}.`);
   }
+  if (input.rollForward.length) {
+    add(
+      rollForwardSheet(wb, { company, from: january, to, parts: input.rollForward, notes: reportNotes, now }),
+      `Each fixed asset, other asset and long term liability account: where it stood at ${monthStart(january)}, its debits and credits, `
+        + `and where it stood at ${end}, FleetSuite's books next to NetSuite's. Each part comes to the balance sheet's.`,
+    );
+  }
+  add(
+    cpaSheet(wb, { company, year, ...input.cpa, notes: [...yearNotes, ...input.cpa.notes], now }),
+    `Each of the CPA's adjustments dated in ${year} and made in NetSuite, line by line: the year's depreciation, loan interest and other year-end entries.`,
+  );
 
   contents.getColumn(1).width = 30;
   contents.getColumn(2).width = 100;
@@ -1253,6 +1276,116 @@ function retainedEarningsSheet(wb: ExcelJS.Workbook, input: YearEndWorkbookInput
       sheet.addRow([`${e.action === 'closed' ? 'Closed' : 'Reopened'}${e.by ? ` by ${e.by}` : ''}, ${centralTime(e.at)}${amounts}${e.reason ? `: ${e.reason}` : ''}`]);
     }
   }
+  return sheet;
+}
+
+/**
+ * Fixed assets and loans for the year: each fixed asset, other asset and
+ * long term liability account as the balance sheet shows it (rollForward
+ * in roll-forward.ts), where it stood when the months began, FleetSuite's
+ * debits and credits in them, where it stood at their end and NetSuite's
+ * then, with a total for each part, which is the balance sheet's.
+ */
+function rollForwardSheet(wb: ExcelJS.Workbook, p: {
+  company: WorkbookCompany; from: string; to: string; parts: readonly RollForwardPart[]; notes: WorkbookNote[]; now: Date;
+}): ExcelJS.Worksheet {
+  const start = monthStart(p.from);
+  const end = monthEnd(p.to);
+  const sheet = wb.addWorksheet('Fixed Assets and Loans', { pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
+  sheet.getColumn(1).width = 44;
+  amountColumns(sheet, 2, 7);
+  titleRows(sheet, {
+    company: p.company,
+    title: 'Fixed Assets and Loans',
+    period: `${start} to ${end}`,
+    about: "Each fixed asset, other asset and long term liability account as the balance sheet shows it, accumulated depreciation as a negative: "
+      + `where it stood at ${start}, FleetSuite's debits and credits to it since, and where it stood at ${end}, next to NetSuite's. `
+      + "Each part's total is the balance sheet's. The documents are on the General Ledger sheet, and the CPA's own entries on CPA Adjustments.",
+    notes: p.notes,
+    now: p.now,
+    header: ['Account', start, 'Debits', 'Credits', end, `NetSuite, ${end}`, 'Difference'],
+    amounts: [2, 7],
+  });
+  const line = (label: string, a: RollForwardAmounts) => {
+    const row = sheet.addRow([
+      label, dollars(a.starting.fleetsuite), dollars(a.debits), dollars(a.credits), dollars(a.ending.fleetsuite), dollars(a.ending.netsuite),
+      dollars(a.ending.fleetsuite - a.ending.netsuite),
+    ]);
+    redIf(row.getCell(7), a.ending.fleetsuite !== a.ending.netsuite);
+    return row;
+  };
+  p.parts.forEach((part, i) => {
+    if (i) sheet.addRow([]);
+    sheet.addRow([part.label]).font = { bold: true };
+    for (const l of part.lines) line([l.number, l.name].filter(Boolean).join(' '), l);
+    const total = line(`Total ${part.label.toLowerCase()}`, part.total);
+    total.getCell(1).font = { bold: true };
+    for (let c = 2; c <= 7; c += 1) {
+      const cell = total.getCell(c);
+      cell.font = { ...cell.font, bold: true };
+      cell.border = { top: { style: 'thin' } };
+    }
+  });
+  return sheet;
+}
+
+/** What the CPA Adjustments sheet warns about beyond the year's notes: the CPA's adjustments dated in the year that aren't made yet, which it doesn't list. */
+export function cpaNotes(p: { year: number; waiting: number }): WorkbookNote[] {
+  if (!p.waiting) return [];
+  return [{
+    tone: 'amber',
+    text: `${p.waiting} of the CPA's adjustments dated in ${p.year} ${p.waiting === 1 ? "isn't made yet, so it isn't" : "aren't made yet, so they aren't"} here.`,
+  }];
+}
+
+/**
+ * The CPA's adjustments dated in the year that are made in NetSuite
+ * (readYearChecks in year-end.ts), oldest first, a row for each line: its
+ * date, NetSuite's number, the entry's memo, the line's account, its note
+ * and its debit or credit, with the debits and credits totalled. With none
+ * made, it says so.
+ */
+function cpaSheet(wb: ExcelJS.Workbook, p: {
+  company: WorkbookCompany; year: number; adjustments: readonly CpaAdjustment[]; accountName: (netsuiteId: string) => string;
+  notes: WorkbookNote[]; now: Date;
+}): ExcelJS.Worksheet {
+  const sheet = wb.addWorksheet('CPA Adjustments', { pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
+  [12, 12, 40, 40, 30].forEach((w, i) => { sheet.getColumn(i + 1).width = w; });
+  sheet.getColumn(1).numFmt = DATE;
+  amountColumns(sheet, 6, 7);
+  titleRows(sheet, {
+    company: p.company,
+    title: 'CPA Adjustments',
+    period: `${monthStart(`${p.year}-01-01`)} to ${monthEnd(`${p.year}-12-01`)}`,
+    about: "Each of the CPA's adjustments dated in the year and made in NetSuite, as typed in FleetSuite, a row for each line: the year's "
+      + "depreciation, loan interest and other year-end entries. Each reaches FleetSuite's books from the copy of NetSuite's ledger, as any "
+      + 'journal entry does.',
+    notes: p.notes,
+    now: p.now,
+    header: ['Date', 'Number', 'Memo', 'Account', 'Line note', 'Debit', 'Credit'],
+    amounts: [6, 7],
+  });
+  if (!p.adjustments.length) {
+    sheet.addRow([null, null, `No CPA adjustment dated in ${p.year} is made yet.`]).getCell(3).font = { color: { argb: MUTED } };
+    return sheet;
+  }
+  let debits = 0;
+  let credits = 0;
+  for (const a of p.adjustments) {
+    // One whose lines weren't kept still has its row, so the total counts what's listed.
+    if (!a.lines.length) sheet.addRow([dateCell(a.date), a.number, a.memo]);
+    for (const l of a.lines) {
+      sheet.addRow([
+        dateCell(a.date), a.number, a.memo, l.accountId ? p.accountName(l.accountId) : null, l.memo,
+        l.debitCents ? dollars(l.debitCents) : null, l.creditCents ? dollars(l.creditCents) : null,
+      ]);
+      debits += l.debitCents;
+      credits += l.creditCents;
+    }
+  }
+  const total = sheet.addRow([null, null, `Total, ${count(p.adjustments.length, 'CPA adjustment', 'CPA adjustments')}`, null, null, dollars(debits), dollars(credits)]);
+  total.font = { bold: true };
+  for (const c of [6, 7]) total.getCell(c).border = { top: { style: 'double' } };
   return sheet;
 }
 

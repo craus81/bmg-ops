@@ -120,6 +120,15 @@ function accountDocuments(args: Record<string, any>) {
   return { documents: rows.length, differing: rows.filter((r) => r.netsuite !== r.fleetsuite).length, netsuite: total('netsuite'), fleetsuite: total('fleetsuite'), rows };
 }
 
+/** The CPA's 2027 depreciation for BMG, made in NetSuite on its adjustments journal, as typed_journal_entries keeps it. */
+const DEPRECIATION = {
+  id: 'j3', company: 'BMG', tran_date: '2027-12-31', journal: 'cpa_adjustments', status: 'made', memo: '2027 depreciation', netsuite_number: 'JE1207',
+  lines: [
+    { account_netsuite_id: '610', debit_cents: 960000, credit_cents: 0, memo: null },
+    { account_netsuite_id: '159', debit_cents: 0, credit_cents: 960000, memo: 'Shop truck' },
+  ],
+};
+
 /** BMG's customers and vendors at a month's end, as gl_party_balances_through has them: nobody, unless a test says otherwise. */
 const NOBODY = { accounts: [], opening: { total: '0', named: '0', complete: true }, parties: [] };
 let partyData: Record<string, unknown>;
@@ -282,6 +291,10 @@ describe('Books → Year end', () => {
         { key: 'months', state: 'done', detail: 'All 12 months are closed.' },
         { key: 'netsuite', state: 'todo', detail: "1 month doesn't match NetSuite: April.", months: ['2027-04-01'] },
         { key: 'entries', state: 'todo', detail: "1 journal entry dated in 2027 isn't made yet: 1 still a draft, the CPA's." },
+        {
+          key: 'yearly', state: 'todo',
+          detail: "No CPA adjustment dated in December 2027 is made yet. The CPA types the year's depreciation and loan interest on CPA adjustments.",
+        },
         { key: 'bank', state: 'todo', detail: '1010 First Bank checking: 11 of 12 months reconciled.' },
         { key: 'sales_tax', state: 'done', detail: "Every month's return is typed in." },
       ],
@@ -308,6 +321,7 @@ describe('Books → Year end', () => {
       ['months', 'none', "1084's books aren't live yet, so 2027's months close in NetSuite."],
       ['netsuite', 'none', "Nothing's posted in 2027 yet."],
       ['entries', 'done', 'None dated in 2027 is waiting.'],
+      ['yearly', 'none', "1084's books aren't live yet, so the CPA books 2027's depreciation and loan interest in NetSuite."],
       ['bank', 'none', "1084's bank accounts aren't reconciled in FleetSuite yet."],
       ['sales_tax', 'none', '1084 makes no sales, so it files no sales tax return.'],
     ]);
@@ -326,7 +340,7 @@ describe('Books → Year end', () => {
 
   it("names a bank account NetSuite's chart doesn't", async () => {
     tables.bank_rec_starts.push({ company: 'BMG', account: '77', first_month: '2027-06-01' });
-    expect((await get()).body.checks[3].detail).toBe('1010 First Bank checking: 11 of 12 months reconciled. NetSuite account 77: 0 of 7 months reconciled.');
+    expect((await get()).body.checks[4].detail).toBe('1010 First Bank checking: 11 of 12 months reconciled. NetSuite account 77: 0 of 7 months reconciled.');
   });
 
   it('says what failed', async () => {
@@ -385,14 +399,15 @@ describe('Books → Year end: closing and reopening', () => {
   it('closes a year with everything done with no reason, and says who when there is no name', async () => {
     fullName = null;
     booksTotals = [fs('10', '2027-03-01', 1000000), fs('40', '2027-03-01', -1000000), fs('60', '2027-04-01', 200000), fs('10', '2027-04-01', -200000)];
-    tables.typed_journal_entries = [];
+    // The CPA's year-end entries made, nothing else waiting.
+    tables.typed_journal_entries = [DEPRECIATION];
     tables.bank_recs = MONTHS_2027.map(statement);
     // April matches once the books do.
     const matched = { ...BMG_DIFFERENCES, fleetsuite: BMG_DIFFERENCES.netsuite };
     const real = service.rpc;
     service.rpc = async (name, args) => (name === 'gl_books_differences' ? { data: matched, error: null } : real(name, args));
     try {
-      expect((await get()).body.checks.map((c: any) => c.state)).toEqual(['done', 'done', 'done', 'done', 'done']);
+      expect((await get()).body.checks.map((c: any) => c.state)).toEqual(['done', 'done', 'done', 'done', 'done', 'done']);
       // As of today, with December over, its sales tax return is due: without it, closing needs a reason.
       const returns = tables.sales_tax_returns;
       tables.sales_tax_returns = returns.slice(0, 11);
@@ -556,13 +571,14 @@ describe('Books → Year end: the year-end package', () => {
     expect(all.map((s) => s.name)).toEqual([
       'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows',
       'Retained Earnings', 'General Ledger', 'Customer Balances', 'Vendor Balances', 'Bank Reconciliations', 'Bank Reconciliations by Month',
-      'Inventory value', 'Inventory ties to accounts',
+      'Inventory value', 'Inventory ties to accounts', 'CPA Adjustments',
     ]);
     const contents = column(all[0]);
     expect(contents.slice(0, 3)).toEqual(['Example Fleet Upfitters LLC', 'Year-end package 2027', 'January 1, 2027 to December 31, 2027']);
     // What's done before it closes, as the page has it.
-    expect(contents.slice(-5)).toEqual([
-      'Months closed: Done', 'Matches NetSuite: Not yet', 'Journal entries: Not yet', 'Bank reconciliations: Not yet', 'Sales tax returns: Done',
+    expect(contents.slice(-6)).toEqual([
+      'Months closed: Done', 'Matches NetSuite: Not yet', 'Journal entries: Not yet', "CPA's yearly entries: Not yet", 'Bank reconciliations: Not yet',
+      'Sales tax returns: Done',
     ]);
     expect(row(all[0], 'Bank reconciliations: Not yet')).toEqual(['Bank reconciliations: Not yet', '1010 First Bank checking: 11 of 12 months reconciled.']);
     // Nothing about the year to say, only what Reports says.
@@ -615,6 +631,63 @@ describe('Books → Year end: the year-end package', () => {
       ['Every customer less the trial balance', 0],
     ]);
     expect(notesOf(named(all, 'Vendor Balances'))).toEqual([NOT_POSTED]);
+    // No fixed asset or loan account in the chart, so no sheet for them; the CPA's draft isn't made, so nothing is listed.
+    const cpa = named(all, 'CPA Adjustments');
+    expect(notesOf(cpa)).toEqual(["1 of the CPA's adjustments dated in 2027 isn't made yet, so it isn't here."]);
+    expect(under(cpa, 'Date', 3)).toEqual([[null, null, 'No CPA adjustment dated in 2027 is made yet.']]);
+  });
+
+  it("rolls BMG's fixed assets and loans forward over the year and lists the CPA's adjustments made, each line's account as the chart names it", async () => {
+    tables.gl_accounts.push(
+      account('a150', '150', '1500', 'Shop truck', 'fixed_asset'),
+      account('a159', '159', '1590', 'Accumulated depreciation', 'fixed_asset'),
+      account('a270', '270', '2700', 'Truck loan', 'long_term_liability'),
+      account('a610', '610', '6100', 'Depreciation', 'expense'),
+    );
+    // A 5,000.00 lift gate put on the shop truck in June on the truck loan, then December's depreciation, both sides.
+    const moves = (side: typeof ns | typeof fs) => [
+      side('150', '2027-06-01', 500000), side('270', '2027-06-01', -500000), side('159', '2027-12-01', -960000), side('610', '2027-12-01', 960000),
+    ];
+    netsuiteTotals = {
+      opening: [ns('10', undefined, 700000), ns('39', undefined, -400000), ns('150', undefined, 4500000), ns('159', undefined, -1800000), ns('270', undefined, -3000000)],
+      netsuite: [...netsuiteTotals.netsuite, ...moves(ns)],
+    };
+    booksTotals = [...booksTotals, ...moves(fs)];
+    // The CPA's depreciation made, next year's, and a general entry still a draft, which the CPA's sheet doesn't count.
+    tables.typed_journal_entries.push(
+      DEPRECIATION, { ...DEPRECIATION, id: 'j4', tran_date: '2028-12-31', memo: '2028 depreciation' },
+      { id: 'j5', company: 'BMG', tran_date: '2027-03-31', journal: 'general', status: 'draft' },
+    );
+    const all = await sheetsOf(await download());
+    expect(all.map((s) => s.name).slice(-3)).toEqual(['Inventory ties to accounts', 'Fixed Assets and Loans', 'CPA Adjustments']);
+    expect(row(all[0], "CPA's yearly entries: Done")).toEqual(["CPA's yearly entries: Done", '1 CPA adjustment dated in December 2027 is made.']);
+
+    const assets = named(all, 'Fixed Assets and Loans');
+    expect(column(assets).slice(1, 3)).toEqual(['Fixed Assets and Loans', 'January 1, 2027 to December 31, 2027']);
+    expect(notesOf(assets)).toEqual([NOT_POSTED]);
+    const none = [null, null, null, null, null, null];
+    expect(under(assets, 'Account', 7)).toEqual([
+      ['Fixed assets', ...none],
+      ['1500 Shop truck', 45000, 5000, 0, 50000, 50000, 0],
+      ['1590 Accumulated depreciation', -18000, 0, 9600, -27600, -27600, 0],
+      ['Total fixed assets', 27000, 5000, 9600, 22400, 22400, 0],
+      [null, ...none],
+      ['Long term liabilities', ...none],
+      ['2700 Truck loan', 30000, 0, 5000, 35000, 35000, 0],
+      ['Total long term liabilities', 30000, 0, 5000, 35000, 35000, 0],
+    ]);
+    // Each part comes to the balance sheet's.
+    expect(amounts(named(all, 'Balance Sheet'), 'Total fixed assets')).toEqual([22400, 22400, 0]);
+    expect(amounts(named(all, 'Balance Sheet'), 'Total long term liabilities')).toEqual([35000, 35000, 0]);
+
+    const cpa = named(all, 'CPA Adjustments');
+    expect(notesOf(cpa)).toEqual(["1 of the CPA's adjustments dated in 2027 isn't made yet, so it isn't here."]);
+    const december = new Date('2027-12-31T00:00:00Z');
+    expect(under(cpa, 'Date', 7)).toEqual([
+      [december, 'JE1207', '2027 depreciation', '6100 Depreciation', null, 9600, null],
+      [december, 'JE1207', '2027 depreciation', '1590 Accumulated depreciation', 'Shop truck', null, 9600],
+      [null, null, 'Total, 1 CPA adjustment', null, null, 9600, 9600],
+    ]);
   });
 
   it('lists what each customer owed and each vendor was owed at December 31, both sides, and how they come to the trial balance', async () => {
@@ -874,7 +947,7 @@ describe('Books → Year end: the year-end package', () => {
     const res = await download('company=1084&year=2026');
     expect(res.headers.get('content-disposition')).toContain('filename="1084 Year-end package 2026.xlsx"');
     const other = await sheetsOf(res);
-    expect(other.map((s) => s.name).slice(-3)).toEqual(['General Ledger', 'Customer Balances', 'Vendor Balances']);
+    expect(other.map((s) => s.name).slice(-3)).toEqual(['Customer Balances', 'Vendor Balances', 'CPA Adjustments']);
     expect(rpcs.filter(([name]) => name === 'gl_party_balances_through').slice(-2).map(([, args]) => [args.p_company, args.p_month])).toEqual([
       ['1084', '2026-12-01'], ['1084', '2026-12-01'],
     ]);
