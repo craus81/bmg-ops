@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireFinancials } from '@/lib/api-auth';
 import { loadYearDetail } from '@/lib/financial-history-detail';
+import { switchIsOn } from '@/lib/books/switches';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +12,9 @@ export const dynamic = 'force-dynamic';
  * One Financial History year taken apart for cross-checking: each system's
  * monthly revenue side by side, invoices per month, QuickBooks' own yearly
  * P&L, and the year by account (src/lib/financial-history-detail.ts). Reads
- * stored data only. Same wall as the report itself (super_admin / executive).
+ * stored data only, and BMG's books in FleetSuite with "Financials on
+ * FleetSuite's books" on. Same wall as the report itself (super_admin /
+ * executive).
  */
 export async function GET(req: NextRequest) {
   const auth = await requireFinancials(req);
@@ -22,7 +25,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'year (YYYY) required' }, { status: 400 });
   }
   try {
-    return NextResponse.json(await loadYearDetail(createServiceClient(), year));
+    const service = createServiceClient();
+    const books = await switchIsOn(service, 'money_screens');
+    return NextResponse.json(await loadYearDetail(service, year, { books }));
   } catch (err: any) {
     console.error('financial-history year detail failed:', err);
     return NextResponse.json({ error: err?.message || 'Report failed' }, { status: 500 });

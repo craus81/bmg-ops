@@ -4,6 +4,9 @@ import { payrollAccountIds, summarizePnl, type PnlSummary } from '@/lib/pnl';
 import { chicagoDay } from '@/lib/exec-metrics';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { readLedgerSettings } from '@/lib/ledger/pdf-gate';
+import { booksMonths, type BooksSource } from '@/lib/books/money-screens';
+import { loadBooksForHistory } from '@/lib/books/money-screens-data';
+import { COPY_FROM } from '@/lib/books/netsuite-gl';
 
 /**
  * Financial history: one monthly P&L across both systems.
@@ -29,9 +32,17 @@ import { readLedgerSettings } from '@/lib/ledger/pdf-gate';
  *               NetSuite's concurrency limit. A month fetched before its books
  *               could have closed is refetched; the current month is always
  *               live and marked directional.
+ *   FleetSuite  with "Financials on FleetSuite's books" on (Books → Switches,
+ *               migration 504, docs/books.md "Money screens"), BMG's own
+ *               books in FleetSuite take NetSuite's place from the cutover
+ *               on, BMG's alone without 1084's, each month as the
+ *               Financials band works it out (src/lib/books/money-screens.ts).
+ *               They're read whole on each visit, so nothing is cached.
+ *               Their first month is January 2025; NetSuite still gives any
+ *               month between an earlier cutover and then.
  */
 
-export type HistorySource = 'quickbooks' | 'netsuite';
+export type HistorySource = 'quickbooks' | 'netsuite' | 'fleetsuite';
 
 export interface MonthPnl {
   /** YYYY-MM */
@@ -78,6 +89,8 @@ export interface FinancialHistory {
   /** Closed NetSuite months not fetched yet (time budget); ask again. */
   netsuitePending: number;
   errors: string[];
+  /** Whose books in FleetSuite the months from the cutover come from, and when they were last posted; null with the switch off. */
+  books: BooksSource | null;
 }
 
 /**
@@ -86,6 +99,19 @@ export interface FinancialHistory {
  * put ten near-empty years at the bottom of the table.
  */
 export const HISTORY_FROM = '2011-01';
+
+/** FleetSuite's books' first month: everything before it is their starting entry (src/lib/books/netsuite-gl.ts). */
+export const BOOKS_FROM = COPY_FROM.slice(0, 7);
+
+/**
+ * With FleetSuite's books on, the first month they give: the cutover's, or
+ * their own first month when the cutover is earlier, NetSuite giving the
+ * months between. Null with the books off.
+ */
+export function booksFromMonth(cutoverMonth: string | null, books: boolean): string | null {
+  if (!books) return null;
+  return cutoverMonth && cutoverMonth > BOOKS_FROM ? cutoverMonth : BOOKS_FROM;
+}
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -144,6 +170,11 @@ export function nsSummaryToMonth(month: string, s: PnlSummary, directional: bool
   };
 }
 
+/** A month of FleetSuite's books, read as NetSuite's: payroll in expenses. */
+export function booksSummaryToMonth(month: string, s: PnlSummary, directional: boolean): MonthPnl {
+  return { ...nsSummaryToMonth(month, s, directional), source: 'fleetsuite' };
+}
+
 export function yearTotals(months: MonthPnl[]): YearPnl[] {
   const byYear = new Map<number, MonthPnl[]>();
   for (const m of months) {
@@ -191,7 +222,7 @@ const netsuiteExternalId = (month: string) => {
 
 type SnapshotRow = { period_start: string; summary: Record<string, unknown> | null; fetched_at: string | null };
 
-async function readSnapshots(service: SupabaseClient, source: HistorySource, before?: string, from?: string): Promise<SnapshotRow[]> {
+async function readSnapshots(service: SupabaseClient, source: 'quickbooks' | 'netsuite', before?: string, from?: string): Promise<SnapshotRow[]> {
   const { data, error } = await fetchAllRows<SnapshotRow>((lo, hi) => {
     let q = service.from('ledger_report_snapshots')
       .select('period_start, summary, fetched_at')
@@ -211,9 +242,11 @@ async function readSnapshots(service: SupabaseClient, source: HistorySource, bef
 /**
  * The whole history, filling missing NetSuite months within `budgetMs`.
  * NetSuite calls run one at a time: this sits beside other RESTlet traffic
- * and must not be the reason SSS_REQUEST_LIMIT_EXCEEDED comes back.
+ * and must not be the reason SSS_REQUEST_LIMIT_EXCEEDED comes back. With
+ * `books` (the switch on), FleetSuite's books give the months from the
+ * cutover instead, and a read of them that fails throws.
  */
-export async function loadFinancialHistory(service: SupabaseClient, opts: { budgetMs: number }): Promise<FinancialHistory> {
+export async function loadFinancialHistory(service: SupabaseClient, opts: { budgetMs: number; books?: boolean }): Promise<FinancialHistory> {
   const deadline = Date.now() + opts.budgetMs;
   const errors: string[] = [];
   const settings = await readLedgerSettings(service);
@@ -223,6 +256,7 @@ export async function loadFinancialHistory(service: SupabaseClient, opts: { budg
   const cutoverMonth = cutover ? cutover.slice(0, 7) : null;
   // No confirmed cutover means no QuickBooks months: never guess the seam.
   const netsuiteFrom = cutoverMonth || thisMonth;
+  const booksFrom = booksFromMonth(cutoverMonth, opts.books === true);
 
   const months: MonthPnl[] = [];
 
@@ -235,13 +269,25 @@ export async function loadFinancialHistory(service: SupabaseClient, opts: { budg
     if (first >= 0) months.push(...qboMonths.slice(first));
   }
 
+  let books: BooksSource | null = null;
+  if (booksFrom) {
+    const read = await loadBooksForHistory(service);
+    for (const [month, summary] of booksMonths(read.data, monthsBetween(booksFrom, thisMonth))) {
+      months.push(booksSummaryToMonth(month, summary, month === thisMonth));
+    }
+    books = read.books;
+  }
+
+  const netsuiteMonths = monthsBetween(netsuiteFrom, thisMonth).filter(m => !booksFrom || m < booksFrom);
   const stored = new Map<string, SnapshotRow>();
-  for (const r of await readSnapshots(service, 'netsuite', undefined, `${netsuiteFrom}-01`)) {
-    stored.set(r.period_start.slice(0, 7), r);
+  if (netsuiteMonths.length > 0) {
+    for (const r of await readSnapshots(service, 'netsuite', undefined, `${netsuiteFrom}-01`)) {
+      stored.set(r.period_start.slice(0, 7), r);
+    }
   }
   const payroll = payrollAccountIds();
   let pending = 0;
-  for (const month of monthsBetween(netsuiteFrom, thisMonth)) {
+  for (const month of netsuiteMonths) {
     const directional = month === thisMonth;
     const have = stored.get(month);
     if (have?.summary && !directional && !netsuiteMonthStale(month, have.fetched_at)) {
@@ -287,5 +333,5 @@ export async function loadFinancialHistory(service: SupabaseClient, opts: { budg
   }
 
   months.sort((a, b) => a.month.localeCompare(b.month));
-  return { months, years: yearTotals(months), cutover, netsuitePending: pending, errors };
+  return { months, years: yearTotals(months), cutover, netsuitePending: pending, errors, books };
 }

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { apiFetch } from '@/lib/api-client';
-import type { FinancialHistory, MonthPnl, YearPnl } from '@/lib/financial-history';
+import type { FinancialHistory, HistorySource, MonthPnl, YearPnl } from '@/lib/financial-history';
 import type { YearDetail } from '@/lib/financial-history-detail';
 
 /**
@@ -13,7 +13,10 @@ import type { YearDetail } from '@/lib/financial-history-detail';
  * years NetSuite doesn't hold can sit beside the ones it does: yearly
  * totals, a month-by-month chart, and a month-by-year grid for seasonality.
  * Top-level totals only; the two charts of accounts differ below that.
- * Tapping a year opens its cross-check (YearCrossCheck below).
+ * Tapping a year opens its cross-check (YearCrossCheck below). With
+ * "Financials on FleetSuite's books" on (Books → Switches), BMG's books in
+ * FleetSuite take NetSuite's place from the cutover, and the answer's
+ * `books` says whose they are and when they were last posted.
  */
 
 type Metric = 'income' | 'grossProfit' | 'netIncome';
@@ -23,8 +26,8 @@ const METRICS: { key: Metric; label: string }[] = [
   { key: 'netIncome', label: 'Net income' },
 ];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const SOURCE_COLOR = { quickbooks: '#2ca01c', netsuite: '#3b82f6' } as const;
-const SOURCE_LABEL = { quickbooks: 'QuickBooks', netsuite: 'NetSuite' } as const;
+const SOURCE_COLOR = { quickbooks: '#2ca01c', netsuite: '#3b82f6', fleetsuite: '#8b5cf6' } as const;
+const SOURCE_LABEL = { quickbooks: 'QuickBooks', netsuite: 'NetSuite', fleetsuite: 'FleetSuite' } as const;
 /** Re-asks while NetSuite months are still being filled, then stops. */
 const MAX_FILL_ROUNDS = 6;
 
@@ -36,12 +39,21 @@ const fmtK = (n: number) => {
 };
 const fmtPct = (n: number | null) => (n === null ? '—' : `${n.toFixed(1)}%`);
 
+function ago(iso: string): string {
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} days ago`;
+}
+
 const card: React.CSSProperties = { background: 'var(--card)', border: '1px solid var(--border)', borderRadius: '12px', padding: '12px 16px', marginBottom: '14px' };
 const eyebrow: React.CSSProperties = { fontSize: '11px', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: '8px' };
 const th: React.CSSProperties = { fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', padding: '6px 8px', borderBottom: '1px solid var(--border)', textAlign: 'right', whiteSpace: 'nowrap' };
 const td: React.CSSProperties = { fontSize: '12.5px', padding: '6px 8px', borderBottom: '1px solid var(--border)', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
 
-function SourceDots({ sources }: { sources: ('quickbooks' | 'netsuite')[] }) {
+function SourceDots({ sources }: { sources: HistorySource[] }) {
   return (
     <span style={{ display: 'inline-flex', gap: '4px' }}>
       {sources.map(s => (
@@ -170,9 +182,12 @@ function YearCrossCheck({ year, onClose }: { year: number; onClose: () => void }
   const totals = detail && {
     qboPnl: sum(m => m.quickbooksPnl),
     nsPnl: sum(m => m.netsuitePnl),
+    fsPnl: sum(m => m.fleetsuitePnl),
     qboInv: sum(m => m.quickbooksInvoiced),
     nsInv: sum(m => m.netsuiteInvoiced),
   };
+  // FleetSuite's books, with the switch on, for the year's months they have.
+  const showBooks = !!detail?.months.some(m => m.fleetsuitePnl !== null);
   const cell = (n: number | null, used: boolean) => (
     <td style={{ ...td, fontWeight: used ? 800 : 400, color: n === null ? 'var(--text-muted)' : undefined }}>{n === null ? '—' : fmtMoney(n)}</td>
   );
@@ -202,6 +217,7 @@ function YearCrossCheck({ year, onClose }: { year: number; onClose: () => void }
                   <th style={{ ...th, textAlign: 'left' }}>Month</th>
                   <th style={th}>QuickBooks P&amp;L</th>
                   <th style={th}>NetSuite P&amp;L</th>
+                  {showBooks && <th style={th}>FleetSuite P&amp;L</th>}
                   <th style={th}>QuickBooks invoiced</th>
                   <th style={th}>NetSuite invoiced</th>
                 </tr>
@@ -212,6 +228,7 @@ function YearCrossCheck({ year, onClose }: { year: number; onClose: () => void }
                     <td style={{ ...td, textAlign: 'left', fontWeight: 700 }}>{MONTHS[i]}</td>
                     {cell(m.quickbooksPnl, m.used === 'quickbooks')}
                     {cell(m.netsuitePnl, m.used === 'netsuite')}
+                    {showBooks && cell(m.fleetsuitePnl, m.used === 'fleetsuite')}
                     {cell(m.quickbooksInvoiced || null, false)}
                     {cell(m.netsuiteInvoiced || null, false)}
                   </tr>
@@ -220,6 +237,7 @@ function YearCrossCheck({ year, onClose }: { year: number; onClose: () => void }
                   <td style={{ ...td, textAlign: 'left', fontWeight: 800 }}>Total</td>
                   {cell(totals.qboPnl, true)}
                   {cell(totals.nsPnl, true)}
+                  {showBooks && cell(totals.fsPnl, true)}
                   {cell(totals.qboInv || null, true)}
                   {cell(totals.nsInv || null, true)}
                 </tr>
@@ -287,6 +305,11 @@ export default function FinancialHistoryPage() {
   if (authLoading || !allowed) return null;
 
   const qboMonths = data?.months.filter(m => m.source === 'quickbooks').length || 0;
+  const books = data?.books ?? null;
+  // With the books on, NetSuite gives only months between an earlier cutover and the books' first.
+  const legend: HistorySource[] = books
+    ? ['quickbooks', ...(data?.months.some(m => m.source === 'netsuite') ? ['netsuite' as const] : []), 'fleetsuite']
+    : ['quickbooks', 'netsuite'];
   const prevOf = (y: YearPnl) => years.find(p => p.year === y.year - 1);
   const firstYear = years[0]?.year;
   // A year counts as full only with twelve months of sales, and the first
@@ -298,22 +321,36 @@ export default function FinancialHistoryPage() {
     <div style={{ maxWidth: '1000px' }}>
       <h1 style={{ fontSize: '20px', fontWeight: 800, marginBottom: '4px' }}>Financial History</h1>
       <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '14px', lineHeight: 1.5 }}>
-        Every month&rsquo;s P&amp;L in one series: QuickBooks before the cutover{data?.cutover ? ` (${data.cutover})` : ''}, NetSuite from it on.
-        Each month comes from one system only, so nothing is counted twice. Totals only: the two charts of accounts differ below that level.
+        {books
+          ? <>Every month&rsquo;s P&amp;L in one series: QuickBooks before the cutover{data?.cutover ? ` (${data.cutover})` : ''}, FleetSuite&rsquo;s books for {books.name} from it on{books.postedAt ? `, posted ${ago(books.postedAt)}` : ''}.
+              Each month comes from one place only, so nothing is counted twice. Totals only: the charts of accounts differ below that level.</>
+          : <>Every month&rsquo;s P&amp;L in one series: QuickBooks before the cutover{data?.cutover ? ` (${data.cutover})` : ''}, NetSuite from it on.
+              Each month comes from one system only, so nothing is counted twice. Totals only: the two charts of accounts differ below that level.</>}
       </div>
 
       {error && <div style={{ color: 'var(--danger, #ef4444)', marginBottom: '12px' }}>{error}</div>}
-      {loading && <div style={{ color: 'var(--text-muted)' }}>Loading… the first visit fetches each NetSuite month once, so it can take a minute.</div>}
+      {loading && <div style={{ color: 'var(--text-muted)' }}>Loading… the first visit can take a minute.</div>}
 
       {data && !loading && (
         <>
+          {books?.postingError && books.postedAt && (
+            <div style={{ ...card, fontSize: '12.5px', color: 'var(--danger, #ef4444)', borderColor: 'var(--danger, #ef4444)' }}>
+              The last posting run failed {ago(books.postedAt)}: {books.postingError}
+            </div>
+          )}
+          {books?.postingPartial && !books.postingError && books.postedAt && (
+            <div style={{ ...card, fontSize: '12.5px', borderColor: '#f59e0b' }}>
+              <span style={{ color: '#f59e0b', fontWeight: 700 }}>Still posting.</span>{' '}
+              The last run, {ago(books.postedAt)}, stopped for time, so some documents aren&rsquo;t in FleetSuite&rsquo;s books yet. It carries on at the next run.
+            </div>
+          )}
           {(data.errors.length > 0 || data.netsuitePending > 0 || qboMonths === 0 || !data.cutover) && (
             <div style={{ border: '1px solid #f59e0b', background: '#f59e0b14', borderRadius: '12px', padding: '12px 16px', marginBottom: '14px', fontSize: '12.5px' }}>
               <div style={{ fontSize: '12px', fontWeight: 800, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.7px', marginBottom: '5px' }}>
                 What this report is missing
               </div>
               <ul style={{ margin: 0, paddingLeft: '18px' }}>
-                {!data.cutover && <li>No QuickBooks cutover is confirmed, so only NetSuite months are shown.</li>}
+                {!data.cutover && <li>No QuickBooks cutover is confirmed, so only {books ? 'months from FleetSuite’s books' : 'NetSuite months'} are shown.</li>}
                 {data.cutover && qboMonths === 0 && <li>No QuickBooks monthly P&amp;L reports are imported for the years before the cutover yet.</li>}
                 {data.netsuitePending > 0 && <li>{data.netsuitePending} NetSuite month{data.netsuitePending === 1 ? ' is' : 's are'} still loading{fillRounds.current < MAX_FILL_ROUNDS ? '…' : '. Reload the page to fetch the rest.'}</li>}
                 {data.errors.map((e, i) => <li key={i}>{e}</li>)}
@@ -391,9 +428,10 @@ export default function FinancialHistoryPage() {
               ))}
             </div>
             <MonthlyChart months={data.months} metric={metric} />
-            <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-              <span><span style={{ display: 'inline-block', width: '9px', height: '9px', borderRadius: '2px', background: SOURCE_COLOR.quickbooks, marginRight: '4px' }} />QuickBooks</span>
-              <span><span style={{ display: 'inline-block', width: '9px', height: '9px', borderRadius: '2px', background: SOURCE_COLOR.netsuite, marginRight: '4px' }} />NetSuite</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              {legend.map(s => (
+                <span key={s}><span style={{ display: 'inline-block', width: '9px', height: '9px', borderRadius: '2px', background: SOURCE_COLOR[s], marginRight: '4px' }} />{SOURCE_LABEL[s]}</span>
+              ))}
               <span>Faded bar = month in progress</span>
             </div>
           </div>

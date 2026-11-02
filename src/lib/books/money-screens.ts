@@ -278,6 +278,15 @@ export function booksPnl(data: ReportData, from: string, to: string, payrollIds:
   }, accounts);
 }
 
+/**
+ * Financial History's months from FleetSuite's books (src/lib/financial-history.ts):
+ * each month given ('YYYY-MM') as the band works one out. Financial History
+ * puts payroll in expenses, so none is set apart.
+ */
+export function booksMonths(data: ReportData, months: readonly string[]): Map<string, PnlSummary> {
+  return new Map(months.map((month) => [month, booksPnl(data, `${month}-01`, `${month}-01`, new Set())]));
+}
+
 /** The month a day is in, 'YYYY-MM-01'. */
 const monthOf = (day: string) => `${day.slice(0, 7)}-01`;
 

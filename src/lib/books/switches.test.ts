@@ -131,10 +131,10 @@ describe('switches', () => {
     });
     expect(SWITCHES.money_screens).toEqual({
       name: "Financials on FleetSuite's books",
-      what: "Home → Financials reads BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, and the lists behind them, BMG's alone, without 1084's.",
-      where: 'Home → Financials',
-      turnOn: "Switch on Financials on FleetSuite's books? Home → Financials then shows BMG's numbers from FleetSuite's books, without 1084's, as of the last posting run (every two hours). Nothing is sent to NetSuite.",
-      turnOff: "Switch off Financials on FleetSuite's books? Home → Financials goes back to reading NetSuite.",
+      what: "Home → Financials and Financial History read BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, the lists behind them, and each month's profit and loss from the QuickBooks cutover on, BMG's alone, without 1084's.",
+      where: 'Home → Financials, and Reports → Financial History',
+      turnOn: "Switch on Financials on FleetSuite's books? Home → Financials and Financial History then show BMG's numbers from FleetSuite's books, without 1084's, as of the last posting run (every two hours). Nothing is sent to NetSuite.",
+      turnOff: "Switch off Financials on FleetSuite's books? Home → Financials and Financial History go back to reading NetSuite.",
     });
     // Only receiving payments, taking deposits, bank deposits, paying vendors, approving adjustments, own numbers,
     // invoice PDFs and counts wait past January 1.

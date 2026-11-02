@@ -4,7 +4,7 @@ vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok
 
 import { buildAgings, type OpenDocumentData, type OpenDocumentsData } from './agings';
 import {
-  accountGroups, apRows, arAging, arRows, booksFinancials, booksPnl, booksPnlPeriod, notOpenOf,
+  accountGroups, apRows, arAging, arRows, booksFinancials, booksMonths, booksPnl, booksPnlPeriod, notOpenOf,
   type BooksSource, type DocLink,
 } from './money-screens';
 import { UNNAMED, type PartyBalance, type PartyBalances, type PartyKind } from './party-balances';
@@ -434,5 +434,19 @@ describe('booksPnlPeriod', () => {
     });
     const midMonth = { key: 'mtd' as const, label: 'This month', from: '2026-10-15', to: '2026-10-20', directional: true };
     expect(booksPnlPeriod(books(), midMonth, new Set(), null).pnl).toEqual(booksPnl(books(), '2026-10-01', '2026-10-01', new Set()));
+  });
+});
+
+describe('booksMonths', () => {
+  it("is each month's profit and loss on its own, payroll left in expenses, a month with nothing at nothing", () => {
+    const months = booksMonths(books(), ['2026-08', '2026-09', '2026-10', '2026-11']);
+    expect([...months.keys()]).toEqual(['2026-08', '2026-09', '2026-10', '2026-11']);
+    expect(months.get('2026-09')).toEqual(booksPnl(books(), '2026-09-01', '2026-09-01', new Set()));
+    expect(months.get('2026-09')).toMatchObject({ income: 1000, cogs: 400, expense: 0, netProfit: 600 });
+    // Wages and payroll taxes stay in expenses: Financial History has no payroll of its own.
+    expect(months.get('2026-10')).toMatchObject({ income: 30, expense: 955, payroll: 0, netProfit: -920 });
+    expect(months.get('2026-11')).toMatchObject({ income: 0, expense: -15, netProfit: 15 });
+    expect(months.get('2026-08')).toMatchObject({ income: 0, netProfit: 0, accountCount: 0 });
+    expect(booksMonths(books(), []).size).toBe(0);
   });
 });

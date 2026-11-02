@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { monthBounds, monthsBetween, netsuiteMonthStale, nsSummaryToMonth, qboSummaryToMonth, yearTotals } from './financial-history';
+import {
+  BOOKS_FROM, booksFromMonth, booksSummaryToMonth, monthBounds, monthsBetween, netsuiteMonthStale, nsSummaryToMonth, qboSummaryToMonth,
+  yearTotals,
+} from './financial-history';
 
 describe('monthsBetween / monthBounds', () => {
   it('walks across a year boundary inclusively', () => {
@@ -44,6 +47,35 @@ describe('nsSummaryToMonth', () => {
   });
 });
 
+describe('booksSummaryToMonth', () => {
+  it("reads a month of FleetSuite's books as NetSuite's, payroll in expenses, marked as FleetSuite's", () => {
+    const s = {
+      income: 200000, cogs: 90000, expense: 50000, payroll: 30000, otherIncome: 500, otherExpense: 1500,
+      grossMargin: 110000, grossMarginPct: 55, netProfit: 29000, netProfitPct: 14.5, laborPct: 15, accountCount: 40,
+    };
+    expect(booksSummaryToMonth('2026-10', s, false)).toEqual({
+      month: '2026-10', source: 'fleetsuite', income: 200000, cogs: 90000, grossProfit: 110000, expenses: 80000, otherNet: -1000,
+      netIncome: 29000, directional: false,
+    });
+    expect(booksSummaryToMonth('2026-11', s, true)).toEqual({ ...nsSummaryToMonth('2026-11', s, true), source: 'fleetsuite' });
+  });
+});
+
+describe('booksFromMonth', () => {
+  it("starts FleetSuite's books at the cutover, or at their own first month when the cutover is earlier", () => {
+    expect(BOOKS_FROM).toBe('2025-01');
+    expect(booksFromMonth('2025-01', true)).toBe('2025-01');
+    expect(booksFromMonth('2025-06', true)).toBe('2025-06');
+    expect(booksFromMonth('2023-04', true)).toBe('2025-01');
+    expect(booksFromMonth(null, true)).toBe('2025-01');
+  });
+
+  it('gives no month with the books off', () => {
+    expect(booksFromMonth('2025-06', false)).toBeNull();
+    expect(booksFromMonth(null, false)).toBeNull();
+  });
+});
+
 describe('yearTotals', () => {
   it('sums months per year and reports coverage and sources', () => {
     const months = [
@@ -54,6 +86,12 @@ describe('yearTotals', () => {
     const [y23, y24] = yearTotals(months);
     expect(y23).toMatchObject({ year: 2023, income: 400, netIncome: 40, months: 2, salesMonths: 2, sources: ['quickbooks'], netMarginPct: 10, directional: false });
     expect(y24).toMatchObject({ year: 2024, income: 400, grossMarginPct: 75, sources: ['netsuite'], directional: true });
+  });
+
+  it("names each system a year's months come from, FleetSuite's books among them", () => {
+    const pnl = { income: 100, cogs: 0, expense: 0, payroll: 0, otherIncome: 0, otherExpense: 0, grossMargin: 100, grossMarginPct: 100, netProfit: 100, netProfitPct: 100, laborPct: 0, accountCount: 1 };
+    const [y] = yearTotals([nsSummaryToMonth('2024-11', pnl, false), booksSummaryToMonth('2024-12', pnl, false)]);
+    expect(y).toMatchObject({ income: 200, months: 2, sources: ['netsuite', 'fleetsuite'] });
   });
 
   it('gives no margin for a year with no revenue', () => {
