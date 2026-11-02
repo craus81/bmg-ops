@@ -645,6 +645,11 @@ export const deepLinks = {
    *  Open to whoever opens the books. */
   books1099s: (company: string, year: number | string) =>
     `/admin/books/1099s?${new URLSearchParams({ company, year: String(year) })}`,
+  /** Books → 1099s → File the 1099s on one company's year: who gets a 1099
+   *  under the year's minimums and the IRS's IRIS file made on the device
+   *  (src/lib/books/1099-filing.ts). Open to whoever opens the books. */
+  books1099Filing: (company: string, year: number | string) =>
+    `/admin/books/1099s/file?${new URLSearchParams({ company, year: String(year) })}`,
   /** Books → Rent and mortgage, with one month opened ('YYYY-MM-01' or
    *  'YYYY-MM'): 1084 Cool Springs' rent from BMG checked against BMG's
    *  books, the lender's statement against 1084's, and the month's two

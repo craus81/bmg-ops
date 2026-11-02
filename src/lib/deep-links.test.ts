@@ -310,6 +310,7 @@ describe('Books 1099s links', () => {
   it("opens one company's year of 1099 totals", () => {
     expect(deepLinks.books1099s('BMG', 2025)).toBe('/admin/books/1099s?company=BMG&year=2025');
     expect(deepLinks.books1099s('1084', '2026')).toBe('/admin/books/1099s?company=1084&year=2026');
+    expect(deepLinks.books1099Filing('BMG', 2026)).toBe('/admin/books/1099s/file?company=BMG&year=2026');
   });
 });
 

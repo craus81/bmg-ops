@@ -3,6 +3,8 @@ import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { buildYear1099, type Year1099Data } from '@/lib/books/1099s';
 import { checkReport, compare1099, type Report1099 } from '@/lib/books/1099-report';
+import { due1099, FORMS, payeeDetails, type PayeeDetails } from '@/lib/books/1099-filing';
+import { getEntityRecord } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
 import { BOOKS_ACCOUNTS_SYNC, type BooksAccountsSyncResult } from '@/lib/books/netsuite-accounts';
 import { BOOKS_LISTS_SYNC, type BooksListsSyncResult } from '@/lib/books/netsuite-lists';
@@ -125,6 +127,15 @@ export async function GET(req: NextRequest) {
  * a row in a name or heading, a tax ID maybe, is refused, so a vendor's tax
  * ID is never kept. Audited without amounts. Nothing is sent to NetSuite.
  *
+ * For filing the year's 1099s (part 70, src/lib/books/1099-filing.ts, the
+ * File the 1099s page): { company, year, payees: [NetSuite's vendor ids] },
+ * up to 25 at a time and each one getting a 1099 for the year, reads each
+ * vendor's record live from NetSuite and hands back its name and billing
+ * address as they go on the form, with what stops it, its tax ID only as the
+ * four digits it ends with; { company, year, madeFile: { form, forms, files,
+ * leftOut } } notes that the IRS file was made on the device, with counts
+ * only. No tax ID is ever sent here: they stay on the device.
+ *
  * Super admins and the bookkeeper; the CPA only reads (docs/books.md "Who can
  * open the books").
  */
@@ -146,6 +157,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `No company ${company || '(none)'}` }, { status: 400 });
   }
   const recordId = `${company} ${year}`;
+
+  if (body.payees !== undefined) return checkPayees(service, auth.user.id, company, year, body.payees);
+  if (body.madeFile !== undefined) {
+    const m = (body.madeFile ?? {}) as Record<string, unknown>;
+    const count = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+    if (!FORMS.includes(m.form as (typeof FORMS)[number]) || !count(m.forms) || !count(m.files) || !count(m.leftOut)) {
+      return NextResponse.json({ error: 'Say which form the file was made for, and how many forms, files and left out' }, { status: 400 });
+    }
+    await logAudit(service, {
+      actorId: auth.user.id,
+      table: 'gl_1099_files',
+      recordId,
+      action: 'made_file',
+      detail: { company, year, form: m.form, forms: m.forms, files: m.files, left_out: m.leftOut },
+    });
+    return NextResponse.json({ noted: true });
+  }
 
   if (body.remove === true) {
     const res = await service.rpc('gl_netsuite_1099_report_remove', { p_company: company, p_year: year });
@@ -183,6 +211,50 @@ export async function POST(req: NextRequest) {
     detail: { company, year, file_name: r.fileName, vendors: r.vendors.length, columns: r.columns.map((c) => c.header) },
   });
   return NextResponse.json({ saved: true, vendors: r.vendors.length, replaced });
+}
+
+/** How many vendors one request reads from NetSuite, and how many at once. */
+const PAYEES_AT_ONCE = 25;
+const IN_FLIGHT = 4;
+
+/**
+ * The year's 1099s' vendors asked for, each read live from NetSuite: its
+ * name and billing address as they go on the form and what stops it
+ * (payeeDetails), never its tax ID beyond the four digits it ends with. Only
+ * a vendor getting a 1099 for the year (due1099) is read.
+ */
+async function checkPayees(service: ReturnType<typeof createServiceClient>, actorId: string, company: string, year: number, asked: unknown) {
+  if (!Array.isArray(asked) || !asked.length || asked.length > PAYEES_AT_ONCE || !asked.every((p) => typeof p === 'string' && /^\d+$/.test(p))) {
+    return NextResponse.json({ error: `Send 1 to ${PAYEES_AT_ONCE} of NetSuite's ids for the vendors getting a 1099` }, { status: 400 });
+  }
+  const res = await service.rpc('gl_1099_year', { p_company: company, p_year: year });
+  if (res.error) return NextResponse.json({ error: res.error.message }, { status: 500 });
+  const due = new Set(due1099(buildYear1099(res.data as Year1099Data), year, { yearOver: true }).forms.map((f) => f.payee));
+  const ids = [...new Set(asked as string[])];
+  const notDue = ids.filter((id) => !due.has(id));
+  if (notDue.length) return NextResponse.json({ error: `Not getting a 1099 for ${year}: ${notDue.join(', ')}` }, { status: 400 });
+
+  const read: Array<{ details: PayeeDetails } | { payee: string; error: string }> = new Array(ids.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(IN_FLIGHT, ids.length) }, async () => {
+    while (next < ids.length) {
+      const i = next++;
+      const r = await getEntityRecord('vendor', ids[i]);
+      read[i] = r.success
+        ? { details: payeeDetails(ids[i], r.record) }
+        : { payee: ids[i], error: r.notFound ? 'NetSuite has no vendor with this id any more.' : r.error };
+    }
+  }));
+  const details = read.flatMap((r) => ('details' in r ? [r.details] : []));
+  const failed = read.flatMap((r) => ('error' in r ? [r] : []));
+  await logAudit(service, {
+    actorId,
+    table: 'gl_1099_files',
+    recordId: `${company} ${year}`,
+    action: 'check_payees',
+    detail: { company, year, payees: ids.length, ready: details.filter((d) => !d.problems.length).length, failed: failed.length },
+  });
+  return NextResponse.json({ details, failed });
 }
 
 /** The years offered: the copy's first (2025) to this one in Central time, the latest first. */

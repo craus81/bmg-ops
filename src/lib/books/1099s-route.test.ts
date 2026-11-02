@@ -2,7 +2,10 @@
 // reads, the year's totals it hands back for a made-up vendor
 // (src/lib/books/1099s.ts), how the copies it reads last went, and
 // NetSuite's 1099 report kept for the year and held against the totals
-// (src/lib/books/1099-report.ts).
+// (src/lib/books/1099-report.ts). And, for filing them (part 70,
+// src/lib/books/1099-filing.ts), the vendors getting a 1099 read live from
+// NetSuite, their tax IDs only as the four digits they end with, and the note
+// that the IRS file was made.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
@@ -18,7 +21,12 @@ vi.mock('@/lib/api-auth', async () => {
   };
 });
 vi.mock('@/lib/supabase-service', () => ({ createServiceClient: () => service }));
-vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
+vi.mock('@/lib/netsuite', () => ({
+  isSuiteqlError: () => false,
+  suiteqlQuery: vi.fn(),
+  suiteqlQueryAll: vi.fn(),
+  getEntityRecord: vi.fn(async (_record: string, id: string) => vendorRead(id)),
+}));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
 import { GET, POST } from '../../app/api/admin/books/1099s/route';
@@ -39,6 +47,13 @@ let reports: Record<string, Record<string, unknown>>;
 let people: Record<string, { full_name: string | null }>;
 let replaced: boolean;
 let removed: boolean;
+/** What NetSuite answers for each vendor read live. */
+let vendorAnswers: Record<string, unknown>;
+const vendorReads: string[] = [];
+function vendorRead(id: string) {
+  vendorReads.push(id);
+  return vendorAnswers[id] ?? { success: false, error: 'NetSuite error (404): gone', notFound: true };
+}
 const rpcs: Array<[string, Record<string, unknown>]> = [];
 const audits: unknown[] = [];
 
@@ -129,6 +144,8 @@ beforeEach(() => {
   people = { 'u-sam': { full_name: 'Sam Sample' } };
   replaced = false;
   removed = true;
+  vendorAnswers = {};
+  vendorReads.length = 0;
   rpcs.length = 0;
   audits.length = 0;
 });
@@ -399,5 +416,104 @@ describe("NetSuite's 1099 report", () => {
     roles = ['bookkeeper'];
     expect(await post({ company: 'BMG', year: 2025, report: REPORT })).toEqual({ status: 200, body: { saved: true, vendors: 1, replaced: false } });
     expect(rpcs.map(([name]) => name)).toEqual(['gl_netsuite_1099_report_save']);
+  });
+});
+
+describe('filing the 1099s', () => {
+  /** V-60's record as NetSuite's REST GET gives it: made up, its tax ID whole. */
+  const V60 = {
+    success: true,
+    record: {
+      id: '60', entityId: 'V-60', companyName: 'V-60 Example Electric', isPerson: false, legalName: 'Example Electric LLC',
+      taxIdNum: '98-7656789', is1099Eligible: true,
+      addressBook: { items: [{ id: 3, defaultBilling: true, addressBookAddress: { addr1: '100 Sample St', city: "O'Fallon", state: 'MO', zip: '63366', country: { id: 'US' } } }] },
+    },
+  };
+
+  it("reads the year's 1099s' vendors live from NetSuite, their tax IDs only as the four digits they end with", async () => {
+    vendorAnswers['60'] = V60;
+    const { status, body } = await post({ company: 'BMG', year: 2025, payees: ['60', '60'] });
+    expect(status).toBe(200);
+    expect(body).toEqual({
+      details: [{
+        payee: '60', person: false, first: '', middle: '', last: '', business: 'Example Electric LLC', business2: 'V-60 Example Electric',
+        address1: '100 Sample St', address2: '', city: "O'Fallon", state: 'MO', zip: '63366', hasTaxId: true, taxIdEnding: '6789',
+        problems: [], notes: [],
+      }],
+      failed: [],
+    });
+    expect(vendorReads).toEqual(['60']);
+    expect(JSON.stringify(body)).not.toMatch(/765/);
+    expect(rpcs).toEqual([['gl_1099_year', { p_company: 'BMG', p_year: 2025 }]]);
+    expect(audits).toEqual([{
+      actor_id: 'u-craig', table_name: 'gl_1099_files', record_id: 'BMG 2025', action: 'check_payees',
+      detail: { company: 'BMG', year: 2025, payees: 1, ready: 1, failed: 0 },
+    }]);
+    expect(JSON.stringify(audits)).not.toMatch(/765|6789/);
+  });
+
+  it("says which NetSuite couldn't read, and counts one with problems as not ready", async () => {
+    vendorAnswers['60'] = { success: false, error: 'NetSuite error (500): down' };
+    expect((await post({ company: 'BMG', year: 2025, payees: ['60'] })).body).toEqual({
+      details: [], failed: [{ payee: '60', error: 'NetSuite error (500): down' }],
+    });
+    vendorAnswers = {};
+    expect((await post({ company: 'BMG', year: 2025, payees: ['60'] })).body.failed).toEqual([
+      { payee: '60', error: 'NetSuite has no vendor with this id any more.' },
+    ]);
+    audits.length = 0;
+    vendorAnswers['60'] = { success: true, record: { ...V60.record, taxIdNum: '' } };
+    const { body } = await post({ company: 'BMG', year: 2025, payees: ['60'] });
+    expect(body.details[0].problems).toEqual(['NetSuite has no tax ID for it: ask for its W-9 and put the tax ID in Vendor Details.']);
+    expect(audits).toEqual([expect.objectContaining({ detail: { company: 'BMG', year: 2025, payees: 1, ready: 0, failed: 0 } })]);
+  });
+
+  it("reads only vendors getting a 1099 for the year, up to 25 at a time", async () => {
+    vendorAnswers['60'] = V60;
+    for (const [payees, error] of [
+      ['60', "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
+      [[], "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
+      [['V-60'], "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
+      [[60], "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
+      [Array.from({ length: 26 }, () => '60'), "Send 1 to 25 of NetSuite's ids for the vendors getting a 1099"],
+      [['60', '61'], 'Not getting a 1099 for 2025: 61'],
+    ] as Array<[unknown, string]>) {
+      expect(await post({ company: 'BMG', year: 2025, payees }), JSON.stringify(payees)).toEqual({ status: 400, body: { error } });
+    }
+    // $1,200 is under 2026's $2,000.
+    expect(await post({ company: 'BMG', year: 2026, payees: ['60'] })).toEqual({ status: 400, body: { error: 'Not getting a 1099 for 2026: 60' } });
+    expect(vendorReads).toEqual([]);
+    expect(audits).toEqual([]);
+    errors.gl_1099_year = { message: 'gl: no year' };
+    expect(await post({ company: 'BMG', year: 2025, payees: ['60'] })).toEqual({ status: 500, body: { error: 'gl: no year' } });
+  });
+
+  it('notes that the IRS file was made, with counts only', async () => {
+    expect(await post({ company: 'BMG', year: 2025, madeFile: { form: 'NEC', forms: 12, files: 1, leftOut: 2, names: ['x'] } }))
+      .toEqual({ status: 200, body: { noted: true } });
+    expect(audits).toEqual([{
+      actor_id: 'u-craig', table_name: 'gl_1099_files', record_id: 'BMG 2025', action: 'made_file',
+      detail: { company: 'BMG', year: 2025, form: 'NEC', forms: 12, files: 1, left_out: 2 },
+    }]);
+    audits.length = 0;
+    for (const madeFile of [null, { form: 'K', forms: 1, files: 1, leftOut: 0 }, { form: 'MISC', forms: -1, files: 1, leftOut: 0 }, { form: 'MISC', forms: 1, files: 1.5, leftOut: 0 }, { form: 'MISC', forms: 1, files: 1 }]) {
+      expect(await post({ company: 'BMG', year: 2025, madeFile }), JSON.stringify(madeFile)).toEqual({
+        status: 400, body: { error: 'Say which form the file was made for, and how many forms, files and left out' },
+      });
+    }
+    expect(audits).toEqual([]);
+  });
+
+  it('is for super admins and the bookkeeper, not the CPA', async () => {
+    vendorAnswers['60'] = V60;
+    roles = ['cpa'];
+    const status = async (body: unknown) => (await POST(new NextRequest('https://go.bmgfleet.com/api/admin/books/1099s', {
+      method: 'POST', body: JSON.stringify(body),
+    }))).status;
+    expect(await status({ company: 'BMG', year: 2025, payees: ['60'] })).toBe(403);
+    expect(await status({ company: 'BMG', year: 2025, madeFile: { form: 'NEC', forms: 1, files: 1, leftOut: 0 } })).toBe(403);
+    expect(vendorReads).toEqual([]);
+    roles = ['bookkeeper'];
+    expect((await post({ company: 'BMG', year: 2025, payees: ['60'] })).status).toBe(200);
   });
 });
