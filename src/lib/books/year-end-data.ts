@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { recYear, type BankRecYear } from './bank-reconciliation';
+import { readBankRec } from './bank-reconciliation-data';
 import { generalLedger, ledgerAccounts, type LedgerBlock } from './general-ledger';
 import { readCompanies, type CompanyRow } from './going-live';
 import { BOOKS_COMPANIES } from './journal';
@@ -17,8 +19,9 @@ import { defaultYear, readYearChecks, readYears, yearsShown, type YearFacts } fr
  * year (src/app/api/admin/books/year-end and its download; docs/books.md
  * "Year end"): the company and year asked for, the year's close both sides,
  * its months, checks and closes, and the books Reports reads, which the
- * package's statements come from; and for the package, the general ledger
- * and each customer's and vendor's balance at the year's end.
+ * package's statements come from; and for the package, the general ledger,
+ * each customer's and vendor's balance and each bank account's
+ * reconciliation at the year's end.
  */
 
 export interface YearRead {
@@ -115,4 +118,26 @@ export async function readPartyBalances(service: SupabaseClient, loaded: LoadedR
     return { ...partyBalances(data as PartyBalancesData, kind), trialBalance: onTrialBalance(loaded.data, kind, to) };
   }));
   return { customer, vendor };
+}
+
+/**
+ * Each bank account reconciled in FleetSuite for the company (`accounts`,
+ * NetSuite's ids, as Year end's bank check reads them from where reconciling
+ * starts), read as Books → 1084's bank reconciliation reads it (readBankRec),
+ * with its months from January through `to` and its statement then held
+ * against the books (recYear). An account no longer reconciled by the time
+ * it's read is left out.
+ */
+export async function readBankRecs(
+  service: SupabaseClient,
+  p: { company: string; accounts: readonly string[]; year: number; to: string; thisMonth: string },
+): Promise<BankRecYear[]> {
+  const read = await Promise.all(p.accounts.map((account) => readBankRec(service, { company: p.company, account, thisMonth: p.thisMonth })));
+  return read.flatMap((r) => (r.start ? [{
+    account: r.account,
+    start: r.start,
+    year: recYear({ start: r.start, recs: r.recs, ticks: r.ticks, events: r.events, docs: r.docs, openingCents: r.openingCents }, p),
+    notPosted: r.notPosted,
+    capped: r.capped,
+  }] : []));
 }

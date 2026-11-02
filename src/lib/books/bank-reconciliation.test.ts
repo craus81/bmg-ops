@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   MAX_OUTSTANDING, balanceOn, draftFor, lastDay, longDate, monthAfter, monthViews, nextMonth, nextView, openEntries, recProblems,
-  startProblems, startView, startingFor,
+  recYear, startProblems, startView, startingFor,
   type BankDoc, type RecBooks, type RecStart, type SavedRec, type RecTick,
 } from './bank-reconciliation';
 
@@ -251,5 +251,69 @@ describe('each month', () => {
     });
     const typedGone = monthViews({ ...base, ticks: [...base.ticks, tick(TYPED, '2026-10-01', -1)], docs: DOCS.filter((d) => d.doc !== TYPED) }, '2026-11-01')[1];
     expect(typedGone.items[0]).toMatchObject({ doc: TYPED, number: 'FleetSuite entry', cents: -1 });
+  });
+});
+
+describe("a year's end", () => {
+  const base = books({
+    ...OCTOBER_DONE,
+    recs: [...OCTOBER_DONE.recs!, rec('2026-11-01', { endingCents: 2210000 }), rec('2026-12-01', { endingCents: 1 })],
+    ticks: [...OCTOBER_DONE.ticks!, tick('5005', '2026-11-01', 850000)],
+  });
+
+  it('holds a month done against the books on its last day: what cleared before it or on it is left out', () => {
+    const year = recYear(base, { year: 2026, to: '2026-10-01', thisMonth: '2026-11-01' });
+    // From the month reconciling starts with, not January; the month after `to` left out.
+    expect(year.months.map((m) => [m.month, m.state])).toEqual([['2026-10-01', 'done']]);
+    expect(year.end).toEqual({
+      month: '2026-10-01', state: 'done', saved: base.recs[0], endsOn: '2026-10-31', endingCents: 2013500,
+      notCleared: [DOCS[4]], notClearedCents: -12000, booksCents: 2001500, tieCents: 0,
+    });
+    // As the page counts it.
+    const october = monthViews(base, '2026-11-01')[1];
+    expect([year.end!.notClearedCents, year.end!.booksCents, year.end!.tieCents]).toEqual([october.notClearedCents, october.booksCents, october.tieCents]);
+    // A statement ending on the 30th: check 1002, written on the 31st, isn't in the books by then.
+    const early = books({ ...base, recs: [{ ...base.recs[0], endsOn: '2026-10-30' }] });
+    expect(recYear(early, { year: 2026, to: '2026-10-01', thisMonth: '2026-11-01' }).end).toMatchObject({
+      endsOn: '2026-10-30', notCleared: [], notClearedCents: 0, booksCents: 2013500, tieCents: 0,
+    });
+  });
+
+  it('holds the month being reconciled against the books as far as it is ticked, oldest month first', () => {
+    const year = recYear(base, { year: 2026, to: '2026-11-01', thisMonth: '2026-12-01' });
+    expect(year.months.map((m) => [m.month, m.state])).toEqual([['2026-10-01', 'done'], ['2026-11-01', 'next']]);
+    expect(year.end).toMatchObject({
+      month: '2026-11-01', state: 'next', saved: base.recs[1], endsOn: '2026-11-30', endingCents: 2210000,
+      notClearedCents: -653500, booksCents: 2210000, tieCents: 653500,
+    });
+    expect(year.end!.notCleared.map((d) => d.doc)).toEqual(['5004', TYPED]);
+    const november = monthViews(base, '2026-12-01')[1];
+    expect([year.end!.notClearedCents, year.end!.tieCents]).toEqual([november.notClearedCents, november.tieCents]);
+    // Nothing typed yet: no tie.
+    const untyped = books({ ...base, recs: base.recs.slice(0, 1) });
+    expect(recYear(untyped, { year: 2026, to: '2026-11-01', thisMonth: '2026-11-01' }).end).toMatchObject({
+      state: 'next', saved: null, endsOn: '2026-11-30', endingCents: null, notClearedCents: -653500, tieCents: null,
+    });
+  });
+
+  it('holds a month that waits for the one before it against the books, counting what is ticked so far as cleared', () => {
+    const year = recYear(base, { year: 2026, to: '2026-12-01', thisMonth: '2027-01-01' });
+    expect(year.months.map((m) => m.state)).toEqual(['done', 'next', 'later']);
+    expect(year.end).toMatchObject({
+      month: '2026-12-01', state: 'later', saved: base.recs[2], endsOn: '2026-12-31', endingCents: 1,
+      notClearedCents: -653500, booksCents: 2210000, tieCents: 2863499,
+    });
+    // What's ticked on it counts as cleared too.
+    const ticked = books({ ...base, ticks: [...base.ticks, tick(TYPED, '2026-12-01', -641500)] });
+    expect(recYear(ticked, { year: 2026, to: '2026-12-01', thisMonth: '2027-01-01' }).end).toMatchObject({ notCleared: [DOCS[4]], notClearedCents: -12000 });
+  });
+
+  it('runs from January in a year after the one reconciling starts with, and has no end in a year before it', () => {
+    const year = recYear(base, { year: 2027, to: '2027-02-01', thisMonth: '2027-03-01' });
+    expect(year.months.map((m) => [m.month, m.state])).toEqual([['2027-01-01', 'later'], ['2027-02-01', 'later']]);
+    expect(year.end).toMatchObject({ month: '2027-02-01', state: 'later', saved: null, endsOn: '2027-02-28', endingCents: null, tieCents: null });
+    expect(recYear(base, { year: 2025, to: '2025-12-01', thisMonth: '2026-11-01' })).toEqual({ months: [], end: null });
+    // Nor before reconciling starts in the year itself.
+    expect(recYear(base, { year: 2026, to: '2026-09-01', thisMonth: '2026-11-01' })).toEqual({ months: [], end: null });
   });
 });

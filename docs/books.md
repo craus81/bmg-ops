@@ -142,8 +142,8 @@ vendor, months that move with the calendar and reports saved by name
 earnings once all its months are, its months held closed until it's
 reopened ("Year end"), part 75, the year's reports for the CPA as one
 Excel file ("The year-end package"), part 76, the year's general ledger
-in it, and part 77, each customer's and vendor's balance at December 31
-in it.
+in it, part 77, each customer's and vendor's balance at December 31 in it,
+and part 78, each bank account's reconciliation at December 31 in it.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -302,12 +302,12 @@ admins can open it while fixing invoices is switched off.
 | 1099s: NetSuite's 1099 report uploaded and held against FleetSuite's totals, vendor by vendor and box by box, never keeping a tax ID | `migrations/482-books-1099-report.sql`, `src/lib/books/1099-report.ts`, the `POST` and the report in `src/app/api/admin/books/1099s/route.ts`, `NetSuiteReport` in `src/app/(main)/admin/books/1099s/page.tsx`; tests `src/lib/books/1099-report.test.ts`, `src/lib/books/1099-report-sql.test.ts`, `src/lib/books/1099s-route.test.ts` |
 | 1099s filed: who gets which 1099 under the year's minimums, each one's name and address read live from NetSuite, and the IRS's IRIS upload template filled in on the device, tax IDs never reaching FleetSuite | `src/lib/books/1099-filing.ts`, `yearPayees` and `payeeFinder` in `src/lib/books/1099-report.ts`, the `payees` and `madeFile` posts in `src/app/api/admin/books/1099s/route.ts`, `src/app/(main)/admin/books/1099s/file/page.tsx`; tests `src/lib/books/1099-filing.test.ts`, `src/lib/books/1099s-route.test.ts` |
 | 1084 Cool Springs' rent and mortgage: the rent checked against BMG's books, the lender's statement against 1084's, and the month's two entries made for Journal entries | `migrations/492-rent-and-mortgage-for-1084.sql`, `src/lib/books/rent-and-mortgage.ts`, `src/app/(main)/admin/books/rent-and-mortgage/page.tsx`, `src/app/api/admin/books/rent-and-mortgage/route.ts`; tests `src/lib/books/rent-and-mortgage.test.ts`, `src/lib/books/rent-and-mortgage-route.test.ts`, `src/lib/books/rent-mortgage-sql.test.ts` |
-| 1084's bank reconciliation: each statement's entries ticked as they clear, month by month | `migrations/493-bank-reconciliation-for-1084.sql`, `src/lib/books/bank-reconciliation.ts`, `src/app/(main)/admin/books/bank-reconciliation/page.tsx`, `src/app/api/admin/books/bank-reconciliation/route.ts`; tests `src/lib/books/bank-reconciliation.test.ts`, `src/lib/books/bank-reconciliation-route.test.ts`, `src/lib/books/bank-rec-sql.test.ts` |
+| 1084's bank reconciliation: each statement's entries ticked as they clear, month by month | `migrations/493-bank-reconciliation-for-1084.sql`, `src/lib/books/bank-reconciliation.ts`, `src/lib/books/bank-reconciliation-data.ts`, `src/app/(main)/admin/books/bank-reconciliation/page.tsx`, `src/app/api/admin/books/bank-reconciliation/route.ts`; tests `src/lib/books/bank-reconciliation.test.ts`, `src/lib/books/bank-reconciliation-route.test.ts`, `src/lib/books/bank-rec-sql.test.ts` |
 | Inventory value: each stocked item's value at a month's end, tied to each inventory account | `migrations/495-inventory-value-at-a-months-end.sql`, `src/lib/books/inventory-value.ts`, `src/lib/books/inventory-value-data.ts`, `src/app/(main)/admin/books/inventory-value/page.tsx`, `src/app/api/admin/books/inventory-value/route.ts` and its `download`; tests `src/lib/books/inventory-value.test.ts`, `src/lib/books/inventory-value-route.test.ts`, `src/lib/books/inventory-value-sql.test.ts` |
 | Sales tax: what goes on Missouri's return for a month, location by location, each location's dated rates, and the return as filed held against it | `migrations/496-books-sales-tax.sql`, `src/lib/books/sales-tax-worksheet.ts`, `src/lib/books/sales-tax-data.ts`, `src/lib/books/sales-tax-words.ts`, `salesTaxWorkbook` in `src/lib/books/report-workbook.ts`, `src/app/(main)/admin/books/sales-tax/page.tsx`, `src/app/api/admin/books/sales-tax/route.ts` and its `download`; tests `src/lib/books/sales-tax-worksheet.test.ts`, `src/lib/books/sales-tax-route.test.ts`, `src/lib/books/sales-tax-sql.test.ts` |
 | Own numbers: FleetSuite's number on each sales order, PO, invoice and credit memo it makes in NetSuite, what became of each, and the sales orders and POs made in NetSuite instead | `migrations/497-books-own-numbers.sql`, `src/lib/books/own-numbers.ts`, `ownNumberFor` in `createSalesOrder`, `createPurchaseOrder`, `createDirectInvoice`, `createInvoiceFromSO` and `createCreditMemoFromInvoice` in `src/lib/netsuite.ts`, the drop ship PO's number in `src/app/api/estimates/[id]/drop-ship/route.ts`, `src/app/(main)/admin/books/own-numbers/page.tsx`, `src/app/api/admin/books/own-numbers/route.ts`; tests `src/lib/books/own-numbers.test.ts`, `src/lib/books/own-numbers-route.test.ts`, `src/lib/netsuite-own-numbers.test.ts`, `src/lib/drop-ship-route.test.ts`, and the tables and their functions `src/lib/books/own-numbers-sql.test.ts` |
 | Year end: each company's year closed into retained earnings once all its months are, in order, its months held closed until it's reopened, with what's done before it closes | `migrations/502-books-year-end.sql`, `src/lib/books/year-end.ts`, `src/lib/books/year-end-data.ts` (what the page and its package read), `src/lib/books/year-end-words.ts` (what both call the checks), `yearCloseAmounts` in `src/lib/books/reports.ts`, `readMonthFacts` and the closed year's months in `src/lib/books/months.ts`, `src/app/(main)/admin/books/year-end/page.tsx`, `src/app/api/admin/books/year-end/route.ts`; tests `src/lib/books/year-end.test.ts`, `src/lib/books/year-end-route.test.ts`, `src/lib/books/year-end-sql.test.ts`, the closed year's months in `src/lib/books/months.test.ts` and `src/lib/books/months-route.test.ts`, and `yearCloseAmounts`' in `src/lib/books/reports.test.ts` |
-| The year-end package: a company's year for the CPA as one Excel file | `yearEndWorkbook` in `src/lib/books/report-workbook.ts`, `loadSplit` in `src/lib/books/report-data.ts`, the general ledger in `src/lib/books/general-ledger.ts` and `readLedger` in `src/lib/books/year-end-data.ts`, each customer's and vendor's balance at December 31 from `migrations/503-books-party-balances-through.sql`, `readPartyBalances` in `src/lib/books/year-end-data.ts` and `onTrialBalance` in `src/lib/books/party-balances.ts`, `src/app/api/admin/books/year-end/download/route.ts`; tests `src/lib/books/year-end-workbook.test.ts`, `src/lib/books/general-ledger.test.ts`, `src/lib/books/party-balances-through-sql.test.ts`, `onTrialBalance`'s in `src/lib/books/party-balances.test.ts`, the download's in `src/lib/books/year-end-route.test.ts` |
+| The year-end package: a company's year for the CPA as one Excel file | `yearEndWorkbook` in `src/lib/books/report-workbook.ts`, `loadSplit` in `src/lib/books/report-data.ts`, the general ledger in `src/lib/books/general-ledger.ts` and `readLedger` in `src/lib/books/year-end-data.ts`, each customer's and vendor's balance at December 31 from `migrations/503-books-party-balances-through.sql`, `readPartyBalances` in `src/lib/books/year-end-data.ts` and `onTrialBalance` in `src/lib/books/party-balances.ts`, each bank account's reconciliation from `readBankRec` in `src/lib/books/bank-reconciliation-data.ts`, `recYear` in `src/lib/books/bank-reconciliation.ts` and `readBankRecs` in `src/lib/books/year-end-data.ts`, `src/app/api/admin/books/year-end/download/route.ts`; tests `src/lib/books/year-end-workbook.test.ts`, `src/lib/books/general-ledger.test.ts`, `src/lib/books/party-balances-through-sql.test.ts`, `onTrialBalance`'s in `src/lib/books/party-balances.test.ts`, the download's in `src/lib/books/year-end-route.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -5721,6 +5721,11 @@ Nothing here moves money or is sent to NetSuite, so it has no switch. The
 audit records carry no amounts: the month, the statement's last day, how
 many entries were ticked, and why a month was undone.
 
+The year-end package reads each account as the page does
+(`readBankRec` in `src/lib/books/bank-reconciliation-data.ts`), and holds
+its statement at December 31 against the books by the same rules ("The
+year-end package").
+
 ### What isn't done yet
 
 - Reading the bank's statement from its PDF or a download: the ending
@@ -6517,6 +6522,27 @@ each, laid out as their own downloads are ("Excel downloads"):
   NetSuite's doesn't, since the copy of NetSuite's ledger doesn't hold
   everything its own totals say moved the accounts yet, and when where the
   accounts stood before 2025 isn't all split by name (`partyNotes`).
+- Bank Reconciliations and Bank Reconciliations by Month (part 78): each
+  bank account reconciled in FleetSuite, read as its page reads it ("1084's
+  bank reconciliation", `readBankRecs` in `src/lib/books/year-end-data.ts`).
+  The first holds the statement at December 31 against the books
+  (`recYear` in `src/lib/books/bank-reconciliation.ts`): the bank's ending
+  balance and who reconciled it, each entry the books had by its last day
+  that hadn't cleared on it or before, the bank with them, FleetSuite's
+  books on that day, and what's left between them, nothing once they tie.
+  That's red when the books changed since the month was reconciled, and
+  amber while it isn't, counting what's ticked so far as cleared, or while
+  its ending balance isn't typed. The second lists each month of the year,
+  from January or from where reconciling starts, with the bank's balance
+  then: the starting and ending balance, what cleared in and out, the
+  difference left and who reconciled it, amber while it isn't and red when
+  the books changed what cleared on it since. The notes say in red when an
+  account has more than 20,000 entries, more than are read at once, and
+  when the books changed entries that cleared on a month done; in amber
+  when December isn't reconciled yet, and how many entries NetSuite has on
+  the account that FleetSuite's books haven't posted (`bankRecNotes`). A
+  company with no bank account reconciled in FleetSuite has neither sheet,
+  and an account reconciled only from after the year says so.
 - For a company with stock, its inventory value at December 31, how it
   ties to each inventory account, and the documents on them with no stocked
   item ("Inventory value at a month's end").
@@ -6535,7 +6561,6 @@ and is open to whoever opens the books.
 
 - How old each customer's and vendor's balance at December 31 was: the
   package has the balances, and the agings are as of today.
-- The bank reconciliations at December 31 in the package.
 
 ## NetSuite feed
 
