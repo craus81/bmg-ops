@@ -71,6 +71,13 @@ date. After that, `npm run migrate` applies only genuinely new files.
   `unguardedWrites` (`src/lib/books/sql-writes.ts`), as
   `src/lib/books/netsuite-gl-sql.test.ts` does for the books functions
   (migration 362 fixed one that reached production).
+- A migration that touches the books (from 359 on, naming one of the books'
+  tables) also runs every night in the restore drill's scratch database
+  (`src/lib/books/restore-drill.ts`, docs/books.md "The restore drill"),
+  which holds only the books, migrations 314 and 454 (`DRILL_NEEDS`) and
+  small stand-ins for the rest of the app (`DRILL_STAND_INS`). If it points
+  at another table of the app, add that table to the stand-ins in the same
+  change; `src/lib/books/restore-drill.test.ts` fails until it's there.
 
 ## History notes (June 2026 cleanup)
 

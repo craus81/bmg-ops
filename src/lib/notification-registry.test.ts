@@ -138,6 +138,7 @@ describe.each([
   ["FleetSuite's own numbers", 'books_own_number', "NetSuite didn't keep FleetSuite's number, or something was made in NetSuite"],
   ["FleetSuite's invoice PDFs", 'books_invoice_pdf', "An invoice's PDF didn't go to NetSuite"],
   ["backups of FleetSuite's books", 'books_backup', "The books' backup didn't work"],
+  ["the restore test of FleetSuite's books", 'books_restore_drill', "The books' restore test didn't pass"],
 ])('%s (Craig, 2026-10-28: new alerts copy him by email)', (_what, type, label) => {
 
   it('is listed in Settings → Notifications by what it tells', () => {

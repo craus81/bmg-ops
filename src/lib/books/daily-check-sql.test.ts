@@ -11,9 +11,10 @@
 // through migration 480's, and at the numbers NetSuite didn't keep and the
 // sales orders and POs made in NetSuite instead, through migration 497's, and
 // at the invoice PDFs NetSuite refused or FleetSuite isn't sure about, through
-// migration 498's, and at the backups of the books, through migration 506's.
+// migration 498's, and at the backups of the books and their restore test,
+// through migrations 506's and 507's.
 // This runs the same migrations as differences-sql.test.ts, with 401, 406, 407,
-// 416, 431, 435, 454, 457, 477, 480, 497, 498 and 506, in an in-memory Postgres (PGlite) as the app's
+// 416, 431, 435, 454, 457, 477, 480, 497, 498, 506 and 507, in an in-memory Postgres (PGlite) as the app's
 // server login, copies a made-up handful of NetSuite documents for BMG and
 // 1084, posts FleetSuite's entries for some of them, copies a few stock moves
 // and NetSuite's counts, saves an own invoice, an own fulfillment, a few
@@ -96,6 +97,7 @@ async function freshDb(): Promise<PGlite> {
   await pg.exec('ALTER TABLE gl_own_invoices ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1');
   await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', '498-books-invoice-pdfs.sql'), 'utf8'));
   await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', '506-books-backups.sql'), 'utf8'));
+  await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', '507-books-restore-drills.sql'), 'utf8'));
   await pg.exec(`UPDATE gl_companies SET netsuite_subsidiary_id = '5' WHERE code = '1084'`);
   for (const [ns, name, type] of ACCOUNTS) {
     await pg.query(
@@ -167,7 +169,7 @@ describe('the daily books check', () => {
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
   /**
    * What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes,
-   * sends to NetSuite, changes in NetSuite, FleetSuite's own numbers, its invoice PDFs and the backups, apart.
+   * sends to NetSuite, changes in NetSuite, FleetSuite's own numbers, its invoice PDFs, the backups and their restore test, apart.
    */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
@@ -182,6 +184,7 @@ describe('the daily books check', () => {
   let toldNumbers: CheckAlert[] = [];
   let toldPdfs: CheckAlert[] = [];
   let toldBackups: CheckAlert[] = [];
+  let toldDrills: CheckAlert[] = [];
 
   /** A read of one of the books' tables, or a change to one, built the way supabase-js builds it, run against the database. */
   const read = (table: string) => {
@@ -233,6 +236,7 @@ describe('the daily books check', () => {
     from: (table: string) => {
       if ([
         'gl_mistake_checks', 'gl_companies', 'gl_periods', 'netsuite_sends', 'profiles', 'books_switches', 'record_differences', 'books_backups',
+        'books_restore_drills',
       ].includes(table)) return read(table);
       if (table === 'sync_state') {
         return {
@@ -280,11 +284,12 @@ describe('the daily books check', () => {
     toldNumbers = [];
     toldPdfs = [];
     toldBackups = [];
+    toldDrills = [];
     const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
       : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
         : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : alert.about === 'send' ? toldSends
           : alert.about === 'change' ? toldChanges : alert.about === 'number' ? toldNumbers : alert.about === 'pdf' ? toldPdfs
-            : alert.about === 'backup' ? toldBackups : told);
+            : alert.about === 'backup' ? toldBackups : alert.about === 'drill' ? toldDrills : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
@@ -308,10 +313,26 @@ describe('the daily books check', () => {
     return { id: r.rows[0].id, startedAt: started.toISOString() };
   };
 
+  /** A restore test of a backup, `minutesAgo` before now, as the drill records it. */
+  const drill = async (backupId: string, status: 'passed' | 'failed', minutesAgo: number, error: string | null = null) => {
+    const started = new Date(Date.now() - minutesAgo * 60_000);
+    const r = await pg.query<{ id: string }>(
+      `INSERT INTO books_restore_drills (backup_id, how, started_at, finished_at, status, migration,
+         table_count, row_count, entry_count, line_count, link_count, error)
+       VALUES ($1, 'nightly', $2, $2::timestamptz + interval '1 minute', $3, '507-books-restore-drills.sql', $4, $5, $6, $7, $8, $9) RETURNING id`,
+      [backupId, started.toISOString(), status, ...(status === 'passed' ? [90, 4000, 300, 900, 67] : [null, null, null, null, null]), error],
+    );
+    return { id: r.rows[0].id };
+  };
+  /** Last night's backup, made and restore tested, so the looks tell nothing about either but where a test says. */
+  const lastNight = async () => {
+    const made = await backup('made', 2);
+    await drill(made.id, 'passed', 80);
+  };
+
   beforeAll(async () => {
     pg = await freshDb();
-    // Last night's backup was made, so the looks below tell nothing about backups but where a test says.
-    await backup('made', 2);
+    await lastNight();
     // BMG's December 2025: INV5003's sales tax went to sales in FleetSuite, a difference everyone knows of.
     await invoice(pg, '5003', '2025-12-10', DEC, 10000, 'Beta Corp', 'BMG', 700);
     await post(pg, 'BMG', 'invoice', '5003', '2025-12-10', [['120', 10700], ['400', -10700]]);
@@ -1434,7 +1455,7 @@ describe('the daily books check', () => {
       month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago',
     });
     // Emptied while no company's books are live (migration 359's truncate guard); every backup's record stays otherwise.
-    await pg.exec('TRUNCATE books_backups');
+    await pg.exec('TRUNCATE books_restore_drills, books_backups');
     try {
       expect(await look('first')).toMatchObject({ told: 1 });
       expect(toldBackups).toEqual([{
@@ -1470,20 +1491,73 @@ describe('the daily books check', () => {
       failing = (name) => name === 'books_backups';
       try {
         const result = await look('first');
-        expect(result.error).toBe("Backups: couldn't read the backups (books_backups failed)");
+        expect(result.error).toBe("Backups: couldn't read the backups (books_backups failed) Restore test: couldn't read the backups (books_backups failed)");
         expect(result.heartbeat).toBeDefined();
         expect(toldBackups).toEqual([]);
       } finally {
         failing = null;
       }
 
-      // A good one made since: nothing to tell.
+      // A good one made since: nothing to tell, its restore test not due yet.
       await backup('made', 0.5);
       expect(await look('first')).toMatchObject({ told: 0 });
       expect(toldBackups).toEqual([]);
     } finally {
-      await pg.exec('TRUNCATE books_backups');
-      await backup('made', 2);
+      await pg.exec('TRUNCATE books_restore_drills, books_backups');
+      await lastNight();
+    }
+  });
+
+  it("tells each morning when the newest backup's restore test didn't pass, or none ran on it", async () => {
+    const central = (iso: string) => new Date(iso).toLocaleString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago',
+    });
+    await pg.exec('TRUNCATE books_restore_drills, books_backups');
+    try {
+      // No good backup is the backups' own alert; there's nothing to test.
+      await look('first');
+      expect(toldDrills).toEqual([]);
+
+      const made = await backup('made', 2);
+      expect(await look('first')).toMatchObject({ told: 1 });
+      expect(toldDrills).toEqual([{
+        title: "Backups: the books' restore test didn't run",
+        body: `The nightly restore test, at 2:51 AM Central, hasn't put back the backup from ${central(made.startedAt)}. Books → Backups can test it now.`,
+        url: `/admin/books/backups?backup=${made.id}`,
+        about: 'drill',
+      }]);
+      // Only the day's first look, after the night's test, looks.
+      expect(await look('second')).toMatchObject({ told: 0 });
+      expect(toldDrills).toEqual([]);
+
+      await drill(made.id, 'failed', 80, "gl_lines has 899 rows in the scratch database, and the backup's manifest says 900.");
+      await look('first');
+      expect(toldDrills).toEqual([{
+        title: "Backups: the books' restore test didn't pass",
+        body: "gl_lines has 899 rows in the scratch database, and the backup's manifest says 900. "
+          + `It was putting back the backup from ${central(made.startedAt)}. Books → Backups can test it again.`,
+        url: `/admin/books/backups?backup=${made.id}`,
+        about: 'drill',
+      }]);
+
+      // One it can't read is said, and the rest of the check goes on.
+      failing = (name) => name === 'books_restore_drills';
+      try {
+        const result = await look('first');
+        expect(result.error).toBe("Restore test: couldn't read the restore tests (books_restore_drills failed)");
+        expect(result.heartbeat).toBeDefined();
+        expect(toldDrills).toEqual([]);
+      } finally {
+        failing = null;
+      }
+
+      // Tested again, by hand, and it passed: nothing to tell.
+      await drill(made.id, 'passed', 10);
+      expect(await look('first')).toMatchObject({ told: 0 });
+      expect(toldDrills).toEqual([]);
+    } finally {
+      await pg.exec('TRUNCATE books_restore_drills, books_backups');
+      await lastNight();
     }
   });
 

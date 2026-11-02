@@ -298,6 +298,13 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Super admins, who make and download the backups.' },
+  // The restore test of those backups (part 85, migration 507), emailed the
+  // same way.
+  { type: 'books_restore_drill', label: "The books' restore test didn't pass", description: "The newest good backup of FleetSuite's books didn't pass its restore test, which puts it back into a scratch database and checks it, or hasn't had one (the nightly test runs at 2:51 AM Central). Told at the daily check's first look of each day until one passes. Opens the backup on Books → Backups.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, who make and test the backups.' },
   { type: 'books_mistake_found', label: 'Books found likely mistakes in NetSuite', description: "FleetSuite's nightly mistake checks found a bill, check or card charge copied from NetSuite that looks like a mistake (entered twice, far off the vendor's usual, a monthly charge missing, or coded to an account the vendor doesn't use) and nobody has cleared it by the daily check's second look. Opens it on Mistake checks, or the list when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
 
   // ── Contract installers (CNI) ─────────────────────────────────────────

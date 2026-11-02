@@ -131,6 +131,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/cron/books-daily-check/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-invoice-pdfs/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-backup/route.ts': cron('requireSuperAdmin('),
+  'src/app/api/cron/books-restore-drill/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-netsuite-deposits/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-netsuite-bills/route.ts': cron('requireSuperAdmin('),
   'src/app/api/cron/books-netsuite-bill-payments/route.ts': cron('requireSuperAdmin('),

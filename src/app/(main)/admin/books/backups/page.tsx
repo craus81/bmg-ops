@@ -7,18 +7,21 @@ import { useAuth } from '@/components/AuthProvider';
 import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { useFileDownload } from '@/lib/use-file-download';
-import { BACKUPS_LISTED, fileSize, holdsWords, tookWords } from '@/lib/books/backup-words';
+import { BACKUPS_LISTED, fileSize, holdsWords, restoredWords, tookWords } from '@/lib/books/backup-words';
 import type { BackupRecord, BackupStatus, BackupsView } from '@/lib/books/backups';
+import type { DrillRecord, DrillStatus, DrillsView } from '@/lib/books/restore-drill';
 
 /**
- * Books → Backups (docs/books.md "Backups").
+ * Books → Backups (docs/books.md "Backups" and "The restore drill").
  *
  * Each night at 2:11 AM Central FleetSuite copies its books into one zip in
  * BMG's private file storage: every table as a CSV file, the journal as a
  * workbook to read, and a manifest. It reads the copy back and checks its
  * journal against the books before counting it as good. Every backup, how
  * it went and why one failed; a super admin downloads one or makes one now.
- * Open to whoever opens the books.
+ * At 2:51 AM it puts the newest good backup back into a scratch database and
+ * checks it: how the newest backup's restore test went, and each backup's
+ * latest; a super admin runs one now. Open to whoever opens the books.
  */
 
 const GREEN = '#22c55e';
@@ -62,12 +65,37 @@ const STATUSES: Record<BackupStatus, { label: string; color: string }> = {
   stopped: { label: 'Stopped', color: RED },
 };
 
+/** A backup's latest restore test, beside how the backup went. */
+const TESTS: Record<DrillStatus, { label: string; color: string }> = {
+  passed: { label: 'Restore tested', color: GREEN },
+  failed: { label: 'Restore test failed', color: RED },
+  running: { label: 'Testing restore', color: GREY },
+  stopped: { label: 'Restore test stopped', color: RED },
+};
+
+type View = BackupsView & { restore: DrillsView };
+
+/** How the newest good backup's restore test stands, as the banner says it; null before a backup is made. */
+function newestTest(restore: DrillsView, canTest: boolean): { color: string; text: string } | null {
+  const t = restore.newest;
+  if (!t) return null;
+  const backup = `The newest backup, from ${when(t.backupAt)},`;
+  if (!t.drill) {
+    if (t.overdue) return { color: AMBER, text: `${backup} hasn't had its restore test.${canTest ? ' Test restore now runs one.' : ''}` };
+    const last = restore.lastPassed ? ` The last one passed ${when(restore.lastPassed.startedAt)}.` : '';
+    return { color: GREY, text: `${backup} hasn't had its restore test yet.${last}` };
+  }
+  if (t.drill.status === 'running') return { color: GREY, text: `${backup} is having its restore test now.` };
+  if (t.drill.status === 'passed') return { color: GREEN, text: `${backup} passed its restore test: ${restoredWords(t.drill)}.` };
+  return { color: RED, text: `${backup} didn't pass its restore test. ${t.drill.error ?? ''}`.trim() };
+}
+
 export default function BooksBackupsPage() {
   const router = useRouter();
   const { hasRole, loading: authLoading } = useAuth();
   // Making a backup and downloading one are the owner's; the bookkeeper and the CPA see the list.
   const canBackUp = booksAllows(booksAccess(hasRole), 'owner');
-  const [data, setData] = useState<BackupsView | null>(null);
+  const [data, setData] = useState<View | null>(null);
   const [error, setError] = useState('');
   const [more, setMore] = useState(false);
   const [running, setRunning] = useState(false);
@@ -76,6 +104,9 @@ export default function BooksBackupsPage() {
   const [downloadError, setDownloadError] = useState('');
   const [downloading, setDownloading] = useState<string | null>(null);
   const [picked, setPicked] = useState<string | null>(null);
+  const [moreTest, setMoreTest] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testError, setTestError] = useState('');
   const file = useFileDownload(setDownloadError);
   /** Whether the notification's backup still needs scrolling to, once the list is read. */
   const toPicked = useRef(false);
@@ -108,13 +139,13 @@ export default function BooksBackupsPage() {
     document.getElementById(`backup-${picked}`)?.scrollIntoView({ block: 'center' });
   }, [data, picked]);
 
-  // A backup running (the night's, or one someone else started) shows how it went once it's done.
-  const anyRunning = !!data?.backups.some((b) => b.status === 'running');
+  // A backup or restore test running (the night's, or one someone else started) shows how it went once it's done.
+  const anyRunning = !!data?.backups.some((b) => b.status === 'running') || !!data?.restore.drills.some((d) => d.status === 'running');
   useEffect(() => {
-    if (!anyRunning || running) return;
+    if (!anyRunning || running || testing) return;
     const timer = setInterval(load, 15_000);
     return () => clearInterval(timer);
-  }, [anyRunning, running, load]);
+  }, [anyRunning, running, testing, load]);
 
   const backUp = async () => {
     setRunning(true);
@@ -137,6 +168,25 @@ export default function BooksBackupsPage() {
     setRunning(false);
   };
 
+  const testRestore = async () => {
+    setTesting(true);
+    setTestError('');
+    try {
+      const res = await apiFetch('/api/admin/books/backups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'test_restore' }),
+      });
+      const json = await res.json().catch(() => ({}));
+      // One that ran says how it went at the top once the page reads it again; one that couldn't run says why here.
+      if (!res.ok && !json.id) throw new Error(json.error || `The restore test didn't run (${res.status})`);
+    } catch (e: any) {
+      setTestError(e?.message || "The restore test didn't run");
+    }
+    await load();
+    setTesting(false);
+  };
+
   const download = async (b: BackupRecord) => {
     setDownloadError('');
     setDownloading(b.id);
@@ -145,6 +195,12 @@ export default function BooksBackupsPage() {
   };
 
   const madeOne = made && data?.backups.find((b) => b.id === made);
+  // Each backup's latest restore test: the list is newest first.
+  const testOf = new Map<string, DrillRecord>();
+  for (const d of data?.restore.drills ?? []) if (!testOf.has(d.backupId)) testOf.set(d.backupId, d);
+  const newest = data ? newestTest(data.restore, canBackUp) : null;
+  // One runs at a time, whichever backup it's on.
+  const testBusy = testing || !!data?.restore.drills.some((d) => d.status === 'running');
 
   return (
     <div>
@@ -204,6 +260,34 @@ export default function BooksBackupsPage() {
           {downloadError && <div style={banner(RED)}>{downloadError}</div>}
 
           <div style={{ marginTop: '14px' }}>
+            <div style={heading}>Restore test</div>
+            <div style={{ ...muted, marginBottom: '8px' }}>
+              Each night FleetSuite puts the newest good backup back into a scratch database and checks it. The books themselves are never touched.{' '}
+              <button onClick={() => setMoreTest(!moreTest)} style={link}>{moreTest ? 'Less' : 'More'}</button>
+              {moreTest && (
+                <span style={{ display: 'block', marginTop: '4px' }}>
+                  It builds empty books from FleetSuite&apos;s own code, loads every table&apos;s CSV file from the backup, and checks that each
+                  table holds the rows the backup counted, that every row pointing at another finds it, that each journal entry balances, and
+                  that the journal adds up, account by account, to what the books held when the backup was made. A backup that passes is one
+                  FleetSuite could be put back from. The daily check tells the super admins when the night&apos;s test didn&apos;t pass or
+                  didn&apos;t run.
+                </span>
+              )}
+            </div>
+            {newest && <div style={banner(newest.color)}>{newest.text}</div>}
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '6px' }}>
+              {canBackUp && (
+                <button onClick={testRestore} disabled={testBusy || !data.restore.newest} style={act(null, !testBusy && !!data.restore.newest)}>
+                  {testBusy ? 'Testing restore…' : 'Test restore now'}
+                </button>
+              )}
+              <span style={muted}>The next nightly test is {when(data.restore.next)}.</span>
+            </div>
+            {testing && <div style={{ ...muted, marginBottom: '10px' }}>Stay on this page until it says how it went.</div>}
+            {testError && <div style={banner(RED)}>{testError}</div>}
+          </div>
+
+          <div style={{ marginTop: '14px' }}>
             <div style={heading}>Every backup</div>
             {!data.backups.length && (
               <div style={banner(GREY)}>None yet. The first one is made tonight{canBackUp ? ', or press Back up now' : ''}.</div>
@@ -213,11 +297,15 @@ export default function BooksBackupsPage() {
               {data.backups.map((b) => {
                 const s = STATUSES[b.status];
                 const holds = holdsWords(b);
+                const test = testOf.get(b.id);
+                // The newest backup's test says why at the top.
+                const testWhy = test && (test.status === 'failed' || test.status === 'stopped') && b.id !== data.restore.newest?.backupId ? test.error : null;
                 return (
                   <div key={b.id} id={`backup-${b.id}`} style={card(picked === b.id)}>
                     <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                       <span style={{ fontSize: '14px', fontWeight: 800 }}>{when(b.startedAt)}</span>
                       <span style={chip(s.color)}>{s.label}</span>
+                      {test && <span style={chip(TESTS[test.status].color)}>{TESTS[test.status].label}</span>}
                       <span style={muted}>{b.how === 'nightly' ? 'Nightly' : `By hand${b.askedBy ? `, ${b.askedBy}` : ''}`}</span>
                       {canBackUp && b.status === 'made' && b.file && (
                         <button
@@ -230,6 +318,7 @@ export default function BooksBackupsPage() {
                       )}
                     </div>
                     {b.error && <div style={{ fontSize: '12px', color: RED, marginTop: '2px' }}>{b.error}</div>}
+                    {testWhy && <div style={{ fontSize: '12px', color: RED, marginTop: '2px' }}>Restore test: {testWhy}</div>}
                     {b.status === 'running' && <div style={{ ...muted, marginTop: '2px' }}>Copying the books now.</div>}
                     {(holds || b.finishedAt) && (
                       <div style={{ ...muted, marginTop: '2px' }}>
