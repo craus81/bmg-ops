@@ -59,6 +59,7 @@ const ALLOWED: Record<string, string> = {
   'src/app/(main)/admin/books/differences/page.tsx': "FleetSuite's own books — super admins, the bookkeeper and the CPA only, who see its money by design (the page redirects everyone else; its API is requireBooks)",
   'src/app/(main)/admin/books/going-live/page.tsx': "FleetSuite's own books — super admins, the bookkeeper and the CPA only, who see its money by design (the page redirects everyone else; its API is requireBooks)",
   'src/app/(main)/admin/books/reports/page.tsx': "FleetSuite's own books — super admins, the bookkeeper and the CPA only, who see its money by design (the page redirects everyone else; its API is requireBooks)",
+  'src/app/(main)/admin/books/reports/builder/page.tsx': "FleetSuite's own books — super admins, the bookkeeper and the CPA only, who see its money by design (the page redirects everyone else; its API is requireBooks)",
   'src/app/(main)/admin/books/reports/detail/page.tsx': "FleetSuite's own books — super admins, the bookkeeper and the CPA only, who see its money by design (the page redirects everyone else; its API is requireBooks)",
   'src/app/(main)/admin/books/stock/page.tsx': "FleetSuite's own books — super admins, the bookkeeper and the CPA only, who see its money by design (the page redirects everyone else; its API is requireBooks)",
   'src/app/(main)/admin/books/stock/item/page.tsx': "FleetSuite's own books — super admins, the bookkeeper and the CPA only, who see its money by design (the page redirects everyone else; its API is requireBooks)",

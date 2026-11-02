@@ -2,6 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate, toCents } from './netsuite-gl';
 import { BOOKS_INVOICE_POSTING, type InvoicePostingResult } from './invoice-posting';
+import type { BuilderAsk, SplitAmount } from './report-builder';
+import { BUILDER_BY } from './report-builder-words';
 import type { AccountDocumentsData } from './report-detail';
 import {
   lastReportMonth, lineSpan, REPORT_KINDS,
@@ -101,6 +103,50 @@ export function reportRange(params: URLSearchParams, loaded: LoadedReports): { k
   const askedFrom = monthParam(params.get('from'), loaded.through);
   const from = askedFrom && askedFrom <= to ? askedFrom : to;
   return { kind, from, to };
+}
+
+/** What the report builder reads for one company: what Reports does, and FleetSuite's journal split by division and location. */
+export interface LoadedBuilder extends LoadedReports {
+  /** gl_books_split_totals (migration 500). */
+  split: SplitAmount[];
+  /** NetSuite's location names by id, from the copy of its lists (migration 363). */
+  locationNames: Map<string, string>;
+}
+
+/** One company's books for the report builder (src/app/api/admin/books/reports/builder): the one asked for, else BMG, else the first. */
+export async function loadBuilder(service: SupabaseClient, asked: string | null): Promise<LoadedBuilder | { error: string }> {
+  const loaded = await loadReports(service, asked);
+  if ('error' in loaded) return loaded;
+  const [split, locations] = await Promise.all([
+    service.rpc('gl_books_split_totals', { p_company: loaded.company }),
+    service.from('gl_netsuite_lists').select('netsuite_id, name').eq('kind', 'location'),
+  ]);
+  const error = split.error || locations.error;
+  if (error) return { error: error.message };
+  return {
+    ...loaded,
+    split: (split.data ?? []) as SplitAmount[],
+    locationNames: new Map((locations.data ?? []).map((l) => [String(l.netsuite_id), String(l.name)])),
+  };
+}
+
+/**
+ * The report a request asks the builder for (by=, from=, to=, division=,
+ * location=): a column for each division by default; its end last month by
+ * default, as on Reports; its start January of the end's year by default,
+ * or when asked for after the end.
+ */
+export function builderAsk(params: URLSearchParams, loaded: LoadedReports): BuilderAsk {
+  const to = monthParam(params.get('to'), loaded.through) ?? loaded.lastMonth;
+  const askedFrom = monthParam(params.get('from'), loaded.through);
+  const by = params.get('by');
+  return {
+    from: askedFrom && askedFrom <= to ? askedFrom : `${to.slice(0, 4)}-01-01`,
+    to,
+    by: BUILDER_BY.find((b) => b === by) ?? 'division',
+    division: params.get('division') || null,
+    location: params.get('location') || null,
+  };
 }
 
 /** One account line's detail, as its page and its Excel download read it. */

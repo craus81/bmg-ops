@@ -424,6 +424,8 @@ export default function BooksReportsPage() {
           FleetSuite&apos;s own books, from what has posted to them, next to NetSuite&apos;s own totals, for each month from
           January 2025. Both start from NetSuite&apos;s balances on December 31, 2024, and are laid out as NetSuite&apos;s reports
           are.{' '}
+          <Link href={deepLinks.booksReportBuilder()} style={{ color: 'var(--text-secondary)' }}>Report builder</Link>
+          {' · '}
           <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
           {' · '}
           <Link href="/admin/books/trial-balance" style={{ color: 'var(--text-secondary)' }}>Trial balance vs NetSuite</Link>

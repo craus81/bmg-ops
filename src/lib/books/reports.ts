@@ -264,9 +264,9 @@ function notInChart(b: Books, value: (key: string) => Pair): ReportLine[] {
 const counted = (lines: ReportLine[]) =>
   lines.filter((l) => l.kind === 'account' && l.fleetsuite !== l.netsuite).length;
 
-/** The profit and loss for the months from `from` through `to`, laid out as NetSuite's income statement. */
-function profitAndLossOf(b: Books, from: string, to: string): Report {
-  const value = (sign: number) => (key: string) => times(sign, pairOf((side) => moved(b, side, key, from, to)));
+/** The profit and loss laid out as NetSuite's income statement, from what each account moved, debit positive. */
+function profitAndLossLayout(b: Books, amount: (key: string) => Pair): ReportLine[] {
+  const value = (sign: number) => (key: string) => times(sign, amount(key));
   const part = (label: string, types: string[], sign: number) =>
     section(label, `Total ${label.toLowerCase()}`, 0, [accountBlock(b, types, value(sign), 1)]);
 
@@ -280,7 +280,7 @@ function profitAndLossOf(b: Books, from: string, to: string): Report {
   const other = minus(otherIncome.total, otherExpense.total);
   const hasOther = otherIncome.lines.length > 0 || otherExpense.lines.length > 0;
 
-  const lines = [
+  return [
     ...income.lines,
     ...cost.lines,
     grand('Gross profit', gross),
@@ -288,8 +288,13 @@ function profitAndLossOf(b: Books, from: string, to: string): Report {
     grand('Net ordinary income', ordinary),
     ...(hasOther ? [...otherIncome.lines, ...otherExpense.lines, grand('Net other income', other)] : []),
     grand('Net income', plus(ordinary, other)),
-    ...notInChart(b, (key) => pairOf((side) => moved(b, side, key, from, to))),
+    ...notInChart(b, amount),
   ];
+}
+
+/** The profit and loss for the months from `from` through `to`, laid out as NetSuite's income statement. */
+function profitAndLossOf(b: Books, from: string, to: string): Report {
+  const lines = profitAndLossLayout(b, (key) => pairOf((side) => moved(b, side, key, from, to)));
   return { lines, differing: counted(lines) };
 }
 
@@ -505,6 +510,22 @@ function withMonths(b: Books, kind: ReportKind, range: ReportRange, r: Report): 
 export function report(data: ReportData, kind: ReportKind, range: ReportRange): Report {
   const b = books(data);
   return withMonths(b, kind, range, reportOf(b, kind, range));
+}
+
+/**
+ * The profit and loss laid out as report() lays it out, from FleetSuite's
+ * amounts alone (`amount`, what each account moved, debit positive), for one
+ * column of the report builder (src/lib/books/report-builder.ts): each
+ * account in `shows` has its line even with nothing in it, and no other
+ * account has one, so that columns side by side have the same lines. One
+ * the chart doesn't have is listed apart at the end, as on Reports. The
+ * lines have no NetSuite side.
+ */
+export function profitAndLossLines(data: ReportData, amount: (key: string) => number, shows: ReadonlySet<string>): ReportLine[] {
+  const b = books({ ...data, opening: [], netsuite: [], fleetsuite: [] });
+  // A line shows when either side has something, so NetSuite's side carries a mark on each account that shows.
+  return profitAndLossLayout({ ...b, keys: [...new Set([...b.keys, ...shows])] }, (key) => ({ fleetsuite: amount(key), netsuite: shows.has(key) ? 1 : 0 }))
+    .map((l) => ({ ...l, netsuite: null }));
 }
 
 /**
