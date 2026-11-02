@@ -140,8 +140,9 @@ lines when picked ("Report builder"), part 73, its lines by customer or
 vendor, months that move with the calendar and reports saved by name
 ("Saved reports"), part 74, each company's year closed into retained
 earnings once all its months are, its months held closed until it's
-reopened ("Year end"), and part 75, the year's reports for the CPA as one
-Excel file ("The year-end package").
+reopened ("Year end"), part 75, the year's reports for the CPA as one
+Excel file ("The year-end package"), and part 76, the year's general ledger
+in it.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -305,7 +306,7 @@ admins can open it while fixing invoices is switched off.
 | Sales tax: what goes on Missouri's return for a month, location by location, each location's dated rates, and the return as filed held against it | `migrations/496-books-sales-tax.sql`, `src/lib/books/sales-tax-worksheet.ts`, `src/lib/books/sales-tax-data.ts`, `src/lib/books/sales-tax-words.ts`, `salesTaxWorkbook` in `src/lib/books/report-workbook.ts`, `src/app/(main)/admin/books/sales-tax/page.tsx`, `src/app/api/admin/books/sales-tax/route.ts` and its `download`; tests `src/lib/books/sales-tax-worksheet.test.ts`, `src/lib/books/sales-tax-route.test.ts`, `src/lib/books/sales-tax-sql.test.ts` |
 | Own numbers: FleetSuite's number on each sales order, PO, invoice and credit memo it makes in NetSuite, what became of each, and the sales orders and POs made in NetSuite instead | `migrations/497-books-own-numbers.sql`, `src/lib/books/own-numbers.ts`, `ownNumberFor` in `createSalesOrder`, `createPurchaseOrder`, `createDirectInvoice`, `createInvoiceFromSO` and `createCreditMemoFromInvoice` in `src/lib/netsuite.ts`, the drop ship PO's number in `src/app/api/estimates/[id]/drop-ship/route.ts`, `src/app/(main)/admin/books/own-numbers/page.tsx`, `src/app/api/admin/books/own-numbers/route.ts`; tests `src/lib/books/own-numbers.test.ts`, `src/lib/books/own-numbers-route.test.ts`, `src/lib/netsuite-own-numbers.test.ts`, `src/lib/drop-ship-route.test.ts`, and the tables and their functions `src/lib/books/own-numbers-sql.test.ts` |
 | Year end: each company's year closed into retained earnings once all its months are, in order, its months held closed until it's reopened, with what's done before it closes | `migrations/502-books-year-end.sql`, `src/lib/books/year-end.ts`, `src/lib/books/year-end-data.ts` (what the page and its package read), `src/lib/books/year-end-words.ts` (what both call the checks), `yearCloseAmounts` in `src/lib/books/reports.ts`, `readMonthFacts` and the closed year's months in `src/lib/books/months.ts`, `src/app/(main)/admin/books/year-end/page.tsx`, `src/app/api/admin/books/year-end/route.ts`; tests `src/lib/books/year-end.test.ts`, `src/lib/books/year-end-route.test.ts`, `src/lib/books/year-end-sql.test.ts`, the closed year's months in `src/lib/books/months.test.ts` and `src/lib/books/months-route.test.ts`, and `yearCloseAmounts`' in `src/lib/books/reports.test.ts` |
-| The year-end package: a company's year for the CPA as one Excel file | `yearEndWorkbook` in `src/lib/books/report-workbook.ts`, `loadSplit` in `src/lib/books/report-data.ts`, `src/app/api/admin/books/year-end/download/route.ts`; tests `src/lib/books/year-end-workbook.test.ts`, the download's in `src/lib/books/year-end-route.test.ts` |
+| The year-end package: a company's year for the CPA as one Excel file | `yearEndWorkbook` in `src/lib/books/report-workbook.ts`, `loadSplit` in `src/lib/books/report-data.ts`, the general ledger in `src/lib/books/general-ledger.ts` and `readLedger` in `src/lib/books/year-end-data.ts`, `src/app/api/admin/books/year-end/download/route.ts`; tests `src/lib/books/year-end-workbook.test.ts`, `src/lib/books/general-ledger.test.ts`, the download's in `src/lib/books/year-end-route.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -6477,6 +6478,21 @@ each, laid out as their own downloads are ("Excel downloads"):
 - Retained Earnings: the close as the page shows it, both sides, which
   account retained earnings is on, and each time the year was closed or
   reopened, with who, when and why.
+- General Ledger (part 76): every account with a balance at either end of
+  the year or a document in it, in the trial balance's order, each with the
+  documents that moved it by date and each side's balance after each, as an
+  account's own download lists them ("Excel downloads"): from where it
+  stood when the year began (income and expenses from nothing, and on
+  retained earnings last year's net income coming in at January) to its
+  line on the trial balance at December 31. Every row names its account,
+  so a filter picks one out. Documents are read only for the accounts that
+  moved, four accounts at a time, at most 20,000 an account
+  (`src/lib/books/general-ledger.ts`, `readLedger` in
+  `src/lib/books/year-end-data.ts`). A red note names how many accounts have
+  more, listed to their first 20,000 by date, to download from Reports a few
+  months at a time; an amber one how many the copy of NetSuite's ledger
+  doesn't hold everything NetSuite's own totals say moved yet, so their
+  NetSuite balance stops short of the line, as the line's last row says.
 - For a company with stock, its inventory value at December 31, how it
   ties to each inventory account, and the documents on them with no stocked
   item ("Inventory value at a month's end").
@@ -6493,8 +6509,6 @@ and is open to whoever opens the books.
 
 ### What isn't done yet
 
-- The general ledger for the year in the package, every document on every
-  account.
 - Each customer's and vendor's balance at December 31: the agings are as of
   today.
 - The bank reconciliations at December 31 in the package.

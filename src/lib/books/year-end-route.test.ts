@@ -80,6 +80,23 @@ const BMG_DIFFERENCES = {
   fleetsuite_kinds: [{ month: '2027-04-01', kind: 'bill', documents: 1, moved: '2100.00' }],
 };
 
+/** BMG's documents in 2027 on each account they moved, as gl_books_account_documents has them: March's sale and April's rent. */
+const docOf = (doc: string, netsuite: string, fleetsuite: string, over: Row) => ({
+  doc, netsuite, fleetsuite, kind: null, type: null, number: null, month: null, date: null, name: null, memo: null, entry_no: null, entries: 1, ...over,
+});
+const SALE = { type: 'CashSale', number: 'CS100', month: '2027-03-01', date: '2027-03-10', name: 'Example Fleet Co' };
+const RENT = { type: 'VendBill', number: 'B-1001', month: '2027-04-01', date: '2027-04-01', name: 'Example Landlord LLC', memo: 'April rent' };
+const BMG_DOCUMENTS: Record<string, Row[]> = {
+  10: [docOf('501', '10000.00', '10000.00', SALE), docOf('502', '-2000.00', '-2100.00', RENT)],
+  40: [docOf('501', '-10000.00', '-10000.00', SALE)],
+  60: [docOf('502', '2000.00', '2100.00', RENT)],
+};
+function accountDocuments(args: Record<string, any>) {
+  const rows = (args.p_company === 'BMG' && BMG_DOCUMENTS[args.p_account]) || [];
+  const total = (side: string) => rows.reduce((sum, r) => sum + Number(r[side]), 0).toFixed(2);
+  return { documents: rows.length, differing: rows.filter((r) => r.netsuite !== r.fleetsuite).length, netsuite: total('netsuite'), fleetsuite: total('fleetsuite'), rows };
+}
+
 /** Just enough of supabase-js for the route: filters, a table that fails when told to, audit rows kept. */
 function query(table: string) {
   const filters: Array<(r: Row) => boolean> = [];
@@ -139,6 +156,7 @@ const service = {
     if (name === 'gl_set_year_status') return { data: setYearStatus(args), error: null };
     if (name === 'gl_books_split_totals') return { data: bmg ? BMG_SPLIT : [], error: null };
     if (name === 'gl_stock_month_end') return { data: stockAt(args.p_month), error: null };
+    if (name === 'gl_books_account_documents') return { data: accountDocuments(args), error: null };
     return { data: null, error: { message: `No ${name}` } };
   },
 };
@@ -486,9 +504,15 @@ describe('Books → Year end: the year-end package', () => {
     const col = column(ws);
     return col.slice(5, col.indexOf(null, 5));
   };
+  /** The rows under a sheet's header, the first `width` cells of each, as Excel holds them. */
+  const under = (ws: ExcelJS.Worksheet, header: string, width: number) => {
+    const at = column(ws).indexOf(header) + 1;
+    return Array.from({ length: ws.rowCount - at }, (_, i) => Array.from({ length: width }, (_, c) => ws.getRow(at + 1 + i).getCell(c + 1).value ?? null));
+  };
+  const documentReads = () => rpcs.filter(([name]) => name === 'gl_books_account_documents');
   const NOT_POSTED = "Nothing has posted to FleetSuite's books yet.";
 
-  it("gives BMG's last year as one Excel file: its reports at December 31, how it closes, its stock and what's done before it closes", async () => {
+  it("gives BMG's last year as one Excel file: its reports at December 31, how it closes, its ledger, its stock and what's done before it closes", async () => {
     const res = await download();
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -497,7 +521,7 @@ describe('Books → Year end: the year-end package', () => {
     const all = await sheetsOf(res);
     expect(all.map((s) => s.name)).toEqual([
       'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows',
-      'Retained Earnings', 'Inventory value', 'Inventory ties to accounts',
+      'Retained Earnings', 'General Ledger', 'Inventory value', 'Inventory ties to accounts',
     ]);
     const contents = column(all[0]);
     expect(contents.slice(0, 3)).toEqual(['Example Fleet Upfitters LLC', 'Year-end package 2027', 'January 1, 2027 to December 31, 2027']);
@@ -526,6 +550,63 @@ describe('Books → Year end: the year-end package', () => {
     expect(rpcs.filter(([name]) => name === 'gl_books_split_totals' || name === 'gl_stock_month_end')).toEqual([
       ['gl_books_split_totals', { p_company: 'BMG' }], ['gl_stock_month_end', { p_month: '2027-12-01', p_limit: 100 }],
     ]);
+    // The general ledger: every account from where it stood when 2027 began, through each document, to its line on the trial balance.
+    const ledger = named(all, 'General Ledger');
+    expect(notesOf(ledger)).toEqual([NOT_POSTED]);
+    const bank = '1010 First Bank checking';
+    const march = new Date('2027-03-10T00:00:00Z');
+    const april = new Date('2027-04-01T00:00:00Z');
+    expect(under(ledger, 'Account', 12)).toEqual([
+      [bank, null, 'Balance at the end of December 2026', null, null, null, null, null, 0, 4000, 4000, null],
+      [bank, march, 'Cash Sale', 'CS100', 'Example Fleet Co', null, 10000, 10000, 0, 14000, 14000, null],
+      [bank, april, 'Bill', 'B-1001', 'Example Landlord LLC', 'April rent', -2100, -2000, -100, 11900, 12000, null],
+      [bank, null, 'Balance at the end of December 2027', null, null, null, null, null, -100, 11900, 12000, null],
+      ['3900 Retained Earnings', null, 'Balance at the end of December 2026', null, null, null, null, null, 0, -4000, -4000, null],
+      ['3900 Retained Earnings', null, 'Balance at the end of December 2027', null, null, null, null, null, 0, -4000, -4000, null],
+      ['4000 Sales', march, 'Cash Sale', 'CS100', 'Example Fleet Co', null, -10000, -10000, 0, -10000, -10000, null],
+      ['4000 Sales', null, 'Total, January to December 2027', null, null, null, null, null, 0, -10000, -10000, null],
+      ['6000 Rent', april, 'Bill', 'B-1001', 'Example Landlord LLC', 'April rent', 2100, 2000, 100, 2100, 2000, null],
+      ['6000 Rent', null, 'Total, January to December 2027', null, null, null, null, null, 100, 2100, 2000, null],
+    ]);
+    // Documents read only for the accounts that moved, over the year, as each account's own download reads them.
+    expect(documentReads()).toEqual(['10', '40', '60'].map((acct) => ['gl_books_account_documents', {
+      p_company: 'BMG', p_account: acct, p_from: '2027-01-01', p_to: '2027-12-01', p_differs: false, p_limit: 20000,
+    }]));
+  });
+
+  it("says when the copy of NetSuite's ledger doesn't hold all NetSuite's totals say, and when an account lists only its first documents", async () => {
+    // April's rent bill isn't in the copy yet, and Sales has more documents than a file lists.
+    const real = service.rpc;
+    service.rpc = async (name, args) => {
+      const read = await real(name, args);
+      if (name !== 'gl_books_account_documents') return read;
+      const data = read.data as Row;
+      if (args.p_account === '40') return { data: { ...data, documents: 20001 }, error: null };
+      const rows = data.rows.map((r: Row) => (r.doc === '502' ? { ...r, netsuite: '0.00' } : r));
+      return { data: { ...data, rows, netsuite: rows.reduce((sum: number, r: Row) => sum + Number(r.netsuite), 0).toFixed(2) }, error: null };
+    };
+    try {
+      const ledger = named(await sheetsOf(await download()), 'General Ledger');
+      expect(notesOf(ledger)).toEqual([
+        NOT_POSTED,
+        "On 2 accounts the copy of NetSuite's ledger doesn't hold everything NetSuite's own totals say moved in these months yet, so some of "
+          + "NetSuite's documents may be missing there and its running balance won't reach the account's line. The next copy catches up.",
+        '1 account has more than 20,000 documents in these months, so only the first are listed, by date, and the running balances stop short '
+          + 'of the line. Download those accounts from Reports a few months at a time.',
+      ]);
+      expect(under(ledger, 'Account', 12).slice(2, 4)).toEqual([
+        ['1010 First Bank checking', new Date('2027-04-01T00:00:00Z'), 'Bill', 'B-1001', 'Example Landlord LLC', 'April rent', -2100, 0, -2100, 11900, 14000, 'Only in FleetSuite'],
+        ['1010 First Bank checking', null, 'Balance at the end of December 2027', null, null, null, null, null, -100, 11900, 12000, "The documents above come to $14,000.00 on NetSuite's side"],
+      ]);
+    } finally {
+      service.rpc = real;
+    }
+    // Until NetSuite's totals are read, Reports' note says its side is empty, and the copy isn't short of anything.
+    netsuiteTotals = { opening: [], netsuite: [] };
+    expect(notesOf(named(await sheetsOf(await download()), 'General Ledger'))).toEqual([
+      NOT_POSTED, "NetSuite's totals haven't been read yet, so NetSuite's side is empty.",
+    ]);
+    expect(documentReads().slice(-3).map(([, args]) => args.p_account)).toEqual(['10', '40', '60']);
   });
 
   it('says on every sheet that the year is closed, by whom and when', async () => {
@@ -546,11 +627,23 @@ describe('Books → Year end: the year-end package', () => {
       'As of January 31, 2028', expect.any(String), 'Downloaded January 20, 2028 at 9:00 AM Central.',
       "January 2028 isn't over yet, so this is where it stood when the file was made.",
     ]);
+    // Nothing has moved this year yet: no documents to read, each balance carried through the month, 2027 coming into retained earnings.
+    expect(documentReads()).toEqual([]);
+    expect(column(named(now, 'General Ledger'))[3]).toMatch(/^Every account with a balance or a document in the month \(2 accounts\),/);
+    expect(under(named(now, 'General Ledger'), 'Account', 3)).toEqual([
+      ['1010 First Bank checking', null, 'Balance at the end of December 2027'],
+      ['1010 First Bank checking', null, 'Balance at the end of January 2028'],
+      ['3900 Retained Earnings', null, 'Balance at the end of December 2027'],
+      ['3900 Retained Earnings', new Date('2028-01-01T00:00:00Z'), "Earlier years' net income, taken into retained earnings at the year's start"],
+      ['3900 Retained Earnings', null, 'Balance at the end of January 2028'],
+    ]);
 
     const res = await download('company=1084&year=2026');
     expect(res.headers.get('content-disposition')).toContain('filename="1084 Year-end package 2026.xlsx"');
     const other = await sheetsOf(res);
-    expect(other.map((s) => s.name).at(-1)).toBe('Retained Earnings');
+    expect(other.map((s) => s.name).at(-1)).toBe('General Ledger');
+    expect(under(named(other, 'General Ledger'), 'Account', 1)).toEqual([['No account has a balance or a document in these months.']]);
+    expect(notesOf(named(other, 'General Ledger'))).toEqual(notesOf(named(other, 'Trial Balance')));
     expect(column(other[0]).slice(0, 6)).toEqual([
       '1084', 'Year-end package 2026', 'January 1, 2026 to December 31, 2026', expect.any(String),
       'Downloaded January 20, 2028 at 9:00 AM Central.',
@@ -603,6 +696,7 @@ describe('Books → Year end: the year-end package', () => {
       gl_books_split_totals: 'gl_books_split_totals is down',
       gl_netsuite_lists: 'gl_netsuite_lists is down',
       gl_stock_month_end: 'gl_stock_month_end is down',
+      gl_books_account_documents: 'gl_books_account_documents is down',
     };
     for (const [table, error] of Object.entries(said)) {
       errors = { [table]: { message: `${table} is down` } };

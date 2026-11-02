@@ -30,6 +30,9 @@ export interface AccountDocumentData {
   entries: number;
 }
 
+/** The most documents gl_books_account_documents gives at once (migration 460): what one file lists for an account. */
+export const DOCUMENTS_LISTED = 20000;
+
 export interface AccountDocumentsData {
   documents: number;
   differing: number;

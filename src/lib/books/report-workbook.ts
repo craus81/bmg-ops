@@ -1,8 +1,9 @@
 import ExcelJS from 'exceljs';
+import type { LedgerBlock } from './general-ledger';
 import type { CompanyValue } from './inventory-value';
 import type { BuilderAsk, BuiltReport } from './report-builder';
 import { builderTitle, filterWords, type BuilderBy, type BuilderRows } from './report-builder-words';
-import type { DetailDocument, LedgerRow } from './report-detail';
+import { DOCUMENTS_LISTED, type DetailDocument, type LedgerRow } from './report-detail';
 import { coversMonths } from './report-links';
 import type { Pair, Report, ReportKind, ReportLine, YearCloseAmounts } from './reports';
 import type { FiledReturn, OtherMoves, ReturnHeld, SalesTaxWorksheet } from './sales-tax-worksheet';
@@ -24,8 +25,8 @@ import { CHECK_LABELS, STATE_WORDS } from './year-end-words';
  * document behind it (part 65, sales-tax-worksheet.ts). Built on the server
  * by the download routes, as is a report from the report builder (part 72,
  * report-builder.ts) and a company's year-end package for the CPA, those
- * reports and its stock at the year's end in one file (part 75, Books →
- * Year end); amounts
+ * reports, its general ledger and its stock at the year's end in one file
+ * (parts 75 and 76, Books → Year end); amounts
  * are dollars in Excel's own Accounting format, read as the report shows
  * them, and anything the page warns about is written at the top, in red
  * when it's a failure.
@@ -518,7 +519,6 @@ export async function accountWorkbook(input: AccountWorkbookInput): Promise<Work
   sheet.getColumn(11).width = 30;
 
   const listed = rows.filter((r) => r.kind === 'document').length;
-  const starting = rows.some((r) => r.kind === 'starting');
   const header = titleRows(sheet, {
     company: input.company,
     title,
@@ -531,50 +531,65 @@ export async function accountWorkbook(input: AccountWorkbookInput): Promise<Work
     header: ['Date', 'Type', 'Number', 'Name', 'Memo', 'FleetSuite', 'NetSuite', 'Difference', 'FleetSuite balance', 'NetSuite balance', 'Note'],
     amounts: [6, 10],
   });
+  addLedgerRows(sheet, rows, { from, to });
+  if (listed) sheet.autoFilter = { from: { row: header, column: 1 }, to: { row: sheet.rowCount, column: 11 } };
 
+  return fileOf(wb, accountFileName(input.company.code, account, from, to));
+}
+
+/**
+ * An account's rows from runningBalances, as its own download and the
+ * general ledger list them: its balance before the months, each document
+ * with each side's balance after it, earlier years' net income coming into
+ * retained earnings, and its line, with what the documents come to in red
+ * where they don't reach it. In the general ledger each row starts with the
+ * account (`account`), so its other columns are one along.
+ */
+function addLedgerRows(sheet: ExcelJS.Worksheet, rows: LedgerRow[], p: { from: string; to: string; account?: string }) {
+  const lead = p.account === undefined ? [] : [p.account];
+  // A column as an account's own download numbers it.
+  const at = (col: number) => col + lead.length;
+  const starting = rows.some((r) => r.kind === 'starting');
   const balances = (b: Pair) => [dollars(b.fleetsuite - b.netsuite), dollars(b.fleetsuite), dollars(b.netsuite)];
   for (const r of rows) {
     if (r.kind === 'starting') {
-      const row = sheet.addRow([null, `Balance at the end of ${monthName(monthBefore(from))}`, null, null, null, null, null, ...balances(r.balance)]);
+      const row = sheet.addRow([...lead, null, `Balance at the end of ${monthName(monthBefore(p.from))}`, null, null, null, null, null, ...balances(r.balance)]);
       row.font = { bold: true };
-      redIf(row.getCell(8), r.balance.fleetsuite !== r.balance.netsuite);
+      redIf(row.getCell(at(8)), r.balance.fleetsuite !== r.balance.netsuite);
     } else if (r.kind === 'document') {
       const d = r.document;
       const row = sheet.addRow([
-        dateCell(d.date), d.type, d.number, d.name, d.memo,
+        ...lead, dateCell(d.date), d.type, d.number, d.name, d.memo,
         dollars(d.fleetsuite), dollars(d.netsuite), dollars(d.fleetsuite - d.netsuite),
         dollars(r.balance.fleetsuite), dollars(r.balance.netsuite), d.only ? ONLY[d.only] : null,
       ]);
-      redIf(row.getCell(8), d.fleetsuite !== d.netsuite);
-      if (d.only) row.getCell(11).font = { color: { argb: d.only === 'not_posted' ? AMBER : RED } };
+      redIf(row.getCell(at(8)), d.fleetsuite !== d.netsuite);
+      if (d.only) row.getCell(at(11)).font = { color: { argb: d.only === 'not_posted' ? AMBER : RED } };
     } else if (r.kind === 'closing') {
       const row = sheet.addRow([
-        dateCell(r.month), "Earlier years' net income, taken into retained earnings at the year's start", null, null, null,
+        ...lead, dateCell(r.month), "Earlier years' net income, taken into retained earnings at the year's start", null, null, null,
         dollars(r.amount.fleetsuite), dollars(r.amount.netsuite), dollars(r.amount.fleetsuite - r.amount.netsuite),
         dollars(r.balance.fleetsuite), dollars(r.balance.netsuite), null,
       ]);
       row.font = { italic: true };
-      redIf(row.getCell(8), r.amount.fleetsuite !== r.amount.netsuite);
+      redIf(row.getCell(at(8)), r.amount.fleetsuite !== r.amount.netsuite);
     } else {
       const short = (['fleetsuite', 'netsuite'] as const).filter((side) => r.reached[side] !== r.balance[side]);
       const row = sheet.addRow([
-        null, starting ? `Balance at the end of ${monthName(to)}` : `Total, ${rangeText(from, to)}`, null, null, null, null, null,
+        ...lead, null, starting ? `Balance at the end of ${monthName(p.to)}` : `Total, ${rangeText(p.from, p.to)}`, null, null, null, null, null,
         ...balances(r.balance),
         short.length
           ? `The documents above come to ${short.map((side) => `${fmt(r.reached[side])} on ${side === 'fleetsuite' ? "FleetSuite's" : "NetSuite's"} side`).join(' and ')}`
           : null,
       ]);
       row.font = { bold: true };
-      for (let c = 8; c <= 10; c += 1) row.getCell(c).border = { top: { style: 'double' } };
-      redIf(row.getCell(8), r.balance.fleetsuite !== r.balance.netsuite);
-      if (short.includes('fleetsuite')) redIf(row.getCell(9), true);
-      if (short.includes('netsuite')) redIf(row.getCell(10), true);
-      if (short.length) row.getCell(11).font = { bold: true, color: { argb: RED } };
+      for (let c = at(8); c <= at(10); c += 1) row.getCell(c).border = { top: { style: 'double' } };
+      redIf(row.getCell(at(8)), r.balance.fleetsuite !== r.balance.netsuite);
+      if (short.includes('fleetsuite')) redIf(row.getCell(at(9)), true);
+      if (short.includes('netsuite')) redIf(row.getCell(at(10)), true);
+      if (short.length) row.getCell(at(11)).font = { bold: true, color: { argb: RED } };
     }
   }
-  if (listed) sheet.autoFilter = { from: { row: header, column: 1 }, to: { row: sheet.rowCount, column: 11 } };
-
-  return fileOf(wb, accountFileName(input.company.code, account, from, to));
 }
 
 // ── Inventory value at a month's end ──────────────────────────────────────
@@ -1077,6 +1092,8 @@ export interface YearEndWorkbookInput {
   reportNotes: WorkbookNote[];
   /** The profit and loss by month from the report builder, with what it warns about (builderNotes). */
   byMonth: { ask: BuilderAsk; built: BuiltReport; notes: WorkbookNote[] };
+  /** The general ledger from January through `to` (readLedger in year-end-data.ts), with what it warns about beyond Reports' notes (ledgerNotes). */
+  ledger: { accounts: LedgerBlock[]; notes: WorkbookNote[] };
   /** The company's stock at `to`'s end, with what Inventory value warns about (inventoryNotes); null for a company with none. */
   inventory: { value: CompanyValue; notes: WorkbookNote[] } | null;
   now: Date;
@@ -1092,9 +1109,10 @@ const PACKAGE_INVENTORY: InventorySheetNames = {
  * closes; the trial balance and balance sheet at the year's end, the profit
  * and loss for the year and by month, the cash flow statement and how the
  * year closes into retained earnings, FleetSuite's books next to NetSuite's
- * own totals; and, for a company with stock, its inventory value at the
- * year's end. What Year end says about the year is at the top of each sheet,
- * above what the sheet's own page warns about.
+ * own totals; the general ledger, every account's documents in the year with
+ * each side's running balance; and, for a company with stock, its inventory
+ * value at the year's end. What Year end says about the year is at the top of
+ * each sheet, above what the sheet's own page warns about.
  */
 export async function yearEndWorkbook(input: YearEndWorkbookInput): Promise<WorkbookFile> {
   const { company, year, to, view, now } = input;
@@ -1119,6 +1137,11 @@ export async function yearEndWorkbook(input: YearEndWorkbookInput): Promise<Work
   );
   add(statement('cash_flow'), `${period}, FleetSuite's books next to NetSuite's.`);
   add(retainedEarningsSheet(wb, input, reportNotes), `How ${year} closes into retained earnings, both sides, and each time it was closed or reopened.`);
+  add(
+    addLedgerSheet(wb, { company, from: january, to, ledger: input.ledger.accounts, notes: [...reportNotes, ...input.ledger.notes], now }),
+    `Each account's documents, ${period}, by date, with each side's balance after each: from where the account stood at the start of ${year} `
+      + 'to its line on the trial balance.',
+  );
   if (input.inventory) {
     // Inventory value's own notes say when its month isn't over, so the year's first note, which says it of the year, is left off.
     const notes = [...yearNotes.slice(view.over ? 0 : 1), ...input.inventory.notes];
@@ -1206,5 +1229,64 @@ function retainedEarningsSheet(wb: ExcelJS.Workbook, input: YearEndWorkbookInput
       sheet.addRow([`${e.action === 'closed' ? 'Closed' : 'Reopened'}${e.by ? ` by ${e.by}` : ''}, ${centralTime(e.at)}${amounts}${e.reason ? `: ${e.reason}` : ''}`]);
     }
   }
+  return sheet;
+}
+
+/** What the general ledger warns about beyond Reports' notes: accounts the copy of NetSuite's ledger is short on, and those with more documents than it lists. */
+export function ledgerNotes(p: { ledger: readonly Pick<LedgerBlock, 'short' | 'documents' | 'listed'>[]; checked: boolean }): WorkbookNote[] {
+  const notes: WorkbookNote[] = [];
+  // Until NetSuite's totals are read its side is empty, as Reports' note says, so every account its copy moved would read as short.
+  const short = p.checked ? p.ledger.filter((a) => a.short).length : 0;
+  if (short) {
+    notes.push({
+      tone: 'amber',
+      text: `On ${count(short, 'account', 'accounts')} the copy of NetSuite's ledger doesn't hold everything NetSuite's own totals say moved in these months yet, `
+        + "so some of NetSuite's documents may be missing there and its running balance won't reach the account's line. The next copy catches up.",
+    });
+  }
+  const cut = p.ledger.filter((a) => a.listed < a.documents).length;
+  if (cut) {
+    notes.push({
+      tone: 'red',
+      text: `${count(cut, 'account has', 'accounts have')} more than ${DOCUMENTS_LISTED.toLocaleString('en-US')} documents in these months, `
+        + 'so only the first are listed, by date, and the running balances stop short of the line. Download those accounts from Reports a few months at a time.',
+    });
+  }
+  return notes;
+}
+
+/**
+ * The general ledger: each account it lists (generalLedger in
+ * general-ledger.ts) with its documents as its own download has them
+ * (addLedgerRows), every row starting with the account so a filter picks
+ * one out. Amounts read as the trial balance shows them.
+ */
+function addLedgerSheet(wb: ExcelJS.Workbook, p: {
+  company: WorkbookCompany; from: string; to: string; ledger: LedgerBlock[]; notes: WorkbookNote[]; now: Date;
+}): ExcelJS.Worksheet {
+  const { from, to, ledger } = p;
+  const sheet = wb.addWorksheet('General Ledger', { pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
+  [32, 11, 20, 14, 28, 40].forEach((w, i) => { sheet.getColumn(i + 1).width = w; });
+  sheet.getColumn(2).numFmt = DATE;
+  amountColumns(sheet, 7, 9, 16);
+  amountColumns(sheet, 10, 11, 18);
+  sheet.getColumn(12).width = 30;
+  const header = titleRows(sheet, {
+    company: p.company,
+    title: 'General Ledger',
+    period: `${monthStart(from)} to ${monthEnd(to)}`,
+    about: `Every account with a balance or a document in ${from === to ? 'the month' : 'these months'} (${count(ledger.length, 'account', 'accounts')}), `
+      + "in the trial balance's order, each document by date with each side's balance after it: FleetSuite's journal next to the copy of NetSuite's "
+      + `general ledger. ${READS.trial_balance}`,
+    notes: p.notes,
+    now: p.now,
+    header: ['Account', 'Date', 'Type', 'Number', 'Name', 'Memo', 'FleetSuite', 'NetSuite', 'Difference', 'FleetSuite balance', 'NetSuite balance', 'Note'],
+    amounts: [7, 11],
+  });
+  for (const a of ledger) {
+    addLedgerRows(sheet, a.rows, { from, to, account: `${a.number ? `${a.number} ` : ''}${a.name}${a.inChart ? '' : ' (not in the chart yet)'}` });
+  }
+  if (ledger.length) sheet.autoFilter = { from: { row: header, column: 1 }, to: { row: sheet.rowCount, column: 12 } };
+  else sheet.addRow(['No account has a balance or a document in these months.']).getCell(1).font = { color: { argb: MUTED } };
   return sheet;
 }
