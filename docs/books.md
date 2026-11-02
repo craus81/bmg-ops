@@ -6280,7 +6280,8 @@ assistant read FleetSuite's books instead of NetSuite (the NetSuite Exit
 Checklist's "Money screens on FleetSuite's books"). Part 80 does Home →
 Financials, switched off (`money_screens`, migration 504,
 `src/lib/books/money-screens.ts`, `src/lib/books/money-screens-data.ts`),
-and part 81 Financial History, on the same switch (below).
+part 81 Financial History, on the same switch, and part 82 the portal's
+billing, on a switch of its own (below).
 NetSuite's income statement read behind the tab's profit and loss has no
 company in it, so today's band most likely has 1084's rent and mortgage in
 BMG's. With the switch on, the tab reads BMG's books alone.
@@ -6311,9 +6312,12 @@ posted.
   position is cash and what customers owe less that.
 - **The lists** behind the tiles are each open invoice and credit memo, or
   bill and bill credit, with its total and PO or memo from the copy of
-  NetSuite's documents, and what isn't in an open one, so they add up to
-  the tiles exactly. A credit memo has no PDF and a bill credit no Print;
-  the NetSuite link is left off where NetSuite can't be linked to.
+  NetSuite's documents (`ledger_invoices`, by type and id, and
+  `gl_netsuite_bills`; before part 82 the read found none, so each showed
+  what's open as its total and no PO or memo), and what isn't in an open
+  one, so they add up to the tiles exactly. A credit memo has no PDF and a
+  bill credit no Print; the NetSuite link is left off where NetSuite can't
+  be linked to.
   Statements printed from the list take in the customer's open credit
   memos.
 - **The profit and loss band** sums each income and expense account's
@@ -6384,15 +6388,59 @@ less a $50 discount in January 2025, $400 of materials and $425 of
 expenses. January 2025 shows revenue of $950, gross profit of $550 and net
 income of $125, and 1084's rent income in October 2026 isn't in it.
 
+### The portal
+
+The customer portal's Billing (`/portal/[token]` and its routes under
+`/api/portal/[token]`) and the billing card on a customer's dashboard
+(`/api/customer/billing`) list a customer's open invoices, read live from
+NetSuite and kept five minutes (`src/lib/portal-billing.ts`). Customers see
+it, so it has a switch of its own, `portal_books` (migration 505, part 82),
+off. With it on, the open invoices come from BMG's books in FleetSuite
+(`loadBooksPortalInvoices`):
+
+- **Whose invoice** goes by NetSuite's customer on it, as the portal does
+  today: the one the copy of NetSuite's open documents names, else the one
+  the copy of NetSuite's invoice names. An invoice the books have under
+  another FleetSuite customer, or none yet, shows to the customer NetSuite
+  names and never to another. Only invoices are listed, as now.
+- **What's open** on each is the books' amount, worked out as AR and AP
+  agings does, with FleetSuite's due date, and its total and PO come from
+  the copy of NetSuite's invoice. One NetSuite still has open that the
+  books have paid isn't listed. The balance, how late, the aging, the
+  statement and which invoice PDFs (NetSuite's) can be had all follow from
+  that list.
+- **As of** is when the books last caught up with NetSuite: the earliest of
+  the last full runs of the copy of NetSuite's general ledger, the posting
+  run and the copy of NetSuite's open documents, each every two hours. The
+  portal's footnote, the dashboard card and the statement's date say so.
+
+If any of the three hasn't finished a run, the earliest is more than a day
+old, or a read of the books fails, the portal says billing is unavailable
+and the reason is logged; it doesn't fall back to NetSuite. A switch that
+can't be read counts as off, so the portal reads NetSuite. What's kept is
+kept apart by where it came from, so switching never shows the other's.
+With the switch off nothing changes: the portal reads NetSuite and nothing
+of the books. The plan leaves it off on January 1, as NetSuite has every
+invoice and payment, live, through 2027.
+
+Made-up example: NetSuite's customer 9001, Acme, has INV101, $800 of
+$1,000 open and 32 days late; INV102, $500 not yet due; and INV401, $75
+and 8 days late, which the books have under no FleetSuite customer yet but
+NetSuite names Acme on. NetSuite still has INV103 open, which the books
+have paid. Acme's portal shows a balance of $1,375, $875 past due, on
+three invoices, and won't give INV103's PDF.
+
 ### Before switching on
 
 - Look at Books → Differences for BMG: where FleetSuite's books still
-  differ from NetSuite's, the tab and Financial History will show
-  FleetSuite's.
+  differ from NetSuite's, the tab, Financial History and the portal will
+  show FleetSuite's.
+- For the portal, open a few customers' Billing with the switch off and
+  then on, from Preview ↗ on the PO status link card of each customer's page.
 
 ### What isn't done yet
 
-- The portal and the AI assistant still read NetSuite.
+- The AI assistant still reads NetSuite.
 - The revenue, receivables trend, sales and operations bands still read
   NetSuite, and the trend lines are NetSuite's nightly snapshots.
 - Reports' card for Financial History still reads "QuickBooks before the
@@ -6402,7 +6450,7 @@ income of $125, and 1084's rent income in October 2026 isn't in it.
 
 Each piece that takes the team out of NetSuite is built switched off, one
 row each in `books_switches` (migrations 466 to 473, 478 to 480, 485 to
-488, 494, 497 to 499 and 504, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
+488, 494, 497 to 499, 504 and 505, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
 in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
 which whoever opens the books can read. The plan turns them on on January 1,
 2027, asking the owner once in late December, all but `customer_payments`,
@@ -6410,8 +6458,9 @@ which whoever opens the books can read. The plan turns them on on January 1,
 until receiving payments, taking deposits, bank deposits and paying vendors
 move into FleetSuite during 2027, `adjustment_approvals`, which the plan
 adds during 2027, from April, `own_numbers` and `invoice_pdfs`, which start
-in the second quarter of 2027, and `stock_counts`, which starts in the third;
-their cards on the page say so (`later`).
+in the second quarter of 2027, `stock_counts`, which starts in the third,
+and `portal_books`, which waits for the full cutover; their cards on the
+page say so (`later`).
 
 While a piece is off, the people who'd use it don't see it at all; super
 admins can open its screen and see what it would send, and its route
@@ -6429,7 +6478,8 @@ stops when it can't read it rather than post one unapproved.
 `own_numbers` needs a step in NetSuite first, ticking Allow Override, so the
 page asks with its own words too. `money_screens` sends nothing anywhere:
 off, Home → Financials and Financial History read NetSuite, as now, and
-on, BMG's books in FleetSuite, so the page asks with its own words too.
+on, BMG's books in FleetSuite, so the page asks with its own words too, as
+it does for `portal_books`, which does the same for what customers see.
 
 | Piece | What it does once it's on | Where |
 | --- | --- | --- |
@@ -6453,6 +6503,7 @@ on, BMG's books in FleetSuite, so the page asks with its own words too.
 | `invoice_pdfs` | Each invoice FleetSuite makes gets FleetSuite's own PDF of it attached in NetSuite, once FleetSuite's copy matches NetSuite's invoice ("Invoice PDFs") | Books → Own invoices, on each invoice |
 | `stock_counts` | Admins count a location's stock, all of it or a part, on a printed sheet or a phone, and ask for approval of what differs from NetSuite; a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as one Inventory Adjustment ("Counts") | Counts on the Inventory page |
 | `money_screens` | Home → Financials and Financial History read BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, the lists behind them, and each month's profit and loss from the QuickBooks cutover on, without 1084's ("Money screens") | Home → Financials, and Reports → Financial History |
+| `portal_books` | The customer portal's Billing and the billing card on a customer's dashboard list each customer's open invoices from BMG's books in FleetSuite instead of NetSuite, as of when the books last caught up with NetSuite ("The portal") | The customer portal's Billing, and the billing card on a customer's dashboard |
 
 ## Posting
 

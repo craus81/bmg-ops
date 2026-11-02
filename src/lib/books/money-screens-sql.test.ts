@@ -104,9 +104,10 @@ describe('migration 504: the switch', () => {
       { piece: 'money_screens', is_on: false },
       { piece: 'stock_counts', is_on: false },
     ]);
-    // Every piece the app names is one the column takes, and nothing else is.
-    expect(SWITCH_PIECES).toEqual([...PIECES, 'money_screens']);
-    for (const piece of SWITCH_PIECES) {
+    // Every piece the app named then is one the column takes, and nothing else is (505 adds portal billing).
+    const then = SWITCH_PIECES.filter((piece) => piece !== 'portal_books');
+    expect(then).toEqual([...PIECES, 'money_screens']);
+    for (const piece of then) {
       await db.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);
     }
     expect((await db.query('SELECT count(*)::int AS n FROM books_switches')).rows[0]).toEqual({ n: 20 });

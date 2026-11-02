@@ -34,7 +34,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   }
 
   try {
-    if (!await invoiceBelongsToCustomer(customer.netsuite_id, id)) {
+    if (!await invoiceBelongsToCustomer(service, customer.netsuite_id, id)) {
       return NextResponse.json({ status: 'invalid' }, { status: 404 });
     }
     const pdf = await getNetSuitePdf('invoice', id);

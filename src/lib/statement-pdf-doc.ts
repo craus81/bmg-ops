@@ -44,6 +44,8 @@ export interface StatementPdfData {
   scope: StatementScope;
   from?: string | null; // ISO
   to?: string | null; // ISO
+  /** When the amounts are as of (ISO), when not now: the portal's from BMG's books are as of when the books last caught up with NetSuite. */
+  asOf?: string | null;
   /** Company letterhead — same source as the wrap quote's header. The
    *  logo must already be inlined (jsPDF can't fetch). */
   letterhead?: { company: CompanyProfile | null; logoDataUrl: string | null } | null;
@@ -98,7 +100,7 @@ export function buildStatementPdf(data: StatementPdfData): jsPDF {
     ? `Invoices ${data.from ? `from ${fmtD(data.from)} ` : ''}${data.to ? `through ${fmtD(data.to)}` : ''}`.trim()
     : null;
   doc.text(
-    [`As of ${new Date().toLocaleDateString('en-US')} · ${isAll ? 'All invoices (activity statement)' : 'Open items only'}`, ...(rangeLine ? [rangeLine] : [])].join('\n'),
+    [`As of ${(data.asOf ? new Date(data.asOf) : new Date()).toLocaleDateString('en-US')} · ${isAll ? 'All invoices (activity statement)' : 'Open items only'}`, ...(rangeLine ? [rangeLine] : [])].join('\n'),
     margin, y + 26,
   );
   y += rangeLine ? 44 : 34;

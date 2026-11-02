@@ -37,7 +37,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
   const { invoiceId, invoiceNumber, message } = parsed.data;
 
   try {
-    if (!await invoiceBelongsToCustomer(customer.netsuite_id, invoiceId)) {
+    if (!await invoiceBelongsToCustomer(service, customer.netsuite_id, invoiceId)) {
       return NextResponse.json({ status: 'invalid' }, { status: 404 });
     }
 

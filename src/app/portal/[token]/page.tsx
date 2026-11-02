@@ -216,6 +216,8 @@ interface BillingData {
   invoiceCount: number;
   aging: Record<string, number>;
   invoices: { id: string; tranid: string; date: string | null; dueDate: string | null; po: string | null; total: number; unpaid: number; daysPastDue: number }[];
+  /** When the amounts are as of. */
+  asOf?: string;
 }
 const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 const AGING_LABELS: [string, string][] = [
@@ -359,7 +361,7 @@ function BillingSection({ token }: { token: string }) {
               </table>
             </div>
             <div style={{ ...muted, marginTop: '8px' }}>
-              Amounts are open balances as of {fmtDateTime(new Date().toISOString())}. Payments applied in the last day may not show yet.
+              Amounts are open balances as of {fmtDateTime(billing.asOf ?? new Date().toISOString())}. Payments applied in the last day may not show yet.
             </div>
           </>
         )}

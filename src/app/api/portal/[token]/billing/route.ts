@@ -26,7 +26,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
   if (!customer) return NextResponse.json({ status: 'invalid' }, { status: 404 });
 
   try {
-    const { billing } = await loadPortalBilling(customer.netsuite_id);
+    const { billing } = await loadPortalBilling(service, customer.netsuite_id);
     return NextResponse.json({ status: 'ready', company: customer.company_name, ...billing });
   } catch (e: any) {
     console.error('portal billing failed:', e);

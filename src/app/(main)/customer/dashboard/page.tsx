@@ -107,6 +107,7 @@ function BillingCard() {
   const [billing, setBilling] = useState<{
     linked: boolean; balance?: number; pastDue?: number; invoiceCount?: number;
     invoices?: { id: string; tranid: string; dueDate: string | null; unpaid: number; daysPastDue: number }[];
+    asOf?: string;
   } | null>(null);
   useEffect(() => {
     fetch('/api/customer/billing')
@@ -145,6 +146,7 @@ function BillingCard() {
         )}
       </div>
       <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '8px' }}>
+        {billing.asOf ? `As of ${new Date(billing.asOf).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}. ` : ''}
         PDFs and statements are on your billing portal link — ask your BMG contact if you need a fresh one.
       </div>
     </div>

@@ -1,5 +1,8 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchStatementInvoices, type StatementInvoice } from './financials-data';
 import type { AgingBucketKey } from './financials-data';
+import { loadBooksPortalInvoices } from './books/money-screens-data';
+import { switchIsOn } from './books/switches';
 
 /**
  * Portal billing data (R5-14): the customer-safe billing projection behind
@@ -13,6 +16,12 @@ import type { AgingBucketKey } from './financials-data';
  * open-AR query every click, and the cache is also what the invoice-PDF
  * route uses to verify an invoice id BELONGS to the token's customer
  * before fetching the PDF (the IDOR check).
+ *
+ * With Portal billing on FleetSuite's books on (Books → Switches, migration
+ * 505, docs/books.md "The portal"), the open invoices come from BMG's books
+ * in FleetSuite instead (src/lib/books/money-screens-data.ts), still keyed
+ * on the NetSuite id, as of when the books last caught up with NetSuite. A
+ * read of the books that fails throws: there's no falling back to NetSuite.
  */
 
 export interface PortalInvoiceRow {
@@ -33,13 +42,15 @@ export interface PortalBilling {
   aging: Record<AgingBucketKey, number>;
   invoices: PortalInvoiceRow[];
   generatedAt: string;
+  /** For BMG's books, when they last caught up with NetSuite, which is what the amounts are as of. Not set for NetSuite's, read live. */
+  asOf?: string;
 }
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const cache = new Map<string, { at: number; data: PortalBilling; raw: StatementInvoice[] }>();
 
-/** Pure fold used by both surfaces — open invoices → balance + aging. */
-export function summarizePortalBilling(invoices: StatementInvoice[]): PortalBilling {
+/** Pure fold used by both surfaces — open invoices → balance + aging (and when they're as of, for BMG's books). */
+export function summarizePortalBilling(invoices: StatementInvoice[], asOf?: string): PortalBilling {
   const aging: Record<AgingBucketKey, number> = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 };
   let balance = 0, pastDue = 0;
   for (const inv of invoices) {
@@ -67,27 +78,35 @@ export function summarizePortalBilling(invoices: StatementInvoice[]): PortalBill
         daysPastDue: i.daysPastDue,
       })),
     generatedAt: new Date().toISOString(),
+    asOf,
   };
 }
 
-export async function loadPortalBilling(netsuiteId: string, opts?: { fresh?: boolean }): Promise<{
+/** The customer's billing from NetSuite, or from BMG's books with the switch on; cached per customer and source. */
+export async function loadPortalBilling(service: SupabaseClient, netsuiteId: string, opts?: { fresh?: boolean }): Promise<{
   billing: PortalBilling;
   raw: StatementInvoice[];
 }> {
-  const key = String(netsuiteId);
+  const id = String(netsuiteId);
+  if (!/^\d{1,15}$/.test(id)) throw new Error('Invalid entity id');
+  const books = await switchIsOn(service, 'portal_books');
+  // Keyed by source too, so switching never serves the other's cached answer.
+  const key = `${books ? 'books' : 'netsuite'}:${id}`;
   const hit = cache.get(key);
   if (!opts?.fresh && hit && Date.now() - hit.at < CACHE_TTL_MS) {
     return { billing: hit.data, raw: hit.raw };
   }
-  const { invoices } = await fetchStatementInvoices(key, { scope: 'open' });
-  const billing = summarizePortalBilling(invoices);
+  const { invoices, asOf } = books
+    ? await loadBooksPortalInvoices(service, id)
+    : { ...await fetchStatementInvoices(id, { scope: 'open' }), asOf: undefined };
+  const billing = summarizePortalBilling(invoices, asOf);
   cache.set(key, { at: Date.now(), data: billing, raw: invoices });
   return { billing, raw: invoices };
 }
 
 /** True only when this open invoice id belongs to this customer — the guard
  *  every tokenized PDF fetch must pass. */
-export async function invoiceBelongsToCustomer(netsuiteId: string, invoiceId: string): Promise<boolean> {
-  const { raw } = await loadPortalBilling(netsuiteId);
+export async function invoiceBelongsToCustomer(service: SupabaseClient, netsuiteId: string, invoiceId: string): Promise<boolean> {
+  const { raw } = await loadPortalBilling(service, netsuiteId);
   return raw.some(i => String(i.id) === String(invoiceId));
 }
