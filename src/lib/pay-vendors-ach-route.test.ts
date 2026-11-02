@@ -403,6 +403,89 @@ describe('how First Bank takes the file', () => {
     expect(state.tables.vendor_ach_setups[0]).toMatchObject({ balanced: false, offset_routing: null, offset_last4: null, offset_locked: null });
   });
 
+  it("tells the other super admins and whoever's copied when a setup is made or changed, by what changed, never an account number", async () => {
+    const history = (accountId: string) =>
+      `/admin/books/change-history?table=vendor_ach_setups&key=${encodeURIComponent(JSON.stringify({ bank_account_netsuite_id: accountId }))}`;
+    const told = () => alerts().map(({ to, type, title, body, url, channels }) => ({ to, type, title, body, url, channels }));
+
+    // Made for Payroll.
+    expect((await post({ ...TYPED, accountId: '214' })).status).toBe(200);
+    expect(told()).toEqual([{
+      to: [OTHER, WATCHER], type: 'books_ach_setup_changed', title: 'ACH setup made for 10200 Payroll',
+      body: "Pat Admin set up how the ACH file for First Bank from 10200 Payroll starts: First Bank's routing number 081999994. "
+        + "Nothing is paid with it until a payment run's file is made and uploaded.",
+      url: history('214'), channels: ['in_app', 'push', 'email'],
+    }]);
+
+    // Saved again as it was: nothing to tell.
+    vi.mocked(notifyMany).mockClear();
+    expect((await post(TYPED)).status).toBe(200);
+    expect(told()).toEqual([]);
+
+    // Balanced with BMG's account: named by its type, last four digits and routing number only.
+    const offset = { routing: '081999994', account: '7700012345', accountAgain: '7700012345', type: 'checking' };
+    let res = await post({ ...TYPED, balanced: true, offset });
+    expect(told()).toEqual([{
+      to: [OTHER, WATCHER], type: 'books_ach_setup_changed', title: 'ACH setup changed for 10100 Operating Checking',
+      body: "Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: a debit to BMG's account in the file. "
+        + "The offsetting debit now comes from BMG's checking account ending 2345 (routing number 081999994). "
+        + 'Books → Change history shows what each was before.',
+      url: history('211'), channels: ['in_app', 'push', 'email'],
+    }]);
+    expect(said(await res.json()).replace(state.tables.vendor_ach_setups[0].offset_locked, '')).not.toContain('0012345');
+
+    // The same account typed again changes nothing; another ending in the same four digits does.
+    vi.mocked(notifyMany).mockClear();
+    await post({ ...TYPED, balanced: true, offset });
+    expect(told()).toEqual([]);
+    res = await post({ ...TYPED, balanced: true, offset: { ...offset, account: '9900012345', accountAgain: '9900012345' } });
+    expect(told().map((a) => a.body)).toEqual([
+      "Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: BMG's account for the offsetting debit. "
+        + "The offsetting debit now comes from BMG's checking account ending 2345 (routing number 081999994). "
+        + 'Books → Change history shows what each was before.',
+    ]);
+    expect(said(await res.json()).replace(state.tables.vendor_ach_setups[0].offset_locked, '')).not.toContain('9900012345');
+    // The same account number at another bank, or savings instead of checking, is another account too.
+    const again = { ...offset, account: '9900012345', accountAgain: '9900012345' };
+    vi.mocked(notifyMany).mockClear();
+    await post({ ...TYPED, balanced: true, offset: { ...again, routing: '021000021' } });
+    expect(told().map((a) => a.body)).toEqual([
+      "Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: BMG's account for the offsetting debit. "
+        + "The offsetting debit now comes from BMG's checking account ending 2345 (routing number 021000021). "
+        + 'Books → Change history shows what each was before.',
+    ]);
+    vi.mocked(notifyMany).mockClear();
+    await post({ ...TYPED, balanced: true, offset: { ...again, routing: '021000021', type: 'savings' } });
+    expect(told().map((a) => a.body)).toEqual([
+      "Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: BMG's account for the offsetting debit. "
+        + "The offsetting debit now comes from BMG's savings account ending 2345 (routing number 021000021). "
+        + 'Books → Change history shows what each was before.',
+    ]);
+
+    // The account kept, the description changed: only that.
+    vi.mocked(notifyMany).mockClear();
+    await post({ ...TYPED, balanced: true, entryDescription: 'BMG PAY' });
+    expect(told().map((a) => a.body)).toEqual([
+      "Pat Admin changed how the ACH file for First Bank from 10100 Operating Checking starts: the description vendors see. "
+        + 'Books → Change history shows what each was before.',
+    ]);
+
+    // Nobody else to tell: nothing is sent, and the setup is kept.
+    vi.mocked(notifyMany).mockClear();
+    state.superAdmins = [MAKER];
+    state.watchers = [MAKER];
+    expect((await post({ ...TYPED, entryDescription: 'VENDOR PAY' })).status).toBe(200);
+    expect(told()).toEqual([]);
+    expect(state.tables.vendor_ach_setups[0]).toMatchObject({ entry_description: 'VENDOR PAY', balanced: false });
+  });
+
+  it("keeps the setup when the alert can't go", async () => {
+    vi.mocked(notifyMany).mockRejectedValue(new Error('push is down'));
+    const res = await post({ ...TYPED, entryDescription: 'BMG PAY' });
+    expect(res.status).toBe(200);
+    expect(state.tables.vendor_ach_setups[0]).toMatchObject({ entry_description: 'BMG PAY' });
+  });
+
   it("needs BMG's account, typed right, and the key, for a balanced file", async () => {
     const offset = { routing: '081999994', account: '7700012345', accountAgain: '7700012345', type: 'checking' };
     let res = await post({ ...TYPED, balanced: true });

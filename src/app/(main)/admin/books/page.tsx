@@ -271,6 +271,8 @@ export default function BooksAccountsPage() {
             <Link href="/admin/books/1099s" style={{ color: 'var(--text-secondary)' }}>1099s</Link>
             {' · '}
             <Link href={deepLinks.booksBackups()} style={{ color: 'var(--text-secondary)' }}>Backups</Link>
+            {' · '}
+            <Link href={deepLinks.booksChangeHistory()} style={{ color: 'var(--text-secondary)' }}>Change history</Link>
           </div>
         </div>
         {canKeep && (

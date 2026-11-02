@@ -12,9 +12,11 @@
 // sales orders and POs made in NetSuite instead, through migration 497's, and
 // at the invoice PDFs NetSuite refused or FleetSuite isn't sure about, through
 // migration 498's, and at the backups of the books and their restore test,
-// through migrations 506's and 507's.
+// through migrations 506's and 507's, and at the changes made to the books
+// outside FleetSuite, through migration 508's.
 // This runs the same migrations as differences-sql.test.ts, with 401, 406, 407,
-// 416, 431, 435, 454, 457, 477, 480, 497, 498, 506 and 507, in an in-memory Postgres (PGlite) as the app's
+// 416, 431, 435, 454, 457, 477, 480, 497, 498, 506, 507 and 508 (but for its
+// triggers), in an in-memory Postgres (PGlite) as the app's
 // server login, copies a made-up handful of NetSuite documents for BMG and
 // 1084, posts FleetSuite's entries for some of them, copies a few stock moves
 // and NetSuite's counts, saves an own invoice, an own fulfillment, a few
@@ -98,6 +100,12 @@ async function freshDb(): Promise<PGlite> {
   await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', '498-books-invoice-pdfs.sql'), 'utf8'));
   await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', '506-books-backups.sql'), 'utf8'));
   await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', '507-books-restore-drills.sql'), 'utf8'));
+  // Migration 508's change history and the check's functions on it, but for its triggers, which go on every table of the
+  // books, most of them not here: a change is written into the history as they write it (money-changes-sql.test.ts runs them).
+  const history = readFileSync(path.resolve(__dirname, '../../../migrations', '508-books-money-changes.sql'), 'utf8');
+  const [triggers, telling] = [history.indexOf("-- ── Where it's written down"), history.indexOf('-- ── Telling about changes made outside FleetSuite')];
+  if (triggers < 0 || telling < triggers) throw new Error("migration 508's triggers aren't where this test leaves them out");
+  await pg.exec(history.slice(0, triggers) + history.slice(telling));
   await pg.exec(`UPDATE gl_companies SET netsuite_subsidiary_id = '5' WHERE code = '1084'`);
   for (const [ns, name, type] of ACCOUNTS) {
     await pg.query(
@@ -169,7 +177,8 @@ describe('the daily books check', () => {
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
   /**
    * What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes,
-   * sends to NetSuite, changes in NetSuite, FleetSuite's own numbers, its invoice PDFs, the backups and their restore test, apart.
+   * sends to NetSuite, changes in NetSuite, FleetSuite's own numbers, its invoice PDFs, the backups and their restore test, and
+   * changes made outside FleetSuite, apart.
    */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
@@ -185,6 +194,7 @@ describe('the daily books check', () => {
   let toldPdfs: CheckAlert[] = [];
   let toldBackups: CheckAlert[] = [];
   let toldDrills: CheckAlert[] = [];
+  let toldOutside: CheckAlert[] = [];
 
   /** A read of one of the books' tables, or a change to one, built the way supabase-js builds it, run against the database. */
   const read = (table: string) => {
@@ -285,11 +295,12 @@ describe('the daily books check', () => {
     toldPdfs = [];
     toldBackups = [];
     toldDrills = [];
+    toldOutside = [];
     const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
       : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
         : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : alert.about === 'send' ? toldSends
           : alert.about === 'change' ? toldChanges : alert.about === 'number' ? toldNumbers : alert.about === 'pdf' ? toldPdfs
-            : alert.about === 'backup' ? toldBackups : alert.about === 'drill' ? toldDrills : told);
+            : alert.about === 'backup' ? toldBackups : alert.about === 'drill' ? toldDrills : alert.about === 'outside' ? toldOutside : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
@@ -1558,6 +1569,84 @@ describe('the daily books check', () => {
     } finally {
       await pg.exec('TRUNCATE books_restore_drills, books_backups');
       await lastNight();
+    }
+  });
+
+  it('tells the super admins about changes made to the books outside FleetSuite, once each', async () => {
+    const central = (iso: string) => `${new Date(iso).toLocaleString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago',
+    })} Central`;
+    /** A change to a row of the books, `minutesAgo` before now, as migration 508's trigger writes it. */
+    const change = async (table: string, via: string, minutesAgo: number, login: string, app: string | null) => {
+      const at = new Date(Date.now() - minutesAgo * 60_000).toISOString();
+      await pg.query(
+        `INSERT INTO books_money_changes (at, table_name, op, row_key, changed, via, db_login, db_app, tx)
+         VALUES ($1, $2, 'update', '{"id": "a1"}', '{"memo": {"from": "Rent", "to": "Rent Oct"}}', $3, $4, $5, txid_current())`,
+        [at, table, via, login, app],
+      );
+      return at;
+    };
+    const untold = async () => (await pg.query<{ table_name: string }>(
+      "SELECT table_name FROM books_money_changes WHERE via IN ('screen', 'database') AND told_at IS NULL ORDER BY id",
+    )).rows.map((r) => r.table_name);
+    // Emptied while no company's books are live (migration 359's truncate guard); every change's record stays otherwise.
+    await pg.exec('TRUNCATE books_money_changes');
+    try {
+      // Made in FleetSuite and by FleetSuite's updates: nothing to tell.
+      await change('vendor_payment_runs', 'server', 90, 'authenticator', 'postgrest');
+      await change('gl_lines', 'migration', 80, 'postgres', null);
+      expect(await look('first')).toMatchObject({ told: 0 });
+      expect(toldOutside).toEqual([]);
+
+      const first = await change('gl_periods', 'database', 60, 'postgres', 'Supabase Studio');
+      await change('gl_lines', 'database', 40, 'postgres', 'Supabase Studio');
+      const last = await change('gl_periods', 'screen', 20, 'authenticator', 'postgrest');
+      expect(await look('second')).toMatchObject({ told: 1 });
+      expect(toldOutside).toEqual([{
+        title: 'Books: 3 changes made outside FleetSuite',
+        body: 'Made straight in the database with Supabase Studio, and from a browser signed in to the database, '
+          + `between ${central(first)} and ${central(last)}, around FleetSuite's own checks: `
+          + "Month (2), Journal line (1). Books → Change history shows what each one changed.",
+        url: '/admin/books/change-history?show=outside',
+        about: 'outside',
+      }]);
+      expect(await untold()).toEqual([]);
+      // Told once: the next look, first or second, tells nothing.
+      await look('first');
+      expect(toldOutside).toEqual([]);
+
+      // One it can't read is said, and the rest of the check goes on.
+      const one = await change('vendor_bank_accounts', 'database', 5, 'postgres', null);
+      failing = (name) => name === 'books_outside_changes';
+      try {
+        const result = await look('first');
+        expect(result.error).toBe("Change history: couldn't read the change history (books_outside_changes failed)");
+        expect(result.heartbeat).toBeDefined();
+        expect(toldOutside).toEqual([]);
+      } finally {
+        failing = null;
+      }
+      // One told but not noted as told is told again the next morning: never lost.
+      failing = (name) => name === 'books_outside_changes_told';
+      try {
+        const result = await look('first');
+        expect(result.error).toBe("Change history: couldn't note the changes told about (books_outside_changes_told failed)");
+        expect(toldOutside.map((a) => a.title)).toEqual(['Books: a change made outside FleetSuite']);
+      } finally {
+        failing = null;
+      }
+      expect(await untold()).toEqual(['vendor_bank_accounts']);
+      await look('first');
+      expect(toldOutside).toEqual([{
+        title: 'Books: a change made outside FleetSuite',
+        body: `Made straight in the database, at ${central(one)}, around FleetSuite's own checks: Vendor's bank numbers (1). `
+          + 'Books → Change history shows what each one changed.',
+        url: '/admin/books/change-history?show=outside',
+        about: 'outside',
+      }]);
+      expect(await untold()).toEqual([]);
+    } finally {
+      await pg.exec('TRUNCATE books_money_changes');
     }
   });
 

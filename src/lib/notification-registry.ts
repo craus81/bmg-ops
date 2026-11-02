@@ -257,6 +257,11 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Super admins, except the one who set it aside.' },
+  { type: 'books_ach_setup_changed', label: "A bank account's ACH setup changed", description: "A super admin set up or changed how a bank account's ACH file for First Bank starts on the Pay vendors page: First Bank's routing number, BMG's ACH ID, the company ID, whether the file is balanced, or BMG's own account for the offsetting debit. Names what changed, never a full account number. Opens the setup's change history.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, except the one who changed it.' },
   // A send to NetSuite FleetSuite isn't sure about (part 45, migration 477).
   // Emailed like the Inventory Adjust alert, only to anyone with "Copy me on
   // new alerts" (Craig's standing rule, 2026-10-28).
@@ -305,6 +310,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Super admins, who make and test the backups.' },
+  // A change made to the books outside FleetSuite (part 86, migration 508).
+  // Emailed like the backup alerts, only to anyone with "Copy me on new
+  // alerts" (Craig's standing rule, 2026-10-28).
+  { type: 'books_changed_outside', label: 'Someone changed the books outside FleetSuite', description: "Someone changed FleetSuite's books straight in the database (Supabase's dashboard or a SQL window), or from a browser signed in to it, around FleetSuite's own screens and the checks they make: a switch, a payment run, a vendor's bank numbers, a journal entry, any row of the books. Told once, at the daily check's next look after it, with how it was made, when, and to what. Opens Books → Change history on the changes made outside FleetSuite.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins.' },
   { type: 'books_mistake_found', label: 'Books found likely mistakes in NetSuite', description: "FleetSuite's nightly mistake checks found a bill, check or card charge copied from NetSuite that looks like a mistake (entered twice, far off the vendor's usual, a monthly charge missing, or coded to an account the vendor doesn't use) and nobody has cleared it by the daily check's second look. Opens it on Mistake checks, or the list when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], audience: 'Super admins, the only people who can open the books.' },
 
   // ── Contract installers (CNI) ─────────────────────────────────────────

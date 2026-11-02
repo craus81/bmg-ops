@@ -10,8 +10,8 @@ import { switchIsOn } from '@/lib/books/switches';
 import { companyNamed, readBankAccounts, readBankCompanies } from '@/lib/books/bank-accounts';
 import { accountName, keptBills } from '@/lib/pay-vendors';
 import {
-  MODIFIERS, WHY_MAX, achFileName, buildAchFile, chicagoClock, dayText, effectiveDate, setupOf, setupProblems, type AchFile, type AchPayee,
-  type SetupTyped,
+  MODIFIERS, WHY_MAX, achFileName, buildAchFile, chicagoClock, dayText, effectiveDate, setupAlert, setupOf, setupProblems,
+  type AchFile, type AchPayee, type SetupTyped,
 } from '@/lib/ach-file';
 import { accountProblem, digitsOf, isAccountType, noteProblem, routingProblem, type BankNumbers } from '@/lib/vendor-bank';
 import {
@@ -531,10 +531,14 @@ async function saveSetup(body: Extract<Body, { action: 'setup' }>, me: string) {
   const problems = setupProblems(typed);
   if (problems.length > 0) return NextResponse.json({ error: problems[0], problems }, { status: 400 });
   const s = setupOf(typed);
+  // How the account's file started until now, for telling the super admins what this changes.
+  const was = (await readSetups([body.accountId])).get(body.accountId) ?? null;
 
   let offset: { offset_routing: string | null; offset_last4: string | null; offset_type: string | null; offset_locked: string | null } = {
     offset_routing: null, offset_last4: null, offset_type: null, offset_locked: null,
   };
+  // BMG's account for the offsetting debit typed now, not the same as the one kept.
+  let offsetChanged = false;
   if (s.balanced) {
     const read = bankKey();
     if (!('key' in read)) return NextResponse.json({ error: read.problem }, { status: 503 });
@@ -551,11 +555,13 @@ async function saveSetup(body: Extract<Body, { action: 'setup' }>, me: string) {
         offset_routing: numbers.routing, offset_last4: numbers.account.slice(-4), offset_type: numbers.type,
         offset_locked: lockOffset(read.key, numbers, body.accountId),
       };
+      const before = was?.balanced ? offsetOf(was, read.key) : null;
+      offsetChanged = !before || 'problem' in before || before.numbers.routing !== numbers.routing
+        || before.numbers.account !== numbers.account || before.numbers.type !== numbers.type;
     } else {
-      const kept = (await readSetups([body.accountId])).get(body.accountId);
-      const opened = kept?.balanced ? offsetOf(kept, read.key) : { problem: OFFSET_NEEDED };
+      const opened = was?.balanced ? offsetOf(was, read.key) : { problem: OFFSET_NEEDED };
       if ('problem' in opened) return NextResponse.json({ error: opened.problem }, { status: 400 });
-      offset = { offset_routing: kept!.offset_routing, offset_last4: kept!.offset_last4, offset_type: kept!.offset_type, offset_locked: kept!.offset_locked };
+      offset = { offset_routing: was!.offset_routing, offset_last4: was!.offset_last4, offset_type: was!.offset_type, offset_locked: was!.offset_locked };
     }
   }
 
@@ -572,6 +578,13 @@ async function saveSetup(body: Extract<Body, { action: 'setup' }>, me: string) {
   await logAudit(service, { actorId: me, table: 'vendor_ach_setups', recordId: body.accountId, action: 'ach_setup', detail: shown });
   const read = bankKey();
   const nameOf = await readNames([me]);
+  const told = setupAlert({
+    was: was ? setupOf(typedOf(was)) : null, now: s, offsetChanged, account: accountName(account), who: nameOf(me) ?? 'Someone',
+    offset: offset.offset_routing && offset.offset_last4 && offset.offset_type
+      ? { routing: offset.offset_routing, last4: offset.offset_last4, type: offset.offset_type }
+      : null,
+  });
+  if (told) await tell(me, { ...told, url: deepLinks.booksChangeHistory(null, { table: 'vendor_ach_setups', key: { bank_account_netsuite_id: body.accountId } }) });
   return NextResponse.json({ success: true, setup: setupView(row, 'key' in read ? read.key : null, nameOf) });
 }
 

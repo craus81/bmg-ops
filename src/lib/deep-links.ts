@@ -718,6 +718,20 @@ export const deepLinks = {
    *  backup that didn't work. Open to whoever opens the books; only a super
    *  admin downloads one or makes one. */
   booksBackups: (backup?: string | null) => `/admin/books/backups${backup ? `?${new URLSearchParams({ backup })}` : ''}`,
+  /** Books → Change history: every change to a row of FleetSuite's books
+   *  (src/lib/books/money-changes.ts), the ones made outside FleetSuite
+   *  with 'outside', or one row's when its table and key are given. The
+   *  landing for the daily books check's notification about changes made
+   *  outside FleetSuite and for the one about a bank account's ACH setup
+   *  changing. Open to whoever opens the books; the vendors' bank numbers
+   *  and the ACH setups and files to super admins only. */
+  booksChangeHistory: (show?: 'outside' | null, row?: { table: string; key: Record<string, string | number | boolean> } | null) => {
+    const query = new URLSearchParams({
+      ...(show ? { show } : {}),
+      ...(row ? { table: row.table, key: JSON.stringify(row.key) } : {}),
+    }).toString();
+    return `/admin/books/change-history${query ? `?${query}` : ''}`;
+  },
   /** Books → Own numbers: the numbers FleetSuite gives each sales order, PO,
    *  invoice and credit memo it makes in NetSuite once FleetSuite's own
    *  numbers is on (src/lib/books/own-numbers.ts), the numbers of one kind

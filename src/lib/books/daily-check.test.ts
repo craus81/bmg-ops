@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   adjustmentAlertsFor, alertsFor, backupAlertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, drillAlertsFor, fulfillmentAlertsFor,
   invoicePdfAlertsFor, lookOf,
-  mistakeAlertsFor, nextCheck, numberAlertsFor, ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
+  mistakeAlertsFor, nextCheck, numberAlertsFor, outsideAlertsFor, ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
   type BalanceNews, type ChangeAlertItem, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews,
   type SendAlertItem, type StockNews,
 } from './daily-check';
@@ -1059,5 +1059,57 @@ describe('drillAlertsFor', () => {
 
   it('tells nothing when the newest backup passed', () => {
     expect(drillAlertsFor(null)).toEqual([]);
+  });
+});
+
+describe('outsideAlertsFor', () => {
+  const ways = { database: { via: 'database' as const, login: 'postgres', app: 'Supabase Studio', changes: 1 } };
+
+  it('says how, when and to what one change was made outside FleetSuite, opening the changes made outside it', () => {
+    expect(outsideAlertsFor({
+      changes: 1, through: 812, snapshot: '900:900:', firstAt: '2026-11-02T20:00:00Z', lastAt: '2026-11-02T20:00:00Z',
+      tables: [{ table: 'vendor_bank_accounts', changes: 1 }], ways: [ways.database],
+    })).toEqual([{
+      title: 'Books: a change made outside FleetSuite',
+      body: "Made straight in the database with Supabase Studio, at Nov 2, 2026, 2:00 PM Central, around FleetSuite's own checks: "
+        + "Vendor's bank numbers (1). Books → Change history shows what each one changed.",
+      url: '/admin/books/change-history?show=outside',
+      about: 'outside',
+    }]);
+  });
+
+  it('counts several, says each way they were made once, and names the three most changed kinds of record', () => {
+    const [alert] = outsideAlertsFor({
+      changes: 1204, through: 2900, snapshot: '3100:3104:3101', firstAt: '2026-11-02T14:05:00Z', lastAt: '2026-11-03T09:40:00Z',
+      tables: [
+        { table: 'gl_lines', changes: 1100 }, { table: 'gl_entries', changes: 100 }, { table: 'books_switches', changes: 2 },
+        { table: 'gl_periods', changes: 1 }, { table: 'a_table_since_dropped', changes: 1 },
+      ],
+      ways: [
+        { via: 'database', login: 'postgres', app: 'psql', changes: 1199 },
+        { via: 'database', login: 'postgres', app: 'psql', changes: 2 },
+        { via: 'database', login: 'supabase_admin', app: 'psql', changes: 1 },
+        { via: 'database', login: 'postgres', app: null, changes: 1 },
+        { via: 'screen', login: 'authenticator', app: null, changes: 1 },
+      ],
+    });
+    expect(alert.title).toBe('Books: 1,204 changes made outside FleetSuite');
+    expect(alert.body).toBe('Made straight in the database with psql, and from a browser signed in to the database, '
+      + "between Nov 2, 2026, 8:05 AM Central and Nov 3, 2026, 3:40 AM Central, around FleetSuite's own checks: "
+      + 'Journal line (1,100), Journal entry (100), Switch (2) and 2 more. Books → Change history shows what each one changed.');
+    expect(outsideAlertsFor({
+      changes: 2, through: 2, snapshot: '9:9:', firstAt: '2026-11-02T20:00:00Z', lastAt: '2026-11-02T20:00:00Z', tables: [{ table: 'gl_periods', changes: 2 }],
+      ways: [{ via: 'database', login: 'postgres', app: 'Supabase Studio', changes: 1 }, { via: 'database', login: 'postgres', app: 'psql', changes: 1 }],
+    })[0].body).toMatch(/^Made straight in the database with Supabase Studio or psql, at /);
+    // A kind of record FleetSuite doesn't know is named by its table.
+    expect(outsideAlertsFor({
+      changes: 1, through: 1, snapshot: '9:9:', firstAt: '2026-11-02T20:00:00Z', lastAt: '2026-11-02T20:00:00Z',
+      tables: [{ table: 'a_table_since_dropped', changes: 1 }], ways: [{ via: 'screen', login: 'authenticator', app: null, changes: 1 }],
+    })[0].body).toBe("Made from a browser signed in to the database, at Nov 2, 2026, 2:00 PM Central, around FleetSuite's own checks: "
+      + 'a_table_since_dropped (1). Books → Change history shows what each one changed.');
+  });
+
+  it('tells nothing when nothing was changed outside FleetSuite', () => {
+    expect(outsideAlertsFor(null)).toEqual([]);
   });
 });

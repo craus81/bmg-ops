@@ -194,6 +194,9 @@ async function main() {
     const sql = await readFile(path.join(MIGRATIONS_DIR, f), 'utf8');
     try {
       await client.query('BEGIN');
+      // The books' change history (migration 508) records what an update
+      // changes as made by this file, not straight in the database.
+      await client.query("SELECT set_config('fleetsuite.via', $1, true)", [`migration ${f}`]);
       await client.query(sql);
       await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [f]);
       await client.query('COMMIT');
