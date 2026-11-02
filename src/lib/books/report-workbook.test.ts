@@ -435,9 +435,10 @@ describe("what an account line's detail warns about, in its file", () => {
 
 describe("a report from the report builder as an Excel file", () => {
   const LOCATIONS = [{ key: '1', label: "O'Fallon" }, { key: '3', label: 'Kansas City' }, { key: 'none', label: 'No location' }];
-  const ASK: BuilderAsk = { from: '2026-01-01', to: '2026-03-01', by: 'location', division: 'upfit', location: null };
+  const ASK: BuilderAsk = { rows: 'account', months: 'picked', from: '2026-01-01', to: '2026-03-01', by: 'location', division: 'upfit', location: null };
   /** The builder's report for Upfit by location: a sale at each of two locations, shop supplies at none, and an account the chart lacks. */
   const BUILT: BuiltReport = {
+    rows: 'account',
     columns: [...LOCATIONS, { key: 'total', label: 'Total' }],
     lines: [
       { kind: 'section', depth: 0, label: 'Income', amounts: null },
@@ -540,6 +541,79 @@ describe("a report from the report builder as an Excel file", () => {
     const three = await read(await builderFile(ASK, { ...BUILT, columns: BUILT.columns.slice(1), lines: [] }));
     expect(three.pageSetup.orientation).toBe('portrait');
   });
+
+  /** The builder's report for Upfit by customer and location: two customers' sales, and supplies for no customer. */
+  const BY_CUSTOMER: BuiltReport = {
+    ...BUILT,
+    rows: 'customer',
+    lines: [
+      { kind: 'section', depth: 0, label: 'Income', amounts: null },
+      { kind: 'account', depth: 1, label: 'Example Fleet Co', party: '301', amounts: [100000, 200000, 0, 300000] },
+      { kind: 'account', depth: 1, label: 'Example Rentals', party: '302', amounts: [0, 50000, 0, 50000] },
+      { kind: 'total', depth: 0, label: 'Total income', amounts: [100000, 250000, 0, 350000] },
+      { kind: 'total', depth: 0, label: 'Gross profit', grand: true, amounts: [100000, 250000, 0, 350000] },
+      { kind: 'section', depth: 0, label: 'Expense', amounts: null },
+      { kind: 'account', depth: 1, label: 'No customer', party: 'none', amounts: [0, 0, 2500, 2500] },
+      { kind: 'total', depth: 0, label: 'Total expense', amounts: [0, 0, 2500, 2500] },
+      { kind: 'total', depth: 0, label: 'Net income', grand: true, amounts: [100000, 250000, -2500, 347500] },
+    ],
+  };
+
+  it('lays lines by customer out with the name first and no number column', async () => {
+    const file = await builderFile({ ...ASK, rows: 'customer' }, BY_CUSTOMER);
+    expect(file.name).toBe('BMG Profit and Loss by Customer and Location (Upfit) 2026-01 to 2026-03.xlsx');
+    const ws = await read(file);
+    // A sheet's name is 31 characters at most.
+    expect(ws.name).toBe('P&L by Customer and Location');
+    expect([2, 4].map((r) => cells(ws, r, 1)[0])).toEqual([
+      'Profit and Loss by Customer and Location',
+      "FleetSuite's own books laid out as NetSuite's income statement, a line for each customer, a column for each location and a Total. Only Upfit lines.",
+    ]);
+    const head = headerRow(ws, 'Customer');
+    expect(cells(ws, head, 5)).toEqual(['Customer', "O'Fallon", 'Kansas City', 'No location', 'Total']);
+    expect(body(ws, 'Customer', 5)).toEqual([
+      ['Income', null, null, null, null],
+      ['Example Fleet Co', 1000, 2000, 0, 3000],
+      ['Example Rentals', 0, 500, 0, 500],
+      ['Total income', 1000, 2500, 0, 3500],
+      ['Gross profit', 1000, 2500, 0, 3500],
+      ['Expense', null, null, null, null],
+      ['No customer', 0, 0, 25, 25],
+      ['Total expense', 0, 0, 25, 25],
+      ['Net income', 1000, 2500, -25, 3475],
+    ]);
+    const at = (label: string) => ws.getRow(body(ws, 'Customer', 1).findIndex((r) => r[0] === label) + head + 1);
+    expect(at('Example Fleet Co').getCell(1)).toMatchObject({ alignment: { indent: 1 } });
+    expect(at('Example Fleet Co').getCell(1).font?.bold).toBeFalsy();
+    expect(at('Income').getCell(1).font).toMatchObject({ bold: true });
+    for (const c of [2, 5]) {
+      expect(at('Example Fleet Co').getCell(c).numFmt).toBe('_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)');
+      expect(at('Total income').getCell(c).border).toEqual({ top: { style: 'thin' } });
+      expect(at('Net income').getCell(c).border).toEqual({ top: { style: 'double' } });
+      expect(ws.getRow(head).getCell(c).alignment).toMatchObject({ horizontal: 'right' });
+      expect(ws.getColumn(c).width).toBe(15);
+    }
+    expect(at('Total income').getCell(1).border ?? {}).toEqual({});
+    expect(ws.getColumn(1).width).toBe(44);
+    expect(ws.getRow(head).getCell(1).alignment).toMatchObject({ horizontal: 'left' });
+    expect(ws.pageSetup).toMatchObject({ orientation: 'landscape', printTitlesRow: `${head}:${head}` });
+  });
+
+  it('names lines by customer or vendor in the file, the sheet and its header', async () => {
+    const titles: Array<[BuilderAsk['by'], 'customer' | 'vendor', string, string]> = [
+      ['total', 'customer', 'Profit and Loss by Customer', 'Profit and Loss by Customer'],
+      ['month', 'vendor', 'Profit and Loss by Vendor and Month', 'P&L by Vendor and Month'],
+      ['year', 'customer', 'Profit and Loss by Customer and Year', 'P&L by Customer and Year'],
+    ];
+    for (const [by, rows, title, sheet] of titles) {
+      const columns = by === 'total' ? [{ key: 'total', label: 'Total' }] : BUILT.columns;
+      const file = await builderFile({ ...ASK, rows, by, division: null }, { ...BY_CUSTOMER, rows, columns, lines: [], division: null });
+      expect(file.name).toBe(`BMG ${title} 2026-01 to 2026-03.xlsx`);
+      const ws = await read(file);
+      expect([ws.name, cells(ws, 2, 1)[0]]).toEqual([sheet, title]);
+      expect(cells(ws, headerRow(ws, rows === 'customer' ? 'Customer' : 'Vendor'), 1)).toEqual([rows === 'customer' ? 'Customer' : 'Vendor']);
+    }
+  });
 });
 
 describe("what the report builder warns about, in its file", () => {
@@ -566,7 +640,7 @@ describe("what the report builder warns about, in its file", () => {
       text: "Still posting: the last run (October 31, 2026 at 2:41 AM Central) stopped for time, so some documents aren't in this report yet. It carries on at the next run.",
     }]);
     expect(builderNotes({ ...base, copied: false, lastCopy: { at: '2026-10-31T06:29:00Z', error: 'Login failed' } })).toEqual([
-      { tone: 'amber', text: "NetSuite's ledger hasn't been copied yet, so lines from its documents have no location." },
+      { tone: 'amber', text: "NetSuite's ledger hasn't been copied yet, so lines from its documents have no location, customer or vendor." },
       { tone: 'red', text: "The last copy of NetSuite's ledger failed (October 31, 2026 at 1:29 AM Central): Login failed" },
     ]);
   });

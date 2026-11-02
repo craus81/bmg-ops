@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
-import { buildReport, type BuilderAsk, type BuiltReport, type SplitAmount } from './report-builder';
+import { buildReport, type BuilderAsk, type BuiltReport, type PartyAmount, type SplitAmount } from './report-builder';
 import { report, type ReportAccount, type ReportAmount, type ReportData } from './reports';
 
 const INCOME_STATEMENT = new Set(['income', 'other_income', 'cost_of_goods_sold', 'expense', 'other_expense']);
@@ -79,9 +79,56 @@ function books(rows: SplitAmount[] = SPLIT, extra: ReportAmount[] = []): ReportD
   return { company: 'BMG', accounts: ACCOUNTS, opening: [], netsuite: [], fleetsuite: [...totalsOf([...rows, ...receivables]), ...extra] };
 }
 
-const Q1: BuilderAsk = { from: '2026-01-01', to: '2026-03-01', by: 'division', division: null, location: null };
+const Q1: BuilderAsk = { rows: 'account', months: 'picked', from: '2026-01-01', to: '2026-03-01', by: 'division', division: null, location: null };
 const build = (ask: Partial<BuilderAsk> = {}, rows: SplitAmount[] = SPLIT, data: ReportData = books(rows)) =>
   buildReport(data, rows, NAMES, { ...Q1, ...ask });
+
+/** The split by name: a line of the split for one customer or vendor (NetSuite's id), or none. */
+const named = (party: string | null, ...line: Parameters<typeof split>): PartyAmount => ({ ...split(...line), party });
+
+// The split by customer: Kansas City's upfit sale in January was for Acme
+// and Bolt, and its cost too; the wages, rent, shop supplies and interest
+// name no customer. December and April are outside the first quarter.
+const CUSTOMERS: PartyAmount[] = [
+  named('301', '40', '2025-12-01', 'upfit', 'ns:1', -70000),
+  named('302', '40', '2026-01-01', 'graphics', 'ns:1', -100000),
+  named('301', '40', '2026-01-01', 'upfit', 'ns:3', -200000),
+  named('302', '40', '2026-01-01', 'upfit', 'ns:3', -100000),
+  named('301', '42', '2026-01-01', null, 'ns:3', -5000),
+  named('302', '50', '2026-01-01', 'graphics', 'ns:1', 40000),
+  named('301', '50', '2026-01-01', 'upfit', 'ns:3', 80000),
+  named('302', '50', '2026-01-01', 'upfit', 'ns:3', 40000),
+  named(null, '61', '2026-01-01', null, 'ofallon', 50000),
+  named(null, '65', '2026-01-01', 'shared', 'ofallon', 100000),
+  named('303', '40', '2026-02-01', 'upfit', 'ns:2', -200000),
+  named('303', '50', '2026-02-01', 'upfit', 'ns:2', 80000),
+  named(null, SHOP, '2026-02-01', null, null, 2500),
+  named(null, '80', '2026-02-01', null, null, -1000),
+  named('302', '40', '2026-03-01', 'graphics', 'ns:5', -50000),
+  named('302', '50', '2026-03-01', 'graphics', 'ns:5', 20000),
+  named('301', '40', '2026-03-01', 'upfit', 'ns:7', -10000),
+  named(null, '65', '2026-03-01', 'shared', 'denver', 30000),
+  named('301', '40', '2026-04-01', 'graphics', 'ns:1', -9000),
+];
+const CUSTOMER_NAMES = new Map([['301', 'Acme Fleet'], ['302', 'Bolt Rentals'], ['303', 'Cobalt Utility']]);
+
+// The split by vendor: the rent is Oak Properties', the shop supplies and
+// some of the cost Hitch Supply's; the sales and wages name no vendor.
+const VENDORS: PartyAmount[] = SPLIT.flatMap((r): PartyAmount[] => {
+  if (r.account === '65') return [{ ...r, party: '401' }];
+  if (r.account === SHOP) return [{ ...r, party: '402' }];
+  if (r.account === '50' && r.month === '2026-01-01' && r.division === 'upfit') {
+    return [{ ...r, ...sides(30000), party: '402' }, { ...r, ...sides(90000), party: null }];
+  }
+  if (r.account === '50' && r.month === '2026-03-01') return [{ ...r, party: '402' }];
+  return [{ ...r, party: null }];
+});
+const VENDOR_NAMES = new Map([['401', 'Oak Properties'], ['402', 'Hitch Supply']]);
+
+const byName = (
+  rows: 'customer' | 'vendor', ask: Partial<BuilderAsk> = {}, list = rows === 'customer' ? CUSTOMERS : VENDORS,
+  names = rows === 'customer' ? CUSTOMER_NAMES : VENDOR_NAMES, data = books(),
+) => buildReport(data, SPLIT, NAMES, { ...Q1, rows, ...ask }, { rows: list, names });
 
 const table = (built: BuiltReport) => built.lines.map((l) => [l.kind, l.depth, l.label, l.amounts]);
 const amountsOf = (built: BuiltReport, label: string) => built.lines.find((l) => l.label === label)?.amounts;
@@ -299,5 +346,172 @@ describe('the report builder', () => {
     expect(build({}, SPLIT, books(SPLIT, [{ account: '12', month: '2026-02-01', ...sides(100) }])).ties).toBe(true);
     // Filters don't change it: it's the whole split.
     expect(build({ division: 'graphics', location: '5' }).ties).toBe(true);
+  });
+
+  it('lays the profit and loss out by customer, the biggest first in each part, with the same totals as by account', () => {
+    const built = byName('customer', { by: 'total' });
+    expect(built.rows).toBe('customer');
+    expect(table(built)).toEqual([
+      ['section', 0, 'Income', null],
+      ['account', 1, 'Bolt Rentals', [250000]],
+      ['account', 1, 'Acme Fleet', [215000]],
+      ['account', 1, 'Cobalt Utility', [200000]],
+      ['total', 0, 'Total income', [665000]],
+      ['section', 0, 'Cost of sales', null],
+      ['account', 1, 'Bolt Rentals', [100000]],
+      // The same amount: by name.
+      ['account', 1, 'Acme Fleet', [80000]],
+      ['account', 1, 'Cobalt Utility', [80000]],
+      ['total', 0, 'Total cost of sales', [260000]],
+      ['total', 0, 'Gross profit', [405000]],
+      ['section', 0, 'Expense', null],
+      ['account', 1, 'No customer', [182500]],
+      ['total', 0, 'Total expense', [182500]],
+      ['total', 0, 'Net ordinary income', [222500]],
+      ['section', 0, 'Other income', null],
+      ['account', 1, 'No customer', [1000]],
+      ['total', 0, 'Total other income', [1000]],
+      ['total', 0, 'Net other income', [1000]],
+      ['total', 0, 'Net income', [223500]],
+    ]);
+    expect(built.lines[1]).toEqual({ kind: 'account', depth: 1, label: 'Bolt Rentals', party: '302', amounts: [250000] });
+    expect(built.lines.filter((l) => l.label === 'No customer').map((l) => l.party)).toEqual(['none', 'none']);
+    expect(built.lines.filter((l) => l.grand).map((l) => l.label)).toEqual(['Gross profit', 'Net ordinary income', 'Net other income', 'Net income']);
+    expect(built.ties).toBe(true);
+  });
+
+  it('lays the profit and loss out by vendor, the line with none last however big', () => {
+    expect(table(byName('vendor', { by: 'total' }))).toEqual([
+      ['section', 0, 'Income', null],
+      ['account', 1, 'No vendor', [665000]],
+      ['total', 0, 'Total income', [665000]],
+      ['section', 0, 'Cost of sales', null],
+      ['account', 1, 'Hitch Supply', [50000]],
+      ['account', 1, 'No vendor', [210000]],
+      ['total', 0, 'Total cost of sales', [260000]],
+      ['total', 0, 'Gross profit', [405000]],
+      ['section', 0, 'Expense', null],
+      ['account', 1, 'Oak Properties', [130000]],
+      ['account', 1, 'Hitch Supply', [2500]],
+      ['account', 1, 'No vendor', [50000]],
+      ['total', 0, 'Total expense', [182500]],
+      ['total', 0, 'Net ordinary income', [222500]],
+      ['section', 0, 'Other income', null],
+      ['account', 1, 'No vendor', [1000]],
+      ['total', 0, 'Total other income', [1000]],
+      ['total', 0, 'Net other income', [1000]],
+      ['total', 0, 'Net income', [223500]],
+    ]);
+  });
+
+  it('comes to the same columns and totals by customer or vendor as by account', () => {
+    const totals = (built: BuiltReport) => built.lines.filter((l) => l.kind === 'total' && l.depth === 0).map((l) => [l.label, l.amounts]);
+    const asks: Array<Partial<BuilderAsk>> = [
+      {}, { by: 'month' }, { by: 'location', from: '2025-12-01', to: '2026-04-01' }, { by: 'quarter', division: 'upfit' }, { location: '3' },
+    ];
+    for (const ask of asks) {
+      for (const rows of ['customer', 'vendor'] as const) {
+        const built = byName(rows, ask);
+        expect(built.columns).toEqual(build(ask).columns);
+        expect(totals(built)).toEqual(totals(build(ask)));
+        expect([built.divisions, built.locations, built.division, built.location]).toEqual(
+          [build(ask).divisions, build(ask).locations, build(ask).division, build(ask).location],
+        );
+      }
+    }
+  });
+
+  it('gives a name a line in every column when any column has something for it', () => {
+    // Customer 304 isn't on NetSuite's list: a sale in January taken back in March.
+    const rows = [...CUSTOMERS, named('304', '40', '2026-01-01', 'upfit', 'ns:2', -500), named('304', '40', '2026-03-01', 'upfit', 'ns:2', 500)];
+    const built = byName('customer', { by: 'month' }, rows);
+    expect(labels(built)).toEqual(['Jan 2026', 'Feb 2026', 'Mar 2026', 'Total']);
+    expect(table(built).slice(0, 6)).toEqual([
+      ['section', 0, 'Income', null],
+      ['account', 1, 'Bolt Rentals', [200000, 0, 50000, 250000]],
+      ['account', 1, 'Acme Fleet', [205000, 0, 10000, 215000]],
+      ['account', 1, 'Cobalt Utility', [0, 200000, 0, 200000]],
+      ['account', 1, 'Customer 304', [500, 0, -500, 0]],
+      ['total', 0, 'Total income', [405500, 200000, 59500, 665000]],
+    ]);
+    // Altogether, it comes to nothing, so it doesn't show.
+    expect(amountsOf(byName('customer', { by: 'total' }, rows), 'Customer 304')).toBeUndefined();
+  });
+
+  it("shows only the division's or location's lines by name it's asked for", () => {
+    const built = byName('customer', { by: 'location', division: 'graphics' });
+    expect(labels(built)).toEqual(["O'Fallon", 'Social Circle', 'Total']);
+    expect(table(built)).toEqual([
+      ['section', 0, 'Income', null],
+      ['account', 1, 'Bolt Rentals', [100000, 50000, 150000]],
+      ['total', 0, 'Total income', [100000, 50000, 150000]],
+      ['section', 0, 'Cost of sales', null],
+      ['account', 1, 'Bolt Rentals', [40000, 20000, 60000]],
+      ['total', 0, 'Total cost of sales', [40000, 20000, 60000]],
+      ['total', 0, 'Gross profit', [60000, 30000, 90000]],
+      ['total', 0, 'Net ordinary income', [60000, 30000, 90000]],
+      ['total', 0, 'Net income', [60000, 30000, 90000]],
+    ]);
+    expect(amountsOf(byName('vendor', { location: 'own:denver', by: 'total' }), 'Oak Properties')).toEqual([30000]);
+  });
+
+  it("names a customer or vendor NetSuite's lists don't by its id, and lists one on an account the chart doesn't have apart", () => {
+    const customers = byName('customer', { by: 'total' }, [...CUSTOMERS, named('309', '77', '2026-02-01', 'upfit', null, 700)]);
+    expect(table(customers).slice(-2)).toEqual([
+      ['section', 0, 'Not in the chart of accounts yet', null],
+      ['account', 1, 'Customer 309', [700]],
+    ]);
+    expect(customers.lines.at(-1)).toMatchObject({ party: '309', inChart: false });
+    expect(amountsOf(customers, 'Net income')).toEqual([223500]);
+    const vendors = byName('vendor', { by: 'total' }, [...VENDORS, named('409', '77', '2026-02-01', null, null, 300), named(null, '77', '2026-02-01', null, null, 900)]);
+    expect(table(vendors).slice(-3)).toEqual([
+      ['section', 0, 'Not in the chart of accounts yet', null],
+      ['account', 1, 'Vendor 409', [300]],
+      ['account', 1, 'No vendor', [900]],
+    ]);
+  });
+
+  it('puts names with the same amount in name order, and lists the biggest apart first', () => {
+    // Zephyr Towing's id comes before Able Auto's, and so does its sale.
+    const rows = [
+      ...CUSTOMERS,
+      named('310', '40', '2026-02-01', 'upfit', 'ns:2', -500), named('311', '40', '2026-03-01', 'upfit', 'ns:2', -500),
+      named('312', '77', '2026-02-01', 'upfit', null, 300), named('313', '77', '2026-02-01', 'upfit', null, 900),
+    ];
+    const names = new Map<string, string>([
+      ...CUSTOMER_NAMES, ['310', 'Zephyr Towing'], ['311', 'Able Auto'], ['312', 'Small Fleet'], ['313', 'Big Fleet'],
+    ]);
+    const built = byName('customer', { by: 'total' }, rows, names);
+    expect(table(built).slice(0, 7)).toEqual([
+      ['section', 0, 'Income', null],
+      ['account', 1, 'Bolt Rentals', [250000]],
+      ['account', 1, 'Acme Fleet', [215000]],
+      ['account', 1, 'Cobalt Utility', [200000]],
+      ['account', 1, 'Able Auto', [500]],
+      ['account', 1, 'Zephyr Towing', [500]],
+      ['total', 0, 'Total income', [666000]],
+    ]);
+    expect(table(built).slice(-3)).toEqual([
+      ['section', 0, 'Not in the chart of accounts yet', null],
+      ['account', 1, 'Big Fleet', [900]],
+      ['account', 1, 'Small Fleet', [300]],
+    ]);
+  });
+
+  it('has a line for each account when the split by name is not read', () => {
+    const built = buildReport(books(), SPLIT, NAMES, { ...Q1, rows: 'customer' });
+    expect(built.rows).toBe('account');
+    expect(built).toEqual(build());
+  });
+
+  it("checks the split by name, as well as the split, comes to Reports' profit and loss for the months", () => {
+    expect(byName('customer').ties).toBe(true);
+    expect(byName('vendor').ties).toBe(true);
+    // One more sale by name than Reports has, in the months, doesn't tie; outside them, it does.
+    expect(byName('customer', {}, [...CUSTOMERS, named('301', '40', '2026-02-01', 'upfit', null, -100)]).ties).toBe(false);
+    expect(byName('customer', {}, [...CUSTOMERS, named('301', '40', '2026-04-01', 'upfit', null, -100)]).ties).toBe(true);
+    // The split itself still counts.
+    const extra = [...SPLIT, split('42', '2026-02-01', null, null, -100)];
+    expect(buildReport(books(), extra, NAMES, { ...Q1, rows: 'customer' }, { rows: CUSTOMERS, names: CUSTOMER_NAMES }).ties).toBe(false);
   });
 });

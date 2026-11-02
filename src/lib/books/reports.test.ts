@@ -4,7 +4,7 @@ vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
 import {
-  lastReportMonth, lineSpan, profitAndLossLines, report, reportMonths, yearClosings,
+  lastReportMonth, lineSpan, profitAndLossByName, profitAndLossLines, report, reportMonths, yearClosings,
   type ReportAccount, type ReportAmount, type ReportData, type ReportKind, type ReportLine,
 } from './reports';
 import { trialBalance, type TbAmount } from './trial-balance';
@@ -199,6 +199,35 @@ describe("the profit and loss for a report builder's column", () => {
       ['total', 0, 'Net ordinary income', 0, null],
       ['total', 0, 'Net income', 0, null],
     ]);
+  });
+
+  it("is laid out by name from each part's lines, with the profit and loss's totals and no NetSuite side", () => {
+    const parts: Record<string, Array<{ key: string; label: string; cents: number }>> = {
+      income: [{ key: '301', label: 'Acme Fleet', cents: -100000 }, { key: 'none', label: 'No customer', cents: -500 }],
+      expense: [{ key: 'none', label: 'No customer', cents: 50000 }],
+      other_expense: [{ key: '302', label: 'Bolt Rentals', cents: 0 }],
+    };
+    const lines = profitAndLossByName((types) => parts[types[0]] ?? [], [{ key: '303', label: 'Cobalt Utility', cents: 700 }]);
+    expect(shape(lines)).toEqual([
+      ['section', 0, 'Income', null, null],
+      ['account', 1, 'Acme Fleet', 100000, null],
+      ['account', 1, 'No customer', 500, null],
+      ['total', 0, 'Total income', 100500, null],
+      ['total', 0, 'Gross profit', 100500, null],
+      ['section', 0, 'Expense', null, null],
+      ['account', 1, 'No customer', 50000, null],
+      ['total', 0, 'Total expense', 50000, null],
+      ['total', 0, 'Net ordinary income', 50500, null],
+      ['section', 0, 'Other expense', null, null],
+      ['account', 1, 'Bolt Rentals', 0, null],
+      ['total', 0, 'Total other expense', 0, null],
+      ['total', 0, 'Net other income', 0, null],
+      ['total', 0, 'Net income', 50500, null],
+      ['section', 0, 'Not in the chart of accounts yet', null, null],
+      ['account', 1, 'Cobalt Utility', 700, null],
+    ]);
+    expect(lines[1]).toEqual({ kind: 'account', depth: 1, label: 'Acme Fleet', party: '301', fleetsuite: 100000, netsuite: null });
+    expect(lines.at(-1)).toEqual({ kind: 'account', depth: 1, label: 'Cobalt Utility', party: '303', inChart: false, fleetsuite: 700, netsuite: null });
   });
 });
 

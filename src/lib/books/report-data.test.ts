@@ -1,0 +1,74 @@
+import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
+vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
+
+import { builderAsk, monthsFor, type LoadedReports } from './report-data';
+
+describe('the report builder’s months that move with the calendar', () => {
+  it('works each out from last month', () => {
+    expect(monthsFor('picked', '2026-10-01')).toBeNull();
+    expect(monthsFor('year_to_date', '2026-10-01')).toEqual({ from: '2026-01-01', to: '2026-10-01' });
+    expect(monthsFor('last_month', '2026-10-01')).toEqual({ from: '2026-10-01', to: '2026-10-01' });
+    expect(monthsFor('last_year', '2026-10-01')).toEqual({ from: '2025-01-01', to: '2025-12-01' });
+    expect(monthsFor('last_12_months', '2026-10-01')).toEqual({ from: '2025-11-01', to: '2026-10-01' });
+  });
+
+  it('takes the last quarter that has ended, the one last month ends when it ends one', () => {
+    const quarter = (last: string) => monthsFor('last_quarter', last);
+    expect(quarter('2026-10-01')).toEqual({ from: '2026-07-01', to: '2026-09-01' });
+    expect(quarter('2026-11-01')).toEqual({ from: '2026-07-01', to: '2026-09-01' });
+    expect(quarter('2026-09-01')).toEqual({ from: '2026-07-01', to: '2026-09-01' });
+    expect(quarter('2026-12-01')).toEqual({ from: '2026-10-01', to: '2026-12-01' });
+    expect(quarter('2026-06-01')).toEqual({ from: '2026-04-01', to: '2026-06-01' });
+    // In January or February, it's the year before's last.
+    expect(quarter('2027-01-01')).toEqual({ from: '2026-10-01', to: '2026-12-01' });
+    expect(quarter('2027-02-01')).toEqual({ from: '2026-10-01', to: '2026-12-01' });
+    expect(quarter('2027-03-01')).toEqual({ from: '2027-01-01', to: '2027-03-01' });
+  });
+
+  it('has December end the year: last year is the one that just ended', () => {
+    expect(monthsFor('last_year', '2026-12-01')).toEqual({ from: '2026-01-01', to: '2026-12-01' });
+    expect(monthsFor('last_year', '2027-01-01')).toEqual({ from: '2026-01-01', to: '2026-12-01' });
+    expect(monthsFor('year_to_date', '2026-12-01')).toEqual({ from: '2026-01-01', to: '2026-12-01' });
+    expect(monthsFor('last_12_months', '2026-12-01')).toEqual({ from: '2026-01-01', to: '2026-12-01' });
+  });
+
+  it('starts no earlier than January 2025', () => {
+    expect(monthsFor('last_12_months', '2025-06-01')).toEqual({ from: '2025-01-01', to: '2025-06-01' });
+    expect(monthsFor('last_year', '2025-06-01')).toEqual({ from: '2025-01-01', to: '2025-01-01' });
+    expect(monthsFor('last_quarter', '2025-02-01')).toEqual({ from: '2025-01-01', to: '2025-01-01' });
+    expect(monthsFor('last_quarter', '2025-04-01')).toEqual({ from: '2025-01-01', to: '2025-03-01' });
+    expect(monthsFor('year_to_date', '2025-01-01')).toEqual({ from: '2025-01-01', to: '2025-01-01' });
+  });
+});
+
+describe('the report a request asks the builder for', () => {
+  const loaded = { through: '2026-11-01', lastMonth: '2026-10-01' } as LoadedReports;
+  const ask = (query: string) => builderAsk(new URLSearchParams(query), loaded);
+
+  it('opens on the year to date by division, a line for each account', () => {
+    expect(ask('')).toEqual({
+      rows: 'account', months: 'year_to_date', from: '2026-01-01', to: '2026-10-01', by: 'division', division: null, location: null,
+    });
+  });
+
+  it('takes the lines, columns, months and filters asked for', () => {
+    expect(ask('rows=vendor&by=quarter&months=last_year&division=graphics&location=own:denver')).toEqual({
+      rows: 'vendor', months: 'last_year', from: '2025-01-01', to: '2025-12-01', by: 'quarter', division: 'graphics', location: 'own:denver',
+    });
+    expect(ask('rows=customer&from=2026-03&to=2026-05')).toMatchObject({ rows: 'customer', months: 'picked', from: '2026-03-01', to: '2026-05-01' });
+    // Only a start picked: the end is last month.
+    expect(ask('from=2025-06')).toMatchObject({ months: 'picked', from: '2025-06-01', to: '2026-10-01' });
+    // A month that moves with the calendar wins over months picked with it.
+    expect(ask('months=last_month&from=2025-06&to=2025-08')).toMatchObject({ months: 'last_month', from: '2026-10-01', to: '2026-10-01' });
+  });
+
+  it('falls back for what it has none of', () => {
+    expect(ask('rows=items&by=week&months=soon')).toMatchObject({ rows: 'account', by: 'division', months: 'year_to_date' });
+    // Months it can't cover are none picked.
+    expect(ask('from=2024-06&to=2027-01')).toMatchObject({ months: 'year_to_date', from: '2026-01-01', to: '2026-10-01' });
+    expect(ask('months=picked&from=2026-09&to=2026-02')).toMatchObject({ months: 'picked', from: '2026-01-01', to: '2026-02-01' });
+    expect(ask('division=&location=')).toMatchObject({ division: null, location: null });
+  });
+});

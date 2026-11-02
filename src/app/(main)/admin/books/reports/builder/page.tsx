@@ -4,21 +4,27 @@ import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { useDialog } from '@/components/DialogProvider';
 import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
-import { BY_LABELS, builderTitle, filterWords, type BuilderBy } from '@/lib/books/report-builder-words';
+import {
+  BUILDER_MONTHS, BUILDER_ROWS, BY_LABELS, MONTHS_LABELS, ROWS_LABELS, builderTitle, filterWords,
+  type BuilderBy, type BuilderMonths, type BuilderRows,
+} from '@/lib/books/report-builder-words';
 import { useFileDownload } from '@/lib/use-file-download';
 
 /**
  * Books → Reports → Report builder (src/lib/books/report-builder.ts,
- * migration 500, docs/books.md "Report builder").
+ * migrations 500 and 501, docs/books.md "Report builder").
  *
- * FleetSuite's own profit and loss for any months from January 2025, laid
- * out as on Reports, with a column for each month, quarter, year, division
- * or location and a Total, only one division's or one location's lines when
- * picked, ready-made ones on top, and the report as an Excel file. Open to
- * whoever opens the books, linked from Reports and the Books hub.
+ * FleetSuite's own profit and loss for any months from January 2025, or
+ * months that move with the calendar, laid out as on Reports with a line
+ * for each account, customer or vendor and a column for each month,
+ * quarter, year, division or location and a Total, only one division's or
+ * one location's lines when picked, ready-made ones on top, reports saved
+ * by name, and the report as an Excel file. Open to whoever opens the
+ * books, linked from Reports and the Books hub.
  */
 
 interface Choice {
@@ -32,10 +38,28 @@ interface Line {
   label: string;
   number?: string | null;
   account?: string;
+  /** On lines by customer or vendor, its key: NetSuite's id, or 'none'. */
+  party?: string;
   grand?: true;
   inChart?: boolean;
   /** One amount for each column; null on a section or heading. */
   amounts: number[] | null;
+}
+
+/** A report saved by name (loadSavedReports in src/lib/books/report-data.ts). */
+interface Saved {
+  id: string;
+  name: string;
+  rows: BuilderRows;
+  by: BuilderBy;
+  division: string | null;
+  location: string | null;
+  months: BuilderMonths;
+  from: string | null;
+  to: string | null;
+  savedBy: string | null;
+  updatedAt: string;
+  canChange: boolean;
 }
 
 interface Payload {
@@ -43,9 +67,11 @@ interface Payload {
   company: string;
   posts: boolean;
   /** The months there are to pick from, 'YYYY-MM-01'. */
-  months: string[];
+  monthList: string[];
+  months: BuilderMonths;
   from: string;
   to: string;
+  rows: BuilderRows;
   by: BuilderBy;
   columns: Choice[];
   lines: Line[];
@@ -54,6 +80,7 @@ interface Payload {
   division: string | null;
   location: string | null;
   ties: boolean;
+  saved: Saved[];
   copied: boolean;
   lastPosting: { at: string; error: string | null; partial: boolean } | null;
   lastCopy: { at: string; error: string | null } | null;
@@ -61,22 +88,42 @@ interface Payload {
 
 interface Ask {
   company?: string | null;
+  rows?: BuilderRows | null;
   by?: BuilderBy | null;
+  months?: BuilderMonths | null;
   from?: string | null;
   to?: string | null;
   division?: string | null;
   location?: string | null;
 }
 
-/** Ready-made reports: a column for each division, location or month, every line, over the months picked. */
-const READY_MADE: Array<[BuilderBy, string]> = [['division', 'P&L by division'], ['location', 'P&L by location'], ['month', 'P&L by month']];
+/** Ready-made reports: a line for each account and a column for each division, location or month, or a line for each customer or vendor, over the months shown. */
+const READY_MADE: Array<{ rows: BuilderRows; by: BuilderBy; label: string }> = [
+  { rows: 'account', by: 'division', label: 'P&L by division' },
+  { rows: 'account', by: 'location', label: 'P&L by location' },
+  { rows: 'account', by: 'month', label: 'P&L by month' },
+  { rows: 'customer', by: 'total', label: 'P&L by customer' },
+  { rows: 'vendor', by: 'total', label: 'P&L by vendor' },
+];
 /** What the columns picker offers, in its order. */
 const PICKER: BuilderBy[] = ['division', 'location', 'month', 'quarter', 'year', 'total'];
 
-/** The route's params for what's asked: months as 'YYYY-MM', anything not asked for left out. */
-const query = (ask: Ask) => new URLSearchParams(Object.entries({
-  company: ask.company, by: ask.by, from: ask.from?.slice(0, 7), to: ask.to?.slice(0, 7), division: ask.division, location: ask.location,
-}).filter((e): e is [string, string] => !!e[1])).toString();
+/**
+ * The route's params for what's asked: months as 'YYYY-MM', anything not
+ * asked for left out, and no months picked with ones that move with the
+ * calendar, which the route works out.
+ */
+const query = (ask: Ask) => {
+  const moving = !!ask.months && ask.months !== 'picked';
+  return new URLSearchParams(Object.entries({
+    company: ask.company, rows: ask.rows, by: ask.by, months: ask.months,
+    from: moving ? null : ask.from?.slice(0, 7), to: moving ? null : ask.to?.slice(0, 7), division: ask.division, location: ask.location,
+  }).filter((e): e is [string, string] => !!e[1])).toString();
+};
+
+/** Is the report shown the saved one, as it was saved? */
+const shows = (s: Saved, d: Payload) => s.rows === d.rows && s.by === d.by && s.division === d.division && s.location === d.location
+  && s.months === d.months && (s.months !== 'picked' || (s.from === d.from && s.to === d.to));
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' });
 const fmt = (cents: number) => money.format(cents / 100);
@@ -125,6 +172,20 @@ const select: React.CSSProperties = {
   color: 'var(--text-primary)', fontSize: '16px', fontWeight: 600,
 };
 
+const act = (color: string | null, enabled: boolean): React.CSSProperties => ({
+  padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 800,
+  border: color ? 'none' : '1px solid var(--border)', background: color ?? 'var(--card)', color: color ? '#fff' : 'var(--text-primary)',
+  cursor: enabled ? 'pointer' : 'not-allowed', opacity: enabled ? 1 : 0.5,
+});
+
+const input: React.CSSProperties = {
+  width: '100%', maxWidth: '360px', boxSizing: 'border-box', padding: '7px 10px', borderRadius: '8px', border: '1px solid var(--border)',
+  background: 'var(--card)', color: 'var(--text-primary)', fontSize: '16px',
+};
+
+/** What the route said went wrong: a field it refused, else its error. */
+const problem = (json: any, status: number) => json?.details?.[0]?.message ?? json?.error ?? `Request failed (${status})`;
+
 const cell: React.CSSProperties = { padding: '6px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
 
 /** The account column stays put while the amounts scroll across under it. */
@@ -169,11 +230,18 @@ function BuilderRow({ line, columns }: { line: Line; columns: Choice[] }) {
 
 export default function BooksReportBuilderPage() {
   const router = useRouter();
+  const dialog = useDialog();
   const { hasRole, loading: authLoading } = useAuth();
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [howOpen, setHowOpen] = useState(false);
+  // The report saved by name that was opened, by id; it stays open while the report is changed, to save the changes to it.
+  const [savedId, setSavedId] = useState<string | null>(null);
+  // The Save panel: the name typed in, and what went wrong saving; null when it's closed.
+  const [panel, setPanel] = useState<{ name: string; error: string } | null>(null);
+  const [busy, setBusy] = useState(false);
   const excel = useFileDownload(setError);
 
   const load = useCallback(async (ask: Ask) => {
@@ -183,10 +251,6 @@ export default function BooksReportBuilderPage() {
       if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
       setData(json);
       setError('');
-      // Keep the address on the report shown, so a reload or a shared link opens it again.
-      window.history.replaceState(null, '', deepLinks.booksReportBuilder({
-        company: json.company, by: json.by, from: json.from, to: json.to, division: json.division, location: json.location,
-      }));
     } catch (e: any) {
       setError(e?.message || 'Could not load the report');
     }
@@ -196,24 +260,104 @@ export default function BooksReportBuilderPage() {
   useEffect(() => {
     if (authLoading) return;
     if (!booksAccess(hasRole)) { router.push('/home'); return; }
-    // A link may name the company, columns, months and filters (deepLinks.booksReportBuilder).
+    // A link may name the company, lines, columns, months, filters and saved report (deepLinks.booksReportBuilder).
     const q = new URLSearchParams(window.location.search);
+    setSavedId(q.get('saved'));
     load({
-      company: q.get('company'), by: PICKER.find((b) => b === q.get('by')) ?? null, from: q.get('from'), to: q.get('to'),
+      company: q.get('company'), rows: BUILDER_ROWS.find((r) => r === q.get('rows')) ?? null, by: PICKER.find((b) => b === q.get('by')) ?? null,
+      months: BUILDER_MONTHS.find((m) => m === q.get('months')) ?? null, from: q.get('from'), to: q.get('to'),
       division: q.get('division'), location: q.get('location'),
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- hasRole identity changes per render; auth state covers it
   }, [authLoading, router, load]);
 
-  // A start after the end moves the end with it, and an end before the start the start.
+  // The saved report open: one of the company's.
+  const open = data?.saved.find((s) => s.id === savedId) ?? null;
+
+  // Keep the address on the report shown, so a reload or a shared link opens it again.
+  useEffect(() => {
+    if (!data) return;
+    window.history.replaceState(null, '', deepLinks.booksReportBuilder({
+      company: data.company, rows: data.rows, by: data.by, months: data.months, from: data.from, to: data.to,
+      division: data.division, location: data.location, saved: open?.id ?? null,
+    }));
+  }, [data, open?.id]);
+
+  // A start after the end moves the end with it, and an end before the start the start; picking a month picks the months by hand.
   const pick = (next: Ask) => {
     if (!data) return;
     let from = next.from ?? data.from;
     let to = next.to ?? data.to;
     if (next.from && from > to) to = from;
     if (next.to && to < from) from = to;
+    const months = next.months ?? (next.from || next.to ? 'picked' : data.months);
+    // Another company has its own saved reports.
+    if (next.company && next.company !== data.company) setSavedId(null);
     setLoading(true);
-    load({ company: data.company, by: data.by, division: data.division, location: data.location, ...next, from, to });
+    setNotice('');
+    load({ company: data.company, rows: data.rows, by: data.by, division: data.division, location: data.location, ...next, months, from, to });
+  };
+
+  const openSaved = (s: Saved) => {
+    if (!data) return;
+    setSavedId(s.id);
+    setPanel(null);
+    setNotice('');
+    setLoading(true);
+    load({ company: data.company, rows: s.rows, by: s.by, months: s.months, from: s.from, to: s.to, division: s.division, location: s.location });
+  };
+
+  // The report shown saved by name: as the saved one open, or as a new one.
+  const save = async (asNew: boolean) => {
+    if (!data || !panel) return;
+    const into = asNew ? null : open;
+    const picked = data.months === 'picked';
+    setBusy(true);
+    try {
+      const res = await apiFetch('/api/admin/books/reports/builder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save', id: into?.id ?? null, seen: into?.updatedAt ?? null, name: panel.name, company: data.company,
+          rows: data.rows, by: data.by, division: data.division, location: data.location, months: data.months,
+          from: picked ? data.from.slice(0, 7) : null, to: picked ? data.to.slice(0, 7) : null,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(problem(json, res.status));
+      setSavedId(json.id);
+      setPanel(null);
+      setNotice(`Saved "${panel.name.trim()}".`);
+      await load(data);
+    } catch (e: any) {
+      setPanel((p) => p && { ...p, error: e?.message || 'Could not save the report' });
+    }
+    setBusy(false);
+  };
+
+  const remove = async (s: Saved) => {
+    if (!data) return;
+    const ok = await dialog.confirm(`Delete the saved report "${s.name}"? The books stay as they are; only the report's name and settings go.`, {
+      title: 'Delete a saved report', confirmLabel: 'Delete it', cancelLabel: 'Keep it', destructive: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const res = await apiFetch('/api/admin/books/reports/builder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'remove', id: s.id, seen: s.updatedAt }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(problem(json, res.status));
+      setSavedId(null);
+      setPanel(null);
+      setNotice(`Deleted "${s.name}".`);
+      await load(data);
+    } catch (e: any) {
+      setPanel((p) => p && { ...p, error: e?.message || 'Could not delete the report' });
+    }
+    setBusy(false);
   };
 
   const companyName = data?.companies.find((c) => c.code === data.company)?.name ?? data?.company;
@@ -224,14 +368,15 @@ export default function BooksReportBuilderPage() {
   const filters = picked ? filterWords(picked.division, picked.location) : '';
   // The report shown, every line, as an Excel file (src/lib/books/report-workbook.ts).
   const excelUrl = data && `/api/admin/books/reports/builder/download?${query(data)}`;
+  const lineWord = data?.rows === 'customer' ? 'Customer' : data?.rows === 'vendor' ? 'Vendor' : 'Account';
 
   return (
     <div>
       <div style={{ marginBottom: '14px' }}>
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Report builder</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          FleetSuite&apos;s own profit and loss with a column for each month, quarter, year, division or location, for any
-          months from January 2025.{' '}
+          FleetSuite&apos;s own profit and loss with a line for each account, customer or vendor and a column for each month,
+          quarter, year, division or location.{' '}
           <Link href="/admin/books/reports" style={{ color: 'var(--text-secondary)' }}>Reports</Link>
           {' · '}
           <Link href="/admin/books" style={{ color: 'var(--text-secondary)' }}>Chart of accounts</Link>
@@ -239,6 +384,7 @@ export default function BooksReportBuilderPage() {
       </div>
 
       {error && <div style={banner(RED)}>{error}</div>}
+      {notice && !error && <div style={banner(GREEN)}>{notice}</div>}
 
       {data && (
         <>
@@ -261,8 +407,8 @@ export default function BooksReportBuilderPage() {
           )}
           {!data.copied && (
             <div style={banner(AMBER)}>
-              NetSuite&apos;s ledger hasn&apos;t been copied yet, so lines from its documents have no location. It&apos;s copied every two
-              hours, or press Copy now on Trial balance vs NetSuite.
+              NetSuite&apos;s ledger hasn&apos;t been copied yet, so lines from its documents have no location, customer or vendor.
+              It&apos;s copied every two hours, or press Copy now on Trial balance vs NetSuite.
             </div>
           )}
           {data.lastCopy?.error && <div style={banner(RED)}>The last copy of NetSuite&apos;s ledger failed {ago(data.lastCopy.at)}: {data.lastCopy.error}</div>}
@@ -279,29 +425,58 @@ export default function BooksReportBuilderPage() {
           </div>
 
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
-            {READY_MADE.map(([by, label]) => (
+            {READY_MADE.map((r) => (
               <button
-                key={by}
-                onClick={() => pick({ by, division: null, location: null })}
+                key={r.label}
+                onClick={() => pick({ rows: r.rows, by: r.by, division: null, location: null })}
                 disabled={loading}
-                style={button(data.by === by && !data.division && !data.location)}
+                style={button(data.rows === r.rows && data.by === r.by && !data.division && !data.location)}
               >
-                {label}
+                {r.label}
               </button>
             ))}
           </div>
 
+          {data.saved.length > 0 && (
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px' }}>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>Saved</span>
+              {data.saved.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => openSaved(s)}
+                  disabled={loading}
+                  title={s.savedBy ? `Saved by ${s.savedBy}` : undefined}
+                  style={button(open?.id === s.id && shows(s, data))}
+                >
+                  {s.name}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+            <label style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              Months
+              <select value={data.months} onChange={(e) => pick({ months: e.target.value as BuilderMonths })} disabled={loading} style={select}>
+                {BUILDER_MONTHS.map((m) => <option key={m} value={m}>{MONTHS_LABELS[m]}</option>)}
+              </select>
+            </label>
             <label style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               From
               <select value={data.from} onChange={(e) => pick({ from: e.target.value })} disabled={loading} style={select}>
-                {data.months.map((m) => <option key={m} value={m}>{shortName(m)}</option>)}
+                {data.monthList.map((m) => <option key={m} value={m}>{shortName(m)}</option>)}
               </select>
             </label>
             <label style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               To
               <select value={data.to} onChange={(e) => pick({ to: e.target.value })} disabled={loading} style={select}>
-                {data.months.map((m) => <option key={m} value={m}>{shortName(m)}</option>)}
+                {data.monthList.map((m) => <option key={m} value={m}>{shortName(m)}</option>)}
+              </select>
+            </label>
+            <label style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              Lines
+              <select value={data.rows} onChange={(e) => pick({ rows: e.target.value as BuilderRows })} disabled={loading} style={select}>
+                {BUILDER_ROWS.map((r) => <option key={r} value={r}>{ROWS_LABELS[r]}</option>)}
               </select>
             </label>
             <label style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -332,20 +507,75 @@ export default function BooksReportBuilderPage() {
 
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: '6px' }}>
             <div style={{ fontSize: '14px', fontWeight: 800 }}>
-              {builderTitle(data.by)}, {period(data.from, data.to)}
+              {builderTitle(data.by, data.rows)}, {period(data.from, data.to)}
+              {data.months !== 'picked' && (
+                <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', marginLeft: '8px' }}>{MONTHS_LABELS[data.months]}</span>
+              )}
               {filters && <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', marginLeft: '8px' }}>{filters}</span>}
             </div>
-            {excelUrl && (
-              <button
-                onClick={() => excel.download(excelUrl, 'Report.xlsx')}
-                disabled={loading || excel.busy}
-                title="Every line of the report as an Excel file, an amount for each column"
-                style={button(false)}
-              >
-                {excel.busy ? 'Making the file…' : excel.ready(excelUrl) ? '⬇ Tap to save the Excel file' : '⬇ Download Excel'}
-              </button>
-            )}
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {!panel && (
+                <button
+                  onClick={() => setPanel({ name: open?.canChange ? open.name : '', error: '' })}
+                  disabled={loading}
+                  title="Keep this report's lines, columns, filters and months under a name, to open again"
+                  style={act(GREEN, !loading)}
+                >
+                  Save report
+                </button>
+              )}
+              {excelUrl && (
+                <button
+                  onClick={() => excel.download(excelUrl, 'Report.xlsx')}
+                  disabled={loading || excel.busy}
+                  title="Every line of the report as an Excel file, an amount for each column"
+                  style={button(false)}
+                >
+                  {excel.busy ? 'Making the file…' : excel.ready(excelUrl) ? '⬇ Tap to save the Excel file' : '⬇ Download Excel'}
+                </button>
+              )}
+            </div>
           </div>
+
+          {panel && (
+            <div style={{ border: '1px solid var(--border)', borderRadius: '8px', padding: '12px', marginBottom: '10px', background: 'var(--card)' }}>
+              <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                Name
+              </label>
+              <input
+                value={panel.name}
+                onChange={(e) => setPanel({ name: e.target.value, error: '' })}
+                maxLength={60}
+                placeholder="Upfit by month, say"
+                style={input}
+              />
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Keeps the lines, columns, filters and months{data.months !== 'picked' ? `, ${MONTHS_LABELS[data.months].toLowerCase()} as the calendar moves` : ''}.
+                Everyone who opens the books sees it.
+              </div>
+              {panel.error && <div style={{ fontSize: '12px', fontWeight: 700, color: RED, marginTop: '6px' }}>{panel.error}</div>}
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginTop: '10px' }}>
+                {open?.canChange ? (
+                  <>
+                    <button onClick={() => save(false)} disabled={busy} style={act(GREEN, !busy)}>{busy ? 'Saving…' : 'Save changes'}</button>
+                    <button onClick={() => save(true)} disabled={busy} style={act(null, !busy)}>Save as a new report</button>
+                  </>
+                ) : (
+                  <button onClick={() => save(true)} disabled={busy} style={act(GREEN, !busy)}>{busy ? 'Saving…' : 'Save'}</button>
+                )}
+                <button onClick={() => setPanel(null)} disabled={busy} style={act(null, !busy)}>Leave without saving</button>
+                {open?.canChange && (
+                  <button
+                    onClick={() => remove(open)}
+                    disabled={busy}
+                    style={{ background: 'none', border: 'none', padding: 0, color: RED, fontSize: '12px', fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer' }}
+                  >
+                    Delete &ldquo;{open.name}&rdquo;
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
             Income, cost of sales and expenses for the months picked, laid out as on Reports.{' '}
             <button
@@ -359,7 +589,9 @@ export default function BooksReportBuilderPage() {
                 A sale line&apos;s division is the invoice rule&apos;s: graphics for 3M vinyl, graphics install labor and removal and items
                 starting 06, upfit for the rest, freight and discounts not split. A cost or expense line without one takes its item&apos;s
                 division, else its document&apos;s sales&apos; when they&apos;re all one division, else it&apos;s Not split, as is an entry
-                made without one. A line&apos;s location is its own, else the one NetSuite has on its document, else No location.
+                made without one. A line&apos;s location is its own, else the one NetSuite has on its document, else No location. A
+                line&apos;s customer or vendor is the one NetSuite names on the line it copies, else the one its document names, else
+                it&apos;s No customer or No vendor.
               </div>
             )}
           </div>
@@ -368,7 +600,7 @@ export default function BooksReportBuilderPage() {
             <table className="rep-table" style={{ minWidth: '100%', borderCollapse: 'separate', borderSpacing: 0, fontSize: '12px', background: 'var(--card)' }}>
               <thead>
                 <tr style={{ color: 'var(--text-secondary)' }}>
-                  <th style={{ ...labelCell(0), fontWeight: 700 }}>Account</th>
+                  <th style={{ ...labelCell(0), fontWeight: 700 }}>{lineWord}</th>
                   {data.columns.map((c) => (
                     <th
                       key={c.key}
@@ -385,7 +617,7 @@ export default function BooksReportBuilderPage() {
                     Nothing in FleetSuite&apos;s books for {data.from === data.to ? 'this month' : 'these months'}{filters ? ' with these filters' : ''}.
                   </td></tr>
                 )}
-                {data.lines.map((l, i) => <BuilderRow key={`${i}-${l.kind}-${l.account ?? l.label}`} line={l} columns={data.columns} />)}
+                {data.lines.map((l, i) => <BuilderRow key={`${i}-${l.kind}-${l.account ?? l.party ?? l.label}`} line={l} columns={data.columns} />)}
               </tbody>
             </table>
           </div>
