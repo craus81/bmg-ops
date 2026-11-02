@@ -1,8 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { generalLedger, ledgerAccounts, type LedgerBlock } from './general-ledger';
 import { readCompanies, type CompanyRow } from './going-live';
 import { BOOKS_COMPANIES } from './journal';
 import { readMonthFacts } from './months';
 import { loadReports, type LoadedReports } from './report-data';
+import { DOCUMENTS_LISTED, type AccountDocumentsData } from './report-detail';
 import { yearCloseAmounts, type YearCloseAmounts } from './reports';
 import { SALES_TAX_COMPANY } from './sales-tax-data';
 import { defaultYear, readYearChecks, readYears, yearsShown, type YearFacts } from './year-end';
@@ -12,7 +14,7 @@ import { defaultYear, readYearChecks, readYears, yearsShown, type YearFacts } fr
  * year (src/app/api/admin/books/year-end and its download; docs/books.md
  * "Year end"): the company and year asked for, the year's close both sides,
  * its months, checks and closes, and the books Reports reads, which the
- * package's statements come from.
+ * package's statements come from; and for the package, the general ledger.
  */
 
 export interface YearRead {
@@ -64,4 +66,34 @@ export async function readYear(service: SupabaseClient, company: CompanyRow, yea
     checked: loaded.data.opening.length > 0 || loaded.data.netsuite.length > 0,
     loaded,
   };
+}
+
+/** How many accounts' documents the general ledger reads at once. */
+const LEDGER_READS = 4;
+
+/**
+ * The general ledger for the months from `from` through `to`
+ * (generalLedger in general-ledger.ts): the documents of each account that
+ * moved in them, read as the account's own download reads them
+ * (gl_books_account_documents, migration 460), at most 20,000 an account, a
+ * few accounts at a time.
+ */
+export async function readLedger(service: SupabaseClient, loaded: LoadedReports, range: { from: string; to: string }): Promise<LedgerBlock[]> {
+  const waiting = ledgerAccounts(loaded.data, range).filter((a) => a.moved).map((a) => a.key);
+  const found = new Map<string, AccountDocumentsData>();
+  const reader = async () => {
+    for (let key = waiting.shift(); key !== undefined; key = waiting.shift()) {
+      const { data, error } = await service.rpc('gl_books_account_documents', {
+        p_company: loaded.company, p_account: key, p_from: range.from, p_to: range.to, p_differs: false, p_limit: DOCUMENTS_LISTED,
+      });
+      if (error) {
+        // The other readers stop at their next account.
+        waiting.length = 0;
+        throw new Error(error.message);
+      }
+      found.set(key, data as AccountDocumentsData);
+    }
+  };
+  await Promise.all(Array.from({ length: LEDGER_READS }, reader));
+  return generalLedger(loaded.data, range, found);
 }

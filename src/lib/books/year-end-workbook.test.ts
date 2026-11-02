@@ -7,13 +7,15 @@ import ExcelJS from 'exceljs';
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
+import { generalLedger, type LedgerBlock } from './general-ledger';
 import { monthEndValue, type MonthEndPartData } from './inventory-value';
 import { buildReport, type BuilderAsk, type SplitAmount } from './report-builder';
+import type { AccountDocumentData, AccountDocumentsData } from './report-detail';
 import { report, yearCloseAmounts, type ReportAccount, type ReportAmount, type ReportData } from './reports';
 import type { TbAmount } from './trial-balance';
 import type { YearCheck, YearEvent } from './year-end';
 import {
-  XLSX_TYPE, yearEndFileName, yearEndNotes, yearEndWorkbook,
+  ledgerNotes, XLSX_TYPE, yearEndFileName, yearEndNotes, yearEndWorkbook,
   type WorkbookFile, type WorkbookNote, type YearEndView, type YearEndWorkbookInput,
 } from './report-workbook';
 
@@ -48,6 +50,25 @@ const DATA: ReportData = {
   fleetsuite: [fs('10', '2027-03-01', 1000000), fs('40', '2027-03-01', -1000000), fs('60', '2027-04-01', 210000), fs('10', '2027-04-01', -210000)],
 };
 const SPLIT = [split('40', '2027-03-01', -1000000), split('60', '2027-04-01', 210000)];
+
+/** The documents behind them, as gl_books_account_documents gives each account's: March's sale and April's rent. */
+const docOf = (doc: string, amounts: Pick<AccountDocumentData, 'netsuite' | 'fleetsuite'>, over: Partial<AccountDocumentData>): AccountDocumentData => ({
+  doc, kind: null, type: null, number: null, month: null, date: null, name: null, memo: null, entry_no: null, entries: 1, ...amounts, ...over,
+});
+const SALE = { type: 'CashSale', number: 'CS100', month: '2027-03-01', date: '2027-03-10', name: 'Example Fleet Co' };
+const RENT = { type: 'Check', number: '1001', month: '2027-04-01', date: '2027-04-01', name: 'Example Landlord LLC', memo: 'April rent' };
+const documents = (rows: AccountDocumentData[]): AccountDocumentsData => ({
+  documents: rows.length,
+  differing: rows.filter((r) => r.netsuite !== r.fleetsuite).length,
+  netsuite: rows.reduce((s, r) => s + Number(r.netsuite), 0).toFixed(2),
+  fleetsuite: rows.reduce((s, r) => s + Number(r.fleetsuite), 0).toFixed(2),
+  rows,
+});
+const FOUND = new Map([
+  ['10', documents([docOf('501', { netsuite: '10000.00', fleetsuite: '10000.00' }, SALE), docOf('502', { netsuite: '-2000.00', fleetsuite: '-2100.00' }, RENT)])],
+  ['40', documents([docOf('501', { netsuite: '-10000.00', fleetsuite: '-10000.00' }, SALE)])],
+  ['60', documents([docOf('502', { netsuite: '2000.00', fleetsuite: '2100.00' }, RENT)])],
+]);
 
 /** BMG's stock at the end of December 2027: four ladder racks, and a journal entry on the inventory account with no item. */
 const zero = {
@@ -94,6 +115,7 @@ const GREEN = 'FF006100';
 const REPORT_NOTE: WorkbookNote = { tone: 'amber', text: "NetSuite's totals haven't been read yet, so NetSuite's side is empty." };
 const BUILDER_NOTE: WorkbookNote = { tone: 'red', text: 'Download it again.' };
 const STOCK_NOTE: WorkbookNote = { tone: 'amber', text: "NetSuite's stock moves haven't been copied yet, so no item has a count or value." };
+const LEDGER_NOTE: WorkbookNote = { tone: 'red', text: '1 account has more than 20,000 documents in these months.' };
 
 /** The package for BMG's 2027 as the download makes it, through `to`, with what's asked changed. */
 function input(over: Partial<YearEndWorkbookInput> = {}, to = '2027-12-01'): YearEndWorkbookInput {
@@ -113,6 +135,7 @@ function input(over: Partial<YearEndWorkbookInput> = {}, to = '2027-12-01'): Yea
     },
     reportNotes: [REPORT_NOTE],
     byMonth: { ask, built: buildReport(DATA, SPLIT, new Map(), ask), notes: [BUILDER_NOTE] },
+    ledger: { accounts: generalLedger(DATA, { from: '2027-01-01', to }, FOUND), notes: [LEDGER_NOTE] },
     inventory: { value: stock(), notes: [STOCK_NOTE] },
     now: NOW,
     ...over,
@@ -168,7 +191,7 @@ describe('the year-end package file', () => {
     const all = await sheets(file);
     expect(all.map((s) => s.name)).toEqual([
       'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows',
-      'Retained Earnings', 'Inventory value', 'Inventory ties to accounts', 'Inventory documents, no item',
+      'Retained Earnings', 'General Ledger', 'Inventory value', 'Inventory ties to accounts', 'Inventory documents, no item',
     ]);
     const ws = all[0];
     expect([1, 2, 3, 4, 5].map((r) => cells(ws, r, 1)[0])).toEqual([
@@ -192,6 +215,11 @@ describe('the year-end package file', () => {
       [link('Profit and Loss by Month'), "The profit and loss with a column for each month and a Total, FleetSuite's books."],
       [link('Statement of Cash Flows'), "January 1, 2027 to December 31, 2027, FleetSuite's books next to NetSuite's."],
       [link('Retained Earnings'), 'How 2027 closes into retained earnings, both sides, and each time it was closed or reopened.'],
+      [
+        link('General Ledger'),
+        "Each account's documents, January 1, 2027 to December 31, 2027, by date, with each side's balance after each: "
+          + 'from where the account stood at the start of 2027 to its line on the trial balance.',
+      ],
       [link('Inventory value'), 'Each item at each location at December 31, 2027: on hand, average cost and value.'],
       [link('Inventory ties to accounts'), 'How the items come to each inventory account on the balance sheet at December 31, 2027.'],
       [link('Inventory documents, no item'), 'Documents on the inventory accounts with no stocked item, from January 1, 2025 to December 31, 2027.'],
@@ -208,14 +236,14 @@ describe('the year-end package file', () => {
     expect(at(0).getCell(1).font).toMatchObject({ color: { argb: 'FF0563C1' }, underline: true });
     expect(at(0).getCell(1).alignment).toMatchObject({ vertical: 'top' });
     expect(at(0).getCell(2).alignment).toMatchObject({ vertical: 'top', wrapText: true });
-    expect(at(10).getCell(1).font).toMatchObject({ bold: true, size: 12 });
+    expect(at(11).getCell(1).font).toMatchObject({ bold: true, size: 12 });
     // What's not done yet stands out; the rest is plain.
-    expect(at(12).getCell(1).font).toMatchObject({ bold: true, color: { argb: AMBER } });
-    expect(at(12).getCell(2).font).toMatchObject({ bold: true, color: { argb: AMBER } });
+    expect(at(13).getCell(1).font).toMatchObject({ bold: true, color: { argb: AMBER } });
+    expect(at(13).getCell(2).font).toMatchObject({ bold: true, color: { argb: AMBER } });
     // Done, or not here at all: Excel's own text color.
-    expect(at(11).getCell(1).font?.color?.argb).toBeUndefined();
-    expect(at(14).getCell(1).font?.color?.argb).toBeUndefined();
-    expect(at(14).getCell(2).alignment).toMatchObject({ vertical: 'top', wrapText: true });
+    expect(at(12).getCell(1).font?.color?.argb).toBeUndefined();
+    expect(at(15).getCell(1).font?.color?.argb).toBeUndefined();
+    expect(at(15).getCell(2).alignment).toMatchObject({ vertical: 'top', wrapText: true });
     expect(ws.getColumn(1).width).toBe(30);
     expect(ws.getColumn(2).width).toBe(100);
   });
@@ -318,8 +346,8 @@ describe('the year-end package file', () => {
 
     const none = { ...INVENTORY, entries: 0, entries_total: '0', month_entries: 0, month_entries_total: '0', kinds: [], rows: [], ledger_moves: '0', netsuite_moves: '0', books_moves: '0' };
     const without = await sheets(await yearEndWorkbook(input({ inventory: { value: stock(none), notes: [] } })));
-    expect(without.slice(7).map((s) => s.name)).toEqual(['Inventory value', 'Inventory ties to accounts']);
-    expect(body(without[0], 'Sheet', 1).map((r) => (r[0] as { text: string } | null)?.text ?? r[0]).slice(6, 9)).toEqual([
+    expect(without.slice(8).map((s) => s.name)).toEqual(['Inventory value', 'Inventory ties to accounts']);
+    expect(body(without[0], 'Sheet', 1).map((r) => (r[0] as { text: string } | null)?.text ?? r[0]).slice(7, 10)).toEqual([
       'Inventory value', 'Inventory ties to accounts', null,
     ]);
   });
@@ -328,8 +356,9 @@ describe('the year-end package file', () => {
     const all = await sheets(await yearEndWorkbook(input({ inventory: null })));
     expect(all.map((s) => s.name)).toEqual([
       'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows', 'Retained Earnings',
+      'General Ledger',
     ]);
-    expect(body(all[0], 'Sheet', 1)[7]).toEqual(['Before 2027 closes']);
+    expect(body(all[0], 'Sheet', 1)[8]).toEqual(['Before 2027 closes']);
   });
 
   it("runs a year that isn't over through this month and says so on each sheet, once on the stock's, which says it of its month", async () => {
@@ -350,6 +379,125 @@ describe('the year-end package file', () => {
       expect([name, notesOf(sheet(all, name))]).toEqual([name, name === 'Inventory documents, no item' ? [] : [[stockNote.text, AMBER]]]);
     }
     expect(body(all[0], 'Sheet', 2)[0][1]).toBe("Each account at November 30, 2027, income and expenses for the year, FleetSuite's books next to NetSuite's.");
+    const ledger = sheet(all, 'General Ledger');
+    expect(cells(ledger, 3, 1)).toEqual(['January 1, 2027 to November 30, 2027']);
+    expect(notesOf(ledger)).toEqual([over, [REPORT_NOTE.text, AMBER], [LEDGER_NOTE.text, RED]]);
+    expect(body(ledger, 'Account', 3).filter((r) => r[0] === '1010 First Bank checking').at(-1)).toEqual([
+      '1010 First Bank checking', null, 'Balance at the end of November 2027',
+    ]);
+    expect(body(ledger, 'Account', 3).at(-1)).toEqual(['6000 Rent', null, 'Total, January to November 2027']);
+  });
+
+  it("lists every account's documents in the general ledger, each row with its account, under the year's notes, Reports' and its own", async () => {
+    const ws = sheet(await sheets(await yearEndWorkbook(input())), 'General Ledger');
+    expect([2, 3, 4].map((r) => cells(ws, r, 1)[0])).toEqual([
+      'General Ledger',
+      'January 1, 2027 to December 31, 2027',
+      "Every account with a balance or a document in these months (4 accounts), in the trial balance's order, each document by date with each side's "
+        + "balance after it: FleetSuite's journal next to the copy of NetSuite's general ledger. "
+        + 'Amounts read as the trial balance shows them: debits positive, credits negative.',
+    ]);
+    expect(notesOf(ws)).toEqual([[CLOSED_NOTE, GREEN], [REPORT_NOTE.text, AMBER], [LEDGER_NOTE.text, RED]]);
+    const head = headerRow(ws, 'Account');
+    expect(cells(ws, head, 12)).toEqual([
+      'Account', 'Date', 'Type', 'Number', 'Name', 'Memo', 'FleetSuite', 'NetSuite', 'Difference', 'FleetSuite balance', 'NetSuite balance', 'Note',
+    ]);
+    expect(Array.from({ length: 12 }, (_, i) => ws.getRow(head).getCell(i + 1).alignment?.horizontal)).toEqual([
+      'left', 'left', 'left', 'left', 'left', 'left', 'right', 'right', 'right', 'right', 'right', 'left',
+    ]);
+    const bank = '1010 First Bank checking';
+    const march = new Date('2027-03-10T00:00:00Z');
+    const april = new Date('2027-04-01T00:00:00Z');
+    expect(body(ws, 'Account', 12)).toEqual([
+      [bank, null, 'Balance at the end of December 2026', null, null, null, null, null, 0, 4000, 4000, null],
+      [bank, march, 'Cash Sale', 'CS100', 'Example Fleet Co', null, 10000, 10000, 0, 14000, 14000, null],
+      [bank, april, 'Check', '1001', 'Example Landlord LLC', 'April rent', -2100, -2000, -100, 11900, 12000, null],
+      [bank, null, 'Balance at the end of December 2027', null, null, null, null, null, -100, 11900, 12000, null],
+      ['3900 Retained Earnings', null, 'Balance at the end of December 2026', null, null, null, null, null, 0, -4000, -4000, null],
+      ['3900 Retained Earnings', null, 'Balance at the end of December 2027', null, null, null, null, null, 0, -4000, -4000, null],
+      ['4000 Sales', march, 'Cash Sale', 'CS100', 'Example Fleet Co', null, -10000, -10000, 0, -10000, -10000, null],
+      ['4000 Sales', null, 'Total, January to December 2027', null, null, null, null, null, 0, -10000, -10000, null],
+      ['6000 Rent', april, 'Check', '1001', 'Example Landlord LLC', 'April rent', 2100, 2000, 100, 2100, 2000, null],
+      ['6000 Rent', null, 'Total, January to December 2027', null, null, null, null, null, 100, 2100, 2000, null],
+    ]);
+    const at = (i: number) => ws.getRow(head + 1 + i);
+    // An account's balance before the year in bold, account and all; a document that differs, its difference in red.
+    expect([1, 3].map((c) => at(0).getCell(c).font?.bold)).toEqual([true, true]);
+    expect(at(1).getCell(9).font?.color?.argb).toBeUndefined();
+    expect(at(2).getCell(9).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect(at(2).getCell(7).font?.color?.argb).toBeUndefined();
+    // Its line at December 31 in bold over a double line, the difference red.
+    expect(at(3).getCell(3).font).toMatchObject({ bold: true });
+    expect([8, 9, 10, 11].map((c) => at(3).getCell(c).border?.top)).toEqual([undefined, { style: 'double' }, { style: 'double' }, { style: 'double' }]);
+    expect(at(3).getCell(9).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect(at(3).getCell(10).font?.color?.argb).toBeUndefined();
+    expect(at(5).getCell(9).font?.color?.argb).toBeUndefined();
+    // Dates as dates, amounts in Excel's own Accounting format; a filter on every column.
+    expect(at(1).getCell(2).numFmt).toBe('m/d/yyyy');
+    expect([7, 9, 11].map((c) => at(1).getCell(c).numFmt)).toEqual([7, 9, 11].map(() => '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)'));
+    expect(ws.autoFilter).toBe(`A${head}:L${head + 10}`);
+    expect(ws.views[0]).toMatchObject({ state: 'frozen', ySplit: head });
+    expect([1, 2, 6, 7, 9, 10, 11, 12].map((c) => ws.getColumn(c).width)).toEqual([32, 11, 40, 16, 16, 18, 18, 30]);
+  });
+
+  it("names an account the chart doesn't have yet, and marks what only one side has, what isn't posted, and a line its documents don't reach", async () => {
+    const one = (only: 'fleetsuite' | 'not_posted', fleetsuite: number, netsuite: number) => ({
+      doc: only, date: '2027-06-30', type: only === 'fleetsuite' ? 'Entry' : 'Customer Refund', number: only === 'fleetsuite' ? 'Entry 7' : 'RF2',
+      name: null, memo: null, fleetsuite, netsuite, only, check: null,
+    });
+    const block: LedgerBlock = {
+      key: '77', number: null, name: 'NetSuite account 77', inChart: false, moved: true, documents: 2, listed: 2, short: true,
+      rows: [
+        { kind: 'starting', balance: { fleetsuite: -100000, netsuite: -100000 } },
+        { kind: 'closing', month: '2027-01-01', amount: { fleetsuite: -5000, netsuite: -6000 }, balance: { fleetsuite: -105000, netsuite: -106000 } },
+        { kind: 'document', document: one('fleetsuite', 2500, 0), balance: { fleetsuite: -102500, netsuite: -106000 } },
+        { kind: 'document', document: one('not_posted', 0, 1500), balance: { fleetsuite: -102500, netsuite: -104500 } },
+        { kind: 'ending', balance: { fleetsuite: -102500, netsuite: -104000 }, reached: { fleetsuite: -102500, netsuite: -104500 } },
+      ],
+    };
+    // Apart when the year began, and a FleetSuite document past the most listed.
+    const other: LedgerBlock = {
+      key: '1450', number: '1450', name: 'Deposits paid', inChart: true, moved: true, documents: 1, listed: 0, short: false,
+      rows: [
+        { kind: 'starting', balance: { fleetsuite: 5000, netsuite: 4000 } },
+        { kind: 'ending', balance: { fleetsuite: 7000, netsuite: 4000 }, reached: { fleetsuite: 5000, netsuite: 4000 } },
+      ],
+    };
+    const ws = sheet(await sheets(await yearEndWorkbook(input({ ledger: { accounts: [block, other], notes: [] } }))), 'General Ledger');
+    expect(notesOf(ws)).toEqual([[CLOSED_NOTE, GREEN], [REPORT_NOTE.text, AMBER]]);
+    const name = 'NetSuite account 77 (not in the chart yet)';
+    const june = new Date('2027-06-30T00:00:00Z');
+    expect(body(ws, 'Account', 12)).toEqual([
+      [name, null, 'Balance at the end of December 2026', null, null, null, null, null, 0, -1000, -1000, null],
+      [name, new Date('2027-01-01T00:00:00Z'), "Earlier years' net income, taken into retained earnings at the year's start", null, null, null, -50, -60, 10, -1050, -1060, null],
+      [name, june, 'Entry', 'Entry 7', null, null, 25, 0, 25, -1025, -1060, 'Only in FleetSuite'],
+      [name, june, 'Customer Refund', 'RF2', null, null, 0, 15, -15, -1025, -1045, "FleetSuite doesn't post these yet"],
+      [name, null, 'Balance at the end of December 2027', null, null, null, null, null, 15, -1025, -1040, "The documents above come to ($1,045.00) on NetSuite's side"],
+      ['1450 Deposits paid', null, 'Balance at the end of December 2026', null, null, null, null, null, 10, 50, 40, null],
+      ['1450 Deposits paid', null, 'Balance at the end of December 2027', null, null, null, null, null, 30, 70, 40, "The documents above come to $50.00 on FleetSuite's side"],
+    ]);
+    const at = (i: number) => ws.getRow(headerRow(ws, 'Account') + 1 + i);
+    expect(at(1).getCell(3).font).toMatchObject({ italic: true });
+    expect(at(1).getCell(9).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect(at(2).getCell(12).font).toMatchObject({ color: { argb: RED } });
+    expect(at(3).getCell(12).font).toMatchObject({ color: { argb: AMBER } });
+    // Only NetSuite's side falls short of the line.
+    expect(at(4).getCell(10).font?.color?.argb).toBeUndefined();
+    expect(at(4).getCell(11).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect(at(4).getCell(12).font).toMatchObject({ bold: true, color: { argb: RED } });
+    // Each side's balance apart before the year, its difference red; then only FleetSuite's side short of the line.
+    expect(at(5).getCell(9).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect(at(5).getCell(8).font?.color?.argb).toBeUndefined();
+    expect(at(6).getCell(10).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect([9, 11].map((c) => at(6).getCell(c).font)).toEqual([{ bold: true, color: { argb: RED } }, { bold: true }]);
+  });
+
+  it('says so when no account has a balance or a document, with nothing to filter', async () => {
+    const ws = sheet(await sheets(await yearEndWorkbook(input({ ledger: { accounts: [], notes: [] } }))), 'General Ledger');
+    expect(cells(ws, 4, 1)[0]).toContain('in these months (0 accounts)');
+    expect(body(ws, 'Account', 2)).toEqual([['No account has a balance or a document in these months.', null]]);
+    expect(ws.getRow(headerRow(ws, 'Account') + 1).getCell(1).font).toMatchObject({ color: { argb: 'FF595959' } });
+    expect(ws.autoFilter).toBeUndefined();
   });
 
   it("says a year before the books went live is the rehearsal, and when FleetSuite's books have changed since it closed", async () => {
@@ -397,5 +545,36 @@ describe('what Year end says about the year, in its package', () => {
     expect(notes({ closed, changedSince: true })[1].text).toContain('at $7,900.00 of net income and ($11,900.00) of retained earnings.');
     // Only a closed year has changed since it closed.
     expect(notes({ changedSince: true })).toEqual([]);
+  });
+});
+
+describe("what the general ledger warns about, beyond Reports' notes", () => {
+  const block = (over: Partial<Pick<LedgerBlock, 'short' | 'documents' | 'listed'>> = {}) => ({ short: false, documents: 3, listed: 3, ...over });
+  const SHORT = "the copy of NetSuite's ledger doesn't hold everything NetSuite's own totals say moved in these months yet, "
+    + "so some of NetSuite's documents may be missing there and its running balance won't reach the account's line. The next copy catches up.";
+
+  it('says nothing when every account comes to its line', () => {
+    expect(ledgerNotes({ ledger: [block(), block({ documents: 0, listed: 0 })], checked: true })).toEqual([]);
+    expect(ledgerNotes({ ledger: [], checked: true })).toEqual([]);
+  });
+
+  it("says on how many accounts the copy of NetSuite's ledger is short, once NetSuite's totals are read", () => {
+    const ledger = [block({ short: true }), block(), block({ short: true })];
+    expect(ledgerNotes({ ledger, checked: true })).toEqual([{ tone: 'amber', text: `On 2 accounts ${SHORT}` }]);
+    expect(ledgerNotes({ ledger: ledger.slice(0, 1), checked: true })).toEqual([{ tone: 'amber', text: `On 1 account ${SHORT}` }]);
+    // Until they are, NetSuite's side is empty, which Reports' note says.
+    expect(ledgerNotes({ ledger, checked: false })).toEqual([]);
+  });
+
+  it('says in red how many accounts have more documents than it lists', () => {
+    const cut = (n: string) => `${n} more than 20,000 documents in these months, so only the first are listed, by date, `
+      + 'and the running balances stop short of the line. Download those accounts from Reports a few months at a time.';
+    expect(ledgerNotes({ ledger: [block({ documents: 20001, listed: 20000 }), block({ short: true })], checked: true })).toEqual([
+      { tone: 'amber', text: `On 1 account ${SHORT}` },
+      { tone: 'red', text: cut('1 account has') },
+    ]);
+    expect(ledgerNotes({ ledger: [block({ documents: 25000, listed: 20000 }), block({ documents: 20002, listed: 20000 }), block()], checked: false })).toEqual([
+      { tone: 'red', text: cut('2 accounts have') },
+    ]);
   });
 });

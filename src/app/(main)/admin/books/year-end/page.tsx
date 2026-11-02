@@ -21,8 +21,8 @@ import { useFileDownload } from '@/lib/use-file-download';
  * reason if anything isn't done; its months then stay closed until the year
  * is reopened, for a reason. Years before the books went live close in
  * NetSuite and show as a rehearsal. The year-end package downloads the
- * year's reports for the CPA as one Excel file. Open to whoever opens the
- * books.
+ * year's reports and general ledger for the CPA as one Excel file. Open to
+ * whoever opens the books.
  */
 
 type Pair = { fleetsuite: number; netsuite: number };
@@ -292,7 +292,7 @@ export default function BooksYearEndPage() {
               <button
                 onClick={() => excel.download(excelUrl, `${data.company} Year-end package ${year}.xlsx`)}
                 disabled={loading || excel.busy}
-                title="The trial balance, balance sheet, profit and loss, cash flows, retained earnings and inventory value at the year's end, as one Excel file for the CPA"
+                title="The trial balance, balance sheet, profit and loss, cash flows, retained earnings, general ledger and inventory value at the year's end, as one Excel file for the CPA"
                 style={button(false)}
               >
                 {excel.busy ? 'Making the file…' : excel.ready(excelUrl) ? '⬇ Tap to save the Excel file' : '⬇ Year-end package'}

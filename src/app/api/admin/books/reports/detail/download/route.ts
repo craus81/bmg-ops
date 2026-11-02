@@ -3,15 +3,12 @@ import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
 import { loadAccountDetail, loadReports } from '@/lib/books/report-data';
-import { detailDocuments, runningBalances } from '@/lib/books/report-detail';
+import { detailDocuments, DOCUMENTS_LISTED, runningBalances } from '@/lib/books/report-detail';
 import { yearClosings } from '@/lib/books/reports';
 import { accountWorkbook, detailNotes } from '@/lib/books/report-workbook';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
-
-/** The most documents one file lists (migration 460). */
-const LISTED = 20000;
 
 /**
  * GET /api/admin/books/reports/detail/download?company=BMG&account=123&report=balance_sheet&from=2026-01&to=2026-09
@@ -34,7 +31,7 @@ export async function GET(req: NextRequest) {
   const loaded = await loadReports(service, params.get('company'));
   if ('error' in loaded) return NextResponse.json({ error: loaded.error }, { status: 500 });
   // Every document, whichever the page lists: a running balance needs them all.
-  const detail = await loadAccountDetail(service, loaded, params, { differs: false, limit: LISTED });
+  const detail = await loadAccountDetail(service, loaded, params, { differs: false, limit: DOCUMENTS_LISTED });
   if ('error' in detail) return NextResponse.json({ error: detail.error }, { status: detail.status });
   const { kind, from, to, span, found } = detail;
   const company = loaded.companies.find((c) => c.code === loaded.company) ?? { code: loaded.company, name: loaded.company, legal_name: null };
