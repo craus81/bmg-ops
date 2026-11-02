@@ -2012,6 +2012,13 @@ on Own numbers, and one made in NetSuite says who for, its date and who
 made it, opening the list made in NetSuite; more than three at once get
 one naming the first three.
 
+And the backups of the books (part 84, "Backups"): at each day's first look,
+after the night's backup, the newest one if it didn't work, saying why and
+when the last good one is from, opening it on Books → Backups; or that none
+good has been made in 26 hours, or none ever (`books_backup`, in the app and
+by push, and emailed to a super admin with "Copy me on new alerts" ticked).
+It's told each morning until a good one is made.
+
 ## Reports
 
 `/admin/books/reports` shows one company's profit and loss, balance sheet,
@@ -7284,6 +7291,97 @@ Transmitter Control Code, and applying for one can take up to 45 days.
 - State filing, corrections, and the forms FleetSuite doesn't fill in are
   done by hand in IRIS.
 
+## Backups
+
+Part 84 (migration 506, `src/lib/books/backups.ts`) keeps a copy of the
+books outside Supabase, the NetSuite Exit Checklist's Backups: every night
+at 08:11 UTC (2:11 AM Central, 3:11 in summer time;
+`/api/cron/books-backup`, after the night's posting runs and before the
+daily check), and whenever a super admin presses Back up now on
+Books → Backups. It only reads the books, so it needs no switch.
+
+A backup is one zip in BMG's private file storage (Cloudflare R2, at
+`books-backups/<year>/fleetsuite-books-<date>-<time>Z.zip`), a folder of
+the same name inside holding:
+
+- `tables/<table>.csv`: each of the books' tables (`BACKUP_TABLES`, 90 of
+  them) as Postgres's COPY reads it back, its first line naming the
+  columns, a value in quotes that text and an empty field without quotes
+  NULL, times in UTC;
+- `<name>-journal.xlsx`: the journal to read in Excel (Read me, each
+  company's trial balance, the chart of accounts, and every line of every
+  entry, a million lines to a sheet; `src/lib/books/backup-workbook.ts`);
+- `manifest.json`: what each file holds (columns, key, parents, rows,
+  SHA-256), the order to load them in (`load_order`), the migration the
+  database was at, and the trial balance the journal adds up to; and
+  `README.txt`, the same in words.
+
+The journal (`gl_entries` and `gl_lines`) is copied as it stood the moment
+the backup began (a transaction snapshot), so an entry posted while it runs
+is wholly in the next backup. The other tables are read children first, so
+a row's parents are in the copy. Before the zip is kept it's opened again:
+every file's SHA-256 has to match the manifest, and the journal's CSV files
+have to add up, entry for entry, line for line and account by account, to
+the books' own trial balance as of that moment. What lands in storage has
+to be the size and MD5 sent. One that doesn't check out is kept for a look
+but marked failed, saying why; a name already in storage is never written
+over. Every backup is kept.
+
+Not in it: the QuickBooks history (migration 314's `ledger_*` tables), which
+QuickBooks still holds, and the rest of FleetSuite (`NOT_BOOKS` says what
+each table made since migration 359 that isn't the books is instead; a test
+holds that every such table is in one list or the other). Vendors' bank and
+ACH numbers are in it only as FleetSuite encrypted them; reading them needs
+`VENDOR_BANK_KEY`, which isn't in the backup.
+
+A backup goes to storage only while BMG's file storage is confirmed private
+(`src/lib/ledger/pdf-gate.ts`, docs/r2-private-flip.md); otherwise each one
+fails saying so, and Books → Backups says why in red. The generic storage
+routes refuse `books-backups/` (`src/lib/storage-guard.ts`); a super admin
+downloads one from Books → Backups (`/api/admin/books/backups/download`, a
+link that works for five minutes, fetched without the session so the zip
+never passes through FleetSuite's server).
+
+Books → Backups lists the newest 60, each with how it went, why one didn't,
+its size, tables, rows, entries and lines, and how long it took; the last
+good one; when the next nightly one runs; and a warning when none good is
+from the last 26 hours. Whoever opens the books sees the list; making one
+and downloading one are super admins' only (`back_up_books` and
+`download_books_backup` in the audit log). One runs at a time, with 270
+seconds to finish in; one still running after 10 minutes has stopped and is
+marked failed. The daily check tells the super admins when one didn't work
+("Daily check").
+
+### Restoring one
+
+Into an empty Postgres, as its superuser, with psql:
+
+1. Run FleetSuite's migrations up to the one the manifest names
+   (`migration`) on the empty database.
+2. Unzip the backup and check each file's SHA-256 against the manifest.
+3. `SET session_replication_role = replica;` so triggers (the journal's
+   guards among them) and foreign keys wait, then
+   `TRUNCATE <every table in load_order> CASCADE;` to empty what the
+   migrations filled in.
+4. For each table in `load_order`, with its columns as the manifest lists
+   them (generated columns aren't in the file; Postgres works them out):
+   `\copy public.<table> ("col", ...) FROM '<folder>/tables/<table>.csv' WITH (FORMAT csv, HEADER true, ENCODING 'UTF8')`
+5. `SET session_replication_role = origin;`
+6. For each identity column the manifest lists, so the next number follows on:
+   `SELECT setval(pg_get_serial_sequence('public.<table>', '<col>'), coalesce(max("<col>"), 1), max("<col>") IS NOT NULL) FROM public.<table>;`
+7. Check the journal's trial balance against the manifest's
+   (`journal.trial_balance`), or against the workbook's Trial balance.
+
+`src/lib/books/backups.test.ts` restores a backup this way into an empty
+database and holds that it comes back row for row, a closed month still
+closed and the next entry numbered after the last.
+
+### What isn't done yet
+
+- The restore drill: a backup restored into a scratch database and checked,
+  on a schedule (part 85, the rest of the checklist's Backups).
+- A second copy away from Cloudflare.
+
 ## Who can open the books
 
 Part 52 (migration 483, `src/lib/books/access.ts`) opens the books to two
@@ -7293,7 +7391,7 @@ a staff one:
 
 | Who | Level | What they can do |
 | --- | --- | --- |
-| Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, reopening a closed month, and closing and reopening a year |
+| Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, reopening a closed month, closing and reopening a year, and making and downloading backups |
 | Bookkeeper | `keep` | Everything else: Sync now and Copy now, Post now, Look now, closing a month, clearing and reopening mistake checks, Looked at it on the NetSuite feed, Snap a bill, NetSuite's 1099 report, and checking the 1099s in NetSuite and making their file |
 | CPA | `read` | Every Books page and Excel download, changing nothing, and its own adjustments journal on Journal entries ("The CPA's adjustments journal") |
 

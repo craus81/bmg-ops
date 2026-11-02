@@ -169,6 +169,30 @@ export async function r2Head(prefix: string, path: string): Promise<boolean> {
   }
 }
 
+// ── An object's size and ETag (HEAD) — null when it isn't there or can't be read ──
+// The books' backups (src/lib/books/backups.ts) check what landed is what
+// they sent: the size, and for a single-part upload the ETag, which is the
+// bytes' MD5.
+export async function r2HeadInfo(
+  prefix: string,
+  path: string,
+): Promise<{ bytes: number | null; etag: string | null } | null> {
+  try {
+    const config = getR2Config();
+    const client = getR2Client();
+    const head = await client.send(new HeadObjectCommand({
+      Bucket: config.bucket,
+      Key: `${prefix}/${path}`,
+    }));
+    return {
+      bytes: typeof head.ContentLength === 'number' ? head.ContentLength : null,
+      etag: head.ETag ? head.ETag.replace(/"/g, '') : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ── Get public URL for a file ──
 /**
  * R3-22 (owner decision C2, 2026-09-07): the public R2 domain is being

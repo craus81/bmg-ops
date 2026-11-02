@@ -269,6 +269,8 @@ export default function BooksAccountsPage() {
             <Link href={deepLinks.booksOwnNumbers()} style={{ color: 'var(--text-secondary)' }}>Own numbers</Link>
             {' · '}
             <Link href="/admin/books/1099s" style={{ color: 'var(--text-secondary)' }}>1099s</Link>
+            {' · '}
+            <Link href={deepLinks.booksBackups()} style={{ color: 'var(--text-secondary)' }}>Backups</Link>
           </div>
         </div>
         {canKeep && (

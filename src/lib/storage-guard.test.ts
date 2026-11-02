@@ -41,6 +41,13 @@ describe('checkStoragePath — shape defenses (every tier)', () => {
     expect(checkStoragePath('books-bills', path, { write: true, access: 'staff' })).toBe('Forbidden bucket');
     expect(checkStoragePath('books-bills', path, installer)).toBe('Forbidden bucket');
   });
+
+  it("books-backups (the books' nightly backups) is denied for everyone, both operations", () => {
+    const path = '2026/fleetsuite-books-2026-11-03-081100Z.zip';
+    expect(checkStoragePath('books-backups', path, staff)).toBe('Forbidden bucket');
+    expect(checkStoragePath('books-backups', path, { write: true, access: 'staff' })).toBe('Forbidden bucket');
+    expect(checkStoragePath('books-backups', path, installer)).toBe('Forbidden bucket');
+  });
 });
 
 describe('checkStoragePath — R3-22 caller tiers', () => {

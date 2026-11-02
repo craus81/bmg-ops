@@ -361,6 +361,15 @@ describe('Books year end links', () => {
   });
 });
 
+describe('Books backups links', () => {
+  it('opens the list, with one backup picked out when given', () => {
+    expect(deepLinks.booksBackups()).toBe('/admin/books/backups');
+    expect(deepLinks.booksBackups(null)).toBe('/admin/books/backups');
+    expect(deepLinks.booksBackups('6f1c2c1e-6a0b-4d55-9a57-2f9a1b0c0d11')).toBe('/admin/books/backups?backup=6f1c2c1e-6a0b-4d55-9a57-2f9a1b0c0d11');
+    expect(deepLinks.booksBackups('a&b')).toBe('/admin/books/backups?backup=a%26b');
+  });
+});
+
 describe('Books sales tax links', () => {
   it("opens one month's return, last month when left out", () => {
     expect(deepLinks.booksSalesTax()).toBe('/admin/books/sales-tax');

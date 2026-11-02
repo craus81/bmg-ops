@@ -11,9 +11,9 @@
 // through migration 480's, and at the numbers NetSuite didn't keep and the
 // sales orders and POs made in NetSuite instead, through migration 497's, and
 // at the invoice PDFs NetSuite refused or FleetSuite isn't sure about, through
-// migration 498's. This
-// runs the same migrations as differences-sql.test.ts, with 401, 406, 407,
-// 416, 431, 435, 454, 457, 477, 480, 497 and 498, in an in-memory Postgres (PGlite) as the app's
+// migration 498's, and at the backups of the books, through migration 506's.
+// This runs the same migrations as differences-sql.test.ts, with 401, 406, 407,
+// 416, 431, 435, 454, 457, 477, 480, 497, 498 and 506, in an in-memory Postgres (PGlite) as the app's
 // server login, copies a made-up handful of NetSuite documents for BMG and
 // 1084, posts FleetSuite's entries for some of them, copies a few stock moves
 // and NetSuite's counts, saves an own invoice, an own fulfillment, a few
@@ -95,6 +95,7 @@ async function freshDb(): Promise<PGlite> {
   // What migration 498 points at that migration 471 adds: the version of FleetSuite's copy of an invoice.
   await pg.exec('ALTER TABLE gl_own_invoices ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1');
   await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', '498-books-invoice-pdfs.sql'), 'utf8'));
+  await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', '506-books-backups.sql'), 'utf8'));
   await pg.exec(`UPDATE gl_companies SET netsuite_subsidiary_id = '5' WHERE code = '1084'`);
   for (const [ns, name, type] of ACCOUNTS) {
     await pg.query(
@@ -166,7 +167,7 @@ describe('the daily books check', () => {
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
   /**
    * What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes,
-   * sends to NetSuite, changes in NetSuite, FleetSuite's own numbers and its invoice PDFs, apart.
+   * sends to NetSuite, changes in NetSuite, FleetSuite's own numbers, its invoice PDFs and the backups, apart.
    */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
@@ -180,6 +181,7 @@ describe('the daily books check', () => {
   let toldChanges: CheckAlert[] = [];
   let toldNumbers: CheckAlert[] = [];
   let toldPdfs: CheckAlert[] = [];
+  let toldBackups: CheckAlert[] = [];
 
   /** A read of one of the books' tables, or a change to one, built the way supabase-js builds it, run against the database. */
   const read = (table: string) => {
@@ -229,7 +231,9 @@ describe('the daily books check', () => {
   // sync_state and cron_runs in memory; every function the real one, called the way supabase-js calls it.
   const service = () => ({
     from: (table: string) => {
-      if (['gl_mistake_checks', 'gl_companies', 'gl_periods', 'netsuite_sends', 'profiles', 'books_switches', 'record_differences'].includes(table)) return read(table);
+      if ([
+        'gl_mistake_checks', 'gl_companies', 'gl_periods', 'netsuite_sends', 'profiles', 'books_switches', 'record_differences', 'books_backups',
+      ].includes(table)) return read(table);
       if (table === 'sync_state') {
         return {
           select: () => ({
@@ -275,10 +279,12 @@ describe('the daily books check', () => {
     toldChanges = [];
     toldNumbers = [];
     toldPdfs = [];
+    toldBackups = [];
     const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
       : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
         : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : alert.about === 'send' ? toldSends
-          : alert.about === 'change' ? toldChanges : alert.about === 'number' ? toldNumbers : alert.about === 'pdf' ? toldPdfs : told);
+          : alert.about === 'change' ? toldChanges : alert.about === 'number' ? toldNumbers : alert.about === 'pdf' ? toldPdfs
+            : alert.about === 'backup' ? toldBackups : told);
     return runDailyCheck(service(), {
       look: which,
       tell: async (alerts) => {
@@ -288,8 +294,24 @@ describe('the daily books check', () => {
   };
   const held = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.companies;
 
+  /** A backup of the books, `hoursAgo` before now, as the nightly run records it. */
+  const backup = async (status: 'made' | 'failed', hoursAgo: number, error: string | null = null) => {
+    const started = new Date(Date.now() - hoursAgo * 3_600_000);
+    const file = `${started.getUTCFullYear()}/fleetsuite-books-${started.toISOString().slice(0, 10)}-${started.toISOString().slice(11, 19).replace(/:/g, '')}Z.zip`;
+    const r = await pg.query<{ id: string }>(
+      `INSERT INTO books_backups (how, started_at, finished_at, status, snapshot, file_path, file_bytes, file_sha256,
+         table_count, row_count, entry_count, line_count, checked, error)
+       VALUES ('nightly', $1, $1::timestamptz + interval '1 minute', $2, '1:1:', $3, $4, $5, 90, 4000, 300, 900, $6, $7) RETURNING id`,
+      [started.toISOString(), status, status === 'made' ? file : null, status === 'made' ? 1_258_291 : null,
+        status === 'made' ? 'a'.repeat(64) : null, status === 'made' ? true : null, error],
+    );
+    return { id: r.rows[0].id, startedAt: started.toISOString() };
+  };
+
   beforeAll(async () => {
     pg = await freshDb();
+    // Last night's backup was made, so the looks below tell nothing about backups but where a test says.
+    await backup('made', 2);
     // BMG's December 2025: INV5003's sales tax went to sales in FleetSuite, a difference everyone knows of.
     await invoice(pg, '5003', '2025-12-10', DEC, 10000, 'Beta Corp', 'BMG', 700);
     await post(pg, 'BMG', 'invoice', '5003', '2025-12-10', [['120', 10700], ['400', -10700]]);
@@ -1404,6 +1426,64 @@ describe('the daily books check', () => {
       await pg.exec(`UPDATE books_switches SET is_on = false WHERE piece = 'invoice_pdfs'`);
       await pg.exec('DELETE FROM own_invoice_pdfs WHERE true');
       store.delete('books_invoice_pdfs');
+    }
+  });
+
+  it("tells each morning when the books' backup didn't work, or none good was made in a day", async () => {
+    const central = (iso: string) => new Date(iso).toLocaleString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago',
+    });
+    // Emptied while no company's books are live (migration 359's truncate guard); every backup's record stays otherwise.
+    await pg.exec('TRUNCATE books_backups');
+    try {
+      expect(await look('first')).toMatchObject({ told: 1 });
+      expect(toldBackups).toEqual([{
+        title: "Backups: FleetSuite hasn't backed up the books yet",
+        body: "The nightly backup, at 2:11 AM Central, hasn't run. Books → Backups can make one now.",
+        url: '/admin/books/backups',
+        about: 'backup',
+      }]);
+      // Only the day's first look, after the night's backup, looks.
+      expect(await look('second')).toMatchObject({ told: 0 });
+      expect(toldBackups).toEqual([]);
+
+      const old = await backup('made', 30);
+      await look('first');
+      expect(toldBackups).toEqual([{
+        title: `Backups: no backup of the books since ${central(old.startedAt)}`,
+        body: "The nightly backup, at 2:11 AM Central, hasn't made a good one in a day. Books → Backups can make one now.",
+        url: '/admin/books/backups',
+        about: 'backup',
+      }]);
+
+      const failed = await backup('failed', 1, 'It ran out of time with 40 of 90 tables copied.');
+      await look('first');
+      expect(toldBackups).toEqual([{
+        title: "Backups: the books' backup didn't work",
+        body: `It ran out of time with 40 of 90 tables copied. The last good backup is from ${central(old.startedAt)}. `
+          + 'Books → Backups can make one now.',
+        url: `/admin/books/backups?backup=${failed.id}`,
+        about: 'backup',
+      }]);
+
+      // One it can't read is said, and the rest of the check goes on.
+      failing = (name) => name === 'books_backups';
+      try {
+        const result = await look('first');
+        expect(result.error).toBe("Backups: couldn't read the backups (books_backups failed)");
+        expect(result.heartbeat).toBeDefined();
+        expect(toldBackups).toEqual([]);
+      } finally {
+        failing = null;
+      }
+
+      // A good one made since: nothing to tell.
+      await backup('made', 0.5);
+      expect(await look('first')).toMatchObject({ told: 0 });
+      expect(toldBackups).toEqual([]);
+    } finally {
+      await pg.exec('TRUNCATE books_backups');
+      await backup('made', 2);
     }
   });
 
