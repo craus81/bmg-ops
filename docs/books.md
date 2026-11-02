@@ -141,7 +141,8 @@ vendor, months that move with the calendar and reports saved by name
 ("Saved reports"), part 74, each company's year closed into retained
 earnings once all its months are, its months held closed until it's
 reopened ("Year end"), part 75, the year's reports for the CPA as one
-Excel file ("The year-end package"), and part 76, the year's general ledger
+Excel file ("The year-end package"), part 76, the year's general ledger
+in it, and part 77, each customer's and vendor's balance at December 31
 in it.
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
@@ -247,9 +248,9 @@ admins can open it while fixing invoices is switched off.
 | NetSuite's stock moves, copied, and each item's count and value at each location | `migrations/401-books-stock-by-item.sql`, `migrations/402-books-stock-values.sql` (what's valued), `migrations/403-books-stock-item-setup.sql` (items set up wrong), `migrations/404-books-stock-ledger-parts.sql` (the ledger account by account), `migrations/405-books-stock-account-items.sql` (the items behind each account), `src/lib/books/netsuite-stock.ts`, `src/lib/books/stock-items.ts`, `src/app/api/cron/books-netsuite-stock/route.ts` |
 | Stock by item and an item's moves, and their APIs | `src/app/(main)/admin/books/stock/page.tsx`, `src/app/(main)/admin/books/stock/item/page.tsx`, `src/app/api/admin/books/stock/route.ts`, `src/app/api/admin/books/stock/item/route.ts` |
 | Stock by item tests | `src/lib/books/netsuite-stock.test.ts`, `src/lib/books/stock-items.test.ts`, `src/lib/books/stock-items-sql.test.ts`; the daily check's are in its test files |
-| Each customer's and vendor's balance, and the starting entry by name | `migrations/406-books-party-balances.sql`, `src/lib/books/party-balances.ts`, `partyOpeningQuery` and `storePartyOpening` in `src/lib/books/netsuite-gl.ts` |
+| Each customer's and vendor's balance, and the starting entry by name | `migrations/406-books-party-balances.sql`, `migrations/503-books-party-balances-through.sql` (the same through a month's end), `src/lib/books/party-balances.ts`, `partyOpeningQuery` and `storePartyOpening` in `src/lib/books/netsuite-gl.ts` |
 | Customer and vendor balances and one balance's documents, and their APIs | `src/app/(main)/admin/books/balances/page.tsx`, `src/app/(main)/admin/books/balances/party/page.tsx`, `src/app/api/admin/books/balances/route.ts`, `src/app/api/admin/books/balances/party/route.ts` |
-| Balance tests | `src/lib/books/party-balances.test.ts`, `src/lib/books/party-balances-sql.test.ts`; the starting entry by name's are in the copy test files, the daily check's in its own |
+| Balance tests | `src/lib/books/party-balances.test.ts`, `src/lib/books/party-balances-sql.test.ts`, `src/lib/books/party-balances-through-sql.test.ts`; the starting entry by name's are in the copy test files, the daily check's in its own |
 | AR and AP agings: NetSuite's open invoices and bills, copied, and each customer's and vendor's open documents both sides | `migrations/458-books-agings.sql`, `src/lib/books/netsuite-open-items.ts`, `src/lib/books/agings.ts`, `src/lib/books/aging-buckets.ts`, `src/app/api/cron/books-netsuite-open-items/route.ts` |
 | AR and AP agings and one customer's or vendor's aging, and their API | `src/app/(main)/admin/books/agings/page.tsx`, `src/app/(main)/admin/books/agings/party/page.tsx`, `src/app/api/admin/books/agings/route.ts` |
 | Aging tests | `src/lib/books/aging-buckets.test.ts`, `src/lib/books/agings.test.ts`, `src/lib/books/netsuite-open-items.test.ts`, and end to end, with the balances they add up to, `src/lib/books/agings-sql.test.ts` |
@@ -306,7 +307,7 @@ admins can open it while fixing invoices is switched off.
 | Sales tax: what goes on Missouri's return for a month, location by location, each location's dated rates, and the return as filed held against it | `migrations/496-books-sales-tax.sql`, `src/lib/books/sales-tax-worksheet.ts`, `src/lib/books/sales-tax-data.ts`, `src/lib/books/sales-tax-words.ts`, `salesTaxWorkbook` in `src/lib/books/report-workbook.ts`, `src/app/(main)/admin/books/sales-tax/page.tsx`, `src/app/api/admin/books/sales-tax/route.ts` and its `download`; tests `src/lib/books/sales-tax-worksheet.test.ts`, `src/lib/books/sales-tax-route.test.ts`, `src/lib/books/sales-tax-sql.test.ts` |
 | Own numbers: FleetSuite's number on each sales order, PO, invoice and credit memo it makes in NetSuite, what became of each, and the sales orders and POs made in NetSuite instead | `migrations/497-books-own-numbers.sql`, `src/lib/books/own-numbers.ts`, `ownNumberFor` in `createSalesOrder`, `createPurchaseOrder`, `createDirectInvoice`, `createInvoiceFromSO` and `createCreditMemoFromInvoice` in `src/lib/netsuite.ts`, the drop ship PO's number in `src/app/api/estimates/[id]/drop-ship/route.ts`, `src/app/(main)/admin/books/own-numbers/page.tsx`, `src/app/api/admin/books/own-numbers/route.ts`; tests `src/lib/books/own-numbers.test.ts`, `src/lib/books/own-numbers-route.test.ts`, `src/lib/netsuite-own-numbers.test.ts`, `src/lib/drop-ship-route.test.ts`, and the tables and their functions `src/lib/books/own-numbers-sql.test.ts` |
 | Year end: each company's year closed into retained earnings once all its months are, in order, its months held closed until it's reopened, with what's done before it closes | `migrations/502-books-year-end.sql`, `src/lib/books/year-end.ts`, `src/lib/books/year-end-data.ts` (what the page and its package read), `src/lib/books/year-end-words.ts` (what both call the checks), `yearCloseAmounts` in `src/lib/books/reports.ts`, `readMonthFacts` and the closed year's months in `src/lib/books/months.ts`, `src/app/(main)/admin/books/year-end/page.tsx`, `src/app/api/admin/books/year-end/route.ts`; tests `src/lib/books/year-end.test.ts`, `src/lib/books/year-end-route.test.ts`, `src/lib/books/year-end-sql.test.ts`, the closed year's months in `src/lib/books/months.test.ts` and `src/lib/books/months-route.test.ts`, and `yearCloseAmounts`' in `src/lib/books/reports.test.ts` |
-| The year-end package: a company's year for the CPA as one Excel file | `yearEndWorkbook` in `src/lib/books/report-workbook.ts`, `loadSplit` in `src/lib/books/report-data.ts`, the general ledger in `src/lib/books/general-ledger.ts` and `readLedger` in `src/lib/books/year-end-data.ts`, `src/app/api/admin/books/year-end/download/route.ts`; tests `src/lib/books/year-end-workbook.test.ts`, `src/lib/books/general-ledger.test.ts`, the download's in `src/lib/books/year-end-route.test.ts` |
+| The year-end package: a company's year for the CPA as one Excel file | `yearEndWorkbook` in `src/lib/books/report-workbook.ts`, `loadSplit` in `src/lib/books/report-data.ts`, the general ledger in `src/lib/books/general-ledger.ts` and `readLedger` in `src/lib/books/year-end-data.ts`, each customer's and vendor's balance at December 31 from `migrations/503-books-party-balances-through.sql`, `readPartyBalances` in `src/lib/books/year-end-data.ts` and `onTrialBalance` in `src/lib/books/party-balances.ts`, `src/app/api/admin/books/year-end/download/route.ts`; tests `src/lib/books/year-end-workbook.test.ts`, `src/lib/books/general-ledger.test.ts`, `src/lib/books/party-balances-through-sql.test.ts`, `onTrialBalance`'s in `src/lib/books/party-balances.test.ts`, the download's in `src/lib/books/year-end-route.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -2525,6 +2526,12 @@ is the payables lines that name nobody. When the mirror matches a customer
 after FleetSuite posted its documents, its NetSuite side moves out of the
 row FleetSuite can't name at once, and its FleetSuite side when the posting
 run posts those documents again.
+
+The year-end package lists each balance at December 31 by the same rules,
+through the end of a month (`gl_party_balances_through`, migration 503,
+which `gl_party_balances` now is with no month): NetSuite's lines in the
+month NetSuite posted them to, FleetSuite's by entry date, as the trial
+balance counts a month ("The year-end package").
 
 Both sides start from the starting entry split by name: the copy of
 NetSuite's ledger reads NetSuite's lines before 2025 on the receivable and
@@ -6493,6 +6500,23 @@ each, laid out as their own downloads are ("Excel downloads"):
   months at a time; an amber one how many the copy of NetSuite's ledger
   doesn't hold everything NetSuite's own totals say moved yet, so their
   NetSuite balance stops short of the line, as the line's last row says.
+- Customer Balances and Vendor Balances (part 77): what each customer owed
+  and each vendor was owed at December 31, as Customer and vendor balances
+  shows them ("Customer and vendor balances") but by name: FleetSuite's
+  books next to NetSuite's, NetSuite's names listed under the customers
+  FleetSuite can't name, and what of the starting entry isn't split by
+  name. Under them, every customer's (vendor's) total next to the
+  receivable (payable) accounts on the trial balance, and what's left
+  between them, nothing once they tie. A month counts as the trial balance
+  counts it: NetSuite's lines in the month NetSuite posted them to,
+  FleetSuite's by entry date (`gl_party_balances_through`, migration 503,
+  `readPartyBalances` in `src/lib/books/year-end-data.ts`, `onTrialBalance`
+  in `src/lib/books/party-balances.ts`). A red note says when FleetSuite's
+  side doesn't come to the trial balance, which only something posted while
+  the file was read does, so it's downloaded again; an amber one when
+  NetSuite's doesn't, since the copy of NetSuite's ledger doesn't hold
+  everything its own totals say moved the accounts yet, and when where the
+  accounts stood before 2025 isn't all split by name (`partyNotes`).
 - For a company with stock, its inventory value at December 31, how it
   ties to each inventory account, and the documents on them with no stocked
   item ("Inventory value at a month's end").
@@ -6509,8 +6533,8 @@ and is open to whoever opens the books.
 
 ### What isn't done yet
 
-- Each customer's and vendor's balance at December 31: the agings are as of
-  today.
+- How old each customer's and vendor's balance at December 31 was: the
+  package has the balances, and the agings are as of today.
 - The bank reconciliations at December 31 in the package.
 
 ## NetSuite feed

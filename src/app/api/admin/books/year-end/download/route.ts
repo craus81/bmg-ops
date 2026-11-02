@@ -8,10 +8,10 @@ import { centralDate } from '@/lib/books/mistake-checks';
 import { monthOfDate } from '@/lib/books/netsuite-gl';
 import { buildReport, type BuilderAsk } from '@/lib/books/report-builder';
 import { loadSplit } from '@/lib/books/report-data';
-import { builderNotes, inventoryNotes, ledgerNotes, reportNotes, yearEndWorkbook } from '@/lib/books/report-workbook';
+import { builderNotes, inventoryNotes, ledgerNotes, partyNotes, reportNotes, yearEndWorkbook } from '@/lib/books/report-workbook';
 import { report } from '@/lib/books/reports';
 import { yearView } from '@/lib/books/year-end';
-import { booksCompanies, pickYear, readLedger, readYear } from '@/lib/books/year-end-data';
+import { booksCompanies, pickYear, readLedger, readPartyBalances, readYear } from '@/lib/books/year-end-data';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -25,8 +25,10 @@ const failed = (err: unknown) => NextResponse.json({ error: String((err as any)?
  * the year and by month, the cash flow statement and how the year closes
  * into retained earnings, FleetSuite's books next to NetSuite's own totals
  * as Reports and Year end show them; the general ledger, every account's
- * documents in the year with each side's running balance; the company's
- * inventory value at December 31 when it has stock; and a contents sheet
+ * documents in the year with each side's running balance; what each
+ * customer owed and each vendor was owed at December 31, both sides, and
+ * how they come to the trial balance; the company's inventory value at
+ * December 31 when it has stock; and a contents sheet
  * with what's done before the year closes (src/lib/books/report-workbook.ts's
  * yearEndWorkbook, docs/books.md "Year end"). While the year isn't over,
  * through this month, and it says so.
@@ -50,10 +52,11 @@ export async function GET(req: NextRequest) {
     // December, or this month while the year isn't over.
     const thisMonth = monthOfDate(today)!;
     const to = thisMonth < `${year}-12-01` ? thisMonth : `${year}-12-01`;
-    const [split, stock, ledger] = await Promise.all([
+    const [split, stock, ledger, parties] = await Promise.all([
       loadSplit(service, company.code),
       loadInventoryValue(service, new URLSearchParams({ month: to.slice(0, 7) })),
       readLedger(service, loaded, { from: january, to }),
+      readPartyBalances(service, loaded, to),
     ]);
     if ('error' in split) throw new Error(split.error);
     if ('error' in stock) throw new Error(stock.error);
@@ -82,6 +85,10 @@ export async function GET(req: NextRequest) {
       reportNotes: reportNotes({ companyName: company.name, posts, checked: read.checked, ...runs }),
       byMonth: { ask, built, notes: builderNotes({ companyName: company.name, posts, copied: read.checked, ties: built.ties, ...runs }) },
       ledger: { accounts: ledger, notes: ledgerNotes({ ledger, checked: read.checked }) },
+      parties: {
+        customer: { balances: parties.customer, notes: partyNotes({ balances: parties.customer, checked: read.checked }) },
+        vendor: { balances: parties.vendor, notes: partyNotes({ balances: parties.vendor, checked: read.checked }) },
+      },
       inventory: value && {
         value,
         notes: inventoryNotes({ month: stock.month, through: stock.through, company: value, lastCopy: stock.lastCopy, lastPosting: stock.lastPosting }),

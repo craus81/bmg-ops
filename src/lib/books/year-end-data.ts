@@ -3,6 +3,9 @@ import { generalLedger, ledgerAccounts, type LedgerBlock } from './general-ledge
 import { readCompanies, type CompanyRow } from './going-live';
 import { BOOKS_COMPANIES } from './journal';
 import { readMonthFacts } from './months';
+import {
+  onTrialBalance, PARTY_KINDS, partyBalances, type PartyBalancesAt, type PartyBalancesData, type PartyKind,
+} from './party-balances';
 import { loadReports, type LoadedReports } from './report-data';
 import { DOCUMENTS_LISTED, type AccountDocumentsData } from './report-detail';
 import { yearCloseAmounts, type YearCloseAmounts } from './reports';
@@ -14,7 +17,8 @@ import { defaultYear, readYearChecks, readYears, yearsShown, type YearFacts } fr
  * year (src/app/api/admin/books/year-end and its download; docs/books.md
  * "Year end"): the company and year asked for, the year's close both sides,
  * its months, checks and closes, and the books Reports reads, which the
- * package's statements come from; and for the package, the general ledger.
+ * package's statements come from; and for the package, the general ledger
+ * and each customer's and vendor's balance at the year's end.
  */
 
 export interface YearRead {
@@ -96,4 +100,19 @@ export async function readLedger(service: SupabaseClient, loaded: LoadedReports,
   };
   await Promise.all(Array.from({ length: LEDGER_READS }, reader));
   return generalLedger(loaded.data, range, found);
+}
+
+/**
+ * Each customer's and each vendor's balance at the end of `to`'s month
+ * (gl_party_balances_through, migration 503), read as Customer and vendor
+ * balances reads them, with the receivable and payable accounts on the
+ * trial balance then (onTrialBalance), which they come to.
+ */
+export async function readPartyBalances(service: SupabaseClient, loaded: LoadedReports, to: string): Promise<Record<PartyKind, PartyBalancesAt>> {
+  const [customer, vendor] = await Promise.all(PARTY_KINDS.map(async (kind): Promise<PartyBalancesAt> => {
+    const { data, error } = await service.rpc('gl_party_balances_through', { p_company: loaded.company, p_kind: kind, p_month: to });
+    if (error) throw new Error(error.message);
+    return { ...partyBalances(data as PartyBalancesData, kind), trialBalance: onTrialBalance(loaded.data, kind, to) };
+  }));
+  return { customer, vendor };
 }

@@ -1,6 +1,7 @@
 import ExcelJS from 'exceljs';
 import type { LedgerBlock } from './general-ledger';
 import type { CompanyValue } from './inventory-value';
+import { byPartyName, type PartyBalance, type PartyBalancesAt, type PartyKind } from './party-balances';
 import type { BuilderAsk, BuiltReport } from './report-builder';
 import { builderTitle, filterWords, type BuilderBy, type BuilderRows } from './report-builder-words';
 import { DOCUMENTS_LISTED, type DetailDocument, type LedgerRow } from './report-detail';
@@ -25,8 +26,9 @@ import { CHECK_LABELS, STATE_WORDS } from './year-end-words';
  * document behind it (part 65, sales-tax-worksheet.ts). Built on the server
  * by the download routes, as is a report from the report builder (part 72,
  * report-builder.ts) and a company's year-end package for the CPA, those
- * reports, its general ledger and its stock at the year's end in one file
- * (parts 75 and 76, Books → Year end); amounts
+ * reports, its general ledger, what each customer and vendor was owed and
+ * its stock at the year's end in one file (parts 75 to 77, Books → Year
+ * end); amounts
  * are dollars in Excel's own Accounting format, read as the report shows
  * them, and anything the page warns about is written at the top, in red
  * when it's a failure.
@@ -1094,6 +1096,8 @@ export interface YearEndWorkbookInput {
   byMonth: { ask: BuilderAsk; built: BuiltReport; notes: WorkbookNote[] };
   /** The general ledger from January through `to` (readLedger in year-end-data.ts), with what it warns about beyond Reports' notes (ledgerNotes). */
   ledger: { accounts: LedgerBlock[]; notes: WorkbookNote[] };
+  /** Each customer's and vendor's balance at `to`'s end (readPartyBalances in year-end-data.ts), with what each warns about beyond Reports' notes (partyNotes). */
+  parties: Record<PartyKind, { balances: PartyBalancesAt; notes: WorkbookNote[] }>;
   /** The company's stock at `to`'s end, with what Inventory value warns about (inventoryNotes); null for a company with none. */
   inventory: { value: CompanyValue; notes: WorkbookNote[] } | null;
   now: Date;
@@ -1110,9 +1114,11 @@ const PACKAGE_INVENTORY: InventorySheetNames = {
  * and loss for the year and by month, the cash flow statement and how the
  * year closes into retained earnings, FleetSuite's books next to NetSuite's
  * own totals; the general ledger, every account's documents in the year with
- * each side's running balance; and, for a company with stock, its inventory
- * value at the year's end. What Year end says about the year is at the top of
- * each sheet, above what the sheet's own page warns about.
+ * each side's running balance; what each customer owed and each vendor was
+ * owed at the year's end, both sides, and how they come to the trial
+ * balance; and, for a company with stock, its inventory value at the year's
+ * end. What Year end says about the year is at the top of each sheet, above
+ * what the sheet's own page warns about.
  */
 export async function yearEndWorkbook(input: YearEndWorkbookInput): Promise<WorkbookFile> {
   const { company, year, to, view, now } = input;
@@ -1142,6 +1148,14 @@ export async function yearEndWorkbook(input: YearEndWorkbookInput): Promise<Work
     `Each account's documents, ${period}, by date, with each side's balance after each: from where the account stood at the start of ${year} `
       + 'to its line on the trial balance.',
   );
+  for (const kind of ['customer', 'vendor'] as const) {
+    const { balances, notes } = input.parties[kind];
+    add(
+      addPartySheet(wb, { company, to, balances, notes: [...reportNotes, ...notes], now }),
+      `${PARTY_WORDS[kind].owed(end)}, FleetSuite's books next to NetSuite's, and how they come to the ${PARTY_WORDS[kind].accounts} accounts `
+        + 'on the trial balance.',
+    );
+  }
   if (input.inventory) {
     // Inventory value's own notes say when its month isn't over, so the year's first note, which says it of the year, is left off.
     const notes = [...yearNotes.slice(view.over ? 0 : 1), ...input.inventory.notes];
@@ -1288,5 +1302,163 @@ function addLedgerSheet(wb: ExcelJS.Workbook, p: {
   }
   if (ledger.length) sheet.autoFilter = { from: { row: header, column: 1 }, to: { row: sheet.rowCount, column: 12 } };
   else sheet.addRow(['No account has a balance or a document in these months.']).getCell(1).font = { color: { argb: MUTED } };
+  return sheet;
+}
+
+// ── Customer and vendor balances ───────────────────────────────────────────
+
+const PARTY_WORDS: Record<PartyKind, {
+  one: string; many: string; One: string; title: string; accounts: string; owed: (end: string) => string; unnamed: (listed: boolean) => string;
+}> = {
+  customer: {
+    one: 'customer',
+    many: 'customers',
+    One: 'Customer',
+    title: 'Customer Balances',
+    accounts: 'receivable',
+    owed: (end) => `What each customer owed at ${end}`,
+    unnamed: (listed) => "NetSuite customers the ledger mirror hasn't matched to a FleetSuite customer, and lines that name no customer, together"
+      + (listed ? "; NetSuite's names in it are listed under it" : ''),
+  },
+  vendor: {
+    one: 'vendor',
+    many: 'vendors',
+    One: 'Vendor',
+    title: 'Vendor Balances',
+    accounts: 'payable',
+    owed: (end) => `What each vendor was owed at ${end}`,
+    unnamed: () => 'Payables lines that name no vendor, together',
+  },
+};
+
+/**
+ * What a kind's balances at a month's end warn about beyond Reports' notes:
+ * when they don't come to the receivable (payable) accounts on the trial
+ * balance, FleetSuite's side (something posted while the package was read)
+ * or NetSuite's (its copy is short of its own totals), and when where the
+ * accounts stood before 2025 isn't all split by name.
+ */
+export function partyNotes(p: {
+  balances: Pick<PartyBalancesAt, 'kind' | 'unsplit' | 'openingComplete' | 'totals' | 'trialBalance'>;
+  checked: boolean;
+}): WorkbookNote[] {
+  const { kind, totals, trialBalance, unsplit } = p.balances;
+  const w = PARTY_WORDS[kind];
+  const notes: WorkbookNote[] = [];
+  if (totals.fleetsuite !== trialBalance.fleetsuite) {
+    notes.push({
+      tone: 'red',
+      text: `Something posted to FleetSuite's books while this was read, so its ${w.many} don't come to the ${w.accounts} accounts on the trial balance. `
+        + 'Download it again.',
+    });
+  }
+  // Until NetSuite's totals are read its side of the trial balance is empty, as Reports' note says.
+  if (p.checked && totals.netsuite !== trialBalance.netsuite) {
+    notes.push({
+      tone: 'amber',
+      text: `NetSuite's ${w.many} don't come to its ${w.accounts} accounts on the trial balance: the copy of NetSuite's ledger doesn't hold `
+        + "everything NetSuite's own totals say moved them yet, so some of its documents may be missing here. The next copy catches up.",
+    });
+  }
+  if (!p.balances.openingComplete) {
+    notes.push({
+      tone: 'amber',
+      text: (unsplit
+        ? `${fmt(unsplit)} of where NetSuite's ${w.accounts} accounts stood before 2025 isn't split by ${w.one} yet, so it's in the total but under no one.`
+        : `The split by ${w.one} of where NetSuite's ${w.accounts} accounts stood before 2025 no longer adds up to them line for line.`)
+        + " The next copy of NetSuite's ledger reads it again.",
+    });
+  }
+  return notes;
+}
+
+/** What a balance's note says: who the group FleetSuite can't name is, a customer's NetSuite customers, and its documents that differ. */
+function partyNote(kind: PartyKind, p: PartyBalance): string | null {
+  const said: string[] = [];
+  if (p.party === '') said.push(PARTY_WORDS[kind].unnamed(p.membersCount > 0));
+  if (p.netsuiteIds.length > 1) said.push(`${p.netsuiteIds.length} NetSuite customers: ${p.netsuiteIds.join(', ')}`);
+  if (p.differing) said.push(`${count(p.differing, 'document differs', 'documents differ')}${p.differs ? '' : ', the balance matches'}`);
+  return said.length ? `${said.join('. ')}.` : null;
+}
+
+/**
+ * What each customer owed (vendor was owed) at the end of `to`'s month, as
+ * Customer and vendor balances shows it, by name: FleetSuite's books next to
+ * NetSuite's, NetSuite's names under the customers FleetSuite can't name,
+ * what of the starting entry isn't split by name, then the total next to the
+ * receivable (payable) accounts on the trial balance and what's left between
+ * them, which is nothing once they tie.
+ */
+function addPartySheet(wb: ExcelJS.Workbook, p: {
+  company: WorkbookCompany; to: string; balances: PartyBalancesAt; notes: WorkbookNote[]; now: Date;
+}): ExcelJS.Worksheet {
+  const { balances } = p;
+  const { kind, totals, trialBalance } = balances;
+  const w = PARTY_WORDS[kind];
+  const end = monthEnd(p.to);
+  const sheet = wb.addWorksheet(w.title, { pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
+  sheet.getColumn(1).width = 46;
+  amountColumns(sheet, 2, 4);
+  sheet.getColumn(5).width = 56;
+  const header = titleRows(sheet, {
+    company: p.company,
+    title: w.title,
+    period: `As of ${end}`,
+    about: `${w.owed(end)}, FleetSuite's books next to NetSuite's: where NetSuite's ${w.accounts} accounts stood for each before 2025 and every `
+      + "document since, FleetSuite's journal on one side and the copy of NetSuite's general ledger on the other, as Customer and vendor balances "
+      + `shows them. ${w.many[0].toUpperCase()}${w.many.slice(1)} at nothing on both sides, with every document matching, are left out.`,
+    notes: p.notes,
+    now: p.now,
+    header: [w.One, 'FleetSuite', 'NetSuite', 'Difference', 'Note'],
+    amounts: [2, 4],
+  });
+  const amounts = (label: string, pair: { fleetsuite: number; netsuite: number }, note: string | null = null) => {
+    const diff = pair.fleetsuite - pair.netsuite;
+    const row = sheet.addRow([label, dollars(pair.fleetsuite), dollars(pair.netsuite), dollars(diff), note]);
+    redIf(row.getCell(4), diff !== 0);
+    return row;
+  };
+
+  const parties = [...balances.parties].sort(byPartyName);
+  for (const party of parties) {
+    amounts(party.name, party, partyNote(kind, party));
+    if (party.party !== '' || !party.membersCount) continue;
+    // NetSuite's names among the customers FleetSuite can't name, each with what it owes in NetSuite's books, then the rest of them together.
+    const members: ExcelJS.CellValue[][] = party.members.map((m) => [m.name, null, dollars(m.balance), null, m.entityId ? `NetSuite id ${m.entityId}` : null]);
+    const rest = party.membersCount - party.members.length;
+    if (rest > 0) {
+      const listed = party.members.reduce((sum, m) => sum + m.balance, 0);
+      members.push([`${count(rest, 'more NetSuite customer', 'more NetSuite customers')} with smaller balances`, null, dollars(party.netsuite - listed), null, null]);
+    }
+    for (const cells of members) {
+      const row = sheet.addRow(cells);
+      row.font = { italic: true, color: { argb: MUTED } };
+      row.getCell(1).alignment = { indent: 1 };
+    }
+  }
+  if (parties.length) sheet.autoFilter = { from: { row: header, column: 1 }, to: { row: sheet.rowCount, column: 5 } };
+  else sheet.addRow([`No ${w.one} had a balance at ${end}.`]).getCell(1).font = { color: { argb: MUTED } };
+
+  if (balances.unsplit) amounts(`From before 2025, not split by ${w.one}`, { fleetsuite: balances.unsplit, netsuite: balances.unsplit });
+  const total = amounts(`Every ${w.one}`, totals);
+  const accounts = balances.accounts.map((a) => [a.number, a.name].filter(Boolean).join(' ')).join(', ');
+  const lines = balances.accounts.length === 1 ? `The ${w.accounts} account's line` : `The ${w.accounts} accounts' lines`;
+  amounts(
+    `On the trial balance: ${accounts || `no ${w.accounts} account in the chart`}`,
+    trialBalance,
+    accounts ? `${lines} on the Trial Balance sheet.` : null,
+  );
+  const left = { fleetsuite: totals.fleetsuite - trialBalance.fleetsuite, netsuite: totals.netsuite - trialBalance.netsuite };
+  const tie = sheet.addRow([`Every ${w.one} less the trial balance`, dollars(left.fleetsuite), dollars(left.netsuite), null, null]);
+  for (const row of [total, tie]) {
+    row.getCell(1).font = { bold: true };
+    for (let c = 2; c <= 4; c += 1) {
+      const cell = row.getCell(c);
+      cell.font = { ...cell.font, bold: true };
+      cell.border = { top: { style: row === tie ? 'double' : 'thin' } };
+    }
+  }
+  redIf(tie.getCell(2), left.fleetsuite !== 0);
+  redIf(tie.getCell(3), left.netsuite !== 0);
   return sheet;
 }

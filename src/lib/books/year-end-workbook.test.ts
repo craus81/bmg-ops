@@ -9,13 +9,14 @@ vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok
 
 import { generalLedger, type LedgerBlock } from './general-ledger';
 import { monthEndValue, type MonthEndPartData } from './inventory-value';
+import { partyBalances, type PartyBalanceData, type PartyBalancesAt } from './party-balances';
 import { buildReport, type BuilderAsk, type SplitAmount } from './report-builder';
 import type { AccountDocumentData, AccountDocumentsData } from './report-detail';
 import { report, yearCloseAmounts, type ReportAccount, type ReportAmount, type ReportData } from './reports';
 import type { TbAmount } from './trial-balance';
 import type { YearCheck, YearEvent } from './year-end';
 import {
-  ledgerNotes, XLSX_TYPE, yearEndFileName, yearEndNotes, yearEndWorkbook,
+  ledgerNotes, partyNotes, XLSX_TYPE, yearEndFileName, yearEndNotes, yearEndWorkbook,
   type WorkbookFile, type WorkbookNote, type YearEndView, type YearEndWorkbookInput,
 } from './report-workbook';
 
@@ -90,6 +91,54 @@ const stock = (part: MonthEndPartData = INVENTORY) => monthEndValue({
   netsuite_through: [{ company: 'BMG', month: '2027-12-01' }],
 }).companies[0];
 
+/** A customer's or vendor's balance at December 31, 2027 as gl_party_balances_through has it. */
+const ACME = 'c0000000-0000-4000-8000-00000000000a';
+const BRAVO = 'c0000000-0000-4000-8000-00000000000b';
+const partyRow = (over: Partial<PartyBalanceData>): PartyBalanceData => ({
+  party: ACME, name: 'Acme Fleet', netsuite_ids: ['9001'], opening: '0', netsuite: '0', fleetsuite: '0',
+  documents: 1, differing: 0, members: null, members_count: null, ...over,
+});
+/**
+ * BMG's customers: Acme, whose payment differs; Bravo, two NetSuite
+ * customers, a document differing but not the balance; and those FleetSuite
+ * can't name, three NetSuite customers and lines that name none, of which
+ * two and the lines are listed. 100.00 of where the receivables stood
+ * before 2025 isn't split by name, and NetSuite's side of the trial balance
+ * holds 5.00 more than the copy of its ledger.
+ */
+const CUSTOMERS: PartyBalancesAt = {
+  ...partyBalances({
+    accounts: [{ netsuite_account_id: '12', number: '1200', name: 'Accounts receivable' }],
+    opening: { total: '900.00', named: '800.00', complete: false },
+    parties: [
+      partyRow({
+        party: '', name: null, netsuite_ids: [], opening: '100.00', netsuite: '310.00', fleetsuite: '250.00', documents: 2, differing: 1,
+        members: [
+          { entity_id: '9006', name: 'Echo Express', opening: '100.00', netsuite: '250.00' },
+          { entity_id: '9007', name: null, opening: '0', netsuite: '50.00' },
+          { entity_id: '', name: null, opening: '0', netsuite: '7.00' },
+        ],
+        members_count: 4,
+      }),
+      partyRow({ party: BRAVO, name: 'Bravo Transit', netsuite_ids: ['9002', '9003'], netsuite: '300.00', fleetsuite: '300.00', documents: 2, differing: 1 }),
+      partyRow({ opening: '700.00', netsuite: '-200.00', fleetsuite: '-150.00', documents: 3, differing: 1 }),
+    ],
+  }, 'customer'),
+  trialBalance: { fleetsuite: 130000, netsuite: 131500 },
+};
+/** BMG's vendors: the landlord, whose bill differs, and lines that name no vendor; FleetSuite's side holds 5.00 more than its trial balance. */
+const VENDORS: PartyBalancesAt = {
+  ...partyBalances({
+    accounts: [{ netsuite_account_id: '20', number: '2000', name: 'Accounts payable' }, { netsuite_account_id: '21', number: '2010', name: 'Accrued bills' }],
+    opening: { total: '-300.00', named: '-300.00', complete: true },
+    parties: [
+      partyRow({ party: '7001', name: 'Example Landlord LLC', netsuite_ids: ['7001'], opening: '-300.00', netsuite: '-200.00', fleetsuite: '-210.00', documents: 2, differing: 1 }),
+      partyRow({ party: '', name: null, netsuite_ids: [], netsuite: '-25.00', fleetsuite: '-25.00' }),
+    ],
+  }, 'vendor'),
+  trialBalance: { fleetsuite: 53000, netsuite: 52500 },
+};
+
 const CHECKS: YearCheck[] = [
   { key: 'months', state: 'done', detail: 'All 12 months are closed.' },
   { key: 'netsuite', state: 'todo', detail: "1 month doesn't match NetSuite: April.", months: ['2027-04-01'] },
@@ -116,6 +165,7 @@ const REPORT_NOTE: WorkbookNote = { tone: 'amber', text: "NetSuite's totals have
 const BUILDER_NOTE: WorkbookNote = { tone: 'red', text: 'Download it again.' };
 const STOCK_NOTE: WorkbookNote = { tone: 'amber', text: "NetSuite's stock moves haven't been copied yet, so no item has a count or value." };
 const LEDGER_NOTE: WorkbookNote = { tone: 'red', text: '1 account has more than 20,000 documents in these months.' };
+const CUSTOMER_NOTE: WorkbookNote = { tone: 'amber', text: "NetSuite's customers don't come to its receivable accounts on the trial balance." };
 
 /** The package for BMG's 2027 as the download makes it, through `to`, with what's asked changed. */
 function input(over: Partial<YearEndWorkbookInput> = {}, to = '2027-12-01'): YearEndWorkbookInput {
@@ -136,6 +186,7 @@ function input(over: Partial<YearEndWorkbookInput> = {}, to = '2027-12-01'): Yea
     reportNotes: [REPORT_NOTE],
     byMonth: { ask, built: buildReport(DATA, SPLIT, new Map(), ask), notes: [BUILDER_NOTE] },
     ledger: { accounts: generalLedger(DATA, { from: '2027-01-01', to }, FOUND), notes: [LEDGER_NOTE] },
+    parties: { customer: { balances: CUSTOMERS, notes: [CUSTOMER_NOTE] }, vendor: { balances: VENDORS, notes: [] } },
     inventory: { value: stock(), notes: [STOCK_NOTE] },
     now: NOW,
     ...over,
@@ -191,7 +242,8 @@ describe('the year-end package file', () => {
     const all = await sheets(file);
     expect(all.map((s) => s.name)).toEqual([
       'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows',
-      'Retained Earnings', 'General Ledger', 'Inventory value', 'Inventory ties to accounts', 'Inventory documents, no item',
+      'Retained Earnings', 'General Ledger', 'Customer Balances', 'Vendor Balances', 'Inventory value', 'Inventory ties to accounts',
+      'Inventory documents, no item',
     ]);
     const ws = all[0];
     expect([1, 2, 3, 4, 5].map((r) => cells(ws, r, 1)[0])).toEqual([
@@ -220,6 +272,14 @@ describe('the year-end package file', () => {
         "Each account's documents, January 1, 2027 to December 31, 2027, by date, with each side's balance after each: "
           + 'from where the account stood at the start of 2027 to its line on the trial balance.',
       ],
+      [
+        link('Customer Balances'),
+        "What each customer owed at December 31, 2027, FleetSuite's books next to NetSuite's, and how they come to the receivable accounts on the trial balance.",
+      ],
+      [
+        link('Vendor Balances'),
+        "What each vendor was owed at December 31, 2027, FleetSuite's books next to NetSuite's, and how they come to the payable accounts on the trial balance.",
+      ],
       [link('Inventory value'), 'Each item at each location at December 31, 2027: on hand, average cost and value.'],
       [link('Inventory ties to accounts'), 'How the items come to each inventory account on the balance sheet at December 31, 2027.'],
       [link('Inventory documents, no item'), 'Documents on the inventory accounts with no stocked item, from January 1, 2025 to December 31, 2027.'],
@@ -236,14 +296,14 @@ describe('the year-end package file', () => {
     expect(at(0).getCell(1).font).toMatchObject({ color: { argb: 'FF0563C1' }, underline: true });
     expect(at(0).getCell(1).alignment).toMatchObject({ vertical: 'top' });
     expect(at(0).getCell(2).alignment).toMatchObject({ vertical: 'top', wrapText: true });
-    expect(at(11).getCell(1).font).toMatchObject({ bold: true, size: 12 });
+    expect(at(13).getCell(1).font).toMatchObject({ bold: true, size: 12 });
     // What's not done yet stands out; the rest is plain.
-    expect(at(13).getCell(1).font).toMatchObject({ bold: true, color: { argb: AMBER } });
-    expect(at(13).getCell(2).font).toMatchObject({ bold: true, color: { argb: AMBER } });
+    expect(at(15).getCell(1).font).toMatchObject({ bold: true, color: { argb: AMBER } });
+    expect(at(15).getCell(2).font).toMatchObject({ bold: true, color: { argb: AMBER } });
     // Done, or not here at all: Excel's own text color.
-    expect(at(12).getCell(1).font?.color?.argb).toBeUndefined();
-    expect(at(15).getCell(1).font?.color?.argb).toBeUndefined();
-    expect(at(15).getCell(2).alignment).toMatchObject({ vertical: 'top', wrapText: true });
+    expect(at(14).getCell(1).font?.color?.argb).toBeUndefined();
+    expect(at(17).getCell(1).font?.color?.argb).toBeUndefined();
+    expect(at(17).getCell(2).alignment).toMatchObject({ vertical: 'top', wrapText: true });
     expect(ws.getColumn(1).width).toBe(30);
     expect(ws.getColumn(2).width).toBe(100);
   });
@@ -346,8 +406,8 @@ describe('the year-end package file', () => {
 
     const none = { ...INVENTORY, entries: 0, entries_total: '0', month_entries: 0, month_entries_total: '0', kinds: [], rows: [], ledger_moves: '0', netsuite_moves: '0', books_moves: '0' };
     const without = await sheets(await yearEndWorkbook(input({ inventory: { value: stock(none), notes: [] } })));
-    expect(without.slice(8).map((s) => s.name)).toEqual(['Inventory value', 'Inventory ties to accounts']);
-    expect(body(without[0], 'Sheet', 1).map((r) => (r[0] as { text: string } | null)?.text ?? r[0]).slice(7, 10)).toEqual([
+    expect(without.slice(10).map((s) => s.name)).toEqual(['Inventory value', 'Inventory ties to accounts']);
+    expect(body(without[0], 'Sheet', 1).map((r) => (r[0] as { text: string } | null)?.text ?? r[0]).slice(9, 12)).toEqual([
       'Inventory value', 'Inventory ties to accounts', null,
     ]);
   });
@@ -356,9 +416,9 @@ describe('the year-end package file', () => {
     const all = await sheets(await yearEndWorkbook(input({ inventory: null })));
     expect(all.map((s) => s.name)).toEqual([
       'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows', 'Retained Earnings',
-      'General Ledger',
+      'General Ledger', 'Customer Balances', 'Vendor Balances',
     ]);
-    expect(body(all[0], 'Sheet', 1)[8]).toEqual(['Before 2027 closes']);
+    expect(body(all[0], 'Sheet', 1)[10]).toEqual(['Before 2027 closes']);
   });
 
   it("runs a year that isn't over through this month and says so on each sheet, once on the stock's, which says it of its month", async () => {
@@ -386,6 +446,11 @@ describe('the year-end package file', () => {
       '1010 First Bank checking', null, 'Balance at the end of November 2027',
     ]);
     expect(body(ledger, 'Account', 3).at(-1)).toEqual(['6000 Rent', null, 'Total, January to November 2027']);
+    for (const name of ['Customer Balances', 'Vendor Balances']) {
+      expect([name, cells(sheet(all, name), 3, 1)[0]]).toEqual([name, 'As of November 30, 2027']);
+    }
+    expect(notesOf(sheet(all, 'Customer Balances'))).toEqual([over, [REPORT_NOTE.text, AMBER], [CUSTOMER_NOTE.text, AMBER]]);
+    expect(body(all[0], 'Sheet', 2)[7][1]).toMatch(/^What each customer owed at November 30, 2027, /);
   });
 
   it("lists every account's documents in the general ledger, each row with its account, under the year's notes, Reports' and its own", async () => {
@@ -500,6 +565,124 @@ describe('the year-end package file', () => {
     expect(ws.autoFilter).toBeUndefined();
   });
 
+  it("lists what each customer owed and each vendor was owed at December 31, both sides, under the year's notes, Reports' and their own, then how they come to the trial balance", async () => {
+    const all = await sheets(await yearEndWorkbook(input()));
+    const ws = sheet(all, 'Customer Balances');
+    expect([2, 3, 4].map((r) => cells(ws, r, 1)[0])).toEqual([
+      'Customer Balances',
+      'As of December 31, 2027',
+      "What each customer owed at December 31, 2027, FleetSuite's books next to NetSuite's: where NetSuite's receivable accounts stood for each "
+        + "before 2025 and every document since, FleetSuite's journal on one side and the copy of NetSuite's general ledger on the other, "
+        + 'as Customer and vendor balances shows them. Customers at nothing on both sides, with every document matching, are left out.',
+    ]);
+    expect(notesOf(ws)).toEqual([[CLOSED_NOTE, GREEN], [REPORT_NOTE.text, AMBER], [CUSTOMER_NOTE.text, AMBER]]);
+    const head = headerRow(ws, 'Customer');
+    expect(cells(ws, head, 5)).toEqual(['Customer', 'FleetSuite', 'NetSuite', 'Difference', 'Note']);
+    expect([1, 2, 3, 4, 5].map((c) => ws.getRow(head).getCell(c).alignment?.horizontal)).toEqual(['left', 'right', 'right', 'right', 'left']);
+    expect(body(ws, 'Customer', 5)).toEqual([
+      ['Acme Fleet', 550, 500, 50, '1 document differs.'],
+      ['Bravo Transit', 300, 300, 0, '2 NetSuite customers: 9002, 9003. 1 document differs, the balance matches.'],
+      [
+        'Not matched to a FleetSuite customer', 350, 410, -60,
+        "NetSuite customers the ledger mirror hasn't matched to a FleetSuite customer, and lines that name no customer, together; "
+          + "NetSuite's names in it are listed under it. 1 document differs.",
+      ],
+      ['Echo Express', null, 350, null, 'NetSuite id 9006'],
+      ['NetSuite customer 9007', null, 50, null, 'NetSuite id 9007'],
+      ['No customer named', null, 7, null, null],
+      ['1 more NetSuite customer with smaller balances', null, 3, null, null],
+      ['From before 2025, not split by customer', 100, 100, 0, null],
+      ['Every customer', 1300, 1310, -10, null],
+      ['On the trial balance: 1200 Accounts receivable', 1300, 1315, -15, "The receivable account's line on the Trial Balance sheet."],
+      ['Every customer less the trial balance', 0, -5, null, null],
+    ]);
+    const at = (i: number) => ws.getRow(head + 1 + i);
+    // A balance that differs, its difference in red; one that matches, plain.
+    expect(at(0).getCell(4).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect(at(1).getCell(4).font?.color?.argb).toBeUndefined();
+    expect(at(2).getCell(1).font?.italic).toBeFalsy();
+    // NetSuite's names under the customers FleetSuite can't name, set in and muted.
+    for (const i of [3, 4, 5, 6]) {
+      expect(at(i).getCell(1).font).toMatchObject({ italic: true, color: { argb: 'FF595959' } });
+      expect(at(i).getCell(1).alignment).toMatchObject({ indent: 1 });
+      expect(at(i).getCell(3).font).toMatchObject({ italic: true, color: { argb: 'FF595959' } });
+    }
+    // Every customer in bold over a line, the trial balance's plain, then what's left between them over a double line, red where it isn't nothing.
+    expect(at(8).getCell(1).font).toMatchObject({ bold: true });
+    expect([2, 3, 4].map((c) => at(8).getCell(c).border)).toEqual([2, 3, 4].map(() => ({ top: { style: 'thin' } })));
+    expect(at(8).getCell(2).font).toEqual({ bold: true });
+    expect(at(8).getCell(4).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect(at(9).getCell(1).font?.bold).toBeFalsy();
+    expect(at(9).getCell(2).border?.top).toBeUndefined();
+    expect(at(9).getCell(4).font).toMatchObject({ bold: true, color: { argb: RED } });
+    expect(at(10).getCell(1).font).toMatchObject({ bold: true });
+    expect([2, 3, 4].map((c) => at(10).getCell(c).border)).toEqual([2, 3, 4].map(() => ({ top: { style: 'double' } })));
+    expect(at(10).getCell(2).font).toEqual({ bold: true });
+    expect(at(10).getCell(3).font).toMatchObject({ bold: true, color: { argb: RED } });
+    // Amounts in Excel's own Accounting format; a filter over the customers and the names under them.
+    expect([2, 3, 4].map((c) => at(0).getCell(c).numFmt)).toEqual([2, 3, 4].map(() => '_($* #,##0.00_);_($* (#,##0.00);_($* "-"??_);_(@_)'));
+    expect(ws.autoFilter).toBe(`A${head}:E${head + 7}`);
+    expect(ws.views[0]).toMatchObject({ state: 'frozen', ySplit: head });
+    expect([1, 2, 3, 4, 5].map((c) => ws.getColumn(c).width)).toEqual([46, 17, 17, 17, 56]);
+
+    const vendors = sheet(all, 'Vendor Balances');
+    expect([2, 3, 4].map((r) => cells(vendors, r, 1)[0])).toEqual([
+      'Vendor Balances',
+      'As of December 31, 2027',
+      "What each vendor was owed at December 31, 2027, FleetSuite's books next to NetSuite's: where NetSuite's payable accounts stood for each "
+        + "before 2025 and every document since, FleetSuite's journal on one side and the copy of NetSuite's general ledger on the other, "
+        + 'as Customer and vendor balances shows them. Vendors at nothing on both sides, with every document matching, are left out.',
+    ]);
+    expect(notesOf(vendors)).toEqual([[CLOSED_NOTE, GREEN], [REPORT_NOTE.text, AMBER]]);
+    const vendorHead = headerRow(vendors, 'Vendor');
+    expect(body(vendors, 'Vendor', 5)).toEqual([
+      ['Example Landlord LLC', 510, 500, 10, '1 document differs.'],
+      ['No vendor named', 25, 25, 0, 'Payables lines that name no vendor, together.'],
+      ['Every vendor', 535, 525, 10, null],
+      ['On the trial balance: 2000 Accounts payable, 2010 Accrued bills', 530, 525, 5, "The payable accounts' lines on the Trial Balance sheet."],
+      ['Every vendor less the trial balance', 5, 0, null, null],
+    ]);
+    // Only FleetSuite's side is apart from the trial balance.
+    expect([2, 3].map((c) => vendors.getRow(vendorHead + 5).getCell(c).font)).toEqual([{ bold: true, color: { argb: RED } }, { bold: true }]);
+    expect(vendors.autoFilter).toBe(`A${vendorHead}:E${vendorHead + 2}`);
+  });
+
+  it('says so when no customer had a balance, with nothing to filter, and when the chart has no receivable account', async () => {
+    const none: PartyBalancesAt = { ...partyBalances(null, 'customer'), trialBalance: { fleetsuite: 0, netsuite: 0 } };
+    const parties = { customer: { balances: none, notes: [] }, vendor: { balances: VENDORS, notes: [] } };
+    const ws = sheet(await sheets(await yearEndWorkbook(input({ parties }))), 'Customer Balances');
+    expect(notesOf(ws)).toEqual([[CLOSED_NOTE, GREEN], [REPORT_NOTE.text, AMBER]]);
+    expect(body(ws, 'Customer', 5)).toEqual([
+      ['No customer had a balance at December 31, 2027.', null, null, null, null],
+      ['Every customer', 0, 0, 0, null],
+      ['On the trial balance: no receivable account in the chart', 0, 0, 0, null],
+      ['Every customer less the trial balance', 0, 0, null, null],
+    ]);
+    expect(ws.getRow(headerRow(ws, 'Customer') + 1).getCell(1).font).toMatchObject({ color: { argb: 'FF595959' } });
+    expect(ws.autoFilter).toBeUndefined();
+
+    // Only FleetSuite's lines that name no customer: no NetSuite name to list under them.
+    const unnamed: PartyBalancesAt = {
+      ...partyBalances({
+        accounts: [{ netsuite_account_id: '12', number: null, name: 'Accounts receivable' }],
+        opening: { total: '0', named: '0', complete: true },
+        parties: [partyRow({ party: '', name: null, netsuite_ids: [], fleetsuite: '20.00', differing: 1, members: [], members_count: 0 })],
+      }, 'customer'),
+      trialBalance: { fleetsuite: 2000, netsuite: 0 },
+    };
+    const only = sheet(await sheets(await yearEndWorkbook(input({ parties: { ...parties, customer: { balances: unnamed, notes: [] } } }))), 'Customer Balances');
+    expect(body(only, 'Customer', 5)).toEqual([
+      [
+        'Not matched to a FleetSuite customer', 20, 0, 20,
+        "NetSuite customers the ledger mirror hasn't matched to a FleetSuite customer, and lines that name no customer, together. 1 document differs.",
+      ],
+      ['Every customer', 20, 0, 20, null],
+      ['On the trial balance: Accounts receivable', 20, 0, 20, "The receivable account's line on the Trial Balance sheet."],
+      ['Every customer less the trial balance', 0, 0, null, null],
+    ]);
+    expect(only.autoFilter).toBe(`A${headerRow(only, 'Customer')}:E${headerRow(only, 'Customer') + 1}`);
+  });
+
   it("says a year before the books went live is the rehearsal, and when FleetSuite's books have changed since it closed", async () => {
     const rehearsal = await sheets(await yearEndWorkbook(input({ year: 2026, view: { ...CLOSED, own: false, closed: null, events: [] } })));
     expect(notesOf(rehearsal[0])).toEqual([["2026 is before BMG's books went live, so it closes in NetSuite: FleetSuite's side here is the rehearsal.", AMBER]]);
@@ -575,6 +758,59 @@ describe("what the general ledger warns about, beyond Reports' notes", () => {
     ]);
     expect(ledgerNotes({ ledger: [block({ documents: 25000, listed: 20000 }), block({ documents: 20002, listed: 20000 }), block()], checked: false })).toEqual([
       { tone: 'red', text: cut('2 accounts have') },
+    ]);
+  });
+});
+
+describe("what customer and vendor balances warn about, beyond Reports' notes", () => {
+  type Warned = Parameters<typeof partyNotes>[0]['balances'];
+  const tied = { fleetsuite: 130000, netsuite: 131000 };
+  const balances = (over: Partial<Warned> = {}): Warned => ({
+    kind: 'customer', unsplit: 0, openingComplete: true, totals: tied, trialBalance: tied, ...over,
+  });
+  const AGAIN = " The next copy of NetSuite's ledger reads it again.";
+
+  it("says nothing when both sides come to the trial balance and where the accounts stood before 2025 is split by name", () => {
+    expect(partyNotes({ balances: balances(), checked: true })).toEqual([]);
+    expect(partyNotes({ balances: balances({ kind: 'vendor' }), checked: false })).toEqual([]);
+  });
+
+  it("says in red when FleetSuite's side doesn't come to the trial balance, which only a posting while it was read does", () => {
+    expect(partyNotes({ balances: balances({ trialBalance: { ...tied, fleetsuite: 129900 } }), checked: false })).toEqual([{
+      tone: 'red',
+      text: "Something posted to FleetSuite's books while this was read, so its customers don't come to the receivable accounts on the trial balance. "
+        + 'Download it again.',
+    }]);
+  });
+
+  it("says when NetSuite's side doesn't, once NetSuite's totals are read", () => {
+    const short = balances({ kind: 'vendor', trialBalance: { ...tied, netsuite: 131500 } });
+    expect(partyNotes({ balances: short, checked: true })).toEqual([{
+      tone: 'amber',
+      text: "NetSuite's vendors don't come to its payable accounts on the trial balance: the copy of NetSuite's ledger doesn't hold everything "
+        + "NetSuite's own totals say moved them yet, so some of its documents may be missing here. The next copy catches up.",
+    }]);
+    // Until they are, NetSuite's side of the trial balance is empty, which Reports' note says.
+    expect(partyNotes({ balances: short, checked: false })).toEqual([]);
+  });
+
+  it("says what of where the accounts stood before 2025 isn't split by name, or that the split no longer adds up", () => {
+    expect(partyNotes({ balances: balances({ unsplit: 10000, openingComplete: false }), checked: true })).toEqual([{
+      tone: 'amber',
+      text: "$100.00 of where NetSuite's receivable accounts stood before 2025 isn't split by customer yet, so it's in the total but under no one." + AGAIN,
+    }]);
+    expect(partyNotes({ balances: balances({ kind: 'vendor', openingComplete: false }), checked: true })).toEqual([{
+      tone: 'amber',
+      text: "The split by vendor of where NetSuite's payable accounts stood before 2025 no longer adds up to them line for line." + AGAIN,
+    }]);
+  });
+
+  it('says each, in that order', () => {
+    const all = balances({ unsplit: -2500, openingComplete: false, trialBalance: { fleetsuite: 1, netsuite: 2 } });
+    expect(partyNotes({ balances: all, checked: true }).map((n) => [n.tone, n.text.slice(0, 30)])).toEqual([
+      ['red', 'Something posted to FleetSuite'],
+      ['amber', "NetSuite's customers don't com"],
+      ['amber', "($25.00) of where NetSuite's r"],
     ]);
   });
 });

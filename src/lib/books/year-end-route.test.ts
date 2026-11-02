@@ -97,6 +97,10 @@ function accountDocuments(args: Record<string, any>) {
   return { documents: rows.length, differing: rows.filter((r) => r.netsuite !== r.fleetsuite).length, netsuite: total('netsuite'), fleetsuite: total('fleetsuite'), rows };
 }
 
+/** BMG's customers and vendors at a month's end, as gl_party_balances_through has them: nobody, unless a test says otherwise. */
+const NOBODY = { accounts: [], opening: { total: '0', named: '0', complete: true }, parties: [] };
+let partyData: Record<string, unknown>;
+
 /** Just enough of supabase-js for the route: filters, a table that fails when told to, audit rows kept. */
 function query(table: string) {
   const filters: Array<(r: Row) => boolean> = [];
@@ -157,6 +161,7 @@ const service = {
     if (name === 'gl_books_split_totals') return { data: bmg ? BMG_SPLIT : [], error: null };
     if (name === 'gl_stock_month_end') return { data: stockAt(args.p_month), error: null };
     if (name === 'gl_books_account_documents') return { data: accountDocuments(args), error: null };
+    if (name === 'gl_party_balances_through') return { data: bmg ? partyData[args.p_kind] : NOBODY, error: null };
     return { data: null, error: { message: `No ${name}` } };
   },
 };
@@ -210,6 +215,7 @@ beforeEach(() => {
     bank_recs: MONTHS_2027.slice(0, 11).map((month) => ({ company: 'BMG', account: '10', month, status: 'done' })),
     sales_tax_returns: MONTHS_2027.map((month) => ({ company: 'BMG', month })),
   };
+  partyData = { customer: NOBODY, vendor: NOBODY };
   errors = {};
   audits = [];
   rpcs.length = 0;
@@ -521,7 +527,7 @@ describe('Books → Year end: the year-end package', () => {
     const all = await sheetsOf(res);
     expect(all.map((s) => s.name)).toEqual([
       'Contents', 'Trial Balance', 'Balance Sheet', 'Profit and Loss', 'Profit and Loss by Month', 'Statement of Cash Flows',
-      'Retained Earnings', 'General Ledger', 'Inventory value', 'Inventory ties to accounts',
+      'Retained Earnings', 'General Ledger', 'Customer Balances', 'Vendor Balances', 'Inventory value', 'Inventory ties to accounts',
     ]);
     const contents = column(all[0]);
     expect(contents.slice(0, 3)).toEqual(['Example Fleet Upfitters LLC', 'Year-end package 2027', 'January 1, 2027 to December 31, 2027']);
@@ -572,6 +578,103 @@ describe('Books → Year end: the year-end package', () => {
     expect(documentReads()).toEqual(['10', '40', '60'].map((acct) => ['gl_books_account_documents', {
       p_company: 'BMG', p_account: acct, p_from: '2027-01-01', p_to: '2027-12-01', p_differs: false, p_limit: 20000,
     }]));
+    // No customer or vendor had a balance, and the chart has no receivable or payable account.
+    expect(under(named(all, 'Customer Balances'), 'Customer', 2)).toEqual([
+      ['No customer had a balance at December 31, 2027.', null],
+      ['Every customer', 0],
+      ['On the trial balance: no receivable account in the chart', 0],
+      ['Every customer less the trial balance', 0],
+    ]);
+    expect(notesOf(named(all, 'Vendor Balances'))).toEqual([NOT_POSTED]);
+  });
+
+  it('lists what each customer owed and each vendor was owed at December 31, both sides, and how they come to the trial balance', async () => {
+    tables.gl_accounts.push(
+      account('a12', '12', '1200', 'Accounts receivable', 'accounts_receivable'),
+      account('a20', '20', '2000', 'Accounts payable', 'accounts_payable'),
+    );
+    // Where they stood before 2025, Bravo's December invoice both sides, and a January one, after the year's end.
+    const invoices = (side: typeof ns | typeof fs) => [
+      side('12', '2027-12-01', 30000), side('40', '2027-12-01', -30000), side('12', '2028-01-01', 10000), side('40', '2028-01-01', -10000),
+    ];
+    netsuiteTotals.opening.push(ns('12', undefined, 50000), ns('20', undefined, -50000));
+    netsuiteTotals.netsuite.push(...invoices(ns));
+    booksTotals.push(...invoices(fs));
+    const balance = (party: string, name: string, opening: string, moved: { netsuite: string; fleetsuite: string }) => ({
+      party, name, netsuite_ids: [party === '7001' ? '7001' : '9001'], opening, ...moved, documents: moved.netsuite === '0' ? 0 : 1, differing: 0,
+      members: null, members_count: null,
+    });
+    const acme = balance('c0000000-0000-4000-8000-00000000000a', 'Acme Fleet', '500.00', { netsuite: '0', fleetsuite: '0' });
+    const bravo = balance('c0000000-0000-4000-8000-00000000000b', 'Bravo Transit', '0', { netsuite: '300.00', fleetsuite: '300.00' });
+    const customers = (parties: unknown[], opening = '500.00') => ({
+      accounts: [{ netsuite_account_id: '12', number: '1200', name: 'Accounts receivable' }],
+      opening: { total: opening, named: opening, complete: true },
+      parties,
+    });
+    const landlord = balance('7001', 'Example Landlord LLC', '-500.00', { netsuite: '0', fleetsuite: '0' });
+    const vendors = (parties: unknown[]) => ({
+      accounts: [{ netsuite_account_id: '20', number: '2000', name: 'Accounts payable' }],
+      opening: { total: '-500.00', named: '-500.00', complete: true },
+      parties,
+    });
+    partyData = { customer: customers([acme, bravo]), vendor: vendors([landlord]) };
+    const all = await sheetsOf(await download());
+    expect(all.map((s) => s.name).slice(7, 10)).toEqual(['General Ledger', 'Customer Balances', 'Vendor Balances']);
+    const tie = "The receivable account's line on the Trial Balance sheet.";
+    expect(notesOf(named(all, 'Customer Balances'))).toEqual([NOT_POSTED]);
+    expect(under(named(all, 'Customer Balances'), 'Customer', 5)).toEqual([
+      ['Acme Fleet', 500, 500, 0, null],
+      ['Bravo Transit', 300, 300, 0, null],
+      ['Every customer', 800, 800, 0, null],
+      ['On the trial balance: 1200 Accounts receivable', 800, 800, 0, tie],
+      ['Every customer less the trial balance', 0, 0, null, null],
+    ]);
+    expect(amounts(named(all, 'Trial Balance'), 'Accounts receivable')).toEqual([800, null, 800, null, 0]);
+    expect(under(named(all, 'Vendor Balances'), 'Vendor', 5)).toEqual([
+      ['Example Landlord LLC', 500, 500, 0, null],
+      ['Every vendor', 500, 500, 0, null],
+      ['On the trial balance: 2000 Accounts payable', 500, 500, 0, "The payable account's line on the Trial Balance sheet."],
+      ['Every vendor less the trial balance', 0, 0, null, null],
+    ]);
+    expect(rpcs.filter(([name]) => name === 'gl_party_balances_through')).toEqual(['customer', 'vendor'].map((kind) => [
+      'gl_party_balances_through', { p_company: 'BMG', p_kind: kind, p_month: '2027-12-01' },
+    ]));
+
+    // The copy of NetSuite's ledger without Bravo's invoice yet, and a FleetSuite posting between the reads; a landlord's payment only in the copy.
+    partyData = {
+      customer: customers([acme, { ...bravo, netsuite: '0', fleetsuite: '250.00' }]),
+      vendor: vendors([{ ...landlord, netsuite: '50.00', documents: 1, differing: 1 }]),
+    };
+    const both = await sheetsOf(await download());
+    expect(notesOf(named(both, 'Vendor Balances'))).toEqual([
+      NOT_POSTED,
+      "NetSuite's vendors don't come to its payable accounts on the trial balance: the copy of NetSuite's ledger doesn't hold everything "
+        + "NetSuite's own totals say moved them yet, so some of its documents may be missing here. The next copy catches up.",
+    ]);
+    const apart = named(both, 'Customer Balances');
+    expect(notesOf(apart)).toEqual([
+      NOT_POSTED,
+      "Something posted to FleetSuite's books while this was read, so its customers don't come to the receivable accounts on the trial balance. "
+        + 'Download it again.',
+      "NetSuite's customers don't come to its receivable accounts on the trial balance: the copy of NetSuite's ledger doesn't hold everything "
+        + "NetSuite's own totals say moved them yet, so some of its documents may be missing here. The next copy catches up.",
+    ]);
+    expect(under(apart, 'Customer', 5).slice(-3)).toEqual([
+      ['Every customer', 750, 500, 250, null],
+      ['On the trial balance: 1200 Accounts receivable', 800, 800, 0, tie],
+      ['Every customer less the trial balance', -50, -300, null, null],
+    ]);
+
+    // Until NetSuite's totals are read its side of the trial balance is empty, which Reports' note says, not the balances'.
+    netsuiteTotals = { opening: [], netsuite: [] };
+    partyData.customer = customers([bravo], '0');
+    const unread = named(await sheetsOf(await download()), 'Customer Balances');
+    expect(notesOf(unread)).toEqual([NOT_POSTED, "NetSuite's totals haven't been read yet, so NetSuite's side is empty."]);
+    expect(under(unread, 'Customer', 5).slice(-3)).toEqual([
+      ['Every customer', 300, 300, 0, null],
+      ['On the trial balance: 1200 Accounts receivable', 300, 0, 300, tie],
+      ['Every customer less the trial balance', 0, 300, null, null],
+    ]);
   });
 
   it("says when the copy of NetSuite's ledger doesn't hold all NetSuite's totals say, and when an account lists only its first documents", async () => {
@@ -623,6 +726,8 @@ describe('Books → Year end: the year-end package', () => {
       "2028 isn't over yet, so this is where it stood when the file was made.",
     ]);
     expect(rpcs.filter(([name]) => name === 'gl_stock_month_end').at(-1)).toEqual(['gl_stock_month_end', { p_month: '2028-01-01', p_limit: 100 }]);
+    expect(rpcs.filter(([name]) => name === 'gl_party_balances_through').map(([, args]) => args.p_month)).toEqual(['2028-01-01', '2028-01-01']);
+    expect(column(named(now, 'Customer Balances'))[2]).toBe('As of January 31, 2028');
     expect(column(named(now, 'Inventory value')).slice(2, 6)).toEqual([
       'As of January 31, 2028', expect.any(String), 'Downloaded January 20, 2028 at 9:00 AM Central.',
       "January 2028 isn't over yet, so this is where it stood when the file was made.",
@@ -641,7 +746,10 @@ describe('Books → Year end: the year-end package', () => {
     const res = await download('company=1084&year=2026');
     expect(res.headers.get('content-disposition')).toContain('filename="1084 Year-end package 2026.xlsx"');
     const other = await sheetsOf(res);
-    expect(other.map((s) => s.name).at(-1)).toBe('General Ledger');
+    expect(other.map((s) => s.name).slice(-3)).toEqual(['General Ledger', 'Customer Balances', 'Vendor Balances']);
+    expect(rpcs.filter(([name]) => name === 'gl_party_balances_through').slice(-2).map(([, args]) => [args.p_company, args.p_month])).toEqual([
+      ['1084', '2026-12-01'], ['1084', '2026-12-01'],
+    ]);
     expect(under(named(other, 'General Ledger'), 'Account', 1)).toEqual([['No account has a balance or a document in these months.']]);
     expect(notesOf(named(other, 'General Ledger'))).toEqual(notesOf(named(other, 'Trial Balance')));
     expect(column(other[0]).slice(0, 6)).toEqual([
@@ -697,6 +805,7 @@ describe('Books → Year end: the year-end package', () => {
       gl_netsuite_lists: 'gl_netsuite_lists is down',
       gl_stock_month_end: 'gl_stock_month_end is down',
       gl_books_account_documents: 'gl_books_account_documents is down',
+      gl_party_balances_through: 'gl_party_balances_through is down',
     };
     for (const [table, error] of Object.entries(said)) {
       errors = { [table]: { message: `${table} is down` } };
