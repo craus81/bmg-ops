@@ -11,6 +11,14 @@
  * FinancialsDrilldown modal with the transactions/accounts behind that
  * number (verify the totals, chase past dues, print statements/invoices/
  * bills) without leaving FleetSuite.
+ *
+ * With "Financials on FleetSuite's books" switched on (Books → Switches),
+ * the tiles, the aging, the A/P cards, the P&L band and the drill-downs read
+ * BMG's books in FleetSuite instead (src/lib/books/money-screens.ts), and
+ * their answers carry `books`: whose books, and when they were last posted.
+ * The revenue, receivables trend, sales and operations bands still read
+ * NetSuite, and the Cash and A/R trend lines, NetSuite's nightly snapshots,
+ * are left off the tiles.
  */
 
 import { useEffect, useState } from 'react';
@@ -18,6 +26,7 @@ import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { useAuth } from '@/components/AuthProvider';
+import type { BooksSource } from '@/lib/books/money-screens';
 import FinancialsDrilldown, { AGE_META, DrillTarget } from './FinancialsDrilldown';
 
 export interface Overdue { key: string; customer: string; amount: number; days: number }
@@ -26,16 +35,29 @@ export interface FinancialsData {
     total: number; pastDue: number; openCount: number;
     buckets: { current: number; d1_30: number; d31_60: number; d61_90: number; d90plus: number };
     topOverdue: Overdue[];
+    /** FleetSuite's books only: what the receivable accounts hold beyond their open invoices and credit memos. */
+    notOpen?: number;
   };
   ap: { vendorBills: number | null; cardOwed: number | null; salesTax: number | null; total: number | null };
   cash: number | null;
   net: number | null;
   config: { balancesOk: boolean; balancesError: string | null; bankConfigured: boolean; cardConfigured: boolean; apConfigured: boolean; salesTaxConfigured: boolean };
+  /** Set when the tab reads FleetSuite's books rather than NetSuite. */
+  books?: BooksSource;
 }
 
 const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
 const money = (n: number | null) => (n === null ? '—' : usd(n));
 const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
+
+function ago(iso: string): string {
+  const minutes = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} days ago`;
+}
 
 /** CEO bands (R4-4), served by /api/reports/executive-summary. */
 interface ExecSummary {
@@ -217,6 +239,7 @@ export default function FinancialsDashboard() {
     };
     options: { key: string; label: string }[];
     payrollConfigured: boolean;
+    books?: BooksSource;
   } | null>(null);
   // Which period the band is showing. Changing it refetches just the band —
   // one period at a time is what keeps us under NetSuite's concurrency limit.
@@ -243,7 +266,7 @@ export default function FinancialsDashboard() {
         if (!res.ok) { setError(body?.error || 'Failed to load financials'); return; }
         setData(body);
       } catch {
-        if (alive) setError('Could not reach NetSuite. Try again in a moment.');
+        if (alive) setError('Couldn’t load the numbers. Try again in a moment.');
       }
     })();
     (async () => {
@@ -282,8 +305,9 @@ export default function FinancialsDashboard() {
   if (error) {
     return (
       <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', padding: '40px 16px' }}>
-        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-secondary)' }}>{error}</div>
-        <div style={{ fontSize: '12px', marginTop: '6px' }}>A/R, A/P, and balances come live from NetSuite.</div>
+        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--error)' }}>{error}</div>
+        {/* A books read that fails names FleetSuite's books itself. */}
+        {!/FleetSuite's books/.test(error) && <div style={{ fontSize: '12px', marginTop: '6px' }}>A/R, A/P, and balances come live from NetSuite.</div>}
       </div>
     );
   }
@@ -291,19 +315,32 @@ export default function FinancialsDashboard() {
     return (
       <div style={{ textAlign: 'center', padding: '50px 0' }}>
         <div style={{ width: '32px', height: '32px', border: '3px solid var(--border)', borderTopColor: 'var(--navy)', borderRadius: '50%', margin: '0 auto', animation: 'spin 1s linear infinite' }} />
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '12px' }}>Pulling from NetSuite…</div>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '12px' }}>Pulling the numbers…</div>
       </div>
     );
   }
 
-  const { ar, ap, cash, net, config } = data;
+  const { ar, ap, cash, net, config, books } = data;
   const b = ar.buckets;
   const bucketRows = AGE_META.map(m => ({ key: m.key, label: m.label, color: m.color, amt: b[m.key] }));
+  const notOpen = ar.notOpen ?? 0;
   const netColor = net === null ? 'var(--text-muted)' : net >= 0 ? 'var(--success)' : 'var(--error)';
   const netValue = net === null ? '—' : `${net >= 0 ? '+' : '−'}${usd(Math.abs(net))}`;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+
+      {books?.postingError && books.postedAt && (
+        <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--error)', borderColor: 'color-mix(in srgb, var(--error) 35%, var(--border))' }}>
+          The last posting run failed {ago(books.postedAt)}: {books.postingError}
+        </div>
+      )}
+      {books?.postingPartial && !books.postingError && books.postedAt && (
+        <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--text-secondary)', borderColor: 'color-mix(in srgb, var(--warning) 35%, var(--border))' }}>
+          <span style={{ color: 'var(--warning)', fontWeight: 700 }}>Still posting.</span>{' '}
+          The last run, {ago(books.postedAt)}, stopped for time, so some documents aren&apos;t in FleetSuite&apos;s books yet. It carries on at the next run.
+        </div>
+      )}
 
       {!config.balancesOk && (
         <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--text-secondary)', borderColor: 'color-mix(in srgb, var(--warning) 35%, var(--border))' }}>
@@ -320,13 +357,13 @@ export default function FinancialsDashboard() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px' }}>
         <Tile swatch="var(--navy, #4d8ba6)" label="Cash on hand" value={money(cash)}
           onClick={() => setDrill({ view: 'cash' })}
-          sub={<>{config.balancesOk ? 'Reconciled in NetSuite' : <span style={hint}>Balances RESTlet not deployed</span>}<Sparkline points={exec?.sparklines?.cash} /></>} />
+          sub={<>{books ? 'From FleetSuite’s books' : config.balancesOk ? 'Reconciled in NetSuite' : <span style={hint}>Balances RESTlet not deployed</span>}{!books && <Sparkline points={exec?.sparklines?.cash} />}</>} />
         <Tile swatch="var(--success)" label="Owed to us · A/R" value={usd(ar.total)}
           onClick={() => setDrill({ view: 'ar' })}
           sub={<>{ar.openCount} open · <span
             onClick={(e) => { e.stopPropagation(); setDrill({ view: 'ar', bucket: 'pastdue' }); }}
             style={{ color: 'var(--error)', fontWeight: 700, cursor: 'pointer', textDecoration: 'underline', textDecorationColor: 'color-mix(in srgb, var(--error) 45%, transparent)', textUnderlineOffset: '3px' }}
-            title="See past-due invoices">{usd(ar.pastDue)} past due</span><Sparkline points={exec?.sparklines?.ar_total} /></>} />
+            title="See past-due invoices">{usd(ar.pastDue)} past due</span>{!books && <Sparkline points={exec?.sparklines?.ar_total} />}</>} />
         <Tile swatch="var(--error)" label="We owe · A/P" value={money(ap.total)}
           onClick={() => setDrill({ view: 'bills' })}
           sub={<>Bills {money(ap.vendorBills)} · Card {money(ap.cardOwed)}{config.salesTaxConfigured && <> · Tax {money(ap.salesTax)}</>}</>} />
@@ -380,6 +417,16 @@ export default function FinancialsDashboard() {
                   <span aria-hidden style={{ color: 'var(--text-muted)', fontSize: '13px', fontWeight: 700, textAlign: 'right' }}>›</span>
                 </div>
               ))}
+              {/* FleetSuite's books: a payment not applied yet or a journal entry, so the rows add up to the total. */}
+              {Math.abs(notOpen) >= 0.5 && (
+                <div style={{ display: 'grid', gridTemplateColumns: '14px 1fr auto auto 14px', alignItems: 'center', gap: '10px', padding: '8px 2px', borderTop: '1px solid var(--border)' }}>
+                  <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: 'var(--border-strong)' }} />
+                  <span style={{ fontSize: '13px', color: 'var(--text-secondary)', fontWeight: 600 }}>Not in an open invoice</span>
+                  <span style={{ fontSize: '13.5px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{usd(notOpen)}</span>
+                  <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', minWidth: '36px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{pct(notOpen, ar.total)}%</span>
+                  <span />
+                </div>
+              )}
             </div>
           </div>
 
@@ -419,7 +466,9 @@ export default function FinancialsDashboard() {
             <div style={eyebrow}>Vendor bills</div>
             <span aria-hidden style={{ position: 'absolute', top: '13px', right: '14px', color: 'var(--text-muted)', fontSize: '14px', fontWeight: 700 }}>›</span>
             <div style={{ ...bigNum, fontSize: '25px' }}>{money(ap.vendorBills)}</div>
-            <Row label="Unpaid vendor bills" value={config.apConfigured ? 'A/P control account' : <span style={hint}>Set A/P account ID</span>} />
+            <Row label="Unpaid vendor bills" value={books
+              ? (config.apConfigured ? 'Payable accounts' : <span style={hint}>No payable account in the chart</span>)
+              : (config.apConfigured ? 'A/P control account' : <span style={hint}>Set A/P account ID</span>)} />
           </div>
           <div style={{ ...card, position: 'relative', cursor: 'pointer' }} className="fin-click" role="button" tabIndex={0}
             onClick={() => setDrill({ view: 'cards' })}
@@ -427,7 +476,9 @@ export default function FinancialsDashboard() {
             <div style={eyebrow}>Credit card balance</div>
             <span aria-hidden style={{ position: 'absolute', top: '13px', right: '14px', color: 'var(--text-muted)', fontSize: '14px', fontWeight: 700 }}>›</span>
             <div style={{ ...bigNum, fontSize: '25px' }}>{money(ap.cardOwed)}</div>
-            <Row label="Balances owed on cards" value={config.cardConfigured ? 'From NetSuite' : <span style={hint}>Set card account ID(s)</span>} />
+            <Row label="Balances owed on cards" value={books
+              ? (config.cardConfigured ? 'From FleetSuite’s books' : <span style={hint}>No card account in the chart</span>)
+              : (config.cardConfigured ? 'From NetSuite' : <span style={hint}>Set card account ID(s)</span>)} />
           </div>
           <div style={{ ...card, position: 'relative', cursor: 'pointer' }} className="fin-click" role="button" tabIndex={0}
             onClick={() => setDrill({ view: 'salestax' })}
@@ -435,7 +486,9 @@ export default function FinancialsDashboard() {
             <div style={eyebrow}>Sales tax liability</div>
             <span aria-hidden style={{ position: 'absolute', top: '13px', right: '14px', color: 'var(--text-muted)', fontSize: '14px', fontWeight: 700 }}>›</span>
             <div style={{ ...bigNum, fontSize: '25px' }}>{money(ap.salesTax)}</div>
-            <Row label="Collected, not yet remitted" value={config.salesTaxConfigured ? 'Sales tax payable account' : <span style={hint}>Set sales tax account ID(s)</span>} />
+            <Row label="Collected, not yet remitted" value={books
+              ? (config.salesTaxConfigured ? 'Sales tax accounts' : <span style={hint}>Tax accounts not read from NetSuite yet</span>)
+              : (config.salesTaxConfigured ? 'Sales tax payable account' : <span style={hint}>Set sales tax account ID(s)</span>)} />
           </div>
         </div>
       </div>
@@ -494,12 +547,19 @@ export default function FinancialsDashboard() {
           </div>
         );
 
+        // Where the band's figures came from: BMG's books in FleetSuite with the switch on.
+        const source = pnl.books ? 'FleetSuite’s books' : 'the NetSuite GL';
         if (!c) {
           return (
             <div>
-              <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>Profit &amp; loss — from the NetSuite GL</div>
+              <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>Profit &amp; loss — from {source}</div>
               {picker}
-              {p.error && (
+              {p.error && pnl.books && (
+                <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--error)', borderColor: 'color-mix(in srgb, var(--error) 35%, var(--border))' }}>
+                  <span style={{ fontWeight: 700 }}>P&amp;L unavailable.</span> {p.error}
+                </div>
+              )}
+              {p.error && !pnl.books && (
                 <div style={{ ...card, padding: '11px 14px', fontSize: '12px', color: 'var(--text-secondary)', borderColor: 'color-mix(in srgb, var(--warning) 35%, var(--border))' }}>
                   <span style={{ color: 'var(--warning)', fontWeight: 700 }}>P&amp;L unavailable.</span>{' '}
                   NetSuite said: <code style={{ color: 'var(--text-primary)' }}>{p.error}</code>
@@ -515,7 +575,7 @@ export default function FinancialsDashboard() {
         return (
           <div style={{ opacity: pnlLoading ? 0.55 : 1, transition: 'opacity .15s' }}>
             <div style={{ ...eyebrow, margin: '2px 2px 10px' }}>
-              Profit &amp; loss — {p.label.toLowerCase()} {p.directional ? '(directional)' : '(closed)'}, from the NetSuite GL
+              Profit &amp; loss — {p.label.toLowerCase()} {p.directional ? '(directional)' : '(closed)'}, from {source}
             </div>
             {picker}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '8px' }}>
@@ -676,8 +736,11 @@ export default function FinancialsDashboard() {
       )}
 
       <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.6, borderTop: '1px solid var(--border)', paddingTop: '12px' }}>
-        Live from NetSuite · Cash / A/P / cards / sales tax from GL account balances (financials RESTlet), A/R aged from open customer invoices. Net position = Cash + A/R − A/P (bills, cards & sales tax).
+        {books
+          ? <>From FleetSuite&apos;s books for {books.name}{books.postedAt ? `, posted ${ago(books.postedAt)}` : ''} · Cash, cards, sales tax and A/P are account balances there; A/R is the receivable accounts&apos; balance, its open invoices and credit memos aged by FleetSuite&apos;s due dates. Net position = Cash + A/R − A/P (bills, cards & sales tax).</>
+          : <>Live from NetSuite · Cash / A/P / cards / sales tax from GL account balances (financials RESTlet), A/R aged from open customer invoices. Net position = Cash + A/R − A/P (bills, cards & sales tax).</>}
         {' '}Click any tile or row to see the transactions behind it, chase past dues, and print statements, invoices, and bills.
+        {books && ' The revenue, receivables trend, sales and operations bands still read NetSuite.'}
         {' '}Revenue is net of credit memos; sales figures share their math with the Sales Performance report; order book and unbilled come from the 2-hourly NetSuite mirror. Trend lines appear as nightly snapshots accrue.
       </div>
 

@@ -104,10 +104,11 @@ describe('migration 499: the switch', () => {
   it('adds Counts, off, and keeps every earlier piece', async () => {
     expect((await pg.query(`SELECT piece, is_on, changed_by FROM books_switches WHERE piece = 'stock_counts'`)).rows)
       .toEqual([{ piece: 'stock_counts', is_on: false, changed_by: null }]);
-    // Every piece the app names is one the column takes, and nothing else is.
-    expect(SWITCH_PIECES.at(-1)).toBe('stock_counts');
-    expect(SWITCH_PIECES).toHaveLength(19);
-    for (const piece of SWITCH_PIECES) await pg.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);
+    // Every piece the app named then is one the column takes, and nothing else is (504 adds money screens).
+    const then = SWITCH_PIECES.filter((piece) => piece !== 'money_screens');
+    expect(then.at(-1)).toBe('stock_counts');
+    expect(then).toHaveLength(19);
+    for (const piece of then) await pg.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);
     expect(await total(pg, 'books_switches')).toBe(19);
     await expect(pg.query("INSERT INTO books_switches (piece) VALUES ('stock_count')")).rejects.toThrow('books_switches_piece_check');
   });

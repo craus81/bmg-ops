@@ -16,6 +16,12 @@
  * Stays inside FleetSuite: lists render here, PDFs/statements open in a new
  * tab for printing. Each list footer reconciles against the tile it came
  * from, so discrepancies are visible instead of mysterious.
+ *
+ * With "Financials on FleetSuite's books" switched on (`summary.books`), the
+ * views read BMG's books in FleetSuite (src/lib/books/money-screens.ts): the
+ * lists take in open credit memos and bill credits, negative, and what the
+ * receivable or payable accounts hold beyond them ("not in an open invoice"),
+ * so the lists add up to the tiles exactly.
  */
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
@@ -53,8 +59,8 @@ export interface DrillTarget {
 const keyOf = (inv: { entityId: string | null; customer: string }): string =>
   inv.entityId ? `e:${inv.entityId}` : `n:${inv.customer}`;
 
-interface ArBody { success: boolean; unpaidColumn: boolean; invoices: OpenArInvoice[] }
-interface BillsBody { success: boolean; unpaidColumn: boolean; bills: OpenVendorBill[] }
+interface ArBody { success: boolean; unpaidColumn: boolean; invoices: OpenArInvoice[]; notOpen?: number }
+interface BillsBody { success: boolean; unpaidColumn: boolean; bills: OpenVendorBill[]; notOpen?: number }
 interface AccountsBody { success: boolean; error?: string; bank: AccountBalance[]; card: AccountBalance[]; ap: AccountBalance[]; salesTax: AccountBalance[] }
 
 /**
@@ -121,6 +127,7 @@ function LoadError({ message, onRetry }: { message: string; onRetry: () => void 
 }
 
 function nsLink(url: string) {
+  if (!url) return null;
   return (
     <a href={url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
       style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', textDecoration: 'none', whiteSpace: 'nowrap' }}>
@@ -144,6 +151,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
   onClose: () => void;
 }) {
   const dialog = useDialog();
+  const books = !!summary.books;
   // Esc is bound on the backdrop (closeOnEscape), so only the topmost window closes.
   const panelRef = useFocusTrap<HTMLDivElement>(true);
 
@@ -192,7 +200,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
       const c = map.get(key) || { key, customer: i.customer, count: 0, total: 0, pastDue: 0, oldest: 0 };
       c.count += 1;
       c.total += i.unpaid;
-      if (i.daysPastDue > 0) { c.pastDue += i.unpaid; c.oldest = Math.max(c.oldest, i.daysPastDue); }
+      if (i.daysPastDue > 0) { c.pastDue += i.unpaid; if (!i.creditMemo) c.oldest = Math.max(c.oldest, i.daysPastDue); }
       map.set(key, c);
     }
     return [...map.values()].sort((a, b) => b.pastDue - a.pastDue || b.total - a.total);
@@ -228,7 +236,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
 
   const renderAccounts = (group: 'cash' | 'cards' | 'salestax') => {
     if (accounts.error) return <LoadError message={accounts.error} onRetry={accounts.retry} />;
-    if (!accounts.data) return <Spinner label="Pulling balances from NetSuite…" />;
+    if (!accounts.data) return <Spinner label={books ? 'Reading balances from FleetSuite’s books…' : 'Pulling balances from NetSuite…'} />;
     if (!accounts.data.success) {
       return (
         <div style={{ ...infoText, padding: '18px 2px' }}>
@@ -241,20 +249,28 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
     const meta = {
       cash: {
         rows: accounts.data.bank, env: 'NETSUITE_BANK_ACCOUNT_IDS', tile: summary.cash, totalLabel: 'Total cash',
-        info: 'Bank account balances straight from NetSuite’s chart of accounts — these add up to the Cash on hand tile.',
+        info: books
+          ? 'Each bank account’s balance in FleetSuite’s books — these add up to the Cash on hand tile.'
+          : 'Bank account balances straight from NetSuite’s chart of accounts — these add up to the Cash on hand tile.',
       },
       cards: {
         rows: accounts.data.card, env: 'NETSUITE_CARD_ACCOUNT_ID', tile: summary.ap.cardOwed, totalLabel: 'Total owed on cards',
-        info: 'Credit card account balances from NetSuite. A card in credit (negative balance) isn’t money owed, so it’s excluded from the tile.',
+        info: books
+          ? 'Each credit card account’s balance in FleetSuite’s books. A card in credit (negative balance) isn’t money owed, so it’s excluded from the tile.'
+          : 'Credit card account balances from NetSuite. A card in credit (negative balance) isn’t money owed, so it’s excluded from the tile.',
       },
       salestax: {
         rows: accounts.data.salesTax, env: 'NETSUITE_SALES_TAX_ACCOUNT_IDS', tile: summary.ap.salesTax, totalLabel: 'Total sales tax owed',
-        info: 'Sales tax payable balances from NetSuite — tax collected on invoices but not yet remitted. It counts toward the We owe tile; an account in credit (negative balance) doesn’t.',
+        info: books
+          ? 'The accounts NetSuite posts sales tax to, at their balance in FleetSuite’s books — tax collected but not yet paid. An account in credit doesn’t count toward the We owe tile.'
+          : 'Sales tax payable balances from NetSuite — tax collected on invoices but not yet remitted. It counts toward the We owe tile; an account in credit (negative balance) doesn’t.',
       },
     }[group];
     const rows = meta.rows;
     if (rows.length === 0) {
-      return <div style={{ ...infoText, padding: '18px 2px' }}>No accounts configured — set <code>{meta.env}</code>.</div>;
+      return books
+        ? <div style={{ ...infoText, padding: '18px 2px' }}>Nothing on these accounts in FleetSuite&apos;s books.</div>
+        : <div style={{ ...infoText, padding: '18px 2px' }}>No accounts configured — set <code>{meta.env}</code>.</div>;
     }
     // Liability groups (cards, sales tax) count only positive balances as owed.
     const isLiability = group !== 'cash';
@@ -298,7 +314,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
 
   const renderAr = () => {
     if (ar.error) return <LoadError message={ar.error} onRetry={ar.retry} />;
-    if (!ar.data) return <Spinner label="Pulling open invoices from NetSuite…" />;
+    if (!ar.data) return <Spinner label={books ? 'Reading open invoices from FleetSuite’s books…' : 'Pulling open invoices from NetSuite…'} />;
     return (
       <>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center', marginBottom: '10px' }}>
@@ -385,6 +401,7 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
                   <tr key={inv.id} className="fin-row">
                     <td style={{ ...td, fontWeight: 700, whiteSpace: 'nowrap' }}>
                       {inv.tranid}
+                      {inv.creditMemo && <div style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-muted)' }}>Credit memo</div>}
                       {inv.po && <div style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-muted)' }}>PO {inv.po}</div>}
                     </td>
                     <td style={tdMuted}>
@@ -394,14 +411,16 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
                     </td>
                     <td style={{ ...tdMuted, whiteSpace: 'nowrap' }}>{fmtDate(inv.date)}</td>
                     <td style={{ ...tdMuted, whiteSpace: 'nowrap' }}>{fmtDate(inv.dueDate)}</td>
-                    <td style={tdNum}>{daysChip(inv.daysPastDue) || <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
+                    <td style={tdNum}>{(!inv.creditMemo && daysChip(inv.daysPastDue)) || <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
                     {showTotalCol && <td style={{ ...tdNum, color: 'var(--text-muted)' }}>{usd2(inv.total)}</td>}
                     <td style={{ ...tdNum, fontWeight: 700 }}>{usd2(inv.unpaid)}</td>
                     <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
-                        <button onClick={() => onPdf(inv)} disabled={pdfBusy === inv.id} style={{ ...btnSm, opacity: pdfBusy === inv.id ? 0.6 : 1 }}>
-                          {pdfBusy === inv.id ? '…' : 'PDF'}
-                        </button>
+                        {!inv.creditMemo && (
+                          <button onClick={() => onPdf(inv)} disabled={pdfBusy === inv.id} style={{ ...btnSm, opacity: pdfBusy === inv.id ? 0.6 : 1 }}>
+                            {pdfBusy === inv.id ? '…' : 'PDF'}
+                          </button>
+                        )}
                         {nsLink(inv.nsUrl)}
                       </span>
                     </td>
@@ -418,14 +437,17 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
 
   const renderBills = () => {
     if (bills.error) return <LoadError message={bills.error} onRetry={bills.retry} />;
-    if (!bills.data) return <Spinner label="Pulling open bills from NetSuite…" />;
+    if (!bills.data) return <Spinner label={books ? 'Reading open bills from FleetSuite’s books…' : 'Pulling open bills from NetSuite…'} />;
     const list = bills.data.bills;
     const sum = list.reduce((s, b) => s + b.unpaid, 0);
+    const notOpen = bills.data.notOpen ?? 0;
     const tile = summary.ap.vendorBills;
     return (
       <>
         <div style={{ ...infoText, marginBottom: '12px' }}>
-          Unpaid vendor bills visible to the FleetSuite integration. The tile is the NetSuite A/P account balance — vendor credits and unapplied payments aren&apos;t visible here, so a small difference between the two is normal.
+          {books
+            ? <>Every open bill and bill credit in FleetSuite&apos;s books. The tile is the payable accounts&apos; balance there, so these and what&apos;s not in an open bill add up to it.</>
+            : <>Unpaid vendor bills visible to the FleetSuite integration. The tile is the NetSuite A/P account balance — vendor credits and unapplied payments aren&apos;t visible here, so a small difference between the two is normal.</>}
         </div>
         {!bills.data.unpaidColumn && (
           <div style={{ ...infoText, color: 'var(--warning)', marginBottom: '10px' }}>
@@ -445,16 +467,17 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
                 <tr key={b.id} className="fin-row">
                   <td style={{ ...td, fontWeight: 700, whiteSpace: 'nowrap' }}>
                     {b.tranid}
+                    {b.billCredit && <div style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-muted)' }}>Bill credit</div>}
                     {b.memo && <div style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-muted)', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={b.memo}>{b.memo}</div>}
                   </td>
                   <td style={tdMuted}>{b.vendor}</td>
                   <td style={{ ...tdMuted, whiteSpace: 'nowrap' }}>{fmtDate(b.date)}</td>
                   <td style={{ ...tdMuted, whiteSpace: 'nowrap' }}>{fmtDate(b.dueDate)}</td>
-                  <td style={tdNum}>{daysChip(b.daysPastDue) || <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
+                  <td style={tdNum}>{(!b.billCredit && daysChip(b.daysPastDue)) || <span style={{ color: 'var(--text-muted)' }}>—</span>}</td>
                   <td style={{ ...tdNum, fontWeight: 700 }}>{usd2(b.unpaid)}</td>
                   <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <span style={{ display: 'inline-flex', gap: '8px', alignItems: 'center' }}>
-                      <button onClick={() => printBill(b, dialog.alert, { unpaidKnown: bills.data!.unpaidColumn, letterhead })} style={btnSm}>Print</button>
+                      {!b.billCredit && <button onClick={() => printBill(b, dialog.alert, { unpaidKnown: bills.data!.unpaidColumn, letterhead, books })} style={btnSm}>Print</button>}
                       {nsLink(b.nsUrl)}
                     </span>
                   </td>
@@ -471,7 +494,14 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
             </tfoot>
           </table>
         </div>
-        {tile !== null && (
+        {tile !== null && books && (
+          <div style={{ ...infoText, marginTop: '10px' }}>
+            {Math.abs(notOpen) >= 0.005 && <>Not in an open bill (a payment not applied yet, a journal entry): <strong style={{ color: 'var(--text-primary)' }}>{usd2(notOpen)}</strong> · </>}
+            Payable accounts&apos; balance (tile): <strong style={{ color: 'var(--text-primary)' }}>{usd2(tile)}</strong>
+            {Math.abs(sum + notOpen - tile) < 1 ? ' · they add up' : ' · refreshed at a different moment; reopen the Financials tab to resync'}
+          </div>
+        )}
+        {tile !== null && !books && (
           <div style={{ ...infoText, marginTop: '10px' }}>
             A/P account balance (tile): <strong style={{ color: 'var(--text-primary)' }}>{usd2(tile)}</strong>
             {Math.abs(sum - tile) >= 1 && <> · difference of {usd2(Math.abs(sum - tile))} — usually vendor credits or payments in transit that the integration can&apos;t see.</>}
@@ -516,9 +546,14 @@ export default function FinancialsDrilldown({ target, summary, onClose }: {
   };
 
   // ── Footer reconciliation line (A/R only — others inline) ───────────────
+  // FleetSuite's books: what the receivable accounts hold beyond the open invoices and credit memos.
+  const arNotOpen = ar.data?.notOpen ?? 0;
+  const arDocs = invoices.some(i => i.creditMemo) ? 'open invoices and credit memos' : 'open invoices';
   const arFooter = view === 'ar' && ar.data ? (
     unfiltered
-      ? <>Sum of {filtered.length} open invoices: <strong style={{ color: 'var(--text-primary)' }}>{usd2(sumShown)}</strong>{Math.abs(sumShown - summary.ar.total) < 1 ? ' · matches the A/R tile' : ` · tile shows ${usd2(summary.ar.total)} (refreshed at a different moment)`}</>
+      ? <>Sum of {filtered.length} {arDocs}: <strong style={{ color: 'var(--text-primary)' }}>{usd2(sumShown)}</strong>
+          {Math.abs(arNotOpen) >= 0.005 && <> · not in an open invoice: <strong style={{ color: 'var(--text-primary)' }}>{usd2(arNotOpen)}</strong></>}
+          {Math.abs(sumShown + arNotOpen - summary.ar.total) < 1 ? ' · matches the A/R tile' : ` · tile shows ${usd2(summary.ar.total)} (refreshed at a different moment)`}</>
       : <>Showing {grouped && !customer ? `${customerRows.length} customers` : `${filtered.length} of ${invoices.length} invoices`} · <strong style={{ color: 'var(--text-primary)' }}>{usd2(sumShown)}</strong></>
   ) : null;
 

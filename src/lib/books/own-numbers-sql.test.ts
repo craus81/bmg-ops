@@ -82,8 +82,9 @@ describe('migration 497: the switch', () => {
   it("adds FleetSuite's own numbers, off, and keeps every earlier piece", async () => {
     expect((await db.query('SELECT piece, is_on FROM books_switches WHERE piece = $1', ['own_numbers'])).rows)
       .toEqual([{ piece: 'own_numbers', is_on: false }]);
-    // Every piece the app named then is one the column takes, and nothing else is (498 adds invoice PDFs, 499 counts).
-    const then = SWITCH_PIECES.filter((piece) => piece !== 'invoice_pdfs' && piece !== 'stock_counts');
+    // Every piece the app named then is one the column takes, and nothing else is (498 adds invoice PDFs, 499 counts,
+    // 504 money screens).
+    const then = SWITCH_PIECES.filter((piece) => !['invoice_pdfs', 'stock_counts', 'money_screens'].includes(piece));
     expect(then).toEqual([...PIECES, 'own_numbers']);
     for (const piece of then) {
       await db.query('INSERT INTO books_switches (piece) VALUES ($1) ON CONFLICT (piece) DO NOTHING', [piece]);

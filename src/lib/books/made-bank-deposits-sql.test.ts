@@ -96,8 +96,8 @@ describe('migration 487', () => {
       { piece: 'customer_payments', is_on: false, changed_by: null },
     ]);
     // Every piece the app named then is one the column takes, and nothing else is (488 adds paying vendors, 494 approving
-    // adjustments, 497 FleetSuite's own numbers, 498 invoice PDFs).
-    const then = SWITCH_PIECES.filter((piece) => !['vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'stock_counts'].includes(piece));
+    // adjustments, 497 FleetSuite's own numbers, 498 invoice PDFs, 499 counts, 504 money screens).
+    const then = SWITCH_PIECES.filter((piece) => !['vendor_payments', 'adjustment_approvals', 'own_numbers', 'invoice_pdfs', 'stock_counts', 'money_screens'].includes(piece));
     expect(then).toHaveLength(14);
     await pg.exec('BEGIN');
     try {

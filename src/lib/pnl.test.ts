@@ -23,6 +23,7 @@ describe('summarizePnl — orientation-robust P&L buckets', () => {
     expect(s.netProfit).toBe(25000);
     expect(s.netProfitPct).toBe(25);
     expect(s.laborPct).toBe(10);
+    expect(s.accountCount).toBe(4);
   });
 
   it('report-normal input (everything positive) gives the same answer', () => {

@@ -143,11 +143,12 @@ earnings once all its months are, its months held closed until it's
 reopened ("Year end"), part 75, the year's reports for the CPA as one
 Excel file ("The year-end package"), part 76, the year's general ledger
 in it, part 77, each customer's and vendor's balance at December 31 in it,
-part 78, each bank account's reconciliation at December 31 in it, and part
+part 78, each bank account's reconciliation at December 31 in it, part
 79, the CPA's yearly entries: a check before the year closes that the
 CPA's depreciation and loan interest are made, and the fixed assets and
 loans and the CPA's adjustments in the package ("The CPA's yearly
-entries").
+entries"), and part 80, Home → Financials on BMG's books in FleetSuite,
+without 1084's, built switched off ("Money screens").
 The screens are the accounts page at `/admin/books`, the trial
 balance at `/admin/books/trial-balance`, the lists at `/admin/books/lists`,
 the invoices at `/admin/books/invoices`, the differences at
@@ -312,6 +313,7 @@ admins can open it while fixing invoices is switched off.
 | Own numbers: FleetSuite's number on each sales order, PO, invoice and credit memo it makes in NetSuite, what became of each, and the sales orders and POs made in NetSuite instead | `migrations/497-books-own-numbers.sql`, `src/lib/books/own-numbers.ts`, `ownNumberFor` in `createSalesOrder`, `createPurchaseOrder`, `createDirectInvoice`, `createInvoiceFromSO` and `createCreditMemoFromInvoice` in `src/lib/netsuite.ts`, the drop ship PO's number in `src/app/api/estimates/[id]/drop-ship/route.ts`, `src/app/(main)/admin/books/own-numbers/page.tsx`, `src/app/api/admin/books/own-numbers/route.ts`; tests `src/lib/books/own-numbers.test.ts`, `src/lib/books/own-numbers-route.test.ts`, `src/lib/netsuite-own-numbers.test.ts`, `src/lib/drop-ship-route.test.ts`, and the tables and their functions `src/lib/books/own-numbers-sql.test.ts` |
 | Year end: each company's year closed into retained earnings once all its months are, in order, its months held closed until it's reopened, with what's done before it closes | `migrations/502-books-year-end.sql`, `src/lib/books/year-end.ts`, `src/lib/books/year-end-data.ts` (what the page and its package read), `src/lib/books/year-end-words.ts` (what both call the checks), `yearCloseAmounts` in `src/lib/books/reports.ts`, `readMonthFacts` and the closed year's months in `src/lib/books/months.ts`, `src/app/(main)/admin/books/year-end/page.tsx`, `src/app/api/admin/books/year-end/route.ts`; tests `src/lib/books/year-end.test.ts`, `src/lib/books/year-end-route.test.ts`, `src/lib/books/year-end-sql.test.ts`, the closed year's months in `src/lib/books/months.test.ts` and `src/lib/books/months-route.test.ts`, and `yearCloseAmounts`' in `src/lib/books/reports.test.ts` |
 | The year-end package: a company's year for the CPA as one Excel file | `yearEndWorkbook` in `src/lib/books/report-workbook.ts`, `loadSplit` in `src/lib/books/report-data.ts`, the general ledger in `src/lib/books/general-ledger.ts` and `readLedger` in `src/lib/books/year-end-data.ts`, each customer's and vendor's balance at December 31 from `migrations/503-books-party-balances-through.sql`, `readPartyBalances` in `src/lib/books/year-end-data.ts` and `onTrialBalance` in `src/lib/books/party-balances.ts`, each bank account's reconciliation from `readBankRec` in `src/lib/books/bank-reconciliation-data.ts`, `recYear` in `src/lib/books/bank-reconciliation.ts` and `readBankRecs` in `src/lib/books/year-end-data.ts`, fixed assets and loans from `rollForward` in `src/lib/books/roll-forward.ts`, the CPA's adjustments from `readYearChecks` in `src/lib/books/year-end.ts`, `src/app/api/admin/books/year-end/download/route.ts`; tests `src/lib/books/year-end-workbook.test.ts`, `src/lib/books/roll-forward.test.ts`, `src/lib/books/general-ledger.test.ts`, `src/lib/books/party-balances-through-sql.test.ts`, `onTrialBalance`'s in `src/lib/books/party-balances.test.ts`, the download's in `src/lib/books/year-end-route.test.ts` |
+| Money screens: Home → Financials on BMG's books in FleetSuite, its tiles, aging, profit and loss band and the lists behind them | `migrations/504-books-money-screens.sql`, `src/lib/books/money-screens.ts`, `src/lib/books/money-screens-data.ts`, the routes under `src/app/api/reports/financials` (the summary, `ar-invoices`, `ap-bills`, `accounts` and `pnl`), `src/components/FinancialsDashboard.tsx`, `src/components/FinancialsDrilldown.tsx`; tests `src/lib/books/money-screens.test.ts`, `src/lib/books/money-screens-route.test.ts` and `src/lib/books/money-screens-sql.test.ts` |
 | Documents post to accounts NetSuite has made inactive since | `migrations/387-books-retired-accounts.sql`; its tests are in `src/lib/books/netsuite-accounts-sql.test.ts`, `src/lib/books/ledger-core-sql.test.ts` and the posting tests |
 
 The `ledger_*` tables from migration 314 are a different thing: copies of
@@ -6271,11 +6273,93 @@ NetSuite's count had moved to 8 by then.
 - More than 500 items are counted a part at a time, one count each.
 - Before switching on, agree who approves, since only super admins can.
 
+## Money screens
+
+The plan has Home → Financials, Financial History, the portal and the AI
+assistant read FleetSuite's books instead of NetSuite (the NetSuite Exit
+Checklist's "Money screens on FleetSuite's books"). Part 80 does Home →
+Financials, switched off (`money_screens`, migration 504,
+`src/lib/books/money-screens.ts`, `src/lib/books/money-screens-data.ts`).
+NetSuite's income statement read behind the tab's profit and loss has no
+company in it, so today's band most likely has 1084's rent and mortgage in
+BMG's. With the switch on, the tab reads BMG's books alone.
+
+With it on, the tab's routes (`/api/reports/financials` and its
+`ar-invoices`, `ap-bills`, `accounts` and `pnl`) read BMG's books in
+FleetSuite and never NetSuite. Each answer says whose books they are, when
+the posting run last ran, and whether it failed or stopped for time
+(`books`); the tab shows a red line when the last run failed, an amber one
+when it stopped for time, and says in its footnote when the books were
+posted.
+
+- **Cash** is each bank account BMG's books can use (its own, and those
+  with no company), at its balance with everything posted, as the balance
+  sheet shows it. **Cards** are each credit card account's balance, and
+  **sales tax** each account NetSuite posts sales tax to (from the last
+  read of NetSuite's lists); an account in credit counts nothing towards
+  what BMG owes. An account with nothing on it isn't listed.
+- **What customers owe** is the receivable accounts' balance, as AR and AP
+  agings shows it: each open invoice and credit memo, aged by FleetSuite's
+  due dates, a credit memo negative and aged from its date, and the rest,
+  a payment not applied yet or a journal entry, on a row of its own, "Not
+  in an open invoice". Past due is everything that isn't current, a credit
+  memo taking it down; the top overdue accounts are the six with the most
+  past due, how late going by their invoices.
+- **What BMG owes** is the payable accounts' balance (the vendors'
+  agings), what's owed on the cards and the sales tax collected. Net
+  position is cash and what customers owe less that.
+- **The lists** behind the tiles are each open invoice and credit memo, or
+  bill and bill credit, with its total and PO or memo from the copy of
+  NetSuite's documents, and what isn't in an open one, so they add up to
+  the tiles exactly. A credit memo has no PDF and a bill credit no Print;
+  the NetSuite link is left off where NetSuite can't be linked to.
+  Statements printed from the list take in the customer's open credit
+  memos.
+- **The profit and loss band** sums each income and expense account's
+  entries in BMG's books for the period's months, as Books → Reports does
+  (a period that takes in today has everything posted in its months so
+  far); payroll is the expense accounts in `NETSUITE_PAYROLL_ACCOUNT_IDS`,
+  as now. Collections are what customers paid on the period's days
+  (`gl_books_collections`): the money side of each customer payment and
+  customer deposit, by its date, a payment reversed and posted again
+  counted once, and a deposit put on an invoice not counted again.
+
+A read that fails says "Couldn't read FleetSuite's books" and why, in red;
+the tab doesn't fall back to NetSuite then. A switch that can't be read
+counts as off, so the tab reads NetSuite.
+
+Still on NetSuite with the switch on: the revenue band
+(`/api/reports/executive-summary`), the receivables trend band
+(`ar-trends`: DSO, collected this week, the nightly aging snapshots and the
+slowest payers), the sales and operations bands, the nightly snapshots
+behind the trend lines (left off the Cash and A/R tiles while it's on, as
+they're NetSuite's), and an invoice's PDF, which is NetSuite's. The
+footnote says which bands still read NetSuite.
+
+Made-up example: BMG's books have $9,100 in Checking, $500 owed on the
+Chase card and $70 of sales tax collected. Customers owe $1,250: $500 not
+yet due, an $800 invoice 32 days late, and a $50 credit memo not used yet.
+Vendors are owed $1,000. The tab shows Cash $9,100, A/R $1,250 with $750
+past due, A/P $1,570, and a net position of $8,780. Last month's band
+shows revenue of $1,000, $600 of expenses and $300 of payroll: net income
+of $100, 10% of revenue.
+
+### Before switching on
+
+- Look at Books → Differences for BMG: where FleetSuite's books still
+  differ from NetSuite's, the tab will show FleetSuite's.
+
+### What isn't done yet
+
+- Financial History, the portal and the AI assistant still read NetSuite.
+- The revenue, receivables trend, sales and operations bands still read
+  NetSuite, and the trend lines are NetSuite's nightly snapshots.
+
 ## Switches
 
 Each piece that takes the team out of NetSuite is built switched off, one
 row each in `books_switches` (migrations 466 to 473, 478 to 480, 485 to
-488, 494 and 497 to 499, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
+488, 494, 497 to 499 and 504, `src/lib/books/switches.ts`), and stays off until a super admin turns it on
 in Books → Switches (`/admin/books/switches`, `deepLinks.booksSwitches`),
 which whoever opens the books can read. The plan turns them on on January 1,
 2027, asking the owner once in late December, all but `customer_payments`,
@@ -6300,7 +6384,9 @@ their own words (`turnOn`, `turnOff`). A sync that can't read
 approval before it goes to NetSuite, so off leaves Adjust as now, and Adjust
 stops when it can't read it rather than post one unapproved.
 `own_numbers` needs a step in NetSuite first, ticking Allow Override, so the
-page asks with its own words too.
+page asks with its own words too. `money_screens` sends nothing anywhere:
+off, Home → Financials reads NetSuite, as now, and on, BMG's books in
+FleetSuite, so the page asks with its own words too.
 
 | Piece | What it does once it's on | Where |
 | --- | --- | --- |
@@ -6323,6 +6409,7 @@ page asks with its own words too.
 | `own_numbers` | Each sales order, PO, invoice and credit memo FleetSuite makes in NetSuite gets FleetSuite's next number of its kind, and NetSuite keeps it as the document's number once Allow Override is ticked there ("Own numbers") | Every sales order, PO, invoice and credit memo FleetSuite makes, and Books → Own numbers |
 | `invoice_pdfs` | Each invoice FleetSuite makes gets FleetSuite's own PDF of it attached in NetSuite, once FleetSuite's copy matches NetSuite's invoice ("Invoice PDFs") | Books → Own invoices, on each invoice |
 | `stock_counts` | Admins count a location's stock, all of it or a part, on a printed sheet or a phone, and ask for approval of what differs from NetSuite; a super admin who didn't ask approves it, and FleetSuite makes it in NetSuite as one Inventory Adjustment ("Counts") | Counts on the Inventory page |
+| `money_screens` | Home → Financials reads BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, and the lists behind them, without 1084's ("Money screens") | Home → Financials |
 
 ## Posting
 
