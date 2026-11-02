@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   rolesOf, canQueryNetSuite, canSeeBooks, canSeeFinancials, touchesBooksData, touchesFinancialData, touchesForbiddenData,
-  stripFinancialGuidance,
+  stripFinancialGuidance, readsNetSuiteBalances, NETSUITE_BALANCE_PATTERNS, NETSUITE_FINANCIAL_PATTERNS,
 } from './ai-agent-access';
 
 describe('rolesOf', () => {
@@ -103,6 +103,50 @@ describe('touchesFinancialData — NetSuite', () => {
   for (const [label, sql] of allowed) {
     it(`allows: ${label}`, () => expect(touchesFinancialData('netsuite', sql)).toBe(false));
   }
+});
+
+// With Financials on FleetSuite's books on, leadership's SuiteQL reading
+// balances or what's open is pointed at the books (docs/books.md "The AI
+// assistant"); NetSuite's documents themselves stay.
+describe('readsNetSuiteBalances', () => {
+  it('catches SuiteQL reading GL lines, accounts, balances or what is open', () => {
+    for (const sql of [
+      'SELECT a.acctnumber, a.balance FROM account a',
+      "SELECT id, fullname FROM Account WHERE isinactive = 'F'",
+      'SELECT t.tranid FROM transaction t JOIN account a ON a.id = t.account',
+      'SELECT tal.debit, tal.credit FROM transactionaccountingline tal',
+      'SELECT tl.credit FROM transactionline tl',
+      "SELECT SUM(t.foreignamountunpaid) FROM transaction t WHERE t.type = 'CustInvc'",
+      'SELECT c.companyname, c. balance FROM customer c',
+      'SELECT c.overduebalance FROM customer c',
+    ]) {
+      expect(readsNetSuiteBalances('netsuite', sql), sql).toBe(true);
+    }
+  });
+
+  it("leaves NetSuite's documents, sales orders, credit limits and the Upfit vs Graphics split alone", () => {
+    for (const sql of [
+      "SELECT SUM(t.foreigntotal) FROM transaction t WHERE t.type = 'SalesOrd'",
+      "SELECT t.tranid, t.trandate FROM transaction t WHERE t.type = 'VendBill'",
+      'SELECT c.creditlimit FROM customer c',
+      "SELECT TO_CHAR(t.trandate,'YYYY-MM') AS month, i.itemid, SUM(-tl.netamount) AS amount FROM transaction t JOIN transactionline tl ON tl.transaction = t.id LEFT JOIN item i ON tl.item = i.id WHERE t.type IN ('CustInvc','CustCred') GROUP BY TO_CHAR(t.trandate,'YYYY-MM'), i.itemid",
+      'SELECT ap.periodname, ap.closed FROM accountingperiod ap',
+    ]) {
+      expect(readsNetSuiteBalances('netsuite', sql), sql).toBe(false);
+    }
+  });
+
+  it("is NetSuite's alone, and safe with no SQL", () => {
+    expect(readsNetSuiteBalances('supabase', 'SELECT a.balance FROM account a')).toBe(false);
+    expect(readsNetSuiteBalances('books', undefined)).toBe(false);
+    expect(readsNetSuiteBalances('netsuite', undefined)).toBe(false);
+    expect(readsNetSuiteBalances('netsuite', '')).toBe(false);
+  });
+
+  it('is part of the financials tier, so everyone else is refused the same queries either way', () => {
+    for (const re of NETSUITE_BALANCE_PATTERNS) expect(NETSUITE_FINANCIAL_PATTERNS).toContain(re);
+    expect(NETSUITE_FINANCIAL_PATTERNS).toHaveLength(NETSUITE_BALANCE_PATTERNS.length + 2);
+  });
 });
 
 describe('touchesFinancialData — Supabase', () => {

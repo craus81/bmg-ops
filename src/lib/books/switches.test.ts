@@ -131,10 +131,10 @@ describe('switches', () => {
     });
     expect(SWITCHES.money_screens).toEqual({
       name: "Financials on FleetSuite's books",
-      what: "Home → Financials and Financial History read BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, the lists behind them, and each month's profit and loss from the QuickBooks cutover on, BMG's alone, without 1084's.",
-      where: 'Home → Financials, and Reports → Financial History',
-      turnOn: "Switch on Financials on FleetSuite's books? Home → Financials and Financial History then show BMG's numbers from FleetSuite's books, without 1084's, as of the last posting run (every two hours). Nothing is sent to NetSuite.",
-      turnOff: "Switch off Financials on FleetSuite's books? Home → Financials and Financial History go back to reading NetSuite.",
+      what: "Home → Financials, Financial History and FleetSuite AI read BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, the lists behind them, and each month's profit and loss from the QuickBooks cutover on, BMG's alone, without 1084's.",
+      where: 'Home → Financials, Reports → Financial History, and FleetSuite AI',
+      turnOn: "Switch on Financials on FleetSuite's books? Home → Financials, Financial History and FleetSuite AI then give BMG's numbers from FleetSuite's books, without 1084's, as of the last posting run (every two hours). Nothing is sent to NetSuite.",
+      turnOff: "Switch off Financials on FleetSuite's books? Home → Financials, Financial History and FleetSuite AI go back to reading NetSuite.",
     });
     expect(SWITCHES.portal_books).toEqual({
       name: "Portal billing on FleetSuite's books",

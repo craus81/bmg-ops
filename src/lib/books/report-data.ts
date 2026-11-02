@@ -71,7 +71,6 @@ export async function loadReports(service: SupabaseClient, asked: string | null)
   lastCalendar.setUTCMonth(lastCalendar.getUTCMonth() - 1);
   const previous = monthOfDate(lastCalendar.toISOString().slice(0, 10))!;
 
-  const run = (posting.data?.last_result ?? null) as InvoicePostingResult | null;
   const copied = (copy.data?.last_result ?? null) as { error?: string } | null;
   return {
     companies: (companies.data || []).map((c) => ({ code: c.code, name: c.name, legal_name: c.legal_name, netsuite_subsidiary_id: c.netsuite_subsidiary_id })),
@@ -79,9 +78,16 @@ export async function loadReports(service: SupabaseClient, asked: string | null)
     data,
     through: lastReportMonth(data, currentMonth),
     lastMonth: previous >= COPY_FROM ? previous : COPY_FROM,
-    lastPosting: posting.data ? { at: posting.data.updated_at, error: run?.error ?? null, partial: !!run?.partial } : null,
+    lastPosting: postingOf(posting.data),
     lastCopy: copy.data ? { at: copy.data.updated_at, error: copied?.error ?? null } : null,
   };
+}
+
+/** How the last posting run went, from its sync_state row; null before it has run. */
+export function postingOf(row: { last_result: unknown; updated_at: string } | null): LoadedReports['lastPosting'] {
+  if (!row) return null;
+  const run = (row.last_result ?? null) as InvoicePostingResult | null;
+  return { at: row.updated_at, error: run?.error ?? null, partial: !!run?.partial };
 }
 
 /** A month param ('YYYY-MM') a report can cover, from January 2025 through `through`, as 'YYYY-MM-01'; else null. */

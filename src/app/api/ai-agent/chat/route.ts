@@ -6,8 +6,12 @@ import { estimatesPromptNote } from '@/lib/estimates-in-fleetsuite';
 import { logAudit } from '@/lib/audit';
 import {
   rolesOf, canQueryNetSuite as canQueryNetSuiteFor, canSeeFinancials as canSeeFinancialsFor,
-  canSeeBooks as canSeeBooksFor, touchesBooksData, touchesFinancialData, touchesForbiddenData, stripFinancialGuidance,
+  canSeeBooks as canSeeBooksFor, readsNetSuiteBalances, touchesBooksData, touchesFinancialData, touchesForbiddenData,
+  stripFinancialGuidance,
 } from '@/lib/ai-agent-access';
+import { BOOKS_INSTEAD, BOOKS_OFF, parseBooksAsk, withBooks } from '@/lib/books/assistant-books';
+import { loadBooksForAssistant } from '@/lib/books/money-screens-data';
+import { switchIsOn } from '@/lib/books/switches';
 import { validateBody, z } from '@/lib/validate';
 import { nextJobNumber, legacyJobNumber } from '@/lib/job-numbers';
 import { getSalesTaxRate } from '@/lib/sales-tax';
@@ -531,10 +535,12 @@ interface Message {
 
 interface QuerySpec {
   id: string;
-  source?: 'netsuite' | 'supabase' | 'action' | 'knowledge' | 'vehicle_search';
+  source?: 'netsuite' | 'supabase' | 'action' | 'knowledge' | 'vehicle_search' | 'books';
   sql?: string;
   search?: string;
   action?: string;
+  /** A read of FleetSuite's books (src/lib/books/assistant-books.ts), its params in `params`. */
+  read?: string;
   params?: Record<string, any>;
   list_files?: boolean;
   file_type_filter?: string;
@@ -800,6 +806,11 @@ async function executeQuery(q: QuerySpec): Promise<any> {
 
   if (source === 'action') {
     return await executeAction(q.action!, q.params || {});
+  }
+
+  if (source === 'books') {
+    const ask = parseBooksAsk(q.read, q.params);
+    return 'error' in ask ? ask : await loadBooksForAssistant(supabase, ask);
   }
 
   throw new Error(`Unknown source: ${source}`);
@@ -1148,6 +1159,12 @@ export async function POST(req: NextRequest) {
     // A/R–A/P–revenue SuiteQL examples stripped out.
     let systemPrompt = canSeeFinancials ? SYSTEM_PROMPT : stripFinancialGuidance(SYSTEM_PROMPT);
 
+    // Financials on FleetSuite's books (Books → Switches): leadership's money
+    // answers come from BMG's books, as Home → Financials' do, rather than
+    // NetSuite's (src/lib/books/assistant-books.ts).
+    const onBooks = canSeeFinancials && await switchIsOn(supabase, 'money_screens');
+    if (onBooks) systemPrompt = withBooks(systemPrompt);
+
     // Role-specific focus notes — driven by the server-resolved roles.
     if (roles.includes('sales')) {
       systemPrompt += '\n\nIMPORTANT: This user has a "sales" role. They can view customer data, estimates, graphics production, and vehicle tracking. They should NOT be able to modify user accounts, delete records, or access admin-only settings. Focus on helping them with customer info, quotes, and production status.';
@@ -1283,6 +1300,12 @@ export async function POST(req: NextRequest) {
           blocked = 'NetSuite access is not available for your role. Use the knowledge base or app database instead.';
         } else if (src === 'action' && !canQueryNetSuite) {
           blocked = 'Actions (creating jobs or estimates, sending messages) aren\'t available for your role.';
+        } else if (src === 'books' && !canSeeFinancials) {
+          blocked = 'FleetSuite\'s books are restricted to leadership. Ask about jobs, parts, customers, vehicles, or schedules instead.';
+        } else if (src === 'books' && !onBooks) {
+          blocked = BOOKS_OFF;
+        } else if (onBooks && readsNetSuiteBalances(src, q.sql)) {
+          blocked = BOOKS_INSTEAD;
         } else if (!canSeeBooks && touchesBooksData(src, q.sql)) {
           blocked = 'Those tables aren\'t available to the assistant. Ask about jobs, parts, customers, vehicles, or schedules instead.';
         } else if (!canSeeFinancials && touchesFinancialData(src, q.sql)) {
@@ -1296,6 +1319,7 @@ export async function POST(req: NextRequest) {
           ...(q.sql ? { sql: q.sql.slice(0, 1000) } : {}),
           ...(q.action ? { action: q.action } : {}),
           ...(q.search ? { search: q.search.slice(0, 200) } : {}),
+          ...(src === 'books' ? { read: String(q.read ?? '').slice(0, 40), ...(q.params ? { params: JSON.stringify(q.params).slice(0, 200) } : {}) } : {}),
           ...(blocked ? { blocked: true } : {}),
         });
 
@@ -1320,8 +1344,10 @@ export async function POST(req: NextRequest) {
           if (r.error) return `"${id}" ERROR: ${r.error}`;
           if (r.success) return `"${id}" ACTION SUCCESS: ${r.message}`;
           const items = r.items;
-          if (!items || items.length === 0) return `"${id}": No rows returned.`;
-          return `"${id}" (${items.length} rows):\n${JSON.stringify(items.slice(0, 50), null, 2)}${items.length > 50 ? `\n... (${items.length - 50} more rows)` : ''}`;
+          // FleetSuite's books say when they're as of, and any warning to pass on.
+          const asOf = typeof r.asOf === 'string' ? `\n${r.asOf}` : '';
+          if (!items || items.length === 0) return `"${id}": No rows returned.${asOf}`;
+          return `"${id}" (${items.length} rows):\n${JSON.stringify(items.slice(0, 50), null, 2)}${items.length > 50 ? `\n... (${items.length - 50} more rows)` : ''}${asOf}`;
         }).join('\n\n')}\n\nBased on these results, provide a clear answer. If you need more data, output another query JSON block. Otherwise respond with plain text only.`
       });
     }

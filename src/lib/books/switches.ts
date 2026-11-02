@@ -21,9 +21,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  * read it rather than post one unapproved (src/app/api/inventory/adjust).
  * Financials on FleetSuite's books sends nothing anywhere: on, Home →
  * Financials and Financial History read BMG's books in FleetSuite rather
- * than NetSuite (src/lib/books/money-screens.ts). Nor does Portal billing on
- * FleetSuite's books: on, the customer portal's billing reads them
- * (src/lib/portal-billing.ts).
+ * than NetSuite (src/lib/books/money-screens.ts), and FleetSuite AI answers
+ * money questions from them (src/lib/books/assistant-books.ts). Nor does
+ * Portal billing on FleetSuite's books: on, the customer portal's billing
+ * reads them (src/lib/portal-billing.ts).
  * Receiving payments, taking deposits, bank deposits and paying vendors stay
  * off past January 1, until they move into FleetSuite during 2027,
  * approving adjustments until the plan adds it in 2027, FleetSuite's own
@@ -167,10 +168,10 @@ export const SWITCHES: Readonly<Record<SwitchPiece, SwitchInfo>> = {
   },
   money_screens: {
     name: "Financials on FleetSuite's books",
-    what: "Home → Financials and Financial History read BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, the lists behind them, and each month's profit and loss from the QuickBooks cutover on, BMG's alone, without 1084's.",
-    where: 'Home → Financials, and Reports → Financial History',
-    turnOn: "Switch on Financials on FleetSuite's books? Home → Financials and Financial History then show BMG's numbers from FleetSuite's books, without 1084's, as of the last posting run (every two hours). Nothing is sent to NetSuite.",
-    turnOff: "Switch off Financials on FleetSuite's books? Home → Financials and Financial History go back to reading NetSuite.",
+    what: "Home → Financials, Financial History and FleetSuite AI read BMG's books in FleetSuite instead of NetSuite: cash, what customers owe and what BMG owes, the profit and loss and collections, the lists behind them, and each month's profit and loss from the QuickBooks cutover on, BMG's alone, without 1084's.",
+    where: 'Home → Financials, Reports → Financial History, and FleetSuite AI',
+    turnOn: "Switch on Financials on FleetSuite's books? Home → Financials, Financial History and FleetSuite AI then give BMG's numbers from FleetSuite's books, without 1084's, as of the last posting run (every two hours). Nothing is sent to NetSuite.",
+    turnOff: "Switch off Financials on FleetSuite's books? Home → Financials, Financial History and FleetSuite AI go back to reading NetSuite.",
   },
   portal_books: {
     name: "Portal billing on FleetSuite's books",
