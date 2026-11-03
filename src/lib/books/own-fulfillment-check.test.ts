@@ -115,7 +115,7 @@ describe("FleetSuite's own fulfillment next to NetSuite's", () => {
       ['cost', '$455.00', '$455.00', true, null],
     ]);
     expect(c.items).toEqual([{
-      item: 'LDR-24', itemId: LADDER, description: null, same: true, why: null,
+      item: 'LDR-24', itemId: LADDER, description: null, partOf: null, same: true, why: null,
       fleetsuite: { quantity: 3, kind: 'stock', location: 'Wentzville', count: 14, valueCents: 212333, each: 212333 / 14, cents: 45500 },
       netsuite: { quantity: 3, locations: ['Wentzville'], each: 45500 / 3, cents: 45500 },
     }]);
@@ -292,7 +292,7 @@ describe("FleetSuite's own fulfillment next to NetSuite's", () => {
     expect(c).toMatchObject({ status: 'voided', summary: "NetSuite's fulfillment is gone from NetSuite." });
   });
 
-  it("doesn't compare a kit, whose parts FleetSuite doesn't know, and says what NetSuite took may be its parts", () => {
+  it("doesn't compare a kit FleetSuite couldn't take apart, and says what NetSuite took may be its parts", () => {
     const c = check(pair({
       own: { lines: [ownLine(RACK_KIT, 1, { item_number: 'RACK-KIT', item_type: 'Kit' })] },
       netsuite: { number: 'IF7001', type: 'ItemShip', date: '2026-10-19', gone: false, lines: [nsLine('1', BINS, -4, '-40.00')] },
@@ -304,12 +304,105 @@ describe("FleetSuite's own fulfillment next to NetSuite's", () => {
       fleetsuiteCost: null, netsuiteCost: 4000, unknowns: ['the parts of RACK-KIT, a kit'],
     });
     expect(c.items.map((i) => [i.item, i.same, i.why])).toEqual([
-      ['RACK-KIT', null, "RACK-KIT is a kit: FleetSuite doesn't know its parts, so what NetSuite took for it isn't compared."],
-      ['BIN-10', null, "NetSuite's fulfillment took 4 of BIN-10 ($40.00), which FleetSuite's copy doesn't have: it may be a part of RACK-KIT, a kit FleetSuite doesn't know the parts of."],
+      ['RACK-KIT', null, "RACK-KIT is a kit FleetSuite couldn't take apart into its parts, so what NetSuite took for it isn't compared."],
+      ['BIN-10', null, "NetSuite's fulfillment took 4 of BIN-10 ($40.00), which FleetSuite's copy doesn't have: it may be a part of RACK-KIT, a kit FleetSuite couldn't take apart."],
     ]);
+    expect(c.items.map((i) => i.partOf)).toEqual([null, null]);
     expect(c.items[0].fleetsuite).toMatchObject({ kind: 'kit', count: null, valueCents: null, each: null, cents: null });
-    expect(field(c, 'cost')).toMatchObject({ fleetsuite: null, same: null, why: "FleetSuite doesn't know the parts of RACK-KIT, so not what they cost." });
+    expect(field(c, 'cost')).toMatchObject({ fleetsuite: null, same: null, why: "FleetSuite didn't know the parts of RACK-KIT, so not what they cost." });
     expect(field(c, 'items')).toMatchObject({ fleetsuite: '1 item', netsuite: '1 item', same: null });
+    // No kit was taken apart, so how the copy was worked out doesn't say how one is.
+    expect(c.workedOut.some((w) => w.startsWith('A kit is taken apart'))).toBe(false);
+
+    // Two kits it couldn't take apart.
+    const two = check(pair({
+      own: { lines: [
+        ownLine(RACK_KIT, 1, { item_number: 'RACK-KIT', item_type: 'Kit' }),
+        ownLine('9201', 1, { line_no: 2, sales_order_line_id: '2', item_number: 'SHELF-KIT', item_type: 'Kit' }),
+      ] },
+      netsuite: { number: 'IF7001', type: 'ItemShip', date: '2026-10-19', gone: false, lines: [nsLine('1', BINS, -4, '-40.00')] },
+      netsuite_gl: entry(4000),
+      before: [{ item_id: BINS, location_id: WENTZVILLE, quantity: '4', value: '40.00' }],
+    }));
+    expect(two.summary).toBe("Matches where it can be checked. FleetSuite didn't know the parts of RACK-KIT and SHELF-KIT, kits.");
+    expect(two.items[2].why).toBe(
+      "NetSuite's fulfillment took 4 of BIN-10 ($40.00), which FleetSuite's copy doesn't have: it may be a part of RACK-KIT and SHELF-KIT, kits FleetSuite couldn't take apart.",
+    );
+  });
+
+  it("compares a kit's parts FleetSuite took it apart into with what NetSuite took for it, and says which kit each is a part of", () => {
+    // One rack kit is four bins and two hooks: NetSuite's fulfillment has the kit's own line, which moves nothing, and its parts'.
+    const c = check(pair({
+      own: { lines: [
+        ownLine(BINS, 4, { item_number: 'BIN-10', kit_id: RACK_KIT }),
+        ownLine(HOOKS, 2, { line_no: 2, item_number: 'HOOK-1', kit_id: RACK_KIT }),
+      ] },
+      netsuite: {
+        number: 'IF7001', type: 'ItemShip', date: '2026-10-19', gone: false,
+        lines: [nsLine('1', RACK_KIT, -1, null, false), nsLine('2', BINS, -4, '-40.00'), nsLine('3', HOOKS, -2, '-10.00')],
+      },
+      netsuite_gl: entry(5000),
+      before: [
+        { item_id: BINS, location_id: WENTZVILLE, quantity: '4', value: '40.00' },
+        { item_id: HOOKS, location_id: WENTZVILLE, quantity: '6', value: '30.00' },
+      ],
+    }));
+    expect(c).toMatchObject({ status: 'matches', summary: "Matches NetSuite's fulfillment.", fleetsuiteCost: 5000, netsuiteCost: 5000, unknowns: [] });
+    expect(c.items.map((i) => [i.item, i.partOf, i.same, i.why])).toEqual([
+      ['BIN-10', 'A part of RACK-KIT', true, null],
+      ['HOOK-1', 'A part of RACK-KIT', true, null],
+    ]);
+    expect(field(c, 'items')).toMatchObject({ fleetsuite: '2 items', netsuite: '2 items', same: true });
+    expect(c.workedOut[2]).toBe(
+      "A kit is taken apart into its parts, each the kit's quantity times what one kit holds: the parts NetSuite's sales order lists for it, "
+        + "or, when it lists none, the parts the copy of NetSuite's items has. NetSuite takes a kit's parts from stock, not the kit.",
+    );
+    expect(c.workedOut[3]).toBe("From Wentzville, where FleetSuite's invoice location rule books Acme Fleet's invoices.");
+
+    // A part NetSuite took fewer of differs, as any item does.
+    const fewer = check(pair({
+      own: { lines: [ownLine(BINS, 4, { item_number: 'BIN-10', kit_id: RACK_KIT })] },
+      netsuite: {
+        number: 'IF7001', type: 'ItemShip', date: '2026-10-19', gone: false,
+        lines: [nsLine('1', RACK_KIT, -1, null, false), nsLine('2', BINS, -3, '-30.00')],
+      },
+      netsuite_gl: entry(3000),
+      before: [{ item_id: BINS, location_id: WENTZVILLE, quantity: '4', value: '40.00' }],
+    }));
+    expect(fewer).toMatchObject({ status: 'differs', summary: 'Items: FleetSuite took 4 of BIN-10 from stock, and NetSuite 3.' });
+  });
+
+  it('says when an item was also taken on a line of its own, or as a part of more than one kit', () => {
+    const c = check(pair({
+      own: { lines: [
+        ownLine(BINS, 2),
+        ownLine(BINS, 4, { line_no: 2, sales_order_line_id: '2', kit_id: RACK_KIT }),
+        ownLine(HOOKS, 2, { line_no: 3, sales_order_line_id: '2', kit_id: RACK_KIT }),
+        ownLine(HOOKS, 1, { line_no: 4, sales_order_line_id: '3', kit_id: '9201' }),
+        ownLine(HOOKS, 1, { line_no: 5, sales_order_line_id: '4', kit_id: RACK_KIT }),
+        ownLine(LADDER, 1, { line_no: 6, sales_order_line_id: '3', kit_id: '9201' }),
+        ownLine(LADDER, 2, { line_no: 7, sales_order_line_id: '5' }),
+      ] },
+      netsuite: {
+        number: 'IF7001', type: 'ItemShip', date: '2026-10-19', gone: false,
+        lines: [nsLine('1', BINS, -6, '-60.00'), nsLine('2', HOOKS, -4, '-20.00'), nsLine('3', LADDER, -3, '-455.00')],
+      },
+      netsuite_gl: entry(53500),
+      before: [
+        { item_id: LADDER, location_id: WENTZVILLE, quantity: '14', value: '2123.33' },
+        { item_id: BINS, location_id: WENTZVILLE, quantity: '6', value: '60.00' },
+        { item_id: HOOKS, location_id: WENTZVILLE, quantity: '6', value: '30.00' },
+      ],
+    }));
+    // Each line costed on its own: the ladder racks 151.67 and 303.33.
+    expect(c).toMatchObject({ status: 'matches', fleetsuiteCost: 53500, netsuiteCost: 53500 });
+    expect(c.items.map((i) => [i.item, i.partOf])).toEqual([
+      ['BIN-10', 'On a line of its own, and a part of RACK-KIT'],
+      // The second kit isn't in the lists copy, so it's named by NetSuite's id.
+      ['HOOK-1', 'A part of RACK-KIT and NetSuite item 9201'],
+      // A part first, then on a line of its own.
+      ['LDR-24', 'On a line of its own, and a part of NetSuite item 9201'],
+    ]);
   });
 
   it("keeps an item the lists copy doesn't have, and counts it neither way", () => {

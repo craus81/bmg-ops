@@ -9,12 +9,15 @@ vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok
 
 import {
   ITEM_ACCOUNTS_QUERY,
+  KIT_PARTS_QUERY,
   LISTS,
   TAX_ACCOUNTS_QUERY,
   fieldQuery,
+  itemsWithParts,
   joinWords,
   listQuery,
   mapItemAccounts,
+  mapKitParts,
   mapList,
   mapListRow,
   mapTaxAccounts,
@@ -269,6 +272,55 @@ describe('mapping NetSuite rows', () => {
       { item_id: '16', item_name: 'PREPAYMENT', account_id: '110', lines: 2 },
       { item_id: '16', item_name: 'PREPAYMENT', account_id: '112', lines: 2 },
     ]);
+  });
+
+  it("reads only kits' parts: an assembly is taken from stock whole, and an order lists a group's members itself", () => {
+    expect(KIT_PARTS_QUERY).toMatch(/SELECT km\.parentitem AS kit_id, km\.item AS item_id, km\.quantity\s+FROM kititemmember km\s+JOIN item k ON k\.id = km\.parentitem/);
+    expect(KIT_PARTS_QUERY).toMatch(/WHERE k\.itemtype = 'Kit'\s+ORDER BY km\.parentitem, km\.item\s*$/);
+  });
+
+  it("keeps each kit's parts in item order, one part per item, and none of a kit it can't read whole", () => {
+    const parts = mapKitParts([
+      { kit_id: 300, item_id: '912', quantity: '2' },
+      { kit_id: '300', item_id: 911, quantity: 1 },
+      { kit_id: '300', item_id: '912', quantity: '0.5' },
+      { kit_id: '300', item_id: '913', quantity: 0 },
+      { kit_id: 301, item_id: '914', quantity: '1.23456' },
+      { kit_id: 302, item_id: '911', quantity: 1 },
+      { kit_id: 302, item_id: null, quantity: 1 },
+      { kit_id: 303, item_id: '911', quantity: '-1' },
+      { kit_id: 304, item_id: '911', quantity: 'two' },
+      { kit_id: 305, item_id: '911', quantity: null },
+      { kit_id: 306, item_id: '911', quantity: ' ' },
+      { kit_id: null, item_id: '911', quantity: 1 },
+      { kit_id: 'KIT', item_id: '911', quantity: 1 },
+      { kit_id: 307, item_id: '913', quantity: '0' },
+    ]);
+    expect([...parts]).toEqual([
+      ['300', [{ item: '911', quantity: 1 }, { item: '912', quantity: 2.5 }]],
+      ['301', [{ item: '914', quantity: 1.2346 }]],
+      ['307', []],
+    ]);
+    expect(mapKitParts([])).toEqual(new Map());
+  });
+
+  it('puts the parts on their kits alone, and nothing on a kit NetSuite lists none for', () => {
+    const kit = { netsuite_id: '300', name: 'RACK-KIT', parent_netsuite_id: null, active: true, details: { item_type: 'Kit', display_name: 'Rack kit' } };
+    const bare = { ...kit, netsuite_id: '301', details: { item_type: 'Kit' } };
+    const empty = { ...kit, netsuite_id: '307', details: { item_type: 'Kit' } };
+    const shelf = { ...kit, netsuite_id: '911', name: 'SHELF-1', details: { item_type: 'InvtPart' } };
+    const parts = new Map([
+      ['300', [{ item: '911', quantity: 2 }]],
+      ['307', []],
+      ['911', [{ item: '912', quantity: 1 }]],
+    ]);
+    expect(itemsWithParts([kit, bare, empty, shelf], parts)).toEqual([
+      { ...kit, details: { item_type: 'Kit', display_name: 'Rack kit', parts: [{ item: '911', quantity: 2 }] } },
+      bare,
+      empty,
+      shelf,
+    ]);
+    expect(kit.details).not.toHaveProperty('parts');
   });
 
   it('joins words the way the notes read', () => {
