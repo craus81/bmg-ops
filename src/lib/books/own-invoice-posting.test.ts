@@ -155,6 +155,47 @@ describe('what the books post for an invoice FleetSuite has its own copy of', ()
     expect(pick(split)?.entry?.lines.map((l) => l.cents)).toEqual([16200, -9000, -6000, -1200]);
   });
 
+  it("posts the copy's entry with the shipping NetSuite added, to the account NetSuite's shipping posts to", () => {
+    // A shipping item has no income account in the items copy: its lines post where NetSuite's have most.
+    const SHIP: Invoice['lines'][number] = { line_id: '4', line_no: 4, kind: 'item', item_id: '70', item_number: 'UPS Ground', amount: '12.50', netamount: '-12.5' };
+    const shipped = invoice({
+      total: '174.50',
+      lines: [...invoice().lines.slice(0, 2), SHIP, invoice().lines[2]],
+      netsuite: [
+        { line_id: '0', account: '120', debit: '174.50', credit: '0.00' },
+        ...invoice().netsuite.slice(1),
+        { line_id: '4', account: '410', debit: '0.00', credit: '12.50' },
+      ],
+    });
+    const worked = workOutMonth({
+      invoices: [shipped],
+      items: [...ITEMS, { kind: 'item', netsuite_id: '70', name: 'UPS Ground', item_type: 'ShipItem', income_account: null, asset_account: null }],
+    }, {
+      company: 'BMG',
+      chart: [...CHART, { netsuite_account_id: '410', number: '4100', name: 'Freight Income', account_type: 'income', company: null, active: true, is_summary: false }],
+      taxAccounts: TAX,
+      itemAccounts: [{ item_id: '70', account_id: '410', lines: 30 }],
+      facts: FACTS,
+    });
+    const w = worked.invoices[0];
+    const shipping = ownLine({ line_no: 3, item_id: '70', item_number: 'UPS Ground', quantity: null, rate: null, amount: '12.50', taxable: false, tax: '0.00' });
+    const p = ownPick(w, entryLines(w), copy('matches', { subtotal: '162.50', total: '174.50', lines: [ownLine(), LABOR, shipping] }), ownMonth(worked));
+    expect(p).toEqual({
+      entry: {
+        lines: [
+          { account: '120', cents: 17450, lineId: '0', itemNumber: null, division: null },
+          { account: '400', cents: -10000, lineId: 'own:1', itemNumber: 'PART-A', division: 'upfit' },
+          { account: '400', cents: -5000, lineId: 'own:2', itemNumber: 'INSTALL LABOR', division: 'upfit' },
+          { account: '410', cents: -1250, lineId: 'own:3', itemNumber: 'UPS Ground', division: null },
+          { account: '220', cents: -1200, lineId: 'own:tax', itemNumber: null, division: null },
+        ],
+        date: '2026-10-15',
+        customerId: CUSTOMER,
+      },
+      why: null,
+    });
+  });
+
   it('dates the entry in the month NetSuite booked the invoice into, as NetSuite\'s is', () => {
     const booked = invoice({ date: '2026-09-30', posting_month: '2026-10-01' });
     const p = pick(copy('matches', { date: '2026-09-30' }), booked);

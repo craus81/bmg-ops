@@ -201,8 +201,8 @@ export default function BooksOwnInvoicesPage() {
       <div style={{ marginBottom: '14px' }}>
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Own invoices</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          FleetSuite&apos;s own copy of each invoice it makes, worked out by its own rules: the lines it billed, sales tax at the
-          location&apos;s rate on its date on Books → Sales tax on the lines it taxes (not service items, tax-exempt customers or work
+          FleetSuite&apos;s own copy of each invoice it makes, worked out by its own rules: the lines it billed and the shipping NetSuite added, sales tax at the
+          location&apos;s rate on its date on Books → Sales tax on the lines it taxes (not service items, shipping, tax-exempt customers or work
           at Social Circle, Georgia),
           and the due date from the customer&apos;s terms. Each is put next to NetSuite&apos;s invoice; tap one for its line by line
           check. The books post a copy that matches NetSuite&apos;s invoice, and makes the same entry, in place of NetSuite&apos;s; one

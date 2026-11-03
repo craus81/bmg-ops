@@ -11,6 +11,7 @@ import { PGlite } from '@electric-sql/pglite';
 
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 
+import { withCharges } from './invoice-charges';
 import { savePayload, workOutOwnInvoice, type OwnInvoiceFacts, type OwnInvoiceInput } from './own-invoices';
 import { checkOwnInvoices, type OwnPairsData } from './own-invoice-check';
 
@@ -296,6 +297,41 @@ describe('migration 407: FleetSuite\'s own invoices', () => {
     expect((await status()).check).toMatchObject({ status: 'voided', summary: "NetSuite's invoice is gone from NetSuite." });
     await pg.query(`UPDATE ledger_invoices SET deleted_at = NULL, voided = true WHERE external_id = 'CustInvc/5004'`);
     expect((await status()).check).toMatchObject({ status: 'voided', summary: "NetSuite's invoice was voided." });
+  });
+
+  it("keeps the shipping NetSuite added, untaxed, and the check finds the copy matches NetSuite's invoice", async () => {
+    await pg.query(`INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details) VALUES ('item', '70', 'UPS Ground', true, '{"item_type": "ShipItem"}')`);
+    const facts: OwnInvoiceFacts = { ...FACTS, items: new Map([...FACTS.items, ['70', { number: 'UPS Ground', type: 'ShipItem', taxableOverride: null }]]) };
+    const lines = withCharges(
+      [{ itemId: '55', itemNumber: 'SHELF-1', quantity: 2, rate: 125.5 }],
+      [{ itemId: '70', itemNumber: 'UPS Ground', description: null, quantity: null, rate: null, cents: 1250 }],
+      (id) => facts.items.get(id)?.type,
+    );
+    const p = savePayload(workOutOwnInvoice(input({ netsuiteId: '5005', invoiceDate: '2026-11-05', lines }), facts));
+    // 21.30 on the shelf, and none on the shipping.
+    expect(p).toMatchObject({ subtotal: '263.50', tax: '21.30', total: '284.80' });
+    expect(await save(pg, p)).toEqual({ saved: true, lines: 2 });
+    expect((await pg.query(
+      `SELECT line_no, item_netsuite_id, amount::text, priced, taxable, tax::text FROM gl_own_invoice_lines WHERE invoice_id = '5005' ORDER BY line_no`,
+    )).rows).toEqual([
+      { line_no: 1, item_netsuite_id: '55', amount: '251.00', priced: true, taxable: true, tax: '21.30' },
+      { line_no: 2, item_netsuite_id: '70', amount: '12.50', priced: true, taxable: false, tax: '0.00' },
+    ]);
+
+    await copyInvoice(pg, '5005', { doc_date: '2026-11-05', due_date: '2026-12-05', total: '284.80' }, [
+      ['1', 'item', '55', '251.00', '-251.00', '2'],
+      ['2', 'item', '70', '12.50', '-12.50', null],
+      ['3', 'tax', '77', '21.30', '-21.30', null],
+    ]);
+    await postInvoice(pg, '5005', '1');
+    const data = await pairs(pg, null, null, '5005');
+    expect(data.items[70]).toEqual({ number: 'UPS Ground', type: 'ShipItem' });
+    const [check] = checkOwnInvoices(data).invoices;
+    expect(check.status).toBe('matches');
+    expect(check.lines.map((l) => [l.item, l.same])).toEqual([['SHELF-1', true], ['UPS Ground', true]]);
+    expect(check.workedOut).toContain(
+      "UPS Ground ($12.50) is shipping or handling NetSuite added to the invoice: FleetSuite's copy has it as NetSuite charged it, and doesn't tax it, as FleetSuite doesn't tax freight.",
+    );
   });
 
   it('takes NetSuite\'s customers into the lists', async () => {

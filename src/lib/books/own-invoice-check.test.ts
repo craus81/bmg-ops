@@ -25,6 +25,7 @@ const LISTS = ownLists({
     56: { number: 'LABOR', type: 'Service' },
     58: { number: 'DISCOUNT', type: 'Discount' },
     61: { number: 'TOW-1', type: 'NonInvtPart' },
+    66: { number: 'UPS Ground', type: 'ShipItem' },
     90: { number: 'SUBTOTAL', type: 'Subtotal' },
   },
   tax_codes: { 77: { name: 'MO St Charles', rate: '8.488%' }, 78: { name: 'MO Other', rate: '8.238%' }, 79: { name: 'No rate', rate: null } },
@@ -97,6 +98,70 @@ describe('an own invoice next to NetSuite\'s', () => {
       "Due 30 days after its date: Net 30, the customer's terms in NetSuite.",
       'Its location is the one FleetSuite gave NetSuite.',
     ]);
+  });
+
+  describe('with shipping NetSuite added', () => {
+    const SHIP_OWN = ownLine({ line_no: 3, item_id: '66', item_number: 'UPS Ground', quantity: null, rate: null, amount: '12.50', taxable: false, tax: '0.00' });
+    const SHIP_NS = nsLine('3', 'item', '66', '12.50', '-12.50');
+    const shipped = own({ subtotal: '548.50', total: '569.80', lines: [ownLine(), LABOR_LINE, SHIP_OWN] });
+
+    it("matches when the copy has it as NetSuite charged it, and says how it's on the copy", () => {
+      const c = check({ own: shipped, netsuite: netsuite({ total: '569.80', lines: [SHELF_NS, LABOR_NS, SHIP_NS, taxNs('21.30')] }) });
+      expect(c).toMatchObject({ status: 'matches', fleetsuiteTotal: 56980, netsuiteTotal: 56980 });
+      expect(c.lines[2]).toMatchObject({ item: 'UPS Ground', same: true, why: null, fleetsuite: { quantity: null, cents: 1250, taxable: false } });
+      expect(c.workedOut[5]).toBe(
+        "UPS Ground ($12.50) is shipping or handling NetSuite added to the invoice: FleetSuite's copy has it as NetSuite charged it, and doesn't tax it, as FleetSuite doesn't tax freight.",
+      );
+      expect(c.workedOut).toHaveLength(6);
+    });
+
+    it('names each line of it when there are more than one', () => {
+      const handling = ownLine({ line_no: 4, item_id: '66', item_number: null, description: 'Handling', quantity: null, rate: null, amount: '4.00', taxable: false, tax: '0.00' });
+      const c = check({
+        own: own({ subtotal: '552.50', total: '573.80', lines: [ownLine(), LABOR_LINE, SHIP_OWN, handling] }),
+        netsuite: netsuite({ total: '573.80', lines: [SHELF_NS, LABOR_NS, SHIP_NS, nsLine('4', 'item', '66', '4.00', '-4.00'), taxNs('21.30')] }),
+      });
+      expect(c.status).toBe('matches');
+      expect(c.workedOut[5]).toBe(
+        "UPS Ground ($12.50) and UPS Ground ($4.00) are shipping or handling NetSuite added to the invoice: FleetSuite's copy has them as NetSuite charged them, and doesn't tax them, as FleetSuite doesn't tax freight.",
+      );
+    });
+
+    it("says when NetSuite's invoice has shipping the copy doesn't", () => {
+      const c = check({ netsuite: netsuite({ total: '569.80', lines: [SHELF_NS, LABOR_NS, SHIP_NS, taxNs('21.30')] }) });
+      const why = "NetSuite added UPS Ground ($12.50) to the invoice as shipping or handling, and FleetSuite's copy doesn't have it.";
+      expect(c).toMatchObject({ status: 'differs', summary: `Lines: ${why}` });
+      expect(c.lines[2]).toMatchObject({ fleetsuite: null, same: false, why });
+      expect(c.workedOut).toHaveLength(5);
+    });
+
+    it("says when the copy has shipping NetSuite's invoice doesn't now, or at another amount", () => {
+      const gone = check({ own: shipped });
+      expect(gone.lines[2]).toMatchObject({ netsuite: null, same: false, why: "FleetSuite's copy has UPS Ground ($12.50), shipping NetSuite added to the invoice, and NetSuite's invoice doesn't have it now." });
+      const changed = check({ own: shipped, netsuite: netsuite({ total: '572.30', lines: [SHELF_NS, LABOR_NS, nsLine('3', 'item', '66', '15.00', '-15.00'), taxNs('21.30')] }) });
+      expect(changed.lines[2]).toMatchObject({ same: false, why: "FleetSuite's copy has UPS Ground at $12.50, and NetSuite's invoice at $15.00." });
+    });
+
+    it('says when NetSuite taxed it', () => {
+      const c = check({ own: shipped, netsuite: netsuite({ total: '570.86', lines: [SHELF_NS, LABOR_NS, SHIP_NS, taxNs('22.36')] }) });
+      expect(field(c, 'tax')).toMatchObject({ same: false, why: "NetSuite also taxed UPS Ground ($12.50), which FleetSuite doesn't tax." });
+      expect(field(c, 'lines').same).toBe(true);
+    });
+
+    it('takes apart a discount NetSuite spread with the shipping left as charged', () => {
+      const shelf = ownLine({ amount: '251.00' });
+      const discount = ownLine({ line_no: 3, item_id: '58', item_number: 'DISCOUNT', quantity: null, rate: null, amount: '-20.00', taxable: false, tax: '0.00' });
+      const ship = { ...SHIP_OWN, line_no: 4 };
+      const c = check({
+        own: own({ subtotal: '528.50', total: '549.80', lines: [shelf, LABOR_LINE, discount, ship] }),
+        netsuite: netsuite({
+          total: '549.80',
+          lines: [SHELF_NS, nsLine('2', 'item', '56', '265.00', '-265.00', '3', '95'), nsLine('5', 'item', '58', '0.00', '0'), SHIP_NS, taxNs('21.30')],
+        }),
+      });
+      expect(c.status).toBe('matches');
+      expect(c.lines.map((l) => [l.item, l.netsuite?.cents])).toEqual([['SHELF-1', 25100], ['LABOR', 28500], ['DISCOUNT', -2000], ['UPS Ground', 1250]]);
+    });
   });
 
   it('says when the copy is the invoice as FleetSuite fixed it', () => {
@@ -394,7 +459,7 @@ describe('finding the lines taxed the other way', () => {
 });
 
 describe('taking apart a discount NetSuite spread over lines', () => {
-  const TYPES: Record<string, string> = { 55: 'InvtPart', 56: 'Service', 58: 'Discount', 59: 'Markup' };
+  const TYPES: Record<string, string> = { 55: 'InvtPart', 56: 'Service', 58: 'Discount', 59: 'Markup', 66: 'ShipItem' };
   const typeOf = (id: string | null) => (id ? TYPES[id] ?? null : null);
   const line = (itemId: string | null, cents: number | null, quantity: number | null = null, rate: number | null = null) => ({ itemId, quantity, rate, cents });
   const shelf = line('55', 25100, 2, 125.5);
@@ -407,6 +472,16 @@ describe('taking apart a discount NetSuite spread over lines', () => {
     expect(out.lines[0]).toBe(shelf);
     const markup = takeApartSpread([shelf, line('56', 29925, 3, 95), line('59', 0)], typeOf);
     expect(markup.lines.map((l) => l.cents)).toEqual([25100, 28500, 1425]);
+  });
+
+  it('keeps shipping at what NetSuite charged, as NetSuite spreads no discount over it', () => {
+    const lines = [shelf, line('56', 26500, 3, 95), line('58', 0, null, 20), line('66', 1250)];
+    const out = takeApartSpread(lines, typeOf);
+    expect(out.lines.map((l) => l.cents)).toEqual([25100, 28500, -2000, 1250]);
+    expect(out.spread).toBe(lines[2]);
+    expect(out.lines[3]).toBe(lines[3]);
+    const unreadable = [shelf, line('56', 26500, 3, 95), line('58', 0), line('66', null)];
+    expect(takeApartSpread(unreadable, typeOf)).toEqual({ lines: unreadable, spread: null });
   });
 
   it('keeps a discount NetSuite didn\'t spread at its own amount', () => {
@@ -458,6 +533,32 @@ describe('pairing lines', () => {
     expect(pairLines([mine(1, 25100, 2)], [theirs('a', null, 1)], name)[0]).toMatchObject({ same: false, why: "NetSuite's amount for SHELF-1 couldn't be read." });
     const extra = pairLines([], [theirs('a', null)], name)[0];
     expect(extra).toMatchObject({ item: 'item 55', fleetsuite: null, same: false, why: "NetSuite's invoice has item 55, and FleetSuite didn't bill it." });
+  });
+});
+
+describe('pairing shipping NetSuite added', () => {
+  const name = (id: string | null, number: string | null) => number || `item ${id}`;
+  const isCharge = (id: string | null) => id === '66';
+  const ship = {
+    lineNo: 3, itemId: '66', itemNumber: 'UPS Ground', description: null, quantity: null, rate: null, cents: 1250, priced: true, taxable: false, taxCents: 0,
+  };
+  const theirs = (cents: number | null) => ({ lineId: 'a', itemId: '66', itemNumber: null, description: null, quantity: null, rate: null, cents });
+
+  it("says how it differs in words that don't say FleetSuite billed it", () => {
+    expect(pairLines([ship], [theirs(1250)], name, isCharge)[0]).toMatchObject({ same: true, why: null });
+    expect(pairLines([ship], [theirs(1500)], name, isCharge)[0].why).toBe("FleetSuite's copy has UPS Ground at $12.50, and NetSuite's invoice at $15.00.");
+    expect(pairLines([ship], [], name, isCharge)[0].why)
+      .toBe("FleetSuite's copy has UPS Ground ($12.50), shipping NetSuite added to the invoice, and NetSuite's invoice doesn't have it now.");
+    expect(pairLines([], [theirs(1500)], name, isCharge)[0].why)
+      .toBe("NetSuite added item 66 ($15.00) to the invoice as shipping or handling, and FleetSuite's copy doesn't have it.");
+    expect(pairLines([], [theirs(null)], name, isCharge)[0].why)
+      .toBe("NetSuite added item 66 to the invoice as shipping or handling, and FleetSuite's copy doesn't have it.");
+  });
+
+  it('keeps the plain words for every other line', () => {
+    expect(pairLines([], [theirs(1500)], name)[0].why).toBe("NetSuite's invoice has item 66 ($15.00), and FleetSuite didn't bill it.");
+    expect(pairLines([ship], [], name)[0].why).toBe("FleetSuite billed UPS Ground ($12.50), and NetSuite's invoice doesn't have it.");
+    expect(pairLines([ship], [theirs(1500)], name)[0].why).toBe('FleetSuite billed UPS Ground for $12.50, and NetSuite for $15.00.');
   });
 });
 

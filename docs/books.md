@@ -259,7 +259,7 @@ admins can open it while fixing invoices is switched off.
 | AR and AP agings: NetSuite's open invoices and bills, copied, and each customer's and vendor's open documents both sides | `migrations/458-books-agings.sql`, `src/lib/books/netsuite-open-items.ts`, `src/lib/books/agings.ts`, `src/lib/books/aging-buckets.ts`, `src/app/api/cron/books-netsuite-open-items/route.ts` |
 | AR and AP agings and one customer's or vendor's aging, and their API | `src/app/(main)/admin/books/agings/page.tsx`, `src/app/(main)/admin/books/agings/party/page.tsx`, `src/app/api/admin/books/agings/route.ts` |
 | Aging tests | `src/lib/books/aging-buckets.test.ts`, `src/lib/books/agings.test.ts`, `src/lib/books/netsuite-open-items.test.ts`, and end to end, with the balances they add up to, `src/lib/books/agings-sql.test.ts` |
-| FleetSuite's own invoices, saved as each is made and checked against NetSuite's, and NetSuite's customers in the lists | `migrations/407-books-own-invoices.sql`, `src/lib/books/own-invoices.ts`, `src/lib/books/own-invoice-check.ts`; saved by `src/app/api/vehicle-tracking/invoice/route.ts`, `src/app/api/netsuite/create-invoice/route.ts`, `src/app/api/pos/invoice-open/route.ts`, `src/app/api/netsuite/invoice-vehicles/route.ts` and `src/app/api/graphics/create-invoice/route.ts`, from what `createDirectInvoice` and `createInvoiceFromSO` in `src/lib/netsuite.ts` say they billed |
+| FleetSuite's own invoices, saved as each is made and checked against NetSuite's, and NetSuite's customers in the lists | `migrations/407-books-own-invoices.sql`, `src/lib/books/own-invoices.ts`, `src/lib/books/own-invoice-check.ts`, `src/lib/books/invoice-charges.ts` (the shipping NetSuite adds); saved by `src/app/api/vehicle-tracking/invoice/route.ts`, `src/app/api/netsuite/create-invoice/route.ts`, `src/app/api/pos/invoice-open/route.ts`, `src/app/api/netsuite/invoice-vehicles/route.ts` and `src/app/api/graphics/create-invoice/route.ts`, from what `createDirectInvoice` and `createInvoiceFromSO` in `src/lib/netsuite.ts` say they billed |
 | Own invoices and one invoice's check, and their API | `src/app/(main)/admin/books/own-invoices/page.tsx`, `src/app/(main)/admin/books/own-invoices/invoice/page.tsx`, `src/app/api/admin/books/own-invoices/route.ts` |
 | Own invoice tests | `src/lib/books/own-invoices.test.ts`, `src/lib/books/own-invoice-check.test.ts`, `src/lib/books/own-invoices-sql.test.ts`; the customers list's are in the lists test files, the daily check's in its own |
 | FleetSuite's own invoices posted in place of NetSuite's when they match | `migrations/409-books-own-invoice-posting.sql`, `src/lib/books/own-invoice-posting.ts`, `src/lib/books/invoice-posting.ts` |
@@ -2799,13 +2799,16 @@ NetSuite by hand have no copy.
   bills those with an order's first invoice. An invoice off a sales order is
   for the order's customer. Lines that never post (subtotals, descriptions,
   item groups) and lines of nothing are left out, as the invoice rule
-  leaves them out.
+  leaves them out. Then come the shipping and handling NetSuite added to
+  the invoice, as it charged them ("Shipping and handling NetSuite adds",
+  below).
 - **Amounts.** A line's amount is its quantity times its price, rounded
   half to even to the cent; a discount is negative.
 - **Sales tax** (`tax@2`, part 66). FleetSuite's own quoting rule decides
   which lines are taxed (`src/lib/line-taxability.ts`): service items
   aren't, an admin's override wins either way, everything else is, and a
-  discount is taxed as the line above it. The rate is the invoice
+  discount is taxed as the line above it. Shipping and handling aren't
+  taxed, as freight isn't on quotes. The rate is the invoice
   location's on its date on Books → Sales tax (`sales_tax_rates`, `rateOn`
   in `src/lib/books/sales-tax-rates.ts`), worked out line by line and
   rounded half to even, as NetSuite does. Where Books has no rate for the
@@ -2839,6 +2842,48 @@ guessed from NetSuite: the lines (its copy of the sales order didn't have
 the order yet), the customer, the terms (a customer the lists copy doesn't
 have, or terms due on a day of the month), a price (a line NetSuite priced
 itself) or the location (a Masterack order with no plant named).
+
+### Shipping and handling NetSuite adds
+
+FleetSuite never bills shipping or handling. NetSuite adds it to an invoice
+from the invoice's header: the shipping method and cost of the sales order
+it's made from, or the customer's own shipping method. It keeps it on lines
+whose item is a shipping item (type `ShipItem`), and the ledger mirror
+copies those with the rest. Until 2026-11-03 (NetSuite Exit Checklist,
+"Gaps in what's built") the check found them on NetSuite's invoice and not
+on FleetSuite's copy, so the copy differed and the invoice posted from
+NetSuite's.
+
+Now, as soon as NetSuite has made an invoice, and again once FleetSuite has
+fixed one ("Fix an invoice"), FleetSuite reads that invoice's shipping lines
+from NetSuite while it reads its copy of the sales order
+(`readInvoiceCharges` in `src/lib/books/invoice-charges.ts`). It's one
+SuiteQL read, tried once more if NetSuite doesn't answer, and given up after
+6 seconds, as the billing screen is waiting. The copy bills them after
+FleetSuite's own lines, as NetSuite charged them, in place of any shipping
+line FleetSuite's copy of the sales order had. An item NetSuite's answer
+has is taken as shipping on NetSuite's word, where the lists copy doesn't
+have it yet or has it as something else, and is named as the lists copy
+names it where NetSuite's answer has no name for it.
+
+FleetSuite doesn't tax them, as it doesn't tax freight on quotes (owner
+decision 2026-10-01: Missouri doesn't tax delivery charged on a line of its
+own). Where NetSuite did, the check says so ("NetSuite also taxed UPS Ground
+($12.50), which FleetSuite doesn't tax."), and the copy's "How FleetSuite
+worked it out" names them. In the check a shipping line pairs by item as
+any line does, keeps its own amount where NetSuite spread a discount over
+the other lines, and says when NetSuite's invoice has it at a different
+amount, or not at all, now.
+
+A read that fails, or an answer that can't be read whole, is logged
+(`[books] shipping on NetSuite invoice … not read`) and the copy is saved as
+copies were before: without shipping, or with the shipping line FleetSuite's
+copy of the sales order had, untaxed. The check then says NetSuite added the
+line and FleetSuite's copy doesn't have it, and NetSuite's invoice posts. A
+copy whose lines FleetSuite didn't know stays unknown, shipping or not.
+Copies made before the fix aren't read again: those with shipping still
+differ, and their invoices post from NetSuite's, as before. Nothing is
+written to NetSuite.
 
 ### The check
 
@@ -2950,8 +2995,8 @@ posts when it does, and links to FleetSuite's copy.
 - FleetSuite's sales tax is one rate for everything but Social Circle, while
   NetSuite picks a tax code for each invoice. Where that differs, the check
   shows which invoices, by name.
-- Shipping or handling NetSuite adds to an invoice's header shows as a line
-  FleetSuite didn't bill.
+- Copies made before 2026-11-03 don't have the shipping NetSuite added
+  ("Shipping and handling NetSuite adds"), and aren't read again.
 
 ## FleetSuite's own fulfillments
 
