@@ -15,6 +15,7 @@ const made = (over: Partial<MadeReceipt> = {}): MadeReceipt => ({
   netsuiteNumber: 'IR-2288',
   netsuiteError: null,
   po: { netsuiteId: 5001, number: 'PO453-ACME', vendorId: '412', vendorName: 'Acme Truck Racks' },
+  subsidiaryId: 3,
   receiveDate: '2026-10-21',
   madeBy: 'u-1',
   ...over,
@@ -25,7 +26,7 @@ describe("working out Books' own receipt", () => {
     const own = workOutOwnReceipt(made())!;
     expect(own).toMatchObject({
       receiptKey: ROW_1, netsuiteId: '7101', netsuiteNumber: 'IR-2288', poId: '5001', poNumber: 'PO453-ACME', vendorId: '412',
-      vendorName: 'Acme Truck Racks', receiveDate: '2026-10-21', netsuiteError: null, unknowns: [], madeBy: 'u-1',
+      vendorName: 'Acme Truck Racks', subsidiaryId: '3', receiveDate: '2026-10-21', netsuiteError: null, unknowns: [], madeBy: 'u-1',
     });
     expect(own.lines.map((l) => [l.lineNo, l.itemId, l.quantity, l.rate, l.poLineId, l.poReceiptId])).toEqual([
       [1, '9001', 12, 178.3333, '2', ROW_1],
@@ -52,16 +53,20 @@ describe("working out Books' own receipt", () => {
   });
 
   it("keeps only numbers for NetSuite's ids", () => {
-    const own = workOutOwnReceipt(made({ netsuiteId: 'IR-2288', po: { netsuiteId: 'PO453', number: null, vendorId: null, vendorName: null } }))!;
-    expect(own).toMatchObject({ netsuiteId: null, poId: null, poNumber: null, vendorId: null });
+    const own = workOutOwnReceipt(made({
+      netsuiteId: 'IR-2288', po: { netsuiteId: 'PO453', number: null, vendorId: null, vendorName: null }, subsidiaryId: '1084',
+    }))!;
+    expect(own).toMatchObject({ netsuiteId: null, poId: null, poNumber: null, vendorId: null, subsidiaryId: '1084' });
+    expect(workOutOwnReceipt(made({ subsidiaryId: 'BMG' }))!.subsidiaryId).toBeNull();
+    expect(workOutOwnReceipt(made({ subsidiaryId: undefined }))!.subsidiaryId).toBeNull();
     expect(workOutOwnReceipt(made({ rows: [{ ...made().rows[0], itemId: 'RACK-48' }] }))!.lines[0].itemId).toBeNull();
   });
 
   it('writes the copy as the database takes it', () => {
     expect(receiptPayload(workOutOwnReceipt(made({ rows: [made().rows[0]] }))!)).toEqual({
       receipt_key: ROW_1, netsuite_id: '7101', netsuite_number: 'IR-2288', po_netsuite_id: '5001', po_number: 'PO453-ACME',
-      vendor_netsuite_id: '412', vendor_name: 'Acme Truck Racks', receive_date: '2026-10-21', netsuite_error: null, unknowns: [],
-      made_by: 'u-1',
+      vendor_netsuite_id: '412', vendor_name: 'Acme Truck Racks', subsidiary_id: '3', receive_date: '2026-10-21', netsuite_error: null,
+      unknowns: [], made_by: 'u-1',
       lines: [{
         line_no: 1, item_netsuite_id: '9001', item_number: 'RACK-48', description: 'Ladder rack', quantity: 12, rate: 178.3333,
         po_line_id: '2', po_receipt_id: ROW_1,

@@ -456,7 +456,7 @@ export function checkOwnReceipt(pair: ReceiptPairData, lists: ReceiptLists, copi
       netsuite: ns ? (companies.length ? listed(companies) : null) : null,
       same,
       why: same === false
-        ? `FleetSuite kept it for ${own.company}, as its copy of the purchase order doesn't say the company, and NetSuite's receipt is ${listed(companies)}'s.`
+        ? `FleetSuite kept it for ${own.company}, and NetSuite's receipt is ${listed(companies)}'s.`
         : null,
     });
   }
@@ -568,8 +568,8 @@ export function checkOwnReceipt(pair: ReceiptPairData, lists: ReceiptLists, copi
     `Made by Receive on the Receiving page on ${dayText(own.date)}, against ${poNumber}${own.vendor_name ? ` from ${own.vendor_name}` : ''}.`,
     "Its lines are what was received, each at the price FleetSuite's copy of the purchase order has for its line.",
     "What it added to stock is the items NetSuite keeps in stock, each its quantity at that price, to the cent. NetSuite's is what its receipt posted to the inventory accounts.",
-    'Dated as FleetSuite dated it for NetSuite: the day it was received in UTC, which in the evening, Central time, is already the next day.',
-    `It's kept for ${own.company}: FleetSuite's copy of the purchase order doesn't say the company, and NetSuite makes the receipt in the PO's.`,
+    "Dated as FleetSuite dated it for NetSuite: the day it was received in O'Fallon. Through November 2, 2026, it was the day in UTC, which in the evening, Central time, was already the next day.",
+    `It's kept for ${own.company}: a receipt is kept for the company its purchase order is for, as NetSuite makes the receipt in the PO's, or for BMG when FleetSuite can't tell, as it couldn't through November 2, 2026.`,
   ];
 
   return {

@@ -7,6 +7,7 @@ import { loadThreeWayMatchForPo } from '@/lib/three-way-match';
 import { logAudit } from '@/lib/audit';
 import { saveOwnBill } from '@/lib/books/own-bills';
 import { madeOrFound, makeBillOnce, STALE_CLAIM_MS } from '@/lib/bill-once';
+import { poCompanyOf } from '@/lib/vendor-po-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -50,9 +51,11 @@ export async function POST(req: NextRequest) {
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
 
+  // The PO with every column, so the invoice is found whether or not the
+  // API's schema has the company the PO is for yet (migration 511).
   const { data: invoice } = await service
     .from('vendor_parts_invoices')
-    .select('*, netsuite_vendor_pos:matched_po_id (id, netsuite_id, tranid, vendor_name, vendor_netsuite_id)')
+    .select('*, netsuite_vendor_pos:matched_po_id (*)')
     .eq('id', parsed.data.invoiceId)
     .maybeSingle();
   if (!invoice) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
@@ -170,8 +173,9 @@ export async function POST(req: NextRequest) {
   const bill = { billId: once.billId, billNumber: once.billNumber };
 
   // Books keeps its own copy of what was billed: the PO's open lines at its
-  // prices, as FleetSuite's copy of the PO has them (src/lib/books/own-bills.ts).
-  // It never stops the bill.
+  // prices, as FleetSuite's copy of the PO has them, for the company the PO
+  // is for, as NetSuite makes the bill in the PO's subsidiary
+  // (src/lib/books/own-bills.ts). It never stops the bill.
   await saveOwnBill(service, {
     netsuiteId: bill.billId,
     netsuiteNumber: bill.billNumber,
@@ -181,6 +185,7 @@ export async function POST(req: NextRequest) {
     vendorId: po.vendor_netsuite_id,
     vendorName: po.vendor_name || invoice.vendor_name,
     referenceNo,
+    subsidiaryId: await poCompanyOf(service, po),
     po: { copyId: po.id, netsuiteId: po.netsuite_id, number: po.tranid },
     invoiceTotal: invoice.total,
   });

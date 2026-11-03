@@ -6,7 +6,7 @@ import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
 import { suiteqlQuery, createItemReceiptFromPo } from '@/lib/netsuite';
 import { mapReceiptLines, type NsPoLine } from '@/lib/po-receiving';
-import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
+import { normalizeItemNumber, isOpenPoStatus, poCompanyOf } from '@/lib/vendor-po-sync';
 import { computePartsReadiness } from '@/lib/parts-readiness';
 import { saveOwnReceipt } from '@/lib/books/own-receipts';
 import { centralDate } from '@/lib/central-day';
@@ -86,9 +86,11 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
   const body = parsed.data;
 
+  // Every column, so a PO is found whether or not the API's schema has the
+  // company it's for yet (migration 511).
   const { data: po } = await supabase
     .from('netsuite_vendor_pos')
-    .select('id, netsuite_id, tranid, vendor_name, vendor_netsuite_id, status')
+    .select('*')
     .eq('id', body.poId)
     .maybeSingle();
   if (!po) return NextResponse.json({ error: 'PO not found' }, { status: 404 });
@@ -238,8 +240,9 @@ export async function POST(req: NextRequest) {
     }, { status: 500 });
   }
 
-  // Books keeps its own copy of the Receive at the PO's prices
-  // (src/lib/books/own-receipts.ts). It never stops the Receive.
+  // Books keeps its own copy of the Receive at the PO's prices, for the
+  // company the PO is for (src/lib/books/own-receipts.ts). It never stops
+  // the Receive.
   const rowIdByLine = new Map((insertedReceipts || []).map((r: any) => [r.line_id as string, r.id as string]));
   await saveOwnReceipt(supabase, {
     rows: rows.map(r => ({
@@ -255,6 +258,7 @@ export async function POST(req: NextRequest) {
     netsuiteNumber: receiptNumber,
     netsuiteError: posted ? null : nsError,
     po: { netsuiteId: po.netsuite_id, number: po.tranid, vendorId: po.vendor_netsuite_id, vendorName: po.vendor_name },
+    subsidiaryId: await poCompanyOf(supabase, po),
     receiveDate: today,
     madeBy: auth.user.id,
   });

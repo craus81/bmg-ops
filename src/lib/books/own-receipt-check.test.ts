@@ -102,7 +102,8 @@ describe("checking Books' own receipt", () => {
       same: true, why: null,
     });
     expect(check.workedOut[0]).toBe('Made by Receive on the Receiving page on Oct 21, 2026, against PO453-ACME from Acme Truck Racks.');
-    expect(check.workedOut[4]).toBe("It's kept for BMG: FleetSuite's copy of the purchase order doesn't say the company, and NetSuite makes the receipt in the PO's.");
+    expect(check.workedOut[3]).toBe("Dated as FleetSuite dated it for NetSuite: the day it was received in O'Fallon. Through November 2, 2026, it was the day in UTC, which in the evening, Central time, was already the next day.");
+    expect(check.workedOut[4]).toBe("It's kept for BMG: a receipt is kept for the company its purchase order is for, as NetSuite makes the receipt in the PO's, or for BMG when FleetSuite can't tell, as it couldn't through November 2, 2026.");
   });
 
   it('says what came in, in a few words', () => {
@@ -231,7 +232,7 @@ describe("checking Books' own receipt", () => {
     expect(field(check, 'date')).toMatchObject({ same: false, why: "FleetSuite dated it Oct 21, 2026, and NetSuite's receipt is dated 1 day later." });
     expect(field(check, 'company')).toMatchObject({
       fleetsuite: 'BMG', netsuite: '1084', same: false,
-      why: "FleetSuite kept it for BMG, as its copy of the purchase order doesn't say the company, and NetSuite's receipt is 1084's.",
+      why: "FleetSuite kept it for BMG, and NetSuite's receipt is 1084's.",
     });
     expect(check).toMatchObject({
       status: 'differs', differing: 2,

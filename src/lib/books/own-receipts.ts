@@ -17,7 +17,10 @@ import type { SaveResult } from './own-invoices';
  *   - its date is the one FleetSuite gave NetSuite;
  *   - it's keyed by the Receive's first po_receipts row, and carries
  *     NetSuite's id for the item receipt when NetSuite took it, or what
- *     NetSuite said when it didn't.
+ *     NetSuite said when it didn't;
+ *   - it's kept for the company the PO is for, as NetSuite makes the
+ *     receipt in the PO's subsidiary (migration 511), or BMG when FleetSuite
+ *     can't tell.
  *
  * The check (src/lib/books/own-receipt-check.ts) puts each copy next to
  * NetSuite's item receipt as the copy of its stock moves has it. Nothing is
@@ -50,6 +53,8 @@ export interface OwnReceipt {
   poNumber: string | null;
   vendorId: string | null;
   vendorName: string | null;
+  /** NetSuite's id for the subsidiary the PO is in, which NetSuite makes the receipt in; the copy is kept for its company. */
+  subsidiaryId: string | null;
   /** 'YYYY-MM-DD', the date FleetSuite gave NetSuite. */
   receiveDate: string;
   netsuiteError: string | null;
@@ -75,6 +80,8 @@ export interface MadeReceipt {
   netsuiteNumber?: string | null;
   netsuiteError?: string | null;
   po: { netsuiteId: string | number | null; number: string | null; vendorId: string | number | null; vendorName: string | null };
+  /** The company the PO is for, as NetSuite's id for its subsidiary (poCompanyOf in src/lib/vendor-po-sync.ts). */
+  subsidiaryId?: string | number | null;
   receiveDate: string;
   madeBy?: string | null;
 }
@@ -115,6 +122,7 @@ export function workOutOwnReceipt(made: MadeReceipt): OwnReceipt | null {
     poNumber: text(made.po.number),
     vendorId: numericId(made.po.vendorId),
     vendorName: text(made.po.vendorName),
+    subsidiaryId: numericId(made.subsidiaryId),
     receiveDate: made.receiveDate,
     netsuiteError: netsuiteId ? null : text(made.netsuiteError)?.slice(0, 500) ?? null,
     lines,
@@ -133,6 +141,7 @@ export function receiptPayload(own: OwnReceipt): Record<string, unknown> {
     po_number: own.poNumber,
     vendor_netsuite_id: own.vendorId,
     vendor_name: own.vendorName,
+    subsidiary_id: own.subsidiaryId,
     receive_date: own.receiveDate,
     netsuite_error: own.netsuiteError,
     unknowns: own.unknowns,

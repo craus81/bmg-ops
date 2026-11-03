@@ -3117,7 +3117,8 @@ A bill is dated the day FleetSuite made it, in Central time: FleetSuite
 sends NetSuite no date for a bill, so NetSuite dates it that day. A snapped
 bill is the exception: it's dated as the bill is, and FleetSuite sends
 NetSuite that date. It's kept for the company whose NetSuite subsidiary it
-was made in, else BMG.
+was made in, else BMG. A Parts Mail bill is made in its PO's subsidiary
+("Which company a PO is for", below).
 
 Receive on the Receiving page (`/api/po-receipts`) saves a copy of each
 Receive (`saveOwnReceipt` in `src/lib/books/own-receipts.ts`), keyed by its
@@ -3128,8 +3129,9 @@ NetSuite said when it didn't. It's dated as FleetSuite dated it for
 NetSuite: the day of the Receive in O'Fallon (`centralDate` in
 `src/lib/central-day.ts`). Through November 2, 2026, it was the day in
 UTC, so a Receive after 7 PM Central (6 PM in winter) took the next day's
-date, in NetSuite and in the copy alike. It's kept for BMG, as FleetSuite's copy
-of a PO doesn't say the company.
+date, in NetSuite and in the copy alike. It's kept for the company the PO is
+for, as NetSuite makes the receipt in the PO's subsidiary ("Which company a
+PO is for").
 
 Saving never stops a bill or a Receive: a copy that can't be saved is
 logged (`[books] own copy of …`) and the work goes on. A copy is kept once;
@@ -3137,6 +3139,27 @@ saving the same one again changes nothing. Bills and receipts made in
 NetSuite by hand have no copy. What FleetSuite can't work out is kept on the
 copy as unknown, never guessed from NetSuite: a Parts Mail bill's lines (its
 copy of the PO didn't have them yet) and a line's price.
+
+### Which company a PO is for
+
+NetSuite makes a PO's bills and item receipts in the PO's subsidiary, so
+FleetSuite's copy of a PO keeps it (`netsuite_vendor_pos.subsidiary_netsuite_id`,
+migration 511). The vendor PO sync (`syncVendorPos` in
+`src/lib/vendor-po-sync.ts`, every two hours, and Sync POs on Parts Mail)
+reads it from each PO's main line, in one more read beside the POs
+themselves. A read that fails leaves each copy's company as it was, and the
+sync's heartbeat says why (`companyError` in its last result); the sync
+never clears a company.
+
+A PO made in FleetSuite (Make PO, a drop ship) has no company on its copy
+until the sync next reads it, and a PO the sync hasn't read since migration
+511 has none either. Create bill on a Parts Mail invoice and Receive ask
+NetSuite for it then (`poCompanyOf`), keep it on the copy, and hand it to
+Books' own copy, which is kept for the company whose NetSuite subsidiary
+it is. When NetSuite can't be asked, the own copy is kept for BMG, as every
+Parts Mail bill and receipt was through November 2, 2026, and the check
+says when that's not the PO's company. Asking never stops the bill or the
+Receive.
 
 ### One bill each
 
@@ -3226,8 +3249,6 @@ bills"). The daily check tells the super admins when one stops matching
 ### What isn't done yet
 
 - There's no history: copies start the day part 27 shipped.
-- FleetSuite's copy of a PO doesn't say the company, so a Parts Mail bill
-  and a receipt are kept for BMG, and one for 1084 differs on its company.
 
 ## FleetSuite's own adjustments
 
