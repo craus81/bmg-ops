@@ -6,25 +6,27 @@ import { workOutBillMonth } from './bill-check';
 import { readBillMonth } from './invoice-posting';
 import { readOwnBooks, type OwnBooks } from './own-invoice-posting';
 import {
-  ADJUSTMENT_BOOKS, FULFILLMENT_BOOKS, INVOICE_COST_BOOKS, RECEIPT_BOOKS, chartNames, entryRows, ownStockPick, readOwnStockAccounts,
-  type EntryRow,
+  ADJUSTMENT_BOOKS, CREDIT_COST_BOOKS, FULFILLMENT_BOOKS, INVOICE_COST_BOOKS, RECEIPT_BOOKS, chartNames, entryRows, ownStockPick,
+  readOwnStockAccounts, type EntryRow,
 } from './own-stock-posting';
 import { BILL_BOOKS, ownBillPick, type OwnBillCopy } from './own-bill-posting';
 import type { OwnFulfillmentCheck } from './own-fulfillment-check';
 import type { OwnReceiptCheck } from './own-receipt-check';
 import type { OwnAdjustmentCheck } from './own-adjustment-check';
 import type { OwnInvoiceCostCheck } from './own-invoice-cost-check';
+import type { OwnCreditCostCheck } from './own-credit-cost-check';
 import { OWN_COMPANY } from './own-invoices';
 
 /**
- * How Books' own copies of fulfillments, receipts, adjustments, bills and
- * invoices' cost post, for their pages on Own fulfillments, Own receipts,
- * Own adjustments, Own bills and Own invoices (migrations 456, 457 and 517,
- * docs/books.md "Posting FleetSuite's own fulfillments, receipts and bills"
- * and "Posting FleetSuite's own invoices' cost"): what the books hold for
- * NetSuite's document, and the copy's entry next to NetSuite's, worked out
- * as the posting run works them out (src/lib/books/own-stock-posting.ts and
- * own-bill-posting.ts).
+ * How Books' own copies of fulfillments, receipts, adjustments, bills,
+ * invoices' cost and the stock credit memos put back post, for their pages on
+ * Own fulfillments, Own receipts, Own adjustments, Own bills, Own invoices
+ * and Own credit memos (migrations 456, 457, 517 and 519, docs/books.md
+ * "Posting FleetSuite's own fulfillments, receipts and bills", "Posting
+ * FleetSuite's own invoices' cost" and "Posting the stock a credit memo puts
+ * back"): what the books hold for NetSuite's document, and the copy's entry
+ * next to NetSuite's, worked out as the posting run works them out
+ * (src/lib/books/own-stock-posting.ts and own-bill-posting.ts).
  */
 
 /** The chart of accounts as the checks take it, each account with its company's code. */
@@ -43,7 +45,10 @@ export async function readChart(service: SupabaseClient): Promise<ChartAccount[]
   return accounts.data.map(({ company_id, ...a }) => ({ ...a, company: company_id ? codeOf.get(company_id) ?? null : null }));
 }
 
-/** How Books' own copy of a document posts, for its page on Own fulfillments, Own receipts, Own adjustments, Own bills or Own invoices. */
+/**
+ * How Books' own copy of a document posts, for its page on Own fulfillments, Own receipts, Own adjustments, Own bills,
+ * Own invoices or Own credit memos.
+ */
 export interface OwnPostingView {
   /** What the books hold for NetSuite's document: the entry that stands, its date and which copy made it; null when none stands. */
   books: OwnBooks | null;
@@ -57,9 +62,9 @@ export interface OwnPostingView {
   entry: EntryRow[] | null;
   /** How the copy's entry differs from NetSuite's, when that's why NetSuite's posts. */
   differs: string | null;
-  /** What a copy of a fulfillment or invoice takes from NetSuite's posting of it next time, a sentence each. */
+  /** What a copy of a fulfillment, invoice or credit memo takes from NetSuite's posting of it next time, a sentence each. */
   learned: string[];
-  /** Where each item's cost goes on a copy of a fulfillment or invoice, in a sentence or two. */
+  /** Where each item's cost goes on a copy of a fulfillment or invoice (comes back from, on a credit memo), in a sentence or two. */
   costs: string | null;
 }
 
@@ -72,12 +77,13 @@ const STOCK_BOOKS = {
   receipt: RECEIPT_BOOKS,
   adjustment: ADJUSTMENT_BOOKS,
   invoice_cost: INVOICE_COST_BOOKS,
+  credit_cost: CREDIT_COST_BOOKS,
 } as const;
 
 /**
- * How Books' own copy of a fulfillment, item receipt, adjustment or invoice's cost posts, for its page: what the books
- * hold for NetSuite's document, and the copy's entry next to NetSuite's when it's worked out, as the posting run works
- * them out.
+ * How Books' own copy of a fulfillment, item receipt, adjustment, invoice's cost or the stock a credit memo puts back
+ * posts, for its page: what the books hold for NetSuite's document, and the copy's entry next to NetSuite's when it's
+ * worked out, as the posting run works them out.
  */
 export async function readOwnStockView(
   service: SupabaseClient,
@@ -85,7 +91,8 @@ export async function readOwnStockView(
     | { kind: 'fulfillment'; check: OwnFulfillmentCheck }
     | { kind: 'receipt'; check: OwnReceiptCheck & { netsuiteId: string } }
     | { kind: 'adjustment'; check: OwnAdjustmentCheck & { netsuiteId: string } }
-    | { kind: 'invoice_cost'; check: OwnInvoiceCostCheck },
+    | { kind: 'invoice_cost'; check: OwnInvoiceCostCheck }
+    | { kind: 'credit_cost'; check: OwnCreditCostCheck },
 ): Promise<OwnPostingView> {
   const id = copy.check.netsuiteId;
   const company = copy.kind === 'receipt' ? copy.check.company : OWN_COMPANY;
@@ -93,11 +100,12 @@ export async function readOwnStockView(
   const receipts = new Map<string, OwnReceiptCheck>(copy.kind === 'receipt' ? [[id, copy.check]] : []);
   const adjustments = new Map<string, OwnAdjustmentCheck>(copy.kind === 'adjustment' ? [[id, copy.check]] : []);
   const invoiceCosts = new Map<string, OwnInvoiceCostCheck>(copy.kind === 'invoice_cost' ? [[id, copy.check]] : []);
+  const creditCosts = new Map<string, OwnCreditCostCheck>(copy.kind === 'credit_cost' ? [[id, copy.check]] : []);
   const [chart, documents, held, accounts] = await Promise.all([
     readChart(service),
     service.rpc('gl_stock_documents', { p_company: company, p_ids: [id] }),
     readOwnBooks(service, STOCK_BOOKS[copy.kind], [{ company, netsuiteId: id }]),
-    readOwnStockAccounts(service, company, fulfillments, receipts, invoiceCosts),
+    readOwnStockAccounts(service, company, fulfillments, receipts, invoiceCosts, creditCosts),
   ]);
   if (documents.error) throw new Error(documents.error.message);
   const doc = (((documents.data ?? {}) as { documents?: StockDocument[] }).documents ?? []).find((d) => d.netsuite_id === id);
@@ -106,7 +114,7 @@ export async function readOwnStockView(
 
   const names = chartNames(chart);
   const [worked] = workOutStockMonth({ documents: [doc] }, { company, chart }).documents;
-  const pick = ownStockPick(worked, { fulfillments, receipts, adjustments, invoiceCosts, accounts }, { company, names });
+  const pick = ownStockPick(worked, { fulfillments, receipts, adjustments, invoiceCosts, creditCosts, accounts }, { company, names });
   return {
     books,
     month: doc.posting_month,

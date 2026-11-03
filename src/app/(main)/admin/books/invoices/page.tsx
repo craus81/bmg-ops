@@ -442,6 +442,8 @@ function ownCopyLink(invoice: Invoice, kind: Kind): string | null {
   if (invoice.type === 'VendBill') return deepLinks.booksOwnBill(invoice.netsuiteId);
   // An invoice's cost: what FleetSuite's own invoice took from stock is on the invoice's own page.
   if (invoice.type === 'CustInvc') return deepLinks.booksOwnInvoice(invoice.netsuiteId);
+  // What a credit memo put back on the shelf is on the credit memo's own page.
+  if (invoice.type === 'CustCred') return deepLinks.booksOwnCreditMemo(invoice.netsuiteId);
   if (invoice.type) return null;
   return kind === 'credit_memo' ? deepLinks.booksOwnCreditMemo(invoice.netsuiteId) : deepLinks.booksOwnInvoice(invoice.netsuiteId);
 }

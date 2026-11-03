@@ -378,8 +378,8 @@ export function checkOwnCreditMemo(pair: OwnCreditPairData, lists: OwnLists): Ow
     "Its location is the invoice's: NetSuite makes the credit memo from the invoice.",
   ];
   if (backToStock.length) {
-    workedOut.push(`${named(backToStock)} ${backToStock.length === 1 ? 'goes' : 'go'} back on the shelf: the stock and its cost `
-      + "post from NetSuite's credit memo, under Stock and cost.");
+    workedOut.push(`${named(backToStock)} ${backToStock.length === 1 ? 'goes' : 'go'} back on the shelf: what that's worth `
+      + "posts apart from the credit, as NetSuite's credit memo's cost lines do, under What it put back on the shelf.");
   }
   if (onCreditItem.length) {
     workedOut.push(`${plural(onCreditItem.length, 'line goes', 'lines go')} on the credit item, so no part comes back for ${onCreditItem.length === 1 ? 'it' : 'them'}.`);

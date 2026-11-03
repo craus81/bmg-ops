@@ -203,8 +203,8 @@ export default function BooksOwnCreditMemosPage() {
           back at the invoice&apos;s rate on the lines the invoice taxed, and the invoice&apos;s customer and location. Each is put
           next to NetSuite&apos;s credit memo; tap one for its line by line check. The books post a copy that matches NetSuite&apos;s
           credit memo, and makes the same entry, in place of NetSuite&apos;s; one that doesn&apos;t keeps posting NetSuite&apos;s,
-          since that&apos;s what the customer was credited. The stock a credit memo puts back on the shelf posts from NetSuite&apos;s
-          credit memo, under Stock and cost. Each morning the daily check tells super admins when one differs.{' '}
+          since that&apos;s what the customer was credited. What one puts back on the shelf is put next to what NetSuite&apos;s put
+          back, and posts from this copy the same way, on its own page. Each morning the daily check tells super admins when one differs.{' '}
           <Link href="/admin/books/invoices" style={{ color: 'var(--text-secondary)' }}>Invoices vs NetSuite</Link>
           {' · '}
           <Link href="/admin/books/own-invoices" style={{ color: 'var(--text-secondary)' }}>Own invoices</Link>

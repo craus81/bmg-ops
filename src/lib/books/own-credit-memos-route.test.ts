@@ -1,7 +1,8 @@
 // Books → Own credit memos' read (src/app/api/admin/books/own-credit-memos, migration 518): the month's credit memos
 // FleetSuite made, Books' own copy of each next to NetSuite's, or one of them line by line, each with what the books
-// hold for it and which copy made it. The check itself is src/lib/books/own-credit-memo-check.ts's, run for real here
-// on copies NetSuite's credit memo hasn't reached yet. Made-up data.
+// hold for it and which copy made it, and what it put back on the shelf (migration 519). The check itself is
+// src/lib/books/own-credit-memo-check.ts's, run for real here on copies NetSuite's credit memo hasn't reached yet.
+// Made-up data.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 import { OWN_COMPANY } from './own-invoices';
@@ -14,6 +15,7 @@ const h = vi.hoisted(() => ({
   months: null as unknown as { data: unknown; error: { message: string } | null },
   pairs: null as unknown as (args: Record<string, unknown>) => { data: unknown; error: { message: string } | null },
   postings: null as unknown as { data: unknown; error: { message: string } | null },
+  costPairs: null as unknown as (args: Record<string, unknown>) => { data: unknown; error: { message: string } | null },
   sync: {} as Record<string, { data: unknown; error: { message: string } | null }>,
 }));
 
@@ -34,6 +36,7 @@ vi.mock('@/lib/supabase-service', () => ({
       if (fn === 'gl_own_credit_memo_months') return h.months;
       if (fn === 'gl_own_credit_memo_pairs') return h.pairs(args ?? {});
       if (fn === 'gl_invoice_postings') return h.postings;
+      if (fn === 'gl_own_credit_cost_pairs') return h.costPairs(args ?? {});
       return { data: null, error: { message: `no ${fn} here` } };
     },
     // How far the copies the check reads from had come, by sync_state's sync_type.
@@ -82,6 +85,25 @@ const posting = (sourceType: string, sourceId: string, entryNo: number, rule: st
 const WAITING = "Waiting for NetSuite's credit memo: the ledger mirror copies NetSuite's credit memos every two hours.";
 /** February's two, newest first, as the read gives them. */
 const FEB = [copy('5203', 'CM5203', '2027-02-11'), copy('5202', 'CM5202', '2027-02-10')];
+/** What a credit memo put back on the shelf, as gl_own_credit_cost_pairs gives it: nothing, and nor did NetSuite's. */
+const nothingBack = (netsuiteId: string): Answer => ({
+  data: {
+    credit_memos: [{
+      own: {
+        netsuite_id: netsuiteId, number: `CM${netsuiteId}`, invoice_id: '4401', invoice_number: 'INV2401', customer_netsuite_id: '701',
+        date: '2027-02-10', location_id: '1', made_at: '2027-02-10T15:00:00Z', lines: [],
+      },
+      netsuite: null,
+      netsuite_gl: null,
+      before: [],
+      customer_name: 'Gateway Plumbing',
+    }],
+    items: {},
+    locations: { 1: "O'Fallon" },
+    accounts: {},
+  },
+  error: null,
+});
 
 beforeEach(() => {
   h.roles = ['admin', 'super_admin'];
@@ -101,6 +123,7 @@ beforeEach(() => {
     },
     error: null,
   };
+  h.costPairs = (args) => nothingBack(String(args.p_netsuite_id));
   h.sync = {
     ledger_netsuite_mirror: { data: { updated_at: '2027-02-12T14:00:00Z', last_result: { copied: 12 } }, error: null },
     books_netsuite_gl: { data: { updated_at: '2027-02-12T13:00:00Z', last_result: { error: 'NetSuite timed out' } }, error: null },
@@ -199,6 +222,26 @@ describe('Books → Own credit memos: one credit memo', () => {
     expect((await read({ id: '5203' })).body.creditMemo.books).toEqual({ entryNo: 1, date: '2027-02-10', from: 'netsuite' });
     h.postings = { data: { invoices: [posting('invoice', '5202', 3, 'own_invoice@1')] }, error: null };
     expect((await read({ id: '5202' })).body.creditMemo.books).toBeNull();
+  });
+
+  it("reads what it put back on the shelf where the credit memo screen puts parts, nothing when neither side put anything back, and says what it couldn't read", async () => {
+    const { status, body } = await read({ id: '5202' });
+    expect(status).toBe(200);
+    expect(called('gl_own_credit_cost_pairs')).toEqual([{ p_from: null, p_to: null, p_netsuite_id: '5202', p_location: '1' }]);
+    expect(body.creditMemo.cost).toBeNull();
+    expect(body.creditMemo).not.toHaveProperty('costError');
+    // A read of it that fails leaves the rest of the page, saying so.
+    h.costPairs = () => ({ data: null, error: { message: 'cost broke' } });
+    const failed = await read({ id: '5202' });
+    expect(failed.status).toBe(200);
+    expect(failed.body.creditMemo).toMatchObject({ netsuiteId: '5202', books: { entryNo: 2 }, costError: 'cost broke' });
+    expect(failed.body.creditMemo).not.toHaveProperty('cost');
+    h.costPairs = (args) => nothingBack(String(args.p_netsuite_id));
+    for (const sync of ['books_netsuite_stock', 'books_netsuite_gl']) {
+      h.sync[sync] = { data: null, error: { message: `${sync} broke` } };
+      expect((await read({ id: '5202' })).body.creditMemo.costError, sync).toBe(`${sync} broke`);
+      delete h.sync[sync];
+    }
   });
 
   it("refuses what isn't a NetSuite id, says when Books has no copy, and says what it couldn't read", async () => {

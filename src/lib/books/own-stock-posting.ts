@@ -8,9 +8,11 @@ import { checkOwnFulfillments, type CopiesThrough, type FulfilPairsData, type Ow
 import { checkOwnReceipts, type OwnReceiptCheck, type ReceiptPairsData } from './own-receipt-check';
 import { checkOwnAdjustments, INVENTORY_ADJUST_ACCOUNT, type AdjustPairsData, type OwnAdjustmentCheck } from './own-adjustment-check';
 import { checkOwnInvoiceCosts, type InvoiceCostPairsData, type OwnInvoiceCostCheck } from './own-invoice-cost-check';
+import { checkOwnCreditCosts, type CreditCostPairsData, type OwnCreditCostCheck } from './own-credit-cost-check';
 import { dayText } from './own-invoice-check';
 import { ownCopyDays, type OwnBooksRead } from './own-invoice-posting';
 import { OWN_COMPANY } from './own-invoices';
+import { STOCK_LOCATION_ID } from '@/lib/credit-memo';
 
 /**
  * FleetSuite's own fulfillments, receipts and adjustments posted to its books
@@ -18,7 +20,9 @@ import { OWN_COMPANY } from './own-invoices';
  * NetSuite with FleetSuite", "Own postings", then "Build it"; docs/books.md
  * "Posting FleetSuite's own fulfillments, receipts and bills"), and since
  * migration 517 what its own invoices made without a sales order took from
- * stock (docs/books.md "Posting FleetSuite's own invoices' cost").
+ * stock (docs/books.md "Posting FleetSuite's own invoices' cost"), and since
+ * migration 519 what its own credit memos put back on the shelf (docs/books.md
+ * "Posting the stock a credit memo puts back").
  *
  * A fulfillment FleetSuite made, a Receive on the Receiving page that
  * NetSuite took, or an Inventory Adjust, posts from Books' own copy of it
@@ -28,13 +32,16 @@ import { OWN_COMPANY } from './own-invoices';
  * (src/lib/books/own-invoice-posting.ts), and so does the cost an invoice
  * FleetSuite made without a sales order booked for what it took from stock
  * (its cost lines, which the stock rule posts apart from the sale), from
- * FleetSuite's own copy of the invoice, when:
+ * FleetSuite's own copy of the invoice, and so does what a credit memo
+ * FleetSuite made put back on the shelf (its cost lines, posted apart from the
+ * credit), from FleetSuite's own copy of the credit memo, when:
  *   - the copy matches NetSuite's document, as Own fulfillments, Own
- *     receipts, Own adjustments or an own invoice's Cost checks it
- *     (src/lib/books/own-fulfillment-check.ts, own-receipt-check.ts,
- *     own-adjustment-check.ts, own-invoice-cost-check.ts): its date, where it
- *     took stock from or the company it's for, each item and how many, what
- *     that cost or added to stock, and an adjustment's account;
+ *     receipts, Own adjustments or an own invoice's or credit memo's stock
+ *     check checks it (src/lib/books/own-fulfillment-check.ts,
+ *     own-receipt-check.ts, own-adjustment-check.ts, own-invoice-cost-check.ts,
+ *     own-credit-cost-check.ts): its date, where it took stock from (or put it
+ *     back) or the company it's for, each item and how many, what that cost or
+ *     added to stock, and an adjustment's account;
  *   - and the entry the copy makes is the one NetSuite's makes (its lines in
  *     the copy of NetSuite's GL, as the stock rule posts them), account by
  *     account and on the same day, so nothing in the books moves when a
@@ -66,10 +73,18 @@ import { OWN_COMPANY } from './own-invoices';
  *     one NetSuite's last fulfillment or invoice of the item before this
  *     invoice debited its cost to, or for an item NetSuite hasn't shipped or
  *     sold before the one most fulfillments debit
- *     (gl_own_invoice_cost_accounts, migration 517).
+ *     (gl_own_invoice_cost_accounts, migration 517);
+ *   - own_credit_memo_cost@1: own_invoice_cost@1 the other way round, each
+ *     item put back (a kit's parts' each) worth its average at O'Fallon just
+ *     before, onto its asset account and out of the cost of goods account
+ *     NetSuite's last fulfillment, invoice or credit memo of the item before
+ *     this credit memo put its cost in or took it back out of, or for an item
+ *     NetSuite hasn't shipped, sold or credited before the one most
+ *     fulfillments debit (gl_own_credit_cost_accounts, migration 519).
  * Each is the document's entry as NetSuite's is, keyed
  * `item_fulfillment:<NetSuite id>:<n>`, `item_receipt:…`,
- * `inventory_adjustment:…` or `invoice_cost:…`, in the month NetSuite booked the document into,
+ * `inventory_adjustment:…` or `invoice_cost:…` (an invoice's or a credit
+ * memo's), in the month NetSuite booked the document into,
  * its lines naming FleetSuite's own (`own:<item>:cost`, `own:<item>:asset`,
  * `own:received`, `own:adjustment`), each with the customer's or vendor's
  * name, or the adjustment's reason, and the item in its memo.
@@ -81,41 +96,57 @@ export const OWN_FULFILLMENT_RULE = 'own_fulfillment@1';
 export const OWN_RECEIPT_RULE = 'own_receipt@1';
 export const OWN_ADJUSTMENT_RULE = 'own_adjustment@1';
 export const OWN_INVOICE_COST_RULE = 'own_invoice_cost@1';
+export const OWN_CREDIT_COST_RULE = 'own_credit_memo_cost@1';
 
 /**
- * The rule a stock document's own copy posts with: a fulfillment's, an item receipt's, an adjustment's, or an invoice's
- * cost lines'; null for any other kind.
+ * The rule a stock document's own copy posts with: a fulfillment's, an item receipt's, an adjustment's, an invoice's
+ * cost lines' or a credit memo's; null for any other kind.
  */
 export function ownStockRule(type: string): string | null {
   if (type === 'ItemShip') return OWN_FULFILLMENT_RULE;
   if (type === 'ItemRcpt') return OWN_RECEIPT_RULE;
   if (type === 'InvAdjst') return OWN_ADJUSTMENT_RULE;
   if (type === 'CustInvc') return OWN_INVOICE_COST_RULE;
+  if (type === 'CustCred') return OWN_CREDIT_COST_RULE;
   return null;
 }
 
 /** NetSuite's document a stock copy stands for, in words. */
-export const THEIRS: Readonly<Record<string, string>> = { ItemShip: 'fulfillment', ItemRcpt: 'receipt', InvAdjst: 'adjustment', CustInvc: 'invoice' };
+export const THEIRS: Readonly<Record<string, string>> = {
+  ItemShip: 'fulfillment', ItemRcpt: 'receipt', InvAdjst: 'adjustment', CustInvc: 'invoice', CustCred: 'credit memo',
+};
+
+/** An earlier document a cost account was learned from, in a word: absent, a fulfillment. */
+const DOC_WORD: Readonly<Record<string, string>> = { ItemShip: 'fulfillment', CustInvc: 'invoice', CustCred: 'credit memo' };
+const docWord = (type: string | undefined) => DOC_WORD[type ?? 'ItemShip'] ?? 'fulfillment';
 
 // ── The accounts ───────────────────────────────────────────────────────────
 
 /**
  * Where an item's cost went on a fulfillment, as gl_own_stock_accounts (migration 456) learned it, or on an invoice,
- * as gl_own_invoice_cost_accounts (migration 517) did.
+ * as gl_own_invoice_cost_accounts (migration 517) did, or came back from on a credit memo, as
+ * gl_own_credit_cost_accounts (migration 519) did.
  */
 export interface LearnedCost {
   /**
    * The account NetSuite's last fulfillment of the item before this one debited its cost to (for an invoice, its last
-   * fulfillment or invoice of the item before it); null when there's none.
+   * fulfillment or invoice of the item before it; for a credit memo, its last fulfillment, invoice or credit memo,
+   * which took the cost back out of it); null when there's none.
    */
   cost: string | null;
-  /** That fulfillment, or invoice: its type 'ItemShip' or 'CustInvc' (absent, a fulfillment). */
+  /** That fulfillment, invoice or credit memo: its type 'ItemShip', 'CustInvc' or 'CustCred' (absent, a fulfillment). */
   from: { netsuite_id: string; number: string | null; date: string; type?: string } | null;
-  /** The account this fulfillment, or invoice, debited the item's cost to in the copy of NetSuite's GL; null when it has none. */
+  /**
+   * The account this fulfillment, or invoice, debited the item's cost to in the copy of NetSuite's GL (a credit memo,
+   * took it back out of); null when it has none.
+   */
   netsuite: string | null;
 }
 
-/** What gl_own_stock_accounts (migration 456) returns, and gl_own_invoice_cost_accounts (migration 517) adds. */
+/**
+ * What gl_own_stock_accounts (migration 456) returns, and gl_own_invoice_cost_accounts (migration 517) and
+ * gl_own_credit_cost_accounts (migration 519) add.
+ */
 export interface OwnStockAccountsData {
   /** Each item's asset account, by NetSuite's id for the item; null when the copy of NetSuite's items has none. */
   items: Record<string, string | null>;
@@ -123,13 +154,15 @@ export interface OwnStockAccountsData {
   fulfillments: Record<string, Record<string, LearnedCost>>;
   /** By NetSuite's id for the invoice, then the item's (gl_own_invoice_cost_accounts). */
   invoices: Record<string, Record<string, LearnedCost>>;
+  /** By NetSuite's id for the credit memo, then the item's (gl_own_credit_cost_accounts). */
+  credits: Record<string, Record<string, LearnedCost>>;
   /** The account most of the company's fulfillments debit their cost to; null when none does. */
   usual_cost: string | null;
   /** The accounts the company's item receipts credit, by how many receipts credit each. */
   received: Array<{ account: string; documents: number }>;
 }
 
-const NO_ACCOUNTS: OwnStockAccountsData = { items: {}, fulfillments: {}, invoices: {}, usual_cost: null, received: [] };
+const NO_ACCOUNTS: OwnStockAccountsData = { items: {}, fulfillments: {}, invoices: {}, credits: {}, usual_cost: null, received: [] };
 
 /** How the chart of accounts names an account: in full ('58000 Cost of Goods Sold'), by its number ('58000'), and its type. */
 export interface ChartNames {
@@ -170,18 +203,24 @@ type OwnStockProblem =
   | { kind: 'no_cost'; item: string }
   | { kind: 'no_received'; company: string };
 
-/** Where one item's cost went on a copy of a fulfillment or invoice, and where NetSuite's fulfillment or invoice put it. */
+/**
+ * Where one item's cost went on a copy of a fulfillment or invoice, and where NetSuite's fulfillment or invoice put it;
+ * on a copy of a credit memo, where it came back out of.
+ */
 interface CostPlace {
   item: string;
   cents: number;
   account: string;
-  /** NetSuite's earlier fulfillment, or invoice, it was learned from; null when it's where most fulfillments put theirs. */
+  /** NetSuite's earlier fulfillment, invoice or credit memo it was learned from; null when it's where most fulfillments put theirs. */
   from: LearnedCost['from'];
   netsuite: string | null;
 }
 
-/** Which kind of copy takes stock out at a cost: a fulfillment's, or an invoice's made without a sales order. */
-type CostKind = 'fulfillment' | 'invoice';
+/**
+ * Which kind of copy moves stock at a cost: a fulfillment's, or an invoice's made without a sales order, which take it
+ * out, or a credit memo's, which puts it back.
+ */
+type CostKind = 'fulfillment' | 'invoice' | 'credit';
 
 interface BuiltEntry {
   lines: OwnStockLine[];
@@ -197,12 +236,15 @@ const costsSomething = (p: OwnFulfillmentCheck['items'][number]) => {
 
 /**
  * A copy of a fulfillment's or invoice's entry: each item's cost off its asset account, onto its cost of goods account,
- * the one `learned` says NetSuite's last fulfillment or invoice of it put its cost in, else the usual one.
+ * the one `learned` says NetSuite's last fulfillment or invoice of it put its cost in, else the usual one. A credit
+ * memo's (`back`) the other way round: what each item put back is worth onto its asset account, out of that cost
+ * account.
  */
 function costEntry(
   check: Pick<OwnFulfillmentCheck, 'customer' | 'items'>,
   learnedOf: Record<string, LearnedCost> | undefined,
   accounts: OwnStockAccountsData,
+  back = false,
 ): BuiltEntry {
   const lines: OwnStockLine[] = [];
   const problems: OwnStockProblem[] = [];
@@ -218,10 +260,10 @@ function costEntry(
     if (!cost) problems.push({ kind: 'no_cost', item: p.item });
     if (!asset || !cost) continue;
     const memo = lineMemo(check.customer, p.item);
-    lines.push(
-      { lineId: `own:${p.itemId}:cost`, account: cost, cents, memo, customerId: null, vendorRef: null, itemNumber: p.item },
-      { lineId: `own:${p.itemId}:asset`, account: asset, cents: -cents, memo, customerId: null, vendorRef: null, itemNumber: p.item },
-    );
+    const costLine: OwnStockLine = { lineId: `own:${p.itemId}:cost`, account: cost, cents, memo, customerId: null, vendorRef: null, itemNumber: p.item };
+    const assetLine: OwnStockLine = { lineId: `own:${p.itemId}:asset`, account: asset, cents: -cents, memo, customerId: null, vendorRef: null, itemNumber: p.item };
+    // Debit first: the cost a fulfillment or invoice takes out, the stock a credit memo puts back.
+    lines.push(...(back ? [{ ...assetLine, cents }, { ...costLine, cents: -cents }] : [costLine, assetLine]));
     costs.push({ item: p.item, cents, account: cost, from: learned?.cost ? learned.from : null, netsuite: learned?.netsuite ?? null });
   }
   return { lines, problems, costs };
@@ -271,18 +313,33 @@ function adjustmentEntry(check: OwnAdjustmentCheck): BuiltEntry {
 }
 
 /** Why a copy's entry can't be worked out, in a sentence. */
-function problemText(p: OwnStockProblem): string {
+function problemText(p: OwnStockProblem, kind: CostKind): string {
   switch (p.kind) {
     case 'no_asset':
       return `${p.item} has no asset account in the copy of NetSuite's items.`;
     case 'no_cost':
-      return `FleetSuite doesn't know which account ${p.item}'s cost goes to: no fulfillment in the copy of NetSuite's GL has debited a cost yet.`;
+      return `FleetSuite doesn't know which account ${p.item}'s cost ${kind === 'credit' ? 'comes back out of' : 'goes to'}: `
+        + "no fulfillment in the copy of NetSuite's GL has debited a cost yet.";
     case 'no_received':
       return `FleetSuite doesn't know which account holds received stock until it's billed: none of ${p.company}'s item receipts in the copy of NetSuite's GL credits one.`;
   }
 }
 
 // ── Comparing entries ──────────────────────────────────────────────────────
+
+/** What NetSuite had done with an item before, for a copy of each kind to learn from it. */
+const SEEN: Readonly<Record<CostKind, string>> = { fulfillment: 'shipped', invoice: 'shipped or sold', credit: 'shipped, sold or credited' };
+
+/**
+ * What a copy of each kind does next time, having seen where NetSuite put an item's cost: an own fulfillment learns only
+ * from NetSuite's fulfillments (gl_own_stock_accounts), an own invoice from its invoices too, an own credit memo from its
+ * credit memos as well.
+ */
+const LEARNS: Readonly<Record<CostKind, (item: string, account: string) => string>> = {
+  fulfillment: (item, account) => `FleetSuite puts ${item}'s cost in ${account}`,
+  invoice: (item, account) => `FleetSuite's own invoices put ${item}'s cost in ${account}`,
+  credit: (item, account) => `FleetSuite's own credit memos take ${item}'s cost out of ${account}`,
+};
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const dollars = (cents: number) => money.format(cents / 100);
@@ -306,9 +363,10 @@ export function accountsApart(mine: ReadonlyArray<{ account: string; cents: numb
 }
 
 /**
- * How a copy's entry differs from NetSuite's, in a clause or two, and what a copy of a fulfillment or invoice (`kind`)
- * takes from NetSuite's posting of it next time; null when they don't differ. An item's cost put in another account
- * than NetSuite's fulfillment or invoice put it in is told item by item.
+ * How a copy's entry differs from NetSuite's, in a clause or two, and what a copy of a fulfillment, invoice or credit
+ * memo (`kind`) takes from NetSuite's posting of it next time; null when they don't differ. An item's cost put in
+ * another account than NetSuite's fulfillment or invoice put it in (or taken back out of another than NetSuite's credit
+ * memo took it out of) is told item by item.
  */
 function stockEntryDifference(
   mine: OwnStockEntry,
@@ -322,19 +380,21 @@ function stockEntryDifference(
   if (mine.date !== theirs.date) parts.push(`it's dated ${dayText(mine.date)}, and NetSuite's ${dayText(theirs.date)}`);
   const apart = accountsApart(mine.lines, theirs.lines);
   const told = new Set<string>();
+  // A copy of a credit memo takes an item's cost back out of an account; the others put it in one.
+  const back = kind === 'credit';
+  const into = back ? 'took it out of' : 'put it in';
   for (const c of costs) {
     if (!c.netsuite || c.netsuite === c.account || !apart.includes(c.account) || !apart.includes(c.netsuite)) continue;
     told.add(c.account);
     told.add(c.netsuite);
+    const went = back ? `took ${c.item}'s ${dollars(c.cents)} back out of` : `put ${c.item}'s ${dollars(c.cents)} in`;
     parts.push(c.from
-      ? `FleetSuite put ${c.item}'s ${dollars(c.cents)} in ${names.account(c.account)}, where NetSuite's last ${c.from.type === 'CustInvc' ? 'invoice' : 'fulfillment'} of it, `
-        + `${c.from.number || `NetSuite ${c.from.netsuite_id}`} on ${dayText(c.from.date)}, put it, and NetSuite put it in ${names.account(c.netsuite)}`
-      : `FleetSuite hadn't seen ${c.item} ${kind === 'invoice' ? 'shipped or sold' : 'shipped'} before, so it put its ${dollars(c.cents)} in ${names.account(c.account)}, `
-        + `where most fulfillments put theirs, and NetSuite put it in ${names.account(c.netsuite)}`);
-    // An own fulfillment learns only from NetSuite's fulfillments (gl_own_stock_accounts); an own invoice from both.
-    learned.push(kind === 'invoice'
-      ? `From now on FleetSuite's own invoices put ${c.item}'s cost in ${names.number(c.netsuite)}, as NetSuite did here.`
-      : `From now on FleetSuite puts ${c.item}'s cost in ${names.number(c.netsuite)}, as NetSuite did here.`);
+      ? `FleetSuite ${went} ${names.account(c.account)}, where NetSuite's last ${docWord(c.from.type)} of it, `
+        + `${c.from.number || `NetSuite ${c.from.netsuite_id}`} on ${dayText(c.from.date)}, ${c.from.type === 'CustCred' ? 'took it back out' : 'put it'}, `
+        + `and NetSuite ${into} ${names.account(c.netsuite)}`
+      : `FleetSuite hadn't seen ${c.item} ${SEEN[kind]} before, so it ${back ? `took its ${dollars(c.cents)} back out of` : `put its ${dollars(c.cents)} in`} `
+        + `${names.account(c.account)}, where most fulfillments put theirs, and NetSuite ${into} ${names.account(c.netsuite)}`);
+    learned.push(`From now on ${LEARNS[kind](c.item, names.number(c.netsuite))}, as NetSuite did here.`);
   }
   const rest = apart.filter((a) => !told.has(a));
   if (rest.length) parts.push(`it posts differently to ${listed(rest.map(names.account))}`);
@@ -369,19 +429,20 @@ export function entryRows(
 // ── Picking ────────────────────────────────────────────────────────────────
 
 /**
- * Books' own copies of some NetSuite fulfillments, item receipts, adjustments and invoices made without a sales order
- * (what they took from stock), checked, by NetSuite's id, and the accounts the fulfillments, receipts and invoices post
- * to (an adjustment's check has its own).
+ * Books' own copies of some NetSuite fulfillments, item receipts, adjustments, invoices made without a sales order
+ * (what they took from stock) and credit memos (what they put back), checked, by NetSuite's id, and the accounts the
+ * fulfillments, receipts, invoices and credit memos post to (an adjustment's check has its own).
  */
 export interface OwnStockCopies {
   fulfillments: Map<string, OwnFulfillmentCheck>;
   receipts: Map<string, OwnReceiptCheck>;
   adjustments: Map<string, OwnAdjustmentCheck>;
   invoiceCosts: Map<string, OwnInvoiceCostCheck>;
+  creditCosts: Map<string, OwnCreditCostCheck>;
   accounts: OwnStockAccountsData;
 }
 
-/** What the books post for a fulfillment, item receipt, adjustment or invoice's cost Books has its own copy of. */
+/** What the books post for a fulfillment, item receipt, adjustment, or invoice's or credit memo's stock Books has its own copy of. */
 export interface OwnStockPick {
   /** The copy's entry, when the books post it. */
   entry: OwnStockEntry | null;
@@ -391,9 +452,12 @@ export interface OwnStockPick {
   own: OwnStockEntry | null;
   /** How the copy's entry differs from NetSuite's, when that's why NetSuite's posts. */
   differs: string | null;
-  /** What a copy of a fulfillment or invoice takes from NetSuite's posting of it next time, a sentence each. */
+  /** What a copy of a fulfillment, invoice or credit memo takes from NetSuite's posting of it next time, a sentence each. */
   learned: string[];
-  /** Where an item's cost goes on a copy of a fulfillment or invoice, a sentence; null for a receipt, or when it isn't worked out. */
+  /**
+   * Where an item's cost goes on a copy of a fulfillment or invoice (comes back from, on a credit memo), a sentence;
+   * null for a receipt, or when it isn't worked out.
+   */
   costs: string | null;
   /** Books' own key for a copy of a receipt, which its page is opened by. */
   receiptKey?: string;
@@ -405,7 +469,10 @@ const NUMBER_WORDS = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven',
 /** Every one of n items, in words: 'it', 'both', 'all three', 'all 12'. */
 const allOf = (n: number) => (n === 1 ? 'it' : n === 2 ? 'both' : `all ${NUMBER_WORDS[n] ?? n}`);
 
-/** Where a copy of a fulfillment or invoice put each item's cost, in a sentence or two: "… 58000 Cost of Goods Sold for all three." */
+/**
+ * Where a copy of a fulfillment or invoice put each item's cost, in a sentence or two: "… 58000 Cost of Goods Sold for
+ * all three."; a copy of a credit memo, where it took it back out of.
+ */
 function costsText(costs: CostPlace[], names: ChartNames, kind: CostKind): string | null {
   if (!costs.length) return null;
   const learned = costs.filter((c) => c.from);
@@ -416,12 +483,14 @@ function costsText(costs: CostPlace[], names: ChartNames, kind: CostKind): strin
     for (const c of learned) by.set(c.account, [...(by.get(c.account) ?? []), c.item]);
     const one = by.size === 1 && !usual.length;
     const each = [...by].map(([account, items]) => `${names.account(account)} for ${one ? allOf(items.length) : listed(items)}`);
-    const last = kind === 'invoice' ? 'fulfillment or invoice' : 'fulfillment';
-    parts.push(`Each item's cost comes out of its asset account and goes to the cost account NetSuite's last ${last} of it used: ${listed(each)}.`);
+    parts.push(kind === 'credit'
+      ? `Each item's cost goes back onto its asset account and comes out of the cost account NetSuite's last fulfillment, invoice or credit memo of it used: ${listed(each)}.`
+      : `Each item's cost comes out of its asset account and goes to the cost account NetSuite's last ${kind === 'invoice' ? 'fulfillment or invoice' : 'fulfillment'} of it used: ${listed(each)}.`);
   }
-  const seen = kind === 'invoice' ? 'shipped or sold' : 'shipped';
   for (const c of usual) {
-    parts.push(`FleetSuite hadn't seen ${c.item} ${seen} before, so its cost goes to ${names.account(c.account)}, where most fulfillments put theirs.`);
+    parts.push(kind === 'credit'
+      ? `FleetSuite hadn't seen ${c.item} ${SEEN[kind]} before, so its cost comes out of ${names.account(c.account)}, where most fulfillments put theirs.`
+      : `FleetSuite hadn't seen ${c.item} ${SEEN[kind]} before, so its cost goes to ${names.account(c.account)}, where most fulfillments put theirs.`);
   }
   return parts.join(' ');
 }
@@ -429,7 +498,7 @@ function costsText(costs: CostPlace[], names: ChartNames, kind: CostKind): strin
 /**
  * What the books post for a stock document, given Books' own copies and the entry NetSuite's makes with the stock rule
  * (worked.checked.lines). Null when a copy has no say: there's none, the document isn't a fulfillment, item receipt,
- * adjustment or invoice, or it's another company's, or posted to more than one.
+ * adjustment, invoice or credit memo, or it's another company's, or posted to more than one.
  */
 export function ownStockPick(worked: WorkedStockDocument, copies: OwnStockCopies, month: { company: string; names: ChartNames }): OwnStockPick | null {
   const doc = worked.entry;
@@ -437,10 +506,11 @@ export function ownStockPick(worked: WorkedStockDocument, copies: OwnStockCopies
   const receipt = doc.type === 'ItemRcpt' ? copies.receipts.get(doc.netsuite_id) : undefined;
   const adjustment = doc.type === 'InvAdjst' ? copies.adjustments.get(doc.netsuite_id) : undefined;
   const invoiceCost = doc.type === 'CustInvc' ? copies.invoiceCosts.get(doc.netsuite_id) : undefined;
-  const check = fulfillment ?? receipt ?? adjustment ?? invoiceCost;
+  const creditCost = doc.type === 'CustCred' ? copies.creditCosts.get(doc.netsuite_id) : undefined;
+  const check = fulfillment ?? receipt ?? adjustment ?? invoiceCost ?? creditCost;
   if (!check) return null;
-  // Fulfillments are BMG's, and so are adjustments (Inventory Adjust adjusts O'Fallon's stock) and the invoices
-  // FleetSuite makes.
+  // Fulfillments are BMG's, and so are adjustments (Inventory Adjust adjusts O'Fallon's stock) and the invoices and
+  // credit memos FleetSuite makes.
   const company = receipt ? receipt.company : OWN_COMPANY;
   if (company !== month.company || doc.companies.length !== 1 || doc.companies[0] !== month.company) return null;
   const theirs = THEIRS[doc.type];
@@ -460,13 +530,14 @@ export function ownStockPick(worked: WorkedStockDocument, copies: OwnStockCopies
   // NetSuite's own lines don't balance: whatever stands stays, whichever copy made it.
   if (worked.checked.status === 'unworkable') return not(null);
 
-  const kind: CostKind = invoiceCost ? 'invoice' : 'fulfillment';
+  const kind: CostKind = invoiceCost ? 'invoice' : creditCost ? 'credit' : 'fulfillment';
   const built = fulfillment ? costEntry(fulfillment, copies.accounts.fulfillments[fulfillment.netsuiteId], copies.accounts)
     : invoiceCost ? costEntry(invoiceCost, copies.accounts.invoices[invoiceCost.netsuiteId], copies.accounts)
-      : receipt ? receiptEntry(receipt, copies.accounts, month.names) : adjustmentEntry(adjustment!);
+      : creditCost ? costEntry(creditCost, copies.accounts.credits[creditCost.netsuiteId], copies.accounts, true)
+        : receipt ? receiptEntry(receipt, copies.accounts, month.names) : adjustmentEntry(adjustment!);
   const costs = costsText(built.costs, month.names, kind);
   if (built.problems.length) {
-    return not(`FleetSuite's own copy matches NetSuite's ${theirs}, but its entry can't be worked out, so the books post NetSuite's. ${problemText(built.problems[0])}`);
+    return not(`FleetSuite's own copy matches NetSuite's ${theirs}, but its entry can't be worked out, so the books post NetSuite's. ${problemText(built.problems[0], kind)}`);
   }
   const own: OwnStockEntry = { lines: built.lines, date: entryDate({ date: check.date, posting_month: doc.posting_month }) };
   const differs = stockEntryDifference(own, { lines: worked.checked.lines, date: entryDate(doc) }, built.costs, month.names, kind);
@@ -482,22 +553,24 @@ export function ownStockPick(worked: WorkedStockDocument, copies: OwnStockCopies
 // ── Reading ────────────────────────────────────────────────────────────────
 
 /**
- * The first month Books has any own copy of a fulfillment, of a receipt, of an adjustment and of an invoice in
- * ('YYYY-MM-01'); null when it has none.
+ * The first month Books has any own copy of a fulfillment, of a receipt, of an adjustment, of an invoice and of a credit
+ * memo in ('YYYY-MM-01'); null when it has none. The credit memos' is read only when a month has a credit memo
+ * (readOwnCreditSince, as the posting run reads it for the credit itself); absent, none is read.
  */
 export interface OwnStockSince {
   fulfillments: string | null;
   receipts: string | null;
   adjustments: string | null;
   invoices: string | null;
+  creditMemos?: string | null;
 }
 
 /**
  * Books' own copies of one company's stock documents of a month (`documents`, gl_stock_month's), made on the days
  * they're dated and none before `since`, each checked against NetSuite's (`through`: how far the copies of NetSuite's
- * stock moves and general ledger had come), and the accounts the matching fulfillments, receipts and invoices post
- * to. A fulfillment, an adjustment and an invoice are BMG's alone; of an invoice, only one made without a sales order
- * has a say, on what it took from stock.
+ * stock moves and general ledger had come), and the accounts the matching fulfillments, receipts, invoices and credit
+ * memos post to. A fulfillment, an adjustment, an invoice and a credit memo are BMG's alone; of an invoice, only one
+ * made without a sales order has a say, on what it took from stock; of a credit memo, on what it put back on the shelf.
  */
 export async function readOwnStockCopies(
   service: SupabaseClient,
@@ -510,24 +583,31 @@ export async function readOwnStockCopies(
   const received = documents.filter((d) => d.type === 'ItemRcpt');
   const adjusted = documents.filter((d) => d.type === 'InvAdjst');
   const invoiced = documents.filter((d) => d.type === 'CustInvc');
+  const credited = documents.filter((d) => d.type === 'CustCred');
   const ids = new Set(documents.map((d) => d.netsuite_id));
   const shipDays = company === OWN_COMPANY && since.fulfillments ? ownCopyDays(shipped, since.fulfillments) : null;
   const receiveDays = since.receipts ? ownCopyDays(received, since.receipts) : null;
   const adjustDays = company === OWN_COMPANY && since.adjustments ? ownCopyDays(adjusted, since.adjustments) : null;
   const invoiceDays = company === OWN_COMPANY && since.invoices ? ownCopyDays(invoiced, since.invoices) : null;
+  const creditDays = company === OWN_COMPANY && since.creditMemos ? ownCopyDays(credited, since.creditMemos) : null;
 
-  const [ships, receives, adjusts, invoices] = await Promise.all([
+  const [ships, receives, adjusts, invoices, credits] = await Promise.all([
     shipDays ? service.rpc('gl_own_fulfillment_pairs', { p_from: shipDays.from, p_to: shipDays.to, p_netsuite_id: null }) : null,
     receiveDays ? service.rpc('gl_own_receipt_pairs', { p_from: receiveDays.from, p_to: receiveDays.to, p_key: null }) : null,
     adjustDays
       ? service.rpc('gl_own_adjustment_pairs', { p_from: adjustDays.from, p_to: adjustDays.to, p_id: null, p_account: INVENTORY_ADJUST_ACCOUNT })
       : null,
     invoiceDays ? service.rpc('gl_own_invoice_cost_pairs', { p_from: invoiceDays.from, p_to: invoiceDays.to, p_netsuite_id: null }) : null,
+    // Every part a credit memo FleetSuite made puts back comes back at O'Fallon (src/lib/credit-memo.ts).
+    creditDays
+      ? service.rpc('gl_own_credit_cost_pairs', { p_from: creditDays.from, p_to: creditDays.to, p_netsuite_id: null, p_location: STOCK_LOCATION_ID })
+      : null,
   ]);
   if (ships?.error) throw new Error(ships.error.message);
   if (receives?.error) throw new Error(receives.error.message);
   if (adjusts?.error) throw new Error(adjusts.error.message);
   if (invoices?.error) throw new Error(invoices.error.message);
+  if (credits?.error) throw new Error(credits.error.message);
   const fulfillments = new Map(ships
     ? checkOwnFulfillments((ships.data ?? {}) as FulfilPairsData, through).fulfillments
       .filter((f) => ids.has(f.netsuiteId))
@@ -548,15 +628,21 @@ export async function readOwnStockCopies(
       .filter((c) => ids.has(c.netsuiteId))
       .map((c) => [c.netsuiteId, c] as const)
     : []);
+  const creditCosts = new Map(credits
+    ? checkOwnCreditCosts((credits.data ?? {}) as CreditCostPairsData, through).creditMemos
+      .filter((c) => ids.has(c.netsuiteId))
+      .map((c) => [c.netsuiteId, c] as const)
+    : []);
   return {
-    fulfillments, receipts, adjustments, invoiceCosts,
-    accounts: await readOwnStockAccounts(service, company, fulfillments, receipts, invoiceCosts),
+    fulfillments, receipts, adjustments, invoiceCosts, creditCosts,
+    accounts: await readOwnStockAccounts(service, company, fulfillments, receipts, invoiceCosts, creditCosts),
   };
 }
 
 /**
- * The accounts the matching copies post to (gl_own_stock_accounts, migration 456, and for invoices
- * gl_own_invoice_cost_accounts, migration 517): nothing to read when none matches.
+ * The accounts the matching copies post to (gl_own_stock_accounts, migration 456, for invoices
+ * gl_own_invoice_cost_accounts, migration 517, and for credit memos gl_own_credit_cost_accounts, migration 519): nothing
+ * to read when none matches.
  */
 export async function readOwnStockAccounts(
   service: SupabaseClient,
@@ -564,42 +650,55 @@ export async function readOwnStockAccounts(
   fulfillments: ReadonlyMap<string, OwnFulfillmentCheck>,
   receipts: ReadonlyMap<string, OwnReceiptCheck>,
   invoiceCosts: ReadonlyMap<string, OwnInvoiceCostCheck> = new Map(),
+  creditCosts: ReadonlyMap<string, OwnCreditCostCheck> = new Map(),
 ): Promise<OwnStockAccountsData> {
   const matching = (m: ReadonlyMap<string, { status: string }>) => [...m].filter(([, c]) => c.status === 'matches').map(([id]) => id);
   const shipped = matching(fulfillments);
   const received = matching(receipts);
-  // Each matching invoice's items that go on its entry, a kit's parts among them, which only the check knows.
-  const sold: Record<string, string[]> = {};
-  for (const id of matching(invoiceCosts)) {
-    const items = invoiceCosts.get(id)!.items.filter(costsSomething).map((p) => p.itemId);
-    if (items.length) sold[id] = items;
-  }
+  // Each matching invoice's or credit memo's items that go on its entry, a kit's parts among them, which only the check
+  // knows.
+  const onEntry = (checks: ReadonlyMap<string, { status: string; items: OwnFulfillmentCheck['items'] }>) => {
+    const out: Record<string, string[]> = {};
+    for (const id of matching(checks)) {
+      const items = checks.get(id)!.items.filter(costsSomething).map((p) => p.itemId);
+      if (items.length) out[id] = items;
+    }
+    return out;
+  };
+  const sold = onEntry(invoiceCosts);
+  const back = onEntry(creditCosts);
   const invoiced = Object.keys(sold).length > 0;
-  if (!shipped.length && !received.length && !invoiced) return NO_ACCOUNTS;
-  const [res, inv] = await Promise.all([
+  const credited = Object.keys(back).length > 0;
+  if (!shipped.length && !received.length && !invoiced && !credited) return NO_ACCOUNTS;
+  const [res, inv, cred] = await Promise.all([
     shipped.length || received.length
       ? service.rpc('gl_own_stock_accounts', { p_company: company, p_fulfillments: shipped, p_receipts: received })
       : null,
     invoiced ? service.rpc('gl_own_invoice_cost_accounts', { p_company: company, p_items: sold }) : null,
+    credited ? service.rpc('gl_own_credit_cost_accounts', { p_company: company, p_items: back }) : null,
   ]);
   if (res?.error) throw new Error(res.error.message);
   if (inv?.error) throw new Error(inv.error.message);
+  if (cred?.error) throw new Error(cred.error.message);
   const data = (res?.data ?? {}) as Partial<OwnStockAccountsData>;
   const sales = (inv?.data ?? {}) as Partial<OwnStockAccountsData>;
+  const returns = (cred?.data ?? {}) as Partial<OwnStockAccountsData>;
   return {
     // Each item's asset account is the copy of NetSuite's items' either way.
-    items: { ...(data.items ?? {}), ...(sales.items ?? {}) },
+    items: { ...(data.items ?? {}), ...(sales.items ?? {}), ...(returns.items ?? {}) },
     fulfillments: data.fulfillments ?? {},
     invoices: sales.invoices ?? {},
-    // Most fulfillments' cost account, read the same way by both.
-    usual_cost: data.usual_cost ?? sales.usual_cost ?? null,
+    credits: returns.credits ?? {},
+    // Most fulfillments' cost account, read the same way by each.
+    usual_cost: data.usual_cost ?? sales.usual_cost ?? returns.usual_cost ?? null,
     received: (data.received ?? []).map((r) => ({ account: String(r.account), documents: Number(r.documents) || 0 })),
   };
 }
 
 /**
  * The first month each kind of own copy was made in, from gl_own_fulfillment_months, gl_own_receipt_months,
- * gl_own_adjustment_months and gl_own_invoice_months.
+ * gl_own_adjustment_months and gl_own_invoice_months; a credit memo's is read apart, only when it's needed
+ * (OwnStockSince).
  */
 export async function readOwnStockSince(service: SupabaseClient): Promise<OwnStockSince> {
   const [ships, receives, adjusts, invoices] = await Promise.all([
@@ -617,12 +716,15 @@ export async function readOwnStockSince(service: SupabaseClient): Promise<OwnSto
 // ── The Own pages ──────────────────────────────────────────────────────────
 
 /**
- * How the journal says what it holds for a fulfillment, an item receipt, an adjustment and an invoice's cost
- * (gl_stock_postings, migration 456).
+ * How the journal says what it holds for a fulfillment, an item receipt, an adjustment, an invoice's cost and the stock
+ * a credit memo puts back (gl_stock_postings, migration 456).
  */
 export const FULFILLMENT_BOOKS: OwnBooksRead = { fn: 'gl_stock_postings', list: 'documents', sourceType: STOCK_SOURCE_TYPE.ItemShip, ownRule: OWN_FULFILLMENT_RULE };
 export const RECEIPT_BOOKS: OwnBooksRead = { fn: 'gl_stock_postings', list: 'documents', sourceType: STOCK_SOURCE_TYPE.ItemRcpt, ownRule: OWN_RECEIPT_RULE };
 export const ADJUSTMENT_BOOKS: OwnBooksRead = { fn: 'gl_stock_postings', list: 'documents', sourceType: STOCK_SOURCE_TYPE.InvAdjst, ownRule: OWN_ADJUSTMENT_RULE };
 export const INVOICE_COST_BOOKS: OwnBooksRead = {
   fn: 'gl_stock_postings', list: 'documents', sourceType: STOCK_SOURCE_TYPE.CustInvc, ownRule: OWN_INVOICE_COST_RULE,
+};
+export const CREDIT_COST_BOOKS: OwnBooksRead = {
+  fn: 'gl_stock_postings', list: 'documents', sourceType: STOCK_SOURCE_TYPE.CustCred, ownRule: OWN_CREDIT_COST_RULE,
 };

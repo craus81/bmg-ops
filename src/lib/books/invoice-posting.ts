@@ -366,7 +366,7 @@ export function replaceBillMemo(worked: WorkedBill, current: { posting_rule?: st
 
 /**
  * Why a stock document's entry is replaced, as for an invoice's (decideStockDocument): only a fulfillment, receipt,
- * adjustment or invoice's cost lines changes copies.
+ * adjustment, or invoice's or credit memo's cost lines changes copies.
  */
 export function replaceStockMemo(worked: WorkedStockDocument, current: { posting_rule?: string } | null, own?: OwnStockPick | null): string {
   const rule = ownStockRule(worked.entry.type);
@@ -1173,8 +1173,8 @@ export function bankJournalEntry(
 
 /**
  * What to do about one stock document of a month, given what the journal holds for it: as for a journal entry, but for
- * a fulfillment, item receipt, adjustment or invoice's cost lines Books has its own copy of, whose entry posts when
- * ownStockPick says so, as an invoice's own copy's does (decide).
+ * a fulfillment, item receipt, adjustment, or invoice's or credit memo's cost lines Books has its own copy of, whose
+ * entry posts when ownStockPick says so, as an invoice's own copy's does (decide).
  */
 export function decideStockDocument(worked: WorkedStockDocument, posting: StockPosting | undefined, own?: OwnStockPick | null): Decision {
   const entry = own?.entry ?? null;
@@ -1195,8 +1195,9 @@ export function stockDocumentBooks(worked: WorkedStockDocument, posting: StockPo
  * as a journal entry's is, keyed by its STOCK_SOURCE_TYPE: `item_fulfillment:…`
  * and so on, `invoice_cost:…` for an invoice's or credit memo's cost lines.
  * With `own`, the entry of Books' own copy of a fulfillment, receipt,
- * adjustment or invoice's cost instead (own_fulfillment@1, own_receipt@1,
- * own_adjustment@1 or own_invoice_cost@1), under the same key.
+ * adjustment, invoice's cost or the stock a credit memo put back instead
+ * (own_fulfillment@1, own_receipt@1, own_adjustment@1, own_invoice_cost@1 or
+ * own_credit_memo_cost@1), under the same key.
  */
 export function stockJournalEntry(
   worked: WorkedStockDocument,
@@ -1904,9 +1905,15 @@ export async function postInvoices(
         if (held.error) throw readFailed(entriesOf('stock'), held.error);
         const postings = new Map((((held.data as any)?.documents ?? []) as StockPosting[]).map((p) => [postingKey(p.source_type, p.source_id), p]));
 
-        // Books' own copies of the month's fulfillments, receipts, adjustments and invoices, made on the days they're dated.
-        const ownStock = await readOwnStockCopies(service, company, stockDocuments.map((w) => w.entry), stockSince, stockThrough)
-          .catch((err) => { throw readFailed(`Books' own copies of ${company}'s fulfillments, receipts, adjustments and invoices for ${monthLabel(month)}`, err); });
+        // Books' own copies of the month's fulfillments, receipts, adjustments, invoices and credit memos, made on the days
+        // they're dated; the first month Books made a credit memo in is read only when one of BMG's months has one.
+        const since = company === OWN_COMPANY && stockDocuments.some((w) => w.entry.type === 'CustCred')
+          ? { ...stockSince, creditMemos: await ownCreditSince() }
+          : stockSince;
+        const ownStock = await readOwnStockCopies(service, company, stockDocuments.map((w) => w.entry), since, stockThrough)
+          .catch((err) => {
+            throw readFailed(`Books' own copies of ${company}'s fulfillments, receipts, adjustments, invoices and credit memos for ${monthLabel(month)}`, err);
+          });
 
         const tasks: Array<() => Promise<void>> = [];
         for (const w of stockDocuments) {

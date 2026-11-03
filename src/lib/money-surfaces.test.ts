@@ -87,8 +87,8 @@ const ALLOWED: Record<string, string> = {
   'src/app/(main)/admin/books/sales/page.tsx': "FleetSuite's own books — super admins, the bookkeeper and the CPA only, who see its money by design (the page redirects everyone else; its API is requireBooks)",
   'src/app/(main)/admin/books/mistake-checks/page.tsx': "FleetSuite's own books — super admins, the bookkeeper and the CPA only, who see its money by design (the page redirects everyone else; its API is requireBooks)",
   'src/app/(main)/admin/books/snap-a-bill/page.tsx': "FleetSuite's own books — super admins, the bookkeeper and the CPA only, who see its money by design (the page redirects everyone else; its API is requireBooks)",
-  'src/components/BooksOwnPosting.tsx': "FleetSuite's own books — rendered only on Own fulfillments, Own receipts, Own adjustments, Own bills and Own invoices, which only super admins, the bookkeeper and the CPA open (their APIs are requireBooks)",
-  'src/components/BooksTakenStock.tsx': "FleetSuite's own books — rendered only on Own fulfillments and Own invoices, which only super admins, the bookkeeper and the CPA open (their APIs are requireBooks)",
+  'src/components/BooksOwnPosting.tsx': "FleetSuite's own books — rendered only on Own fulfillments, Own receipts, Own adjustments, Own bills, Own invoices and Own credit memos, which only super admins, the bookkeeper and the CPA open (their APIs are requireBooks)",
+  'src/components/BooksTakenStock.tsx': "FleetSuite's own books — rendered only on Own fulfillments, Own invoices and Own credit memos, which only super admins, the bookkeeper and the CPA open (their APIs are requireBooks)",
 
   // ── CNI admin console ──
   'src/app/(main)/admin/cni/jobs/[id]/page.tsx': 'cni_admin — admin only',

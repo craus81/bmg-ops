@@ -36,7 +36,7 @@ import {
   type PaymentPosting, type SpendingPosting, type StockPosting,
 } from '@/lib/books/invoice-posting';
 import { OWN_COMPANY } from '@/lib/books/own-invoices';
-import { ownCreditPick, readOwnCreditCopies, type OwnCreditCopies } from '@/lib/books/own-credit-memo-posting';
+import { ownCreditPick, readOwnCreditCopies, readOwnCreditSince, type OwnCreditCopies } from '@/lib/books/own-credit-memo-posting';
 import { ownCopyDays, ownPick, readOwnCopies, salesTaxAccount, type OwnCopies } from '@/lib/books/own-invoice-posting';
 import { chartNames, ownStockPick, readOwnStockCopies, readOwnStockSince, type OwnStockCopies } from '@/lib/books/own-stock-posting';
 import { ownBillPick, readOwnBillCopies, readOwnBillSince, type OwnBillCopies } from '@/lib/books/own-bill-posting';
@@ -235,9 +235,14 @@ export async function GET(req: NextRequest) {
         const through = { stock: stockCopy.data?.last_synced_at ?? null, ledger: gl.data?.last_synced_at ?? null };
         const [books, own] = await Promise.all([
           service.rpc('gl_stock_postings', { p_company: company, p_source_ids: documents.map((d) => d.netsuite_id), p_lines: true }),
-          // Books' own copies of the month's fulfillments, receipts, adjustments and invoices, as the posting run reads them, so what this shows is what it posts.
-          readOwnStockSince(service)
-            .then((since) => readOwnStockCopies(service, company, documents, since, through))
+          // Books' own copies of the month's fulfillments, receipts, adjustments, invoices and credit memos, as the posting run
+          // reads them, so what this shows is what it posts: the first month Books made a credit memo in only when one of
+          // BMG's months has one.
+          Promise.all([
+            readOwnStockSince(service),
+            company === OWN_COMPANY && documents.some((d) => d.type === 'CustCred') ? readOwnCreditSince(service) : undefined,
+          ])
+            .then(([since, creditMemos]) => readOwnStockCopies(service, company, documents, { ...since, creditMemos }, through))
             .then((read) => ({ read, error: null }), (err: Error) => ({ read: null, error: err })),
         ]);
         if (books.error) return NextResponse.json({ error: books.error.message }, { status: 500 });

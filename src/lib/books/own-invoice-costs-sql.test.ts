@@ -752,8 +752,8 @@ describe("the posting job, with Books' own invoices' cost", () => {
     for (const [read, error] of [
       // The months of FleetSuite's own invoices are read for their sales first.
       ['gl_own_invoice_months', "Reading the months of FleetSuite's own invoices: gl_own_invoice_months failed"],
-      ['gl_own_invoice_cost_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments and invoices for Feb 2025: gl_own_invoice_cost_pairs failed"],
-      ['gl_own_invoice_cost_accounts', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments and invoices for Feb 2025: gl_own_invoice_cost_accounts failed"],
+      ['gl_own_invoice_cost_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments, invoices and credit memos for Feb 2025: gl_own_invoice_cost_pairs failed"],
+      ['gl_own_invoice_cost_accounts', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments, invoices and credit memos for Feb 2025: gl_own_invoice_cost_accounts failed"],
       [BOOKS_STOCK_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_STOCK_SYNC} failed`],
       [BOOKS_GL_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_GL_SYNC} failed`],
     ]) {

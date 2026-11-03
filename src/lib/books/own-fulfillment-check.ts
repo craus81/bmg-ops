@@ -39,7 +39,9 @@ import type { FulfilledFrom, FulfilUnknown, KeptType, LocationFrom } from './own
  * What a copy took from stock is checked the same way whatever the document
  * (checkTaken): since migration 517, an invoice FleetSuite made without a
  * sales order is checked against NetSuite's invoice too
- * (src/lib/books/own-invoice-cost-check.ts).
+ * (src/lib/books/own-invoice-cost-check.ts), and since migration 519 what a
+ * credit memo FleetSuite made puts back on the shelf against NetSuite's
+ * credit memo, the other way round (src/lib/books/own-credit-cost-check.ts).
  *
  * Pure. Amounts are whole cents, a cost positive.
  */
@@ -134,7 +136,8 @@ export interface CopiesThrough {
 /**
  * A copy of a document that takes stock next to NetSuite's, as checkTaken compares them: a fulfillment
  * (gl_own_fulfillment_pairs), or since migration 517 an invoice FleetSuite made without a sales order
- * (gl_own_invoice_cost_pairs, src/lib/books/own-invoice-cost-check.ts). Its lines are what it took from stock.
+ * (gl_own_invoice_cost_pairs, src/lib/books/own-invoice-cost-check.ts). Its lines are what it took from stock; since
+ * migration 519 a credit memo's are what it put back (gl_own_credit_cost_pairs, src/lib/books/own-credit-cost-check.ts).
  */
 export interface TakenPairData {
   own: Pick<OwnFulfillmentData, 'netsuite_id' | 'date' | 'location_id' | 'unknowns' | 'made_at' | 'lines'>;
@@ -157,6 +160,11 @@ export interface TakenWords {
   whereUnknown: string;
   /** Why where FleetSuite took stock from isn't where NetSuite took it from, in a sentence, given each side's places in words. */
   whereDiffers: (ours: string, theirs: string) => string;
+  /**
+   * The document puts stock back on the shelf (a credit memo) rather than taking it out: NetSuite's lines count stock
+   * in, its value is what went onto the inventory accounts, and the sentences say "put back".
+   */
+  back?: boolean;
 }
 
 // ── What the check says ────────────────────────────────────────────────────
@@ -319,8 +327,46 @@ export const locationNameIn = (lists: Pick<FulfilLists, 'locations'>, id: string
 export const placesTextIn = (lists: Pick<FulfilLists, 'locations'>, ids: Iterable<string | null>) =>
   listed([...new Set(ids)].map((id) => locationNameIn(lists, id)).sort());
 
-/** Where FleetSuite didn't know where it took stock from, in words. */
-const LOCATION_UNKNOWN = 'where it took stock from, so what it cost';
+/** How checkTaken words what a copy did with stock: took it out (a fulfillment, an invoice), or put it back (a credit memo). */
+const TAKEN_WORDS = {
+  out: {
+    /** "took 2 of LDR-24 from stock" */
+    took: (n: string, name: string) => `took ${n} of ${name} from stock`,
+    tookNone: 'took none',
+    tookNoneOfIt: 'took none of it from stock',
+    /** What NetSuite did for a kit, after "so what NetSuite". */
+    forKit: 'took for it',
+    /** "2 from O'Fallon" */
+    at: 'from',
+    /** "took LDR-24 from O'Fallon" */
+    where: (what: string, places: string) => `took ${what} from ${places}`,
+    /** "and NetSuite from Wentzville" */
+    theirsWhere: (places: string) => `and NetSuite from ${places}`,
+    /** "didn't know where it took LDR-24 from" */
+    whereOf: (what: string) => `where it took ${what} from`,
+    /** "on where it was taken from" */
+    wasWhere: 'taken from',
+    whereStock: 'where it took stock from',
+    nothing: 'Nothing from stock',
+    tookNothing: 'took nothing from stock',
+    summaryNothing: 'Took nothing from stock',
+  },
+  back: {
+    took: (n: string, name: string) => `put back ${n} of ${name}`,
+    tookNone: 'put none back',
+    tookNoneOfIt: 'put none of it back',
+    forKit: 'put back for it',
+    at: 'at',
+    where: (what: string, places: string) => `put ${what} back at ${places}`,
+    theirsWhere: (places: string) => `and NetSuite at ${places}`,
+    whereOf: (what: string) => `where it put ${what} back`,
+    wasWhere: 'put back',
+    whereStock: 'where it put stock back',
+    nothing: 'Nothing back',
+    tookNothing: 'put nothing back',
+    summaryNothing: 'Put nothing back',
+  },
+} as const;
 
 /** What's compared, in a sentence. */
 const FIELD_WORDS: Readonly<Record<FulfilField, string>> = {
@@ -379,6 +425,9 @@ const sameSplit = (a: ReadonlyMap<string | null, number>, b: ReadonlyMap<string 
  */
 export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: CopiesThrough, words: TakenWords): TakenCheck {
   const own = pair.own;
+  const w = words.back ? TAKEN_WORDS.back : TAKEN_WORDS.out;
+  // NetSuite's lines count stock out negative: what a copy takes out is the other way round, what it puts back the same.
+  const sign = words.back ? 1 : -1;
   const unknowns = new Set(own.unknowns ?? []);
   const gone = !!pair.netsuite?.gone;
   const ns = pair.netsuite && !gone ? pair.netsuite : null;
@@ -403,7 +452,7 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
   const splitText = (places: ReadonlyMap<string | null, number>, of = '') => listed([...places]
     .map(([at, n]) => ({ at: locationName(at), n }))
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0))
-    .map((p, i) => `${qty(p.n)}${i === 0 ? of : ''} from ${p.at}`));
+    .map((p, i) => `${qty(p.n)}${i === 0 ? of : ''} ${w.at} ${p.at}`));
 
   // FleetSuite's side, item by item, each line costed at its item's cost each at the location it was taken from just before.
   const ownItems = new Map<string, OwnItem>();
@@ -428,12 +477,13 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
     ownItems.set(l.item_id, item);
   }
 
-  // NetSuite's side, item by item: what it took from stock and where, and what that took off the inventory accounts.
+  // NetSuite's side, item by item: what it took from stock (or put back) and where, and what that took off the inventory
+  // accounts (or put on them).
   const netItems = new Map<string, NetItem>();
   for (const l of ns?.lines ?? []) {
     const item = netItems.get(l.item_id) ?? { itemId: l.item_id, quantity: 0, places: new Map<string | null, number>(), valueCents: 0 };
     if (l.moves_stock) {
-      const took = -(num(l.quantity) ?? 0);
+      const took = sign * (num(l.quantity) ?? 0);
       item.quantity += took;
       item.places.set(l.location_id, (item.places.get(l.location_id) ?? 0) + took);
     }
@@ -442,8 +492,8 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
   }
   // A line that moved nothing and posted nothing to stock (a non-inventory part, say) isn't stock.
   for (const [id, item] of netItems) if (sameQuantity(item.quantity, 0) && item.valueCents === 0) netItems.delete(id);
-  // What it took off the inventory accounts, a cost positive (and never -0, which prints as -$0.00).
-  const netCents = (item: NetItem) => (nsValued ? (item.valueCents ? -item.valueCents : 0) : null);
+  // What it took off the inventory accounts, or put on them, a cost positive (and never -0, which prints as -$0.00).
+  const netCents = (item: NetItem) => (nsValued ? (item.valueCents ? sign * item.valueCents : 0) : null);
   const netLocations = (item: NetItem) => [...item.places.keys()].map(locationName).sort();
 
   const kits = [...ownItems.values()].filter((i) => i.kind === 'kit');
@@ -501,18 +551,18 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
     let why: string | null = null;
     if (o.kind === 'kit') {
       same = null;
-      why = `${name} is a kit FleetSuite couldn't take apart into its parts, so what NetSuite took for it isn't compared.`;
+      why = `${name} is a kit FleetSuite couldn't take apart into its parts, so what NetSuite ${w.forKit} isn't compared.`;
       takenUnknown = true;
     } else if (!nsKnown) {
       same = null;
     } else if (!netsuite) {
       if (o.kind === 'unknown') {
         same = null;
-        why = `FleetSuite didn't know whether ${name} is kept in stock (the copy of NetSuite's items doesn't have it yet), and ${words.theirs} took none of it from stock.`;
+        why = `FleetSuite didn't know whether ${name} is kept in stock (the copy of NetSuite's items doesn't have it yet), and ${words.theirs} ${w.tookNoneOfIt}.`;
         takenUnknown = true;
       } else {
         same = false;
-        why = `FleetSuite took ${qty(o.quantity)} of ${name} from stock${o.cents !== null ? ` (${dollars(o.cents)})` : ''}, and ${words.theirs} took none.`;
+        why = `FleetSuite ${w.took(qty(o.quantity), name)}${o.cents !== null ? ` (${dollars(o.cents)})` : ''}, and ${words.theirs} ${w.tookNone}.`;
         takenDiffers.push(why);
       }
     } else {
@@ -525,13 +575,13 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
       same = parts.includes(false) ? false : parts.includes(null) ? null : true;
       const reasons: string[] = [];
       if (!quantitySame) {
-        reasons.push(`FleetSuite took ${qty(o.quantity)} of ${name} from stock, and NetSuite ${qty(netsuite.quantity)}.`);
+        reasons.push(`FleetSuite ${w.took(qty(o.quantity), name)}, and NetSuite ${qty(netsuite.quantity)}.`);
         takenDiffers.push(reasons[0]);
       }
       if (locationSame === false) {
         const takenFrom = (what: string, of: string) => (placesSame
-          ? `FleetSuite took ${splitText(o.places, of)}, and NetSuite ${splitText(n!.places)}.`
-          : `FleetSuite took ${what} from ${placesText(ours)}, and NetSuite from ${listed(netsuite.locations)}.`);
+          ? `FleetSuite ${words.back ? 'put back' : 'took'} ${splitText(o.places, of)}, and NetSuite ${splitText(n!.places)}.`
+          : `FleetSuite ${w.where(what, placesText(ours))}, ${w.theirsWhere(listed(netsuite.locations))}.`);
         reasons.push(takenFrom('it', ''));
         placeDiffers.push(takenFrom(name, ` of ${name}`));
       }
@@ -546,7 +596,7 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
       if (o.kind === 'unknown') {
         reasons.push(`FleetSuite didn't know ${name} is kept in stock (the copy of NetSuite's items doesn't have it yet), so not what it cost.`);
       } else if (!placeKnown) {
-        reasons.push(`FleetSuite didn't know where it took ${ours.length > 1 ? 'some of ' : ''}${name} from, so not what it cost.`);
+        reasons.push(`FleetSuite didn't know ${w.whereOf(`${ours.length > 1 ? 'some of ' : ''}${name}`)}, so not what it cost.`);
       } else if (o.cents === null) {
         reasons.push(`FleetSuite counted none of ${name} at ${placesText(o.noneAt)} just before, so it can't work out what it cost.`);
       }
@@ -559,7 +609,7 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
     const name = itemName(n.itemId, null);
     const cents = netCents(n);
     const netsuite = { quantity: n.quantity, locations: netLocations(n), cents, each: cents !== null && n.quantity > 0 ? cents / n.quantity : null };
-    const took = `${words.theirs} took ${qty(n.quantity)} of ${name}${cents !== null ? ` (${dollars(cents)})` : ''}`;
+    const took = `${words.theirs} ${words.back ? `put back ${qty(n.quantity)} of ${name}` : `took ${qty(n.quantity)} of ${name}`}${cents !== null ? ` (${dollars(cents)})` : ''}`;
     // With a kit in FleetSuite's copy this may be one of its parts, and the kit already leaves what was taken not known.
     if (!kits.length && linesKnown) takenDiffers.push(`${took}, and ${words.notOnCopy}.`);
     const description = lists.items.get(n.itemId)?.displayName ?? null;
@@ -600,7 +650,7 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
       why = words.whereUnknown;
     } else if (same === false && placesSame) {
       const more = placeDiffers.length - 1;
-      why = `${placeDiffers[0]}${more > 0 ? ` ${plural(more, 'other item differs on where it was', 'other items differ on where they were')} taken from too.` : ''}`;
+      why = `${placeDiffers[0]}${more > 0 ? ` ${plural(more, 'other item differs on where it was', 'other items differ on where they were')} ${w.wasWhere} too.` : ''}`;
     } else if (same === false) {
       why = words.whereDiffers(placesText(ourPlaces), placesText(theirs));
     }
@@ -622,7 +672,7 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
     let why: string | null = null;
     if (!linesKnown) why = `FleetSuite didn't know ${words.linesUnknown}.`;
     else if (tookNothing && takenDiffers.length) {
-      why = `${words.theirs} took nothing from stock, or is gone from NetSuite: the copy of NetSuite's stock moves, made since, doesn't have it.`;
+      why = `${words.theirs} ${w.tookNothing}, or is gone from NetSuite: the copy of NetSuite's stock moves, made since, doesn't have it.`;
     } else if (compared && takenDiffers.length) {
       const more = takenDiffers.length - 1;
       why = `${takenDiffers[0]}${more > 0 ? ` ${plural(more, 'other item differs', 'other items differ')}.` : ''}`;
@@ -630,8 +680,8 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
     fields.push({
       field: 'items',
       label: 'Items',
-      fleetsuite: linesKnown ? (ownItems.size ? plural(ownItems.size, 'item', 'items') : 'Nothing from stock') : null,
-      netsuite: nsKnown ? (netItems.size ? plural(netItems.size, 'item', 'items') : 'Nothing from stock') : null,
+      fleetsuite: linesKnown ? (ownItems.size ? plural(ownItems.size, 'item', 'items') : w.nothing) : null,
+      netsuite: nsKnown ? (netItems.size ? plural(netItems.size, 'item', 'items') : w.nothing) : null,
       same,
       why,
     });
@@ -645,14 +695,14 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
   const noneOf = [...noneWhere].map(([at, names]) => `${listed(names)} at ${locationName(at)}`).join(' and none of ');
   const uncostedNames = listed(uncosted.map((u) => u.name));
   const fleetsuiteCost = ownCostKnown ? [...ownItems.values()].reduce((sum, i) => sum + (i.cents ?? 0), 0) : null;
-  const netsuiteCost = nsValued ? [...netItems.values()].reduce((sum, i) => sum - i.valueCents, 0) : null;
+  const netsuiteCost = nsValued ? [...netItems.values()].reduce((sum, i) => sum + sign * i.valueCents, 0) : null;
   // The ledger copy has run since and has nothing for NetSuite's document.
   const bookedNothing = !!ns && !pair.netsuite_gl && ledgerRanSince;
   {
     const same = fleetsuiteCost !== null && netsuiteCost !== null ? fleetsuiteCost === netsuiteCost : null;
     let why: string | null = null;
     if (!linesKnown) why = `FleetSuite didn't know ${words.linesUnknown}.`;
-    else if (locationUnknown) why = "FleetSuite didn't know where it took stock from, so not what it cost.";
+    else if (locationUnknown) why = `FleetSuite didn't know ${w.whereStock}, so not what it cost.`;
     else if (kits.length) why = `FleetSuite didn't know the parts of ${kitNames}, so not what they cost.`;
     else if (unlisted.length) why = `FleetSuite didn't know whether ${listed(unlisted.map((i) => itemName(i.itemId, i.itemNumber)))} ${unlisted.length > 1 ? 'are' : 'is'} kept in stock, so not what ${unlisted.length > 1 ? 'they' : 'it'} cost.`;
     else if (uncosted.length) why = `FleetSuite counted none of ${noneOf} just before, so it can't work out what ${uncosted.length > 1 ? 'they' : 'it'} cost.`;
@@ -671,7 +721,7 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
   const differing = fields.filter((f) => f.same === false).length;
   const unknownWords: string[] = [];
   if (!linesKnown) unknownWords.push(words.linesUnknown);
-  if (locationUnknown) unknownWords.push(LOCATION_UNKNOWN);
+  if (locationUnknown) unknownWords.push(`${w.whereStock}, so what it cost`);
   if (kits.length) unknownWords.push(`the parts of ${kitNames}, ${kits.length > 1 ? 'kits' : 'a kit'}`);
   if (unlisted.length) {
     unknownWords.push(`whether ${listed(unlisted.map((i) => itemName(i.itemId, i.itemNumber)))} ${unlisted.length > 1 ? 'are' : 'is'} kept in stock (the copy of NetSuite's items doesn't have ${unlisted.length > 1 ? 'them' : 'it'} yet)`);
@@ -708,7 +758,7 @@ export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: Copi
     summary = `Matches where it can be checked. FleetSuite didn't know ${listed(unknownWords)}.`;
   } else if (tookNothing) {
     status = 'matches';
-    summary = `Took nothing from stock, and nor did ${words.theirs}.`;
+    summary = `${w.summaryNothing}, and nor did ${words.theirs}.`;
   } else {
     status = 'matches';
     summary = `Matches ${words.theirs}.`;

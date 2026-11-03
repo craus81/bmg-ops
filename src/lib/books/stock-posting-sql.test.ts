@@ -4,9 +4,11 @@
 // one read of the copy's cost lines; the posting job posts them with the
 // stock rule. This runs migration 314 (with stand-ins for the app tables it
 // points at) and migrations 359–364, 367, 370, 374, 376, 377, 380, 382–387,
-// 389–395, 397 and 399 in an in-memory Postgres (PGlite) as the app's server
-// login and holds the functions' rules, then runs the posting job against
-// them with stock documents only.
+// 389–395, 397 and 399, with the ones Books' own copies are read through
+// (401–405, 407, 409, 416, 435, 436, 454, 456, 457, 466 and 518), in an
+// in-memory Postgres (PGlite) as the app's server login and holds the
+// functions' rules, then runs the posting job against them with stock
+// documents only.
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -68,7 +70,7 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migrations 314, 407, 416, 435 and 454 point at in the app's own schema.
+    -- What migrations 314, 407, 416, 435, 454 and 466 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
     CREATE TABLE public.netsuite_parts (id UUID PRIMARY KEY);
     CREATE FUNCTION public.is_admin() RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT false $$;
@@ -80,6 +82,7 @@ async function freshDb(): Promise<PGlite> {
     CREATE TABLE public.vendor_invoices (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), status TEXT NOT NULL DEFAULT 'approved');
     CREATE TABLE public.payouts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), status TEXT NOT NULL DEFAULT 'approved');
     CREATE TABLE public.po_receipts (id UUID PRIMARY KEY, ns_status TEXT NOT NULL);
+    CREATE TABLE public.quote_settings (id INTEGER PRIMARY KEY CHECK (id = 1), updated_at TIMESTAMPTZ, updated_by UUID);
     CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
   `);
   for (const file of [
@@ -99,6 +102,8 @@ async function freshDb(): Promise<PGlite> {
     // Books' own fulfillments, receipts and bills, which the job reads with NetSuite's.
     '416-books-own-fulfillments.sql', '435-books-own-bills.sql', '436-books-snap-a-bill.sql', '454-inventory-adjustments.sql',
     '456-books-own-postings.sql', '457-books-own-adjustments.sql',
+    // Books' own credit memos, whose months the job reads once a month of BMG's has a credit memo's stock.
+    '466-credit-memos-in-fleetsuite.sql', '518-books-own-credit-memo-posting.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -846,5 +851,28 @@ describe('the posting job, for stock documents', () => {
     ]);
     expect(await journal()).toEqual(before);
     expect((await differing(MAR)).counts).toEqual({ assembly_build: 1, inventory_adjustment: 1 });
+  });
+
+  it("reads the months of Books' own credit memos only for a month of BMG's with a credit memo's stock, so no other stops over them", async () => {
+    // 1084 takes a part back on a credit memo, its cost back into the inventory account 1084's items keep their stock in.
+    await pg.query(`INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details) VALUES ('item', '503', 'GADGET', true, '{"asset_account": "135"}')`);
+    await add({ ref: '8130', type: 'CustCred', number: 'CM0130', date: '2025-03-12', lines: [['1', '1084', '135', 700], ['2', '1084', '500', -700]] });
+    const before = await journal();
+    failing.set('gl_own_credit_memo_months', () => true);
+    try {
+      // BMG's January and February have no credit memo's stock; March has CM0105's, so the run stops there.
+      const bmg = await run();
+      expect(bmg.error).toBe("Reading the months of Books' own credit memos: gl_own_credit_memo_months failed");
+      expect(bmg.months).toEqual([JAN, FEB]);
+      expect(await journal()).toEqual(before);
+      // Books' own credit memos are BMG's alone, so a run for 1084 posts its credit memo's cost without them.
+      const other = await postInvoices(service(), { deadline: clock + 240_000, deps: { query, now: () => clock, companies: ['1084'] } });
+      expect(other.error).toBeUndefined();
+      expect(other).toMatchObject({ months: [JAN, FEB, MAR], posted: 3, left: 1, failedCount: 0 });
+      expect((await journal()).slice(before.length).map((e) => e.key))
+        .toEqual(['1084:item_fulfillment:8106:1', '1084:inventory_transfer:8107:1', '1084:invoice_cost:8130:1']);
+    } finally {
+      failing.delete('gl_own_credit_memo_months');
+    }
   });
 });

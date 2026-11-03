@@ -175,7 +175,7 @@ export const POSTING_RULES: readonly PostingRuleInfo[] = [
     posts: [
       "The credit memo rule on the copy's own lines, with the sales tax it gives back to the account FleetSuite's own invoices post theirs to.",
     ],
-    note: "The stock it puts back on the shelf is the stock rule's, from NetSuite's credit memo.",
+    note: "The stock it puts back on the shelf posts apart, as NetSuite's credit memo's cost lines do: own_credit_memo_cost@1 when it matches, else the stock rule's.",
     code: 'src/lib/books/own-credit-memo-posting.ts', docs: "Posting FleetSuite's own credit memos",
   },
   {
@@ -220,6 +220,15 @@ export const POSTING_RULES: readonly PostingRuleInfo[] = [
     ],
     note: "A kit's items are its parts, as NetSuite takes them from stock: each the kit's quantity times what one kit holds.",
     code: 'src/lib/books/own-stock-posting.ts', docs: "Posting FleetSuite's own invoices' cost",
+  },
+  {
+    id: 'own_credit_memo_cost@1', name: "The stock FleetSuite's own credit memos put back", group: 'own',
+    from: "What a credit memo FleetSuite made put back on the shelf, from Books' own copy of the credit memo.",
+    posts: [
+      "Debit each item's inventory asset account and credit the cost account NetSuite's last fulfillment, invoice or credit memo of it used, at the item's average cost at O'Fallon just before.",
+    ],
+    note: "Only parts credited with Back to stock on come back, all at O'Fallon; a kit's items are its parts, as NetSuite puts them back.",
+    code: 'src/lib/books/own-stock-posting.ts', docs: 'Posting the stock a credit memo puts back',
   },
   {
     id: 'opening_balance@1', name: 'Opening balances', group: 'opening',
@@ -367,7 +376,7 @@ export const MONEY_STEPS: readonly MoneyStep[] = [
   },
   {
     key: 'credit_memo', area: 'sales', step: 'Make a credit memo', where: 'Credit on an invoice',
-    holders: [feature('invoicing')], switch: 'credit_memos', posts: ['credit_memo@1', 'own_credit_memo@1', 'stock@1'],
+    holders: [feature('invoicing')], switch: 'credit_memos', posts: ['credit_memo@1', 'own_credit_memo@1', 'stock@1', 'own_credit_memo_cost@1'],
     route: { file: 'src/app/api/invoices/credit-memo/route.ts', guard: 'feature', markers: ["requireFeature(req, 'invoicing')", "switchIsOn(service, 'credit_memos')"] },
   },
   {

@@ -7,9 +7,13 @@ import { useAuth } from '@/components/AuthProvider';
 import { booksAccess } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
-import type { OwnCreditMemoCheck, OwnCreditStatus } from '@/lib/books/own-credit-memo-check';
-import type { OwnLinePair } from '@/lib/books/own-invoice-check';
+import type { OwnCreditMemoCheck } from '@/lib/books/own-credit-memo-check';
+import type { OwnCheckStatus, OwnLinePair } from '@/lib/books/own-invoice-check';
 import type { OwnBooks } from '@/lib/books/own-invoice-posting';
+import type { OwnCreditCostCheck } from '@/lib/books/own-credit-cost-check';
+import type { OwnPostingView } from '@/lib/books/own-posting-view';
+import { OwnBooksLine, OwnEntry } from '@/components/BooksOwnPosting';
+import { NetSuitePosted, TakenItems } from '@/components/BooksTakenStock';
 
 /**
  * Books → Own credit memos → Books' own copy of one credit memo FleetSuite
@@ -20,12 +24,26 @@ import type { OwnBooks } from '@/lib/books/own-invoice-posting';
  * What's compared, each with FleetSuite's and NetSuite's side and why they
  * differ; each line FleetSuite credited paired with NetSuite's; how it worked
  * its copy out; and which copy the books posted the credit memo from
- * (src/lib/books/own-credit-memo-posting.ts). Open to whoever opens the
- * books; opened from Own credit memos, Invoices vs NetSuite, or the daily
- * check's notification (?id=, NetSuite's id for the credit memo).
+ * (src/lib/books/own-credit-memo-posting.ts). One that puts parts back on
+ * the shelf also shows what it put back next to what NetSuite's credit memo
+ * put back, each item with what it was worth, and how that posts: what the
+ * books hold for it and the copy's entry next to NetSuite's (migration 519,
+ * src/lib/books/own-credit-cost-check.ts, docs/books.md "Posting the stock a
+ * credit memo puts back"); it shows nothing there when neither put anything
+ * back. Open to whoever opens the books; opened from Own credit memos,
+ * Invoices vs NetSuite, or the daily check's notification (?id=, NetSuite's
+ * id for the credit memo).
  */
 
-type CreditMemo = OwnCreditMemoCheck & { books: OwnBooks | null };
+/** What a credit memo put back on the shelf, and how that posts. */
+type Cost = { check: OwnCreditCostCheck; posting: OwnPostingView };
+
+type CreditMemo = OwnCreditMemoCheck & {
+  books: OwnBooks | null;
+  /** Null when neither it nor NetSuite's credit memo put anything back. */
+  cost?: Cost | null;
+  costError?: string;
+};
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' });
 const fmt = (cents: number) => money.format(cents / 100);
@@ -33,11 +51,14 @@ const qty = (n: number) => String(Number(n.toFixed(4)));
 
 const GREEN = '#22c55e';
 const RED = '#ef4444';
+const AMBER = '#fbbf24';
 const BLUE = '#60a5fa';
 const GRAY = '#9ca3af';
 
-const STATUS: Record<OwnCreditStatus, { chip: string; color: string }> = {
+// A credit memo's own check is never incomplete; what it put back on the shelf can be.
+const STATUS: Record<OwnCheckStatus, { chip: string; color: string }> = {
   differs: { chip: 'Differs from NetSuite', color: RED },
+  incomplete: { chip: 'Incomplete', color: AMBER },
   waiting: { chip: 'Waiting for NetSuite', color: BLUE },
   matches: { chip: 'Matches NetSuite', color: GREEN },
   voided: { chip: 'Voided in NetSuite', color: GRAY },
@@ -143,6 +164,11 @@ export default function BooksOwnCreditMemoPage() {
 
   const c = creditMemo;
   const s = c ? STATUS[c.status] : null;
+  const cost = c?.cost ?? null;
+  const cs = cost ? STATUS[cost.check.status] : null;
+  // What FleetSuite didn't know of what it put back, and how it worked that out, follow the credit memo's own.
+  const unknowns = cost?.check.unknowns ?? [];
+  const workedOut = [...(c?.workedOut ?? []), ...(cost?.check.workedOut ?? [])];
 
   return (
     <div>
@@ -240,9 +266,78 @@ export default function BooksOwnCreditMemoPage() {
             </>
           )}
 
+          {cost && cs && (
+            <div id="cost">
+              <div style={heading}>What it put back on the shelf</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 8px' }}>
+                <span style={chip(cs.color)}>{cs.chip}</span>
+                <span style={{ fontSize: '12px', color: cost.check.status === 'differs' ? RED : 'var(--text-muted)' }}>{cost.check.summary}</span>
+              </div>
+              {/* What it put back posts apart from the credit, as NetSuite's credit memo's cost lines do. */}
+              <OwnBooksLine
+                posting={cost.posting}
+                status={cost.check.status}
+                theirs="credit memo"
+                company="BMG"
+                kind="stock"
+                netsuiteId={c.netsuiteId}
+                date={c.date}
+              />
+              <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px', marginTop: '8px' }}>
+                <table className="rep-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', background: 'var(--card)' }}>
+                  <thead>
+                    <tr style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>
+                      <th className="rep-label" style={{ ...cell, textAlign: 'left' }}>Compared</th>
+                      <th style={sideHead}>FleetSuite</th>
+                      <th style={sideHead}>NetSuite</th>
+                      <th style={markHead} aria-label="Same" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cost.check.fields.map((f) => (
+                      <TableRow
+                        key={f.field}
+                        label={<div><div style={{ fontWeight: 700 }}>{f.label}</div><Why text={f.why} differs={f.same === false} /></div>}
+                        style={{ borderTop: '1px solid var(--border)' }}
+                      >
+                        <td style={{ ...cell, whiteSpace: 'normal', color: f.fleetsuite === null ? 'var(--text-muted)' : undefined }}>{f.fleetsuite ?? 'Not known'}</td>
+                        <td style={{ ...cell, whiteSpace: 'normal', color: f.netsuite === null ? 'var(--text-muted)' : undefined }}>{f.netsuite ?? 'Not copied'}</td>
+                        <td style={cell}><Mark same={f.same} /></td>
+                      </TableRow>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <OwnEntry posting={cost.posting} title="Its stock entry" />
+              <TakenItems
+                items={cost.check.items}
+                locationId={cost.check.locationId}
+                copied={cost.check.fields.some((f) => f.field === 'items' && f.netsuite !== null)}
+                title="Items it put back"
+                back
+              />
+              {/* The stock entry above puts NetSuite's posting next to this copy's once it's worked out. */}
+              {!cost.posting.entry?.length && <NetSuitePosted entry={cost.check.entry} title="What NetSuite's credit memo posted for what came back" />}
+            </div>
+          )}
+          {c.costError && (
+            <div style={{ fontSize: '12px', color: RED, fontWeight: 700, marginTop: '12px' }}>
+              Couldn&apos;t read what it put back on the shelf: {c.costError}
+            </div>
+          )}
+
+          {unknowns.length > 0 && (
+            <>
+              <div style={heading}>What FleetSuite didn&apos;t know</div>
+              <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                {unknowns.map((u) => <li key={u}>{u.charAt(0).toUpperCase()}{u.slice(1)}.</li>)}
+              </ul>
+            </>
+          )}
+
           <div style={heading}>How FleetSuite worked it out</div>
           <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-            {c.workedOut.map((w) => <li key={w}>{w}</li>)}
+            {workedOut.map((w) => <li key={w}>{w}</li>)}
           </ul>
         </>
       )}
