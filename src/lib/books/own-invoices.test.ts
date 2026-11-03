@@ -636,6 +636,17 @@ describe('the shipping NetSuite added', () => {
     expect(p).toMatchObject({ lines_from: 'sent', subtotal: '112.50', tax: '8.49', total: '120.99', unknowns: [] });
   });
 
+  it("names NetSuite's shipping from the lists copy when NetSuite's answer has no name for it", async () => {
+    suiteql.mockResolvedValueOnce([shipping({ item_number: null })]);
+    const { service, rpc } = fakeService(database());
+    await saveOwnInvoice(service, {
+      netsuiteId: '5028', madeFrom: 'po', customerNetsuiteId: '9001', locationId: '1', billed: [{ itemId: '55', quantity: 1, rate: 100 }],
+    }, AT);
+    expect(payloadOf(rpc).lines.map((l: Row) => [l.item_netsuite_id, l.item_number, l.amount, l.taxable])).toEqual([
+      ['55', 'SHELF-1', '100.00', true], ['70', 'UPS Ground', '12.50', false],
+    ]);
+  });
+
   it("takes NetSuite's shipping in place of the order's when it bills a sales order whole", async () => {
     suiteql.mockResolvedValueOnce([shipping()]);
     const { service, rpc } = fakeService(withOrderShipping());
@@ -663,6 +674,18 @@ describe('the shipping NetSuite added', () => {
     await saveOwnInvoice(service, { netsuiteId: '5024', madeFrom: 'vehicle', salesOrderId: '700' }, AT);
     expect(payloadOf(rpc).lines.map((l: Row) => [l.item_netsuite_id, l.item_number, l.amount, l.taxable])).toEqual([
       ['55', 'SHELF-1', '251.00', true], ['71', 'Freight Line', '12.50', false],
+    ]);
+  });
+
+  it("takes NetSuite's word that an item is shipping over a copy that says it isn't", async () => {
+    suiteql.mockResolvedValueOnce([shipping({ item: '72', item_number: 'FREIGHT' })]);
+    const stale = { kind: 'item', netsuite_id: '72', name: 'FREIGHT', details: { item_type: 'OthCharge' }, gone_at: null };
+    const { service, rpc } = fakeService(database({ gl_netsuite_lists: [...lists(), stale] }));
+    await saveOwnInvoice(service, {
+      netsuiteId: '5029', madeFrom: 'po', customerNetsuiteId: '9001', locationId: '1', billed: [{ itemId: '55', quantity: 1, rate: 100 }],
+    }, AT);
+    expect(payloadOf(rpc).lines.map((l: Row) => [l.item_number, l.amount, l.taxable, l.tax])).toEqual([
+      ['SHELF-1', '100.00', true, '8.49'], ['FREIGHT', '12.50', false, '0.00'],
     ]);
   });
 
@@ -787,6 +810,43 @@ describe("a fixed invoice's next version", () => {
     expect(p.lines.map((l: Row) => [l.line_no, l.item_number, l.amount, l.taxable, l.tax, l.sales_order_line_id]).slice(-1))
       .toEqual([[5, 'UPS Ground', '12.50', false, '0.00', null]]);
     expect(p).toMatchObject({ subtotal: '564.00', tax: '36.15', total: '600.15' });
+  });
+
+  it("knows the shipping on a fixed invoice as when the copy was made: by NetSuite's word, named by the lists copy when NetSuite's answer has no name", async () => {
+    suiteql.mockResolvedValueOnce([
+      { line_id: '14', line_no: '9', item: '71', item_number: 'Freight Line', description: null, netamount: '-12.50' },
+      { line_id: '15', line_no: '10', item: '70', item_number: null, description: null, netamount: '-5.00' },
+    ]);
+    const { service, rpc } = fakeService(database({ gl_own_invoices: [COPY] }), { data: { saved: true, version: 2, lines: 6 } });
+    const fixed = { ...FIXED, lines: FIXED.lines.filter((l) => l.itemId !== '60') };
+    await saveFixedOwnInvoice(service, { netsuiteId: '5001', fixed, fixId: FIX, by: BY });
+    const p = (rpc.mock.calls[0][1] as { p: Record<string, any> }).p;
+    expect(p.lines.map((l: Row) => [l.item_netsuite_id, l.item_number, l.amount, l.taxable, l.tax]).slice(-2))
+      .toEqual([['71', 'Freight Line', '12.50', false, '0.00'], ['70', 'UPS Ground', '5.00', false, '0.00']]);
+    expect(p).toMatchObject({ subtotal: '569.00', tax: '36.15', total: '605.15' });
+  });
+
+  it("keeps a shipping line the fix has when NetSuite doesn't say what shipping it has, and takes NetSuite's in its place when it does", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ship = { itemId: '70', itemNumber: 'UPS Ground', description: null, quantity: null, rate: null, cents: 1000, orderLine: null };
+    const fixed = { ...FIXED, lines: [...FIXED.lines.filter((l) => l.itemId !== '60'), ship] };
+    const nextVersion = async () => {
+      const { service, rpc } = fakeService(database({ gl_own_invoices: [COPY] }), { data: { saved: true, version: 2, lines: 5 } });
+      await saveFixedOwnInvoice(service, { netsuiteId: '5001', fixed, fixId: FIX, by: BY });
+      return (rpc.mock.calls[0][1] as { p: Record<string, any> }).p;
+    };
+    const shippingOf = (p: Record<string, any>) => p.lines.filter((l: Row) => l.item_netsuite_id === '70').map((l: Row) => [l.amount, l.taxable]);
+
+    suiteql.mockRejectedValueOnce(new Error('NetSuite SuiteQL error (503): busy'));
+    const kept = await nextVersion();
+    expect(shippingOf(kept)).toEqual([['10.00', false]]);
+    expect(kept).toMatchObject({ subtotal: '561.50', tax: '36.15' });
+
+    suiteql.mockResolvedValueOnce([{ line_id: '14', line_no: '9', item: '70', item_number: 'UPS Ground', description: null, netamount: '-12.50' }]);
+    const taken = await nextVersion();
+    expect(shippingOf(taken)).toEqual([['12.50', false]]);
+    expect(taken).toMatchObject({ subtotal: '564.00', tax: '36.15' });
+    warn.mockRestore();
   });
 
   it("makes the next version as before when NetSuite doesn't say what shipping it has, and logs why", async () => {

@@ -36,7 +36,7 @@ describe("NetSuite's answer as the copy's lines", () => {
       row({ item: 71, item_number: '  Handling ', description: ' Handling ', netamount: -4 }),
       row({ item: ' 70 ', item_number: '', description: '  ', netamount: '0' }),
       row({ netamount: null }),
-      row({ item: '72', item_number: null, netamount: '3.25' }),
+      row({ item: ' 72 ', item_number: null, netamount: '3.25' }),
     ])).toEqual([
       { itemId: '70', itemNumber: 'UPS Ground', description: null, quantity: null, rate: null, cents: 1250 },
       { itemId: '71', itemNumber: 'Handling', description: 'Handling', quantity: null, rate: null, cents: 400 },

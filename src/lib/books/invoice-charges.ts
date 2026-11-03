@@ -83,10 +83,10 @@ export function chargeLines(rows: unknown): ChargeLine[] | null {
 
 /**
  * Reads the shipping and handling NetSuite put on an invoice. Never throws, and gives up after `timeoutMs`: the
- * invoice exists in NetSuite whatever happens here, and its copy is saved either way.
+ * invoice exists in NetSuite whatever happens here, and its copy is saved either way. An id that isn't one asks
+ * NetSuite nothing (chargesQuery refuses it).
  */
 export async function readInvoiceCharges(invoiceId: string, opts: { timeoutMs?: number } = {}): Promise<ChargesRead> {
-  if (!/^\d+$/.test(invoiceId)) return { ok: false, reason: `Not a NetSuite invoice id: ${invoiceId}` };
   const timeoutMs = opts.timeoutMs ?? CHARGES_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

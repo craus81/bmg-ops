@@ -617,7 +617,7 @@ function warnUnread(netsuiteId: string, charges: ChargesRead): void {
   if (!charges.ok) console.warn(`[books] shipping on NetSuite invoice ${netsuiteId} not read: ${charges.reason}`);
 }
 
-/** NetSuite said these items are shipping: the copy takes them so where the lists copy doesn't have them yet. */
+/** NetSuite said these items are shipping: the copy takes them so where the lists copy doesn't have them yet, or has them as something else. */
 function knowCharges(items: OwnInvoiceFacts['items'], charges: Array<{ itemId: string | null; itemNumber?: string | null }>): void {
   for (const c of charges) {
     const known = c.itemId ? items.get(c.itemId) : undefined;

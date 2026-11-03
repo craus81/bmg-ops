@@ -2861,8 +2861,10 @@ from NetSuite while it reads its copy of the sales order
 SuiteQL read, tried once more if NetSuite doesn't answer, and given up after
 6 seconds, as the billing screen is waiting. The copy bills them after
 FleetSuite's own lines, as NetSuite charged them, in place of any shipping
-line FleetSuite's copy of the sales order had. A shipping item the lists
-copy doesn't have yet is taken as one on NetSuite's word.
+line FleetSuite's copy of the sales order had. An item NetSuite's answer
+has is taken as shipping on NetSuite's word, where the lists copy doesn't
+have it yet or has it as something else, and is named as the lists copy
+names it where NetSuite's answer has no name for it.
 
 FleetSuite doesn't tax them, as it doesn't tax freight on quotes (owner
 decision 2026-10-01: Missouri doesn't tax delivery charged on a line of its
