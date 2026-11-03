@@ -11,6 +11,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { nextMillisecond } from './pglite-clock';
 import { readRates, type SalesTaxRateRow } from './sales-tax-rates';
 import { holdReturn, readReturn, salesTaxWorksheet, type SalesTaxReturnRow } from './sales-tax-worksheet';
 
@@ -222,8 +223,15 @@ describe("migration 496's rates and returns", () => {
       company: 'BMG', month: '2025-06-01', filed_on: '2025-07-18', gross_cents: 81100, adjustments_cents: -28500, taxable_cents: 52600,
       tax_cents: 4465, allowance_cents: 89, paid_cents: 4376, note: '  Filed online  ',
     };
-    const save = (p: Record<string, unknown>) => one<Answer>(db, 'SELECT sales_tax_return_save($1::jsonb) AS r', [JSON.stringify(p)]);
-    const remove = (p: Record<string, unknown>) => one<Answer>(db, 'SELECT sales_tax_return_remove($1::jsonb) AS r', [JSON.stringify(p)]);
+    // As a page would, never in the same millisecond of PGlite's clock as the call before (see pglite-clock.ts).
+    const save = async (p: Record<string, unknown>) => {
+      await nextMillisecond();
+      return one<Answer>(db, 'SELECT sales_tax_return_save($1::jsonb) AS r', [JSON.stringify(p)]);
+    };
+    const remove = async (p: Record<string, unknown>) => {
+      await nextMillisecond();
+      return one<Answer>(db, 'SELECT sales_tax_return_remove($1::jsonb) AS r', [JSON.stringify(p)]);
+    };
     const june = async () => (await db.query<Record<string, unknown>>(
       `SELECT tax_cents::int AS tax, paid_cents::int AS paid, note, entered_by, updated_by, updated_at
        FROM sales_tax_returns WHERE company = 'BMG' AND month = '2025-06-01'`,

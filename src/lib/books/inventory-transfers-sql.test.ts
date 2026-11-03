@@ -9,6 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { nextMillisecond } from './pglite-clock';
 import { keptLines, linesToKeep, type KeptLine, type TransferItem, type TransferLine } from '@/lib/inventory-transfers';
 
 const TRANSFER = (n: number) => `f0000000-0000-4000-8000-00000000000${n}`;
@@ -40,8 +41,11 @@ async function freshDb(): Promise<PGlite> {
   return pg;
 }
 
-const call = async <T = any>(pg: PGlite, fn: string, p: unknown) =>
-  (await pg.query<{ r: T }>(`SELECT ${fn}($1::jsonb) AS r`, [JSON.stringify(p)])).rows[0].r;
+// As a page would, never in the same millisecond of PGlite's clock as the call before (see pglite-clock.ts).
+const call = async <T = any>(pg: PGlite, fn: string, p: unknown) => {
+  await nextMillisecond();
+  return (await pg.query<{ r: T }>(`SELECT ${fn}($1::jsonb) AS r`, [JSON.stringify(p)])).rows[0].r;
+};
 
 const ITEMS = new Map<string, TransferItem>([
   ['501', { id: '501', number: 'BRK-100', name: 'Bracket kit', type: 'InvtPart', active: true }],

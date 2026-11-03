@@ -9,6 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { nextMillisecond } from './pglite-clock';
 
 const ANN = '00000000-0000-4000-8000-0000000000a1';
 const BEN = '00000000-0000-4000-8000-0000000000b2';
@@ -47,8 +48,11 @@ type Saved = {
   updated_at: string;
 };
 
-const call = async (pg: PGlite, fn: 'books_saved_report_save' | 'books_saved_report_remove', p: Record<string, unknown>) =>
-  (await pg.query<{ r: Answer }>(`SELECT public.${fn}($1::jsonb) AS r`, [JSON.stringify(p)])).rows[0].r;
+// As a page would, never in the same millisecond of PGlite's clock as the call before (see pglite-clock.ts).
+const call = async (pg: PGlite, fn: 'books_saved_report_save' | 'books_saved_report_remove', p: Record<string, unknown>) => {
+  await nextMillisecond();
+  return (await pg.query<{ r: Answer }>(`SELECT public.${fn}($1::jsonb) AS r`, [JSON.stringify(p)])).rows[0].r;
+};
 
 /** A save as the route sends it: Ann's year to date by division on BMG unless told otherwise. */
 const save = (pg: PGlite, p: Record<string, unknown>) => call(pg, 'books_saved_report_save', {

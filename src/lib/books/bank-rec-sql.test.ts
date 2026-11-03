@@ -10,6 +10,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
+import { nextMillisecond } from './pglite-clock';
 
 const CRAIG = 'a0000000-0000-4000-8000-000000000001';
 const HAROLD = 'a0000000-0000-4000-8000-000000000002';
@@ -38,8 +39,11 @@ async function freshDb(): Promise<PGlite> {
   return pg;
 }
 
-const call = async <T = any>(pg: PGlite, fn: string, p: unknown) =>
-  (await pg.query<{ r: T }>(`SELECT ${fn}($1::jsonb) AS r`, [JSON.stringify(p)])).rows[0].r;
+// As a page would, never in the same millisecond of PGlite's clock as the call before (see pglite-clock.ts).
+const call = async <T = any>(pg: PGlite, fn: string, p: unknown) => {
+  await nextMillisecond();
+  return (await pg.query<{ r: T }>(`SELECT ${fn}($1::jsonb) AS r`, [JSON.stringify(p)])).rows[0].r;
+};
 
 type Row = Record<string, any>;
 
