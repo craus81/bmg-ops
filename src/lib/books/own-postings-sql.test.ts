@@ -232,7 +232,7 @@ async function saveOwnCopies(pg: PGlite) {
     netsuiteId: '8801', netsuiteNumber: 'VI-1042', madeFrom: 'vendor_invoice', madeFromId: 'inv-1', vendorId: 412,
     vendorName: 'Northside Install Co.', referenceNo: 'VI-1042', subsidiaryId: null, locationId: OFALLON,
     expense: { accountId: SUBCONTRACTORS, amount: 1250, memo: 'Install' },
-  } as MadeBill & { netsuiteId: string }, null, new Date('2025-03-05T15:00:00Z'))))).toEqual({ saved: true, lines: 1 });
+  } as MadeBill & { netsuiteId: string }, null, new Date('2025-03-05T15:00:00Z'), null)))).toEqual({ saved: true, lines: 1 });
 }
 
 // ── The functions ──────────────────────────────────────────────────────────

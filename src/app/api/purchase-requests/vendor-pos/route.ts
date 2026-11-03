@@ -24,8 +24,10 @@ function poUrl(netsuiteId: string | null): string | null {
  * GET /api/purchase-requests/vendor-pos — the Purchasing page's Vendor POs
  * tab: every vendor PO in the NetSuite mirror, newest first, with its lines
  * and the requests each line holds (which is what the per-line Undo acts
- * on). ?status=open|received|closed|all, ?fleetsuite=1 for only POs made
- * here, ?q= for a PO number, vendor or part number.
+ * on), then its other lines (its Expenses tab: freight, say; migration 515),
+ * each with whether a bill has it. ?status=open|received|closed|all,
+ * ?fleetsuite=1 for only POs made here, ?q= for a PO number, vendor or part
+ * number.
  */
 export async function GET(req: NextRequest) {
   const auth = await requireFeature(req, 'parts_ordering');
@@ -75,12 +77,19 @@ export async function GET(req: NextRequest) {
   const ids = pos.map(p => p.id as string);
   if (ids.length === 0) return NextResponse.json({ success: true, pos: [] });
 
-  const [lines, requests] = await Promise.all([
+  const [lines, others, requests] = await Promise.all([
     fetchAllRows<any>((from, to) => service
       .from('netsuite_vendor_po_lines')
       .select('id, po_id, line_id, item_number, item_netsuite_id, description, quantity, quantity_received, rate')
       .in('po_id', ids)
       .order('po_id').order('line_id').order('id')
+      .range(from, to)),
+    // A copy that can't be read yet shows the PO's item lines alone.
+    fetchAllRows<any>((from, to) => service
+      .from('netsuite_vendor_po_expense_lines')
+      .select('id, po_id, line_id, account_name, memo, amount, closed, billed_by')
+      .in('po_id', ids)
+      .order('po_id').order('id')
       .range(from, to)),
     fetchAllRows<any>((from, to) => service
       .from('purchase_requests')
@@ -107,6 +116,9 @@ export async function GET(req: NextRequest) {
           ? r.netsuite_item_id === l.item_netsuite_id
           : r.item_number === l.item_number),
       })),
+      other_lines: ((others.data || []) as any[])
+        .filter(l => l.po_id === po.id)
+        .sort((a, b) => Number(a.line_id) - Number(b.line_id)),
     };
   }).filter(Boolean);
 

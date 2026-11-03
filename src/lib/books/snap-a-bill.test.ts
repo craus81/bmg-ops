@@ -606,6 +606,7 @@ const PO453: SnapPo = {
     lines: [{ itemNumber: 'RACK-48', ordered: 4, received: 4 }, { itemNumber: 'CLAMP-ACX', ordered: 4, received: 4 }],
     priorBills: [], earlierBills: [], billedUnits: 0, rows: PO_ROWS,
   },
+  expenses: [],
 };
 const ACME_READ: BillRead = {
   isBill: true, vendorName: 'Acme Truck Racks', billNumber: 'INV-5531', billDate: '2026-10-20', dueDate: null, terms: null,

@@ -38,6 +38,29 @@ interface PoLine {
   requests: LineRequest[];
 }
 
+/** One of the PO's other lines (its Expenses tab: freight, say), from the copy of the PO (migration 515). */
+interface PoOtherLine {
+  id: string;
+  line_id: string;
+  account_name: string | null;
+  memo: string | null;
+  amount: number | string | null;
+  closed: boolean | null;
+  /** The bills that have it; null when the copy couldn't say. */
+  billed_by: string[] | null;
+}
+
+/** An other line's amount: a discount on the Expenses tab shows as -$5.00. */
+const otherLineAmount = (amount: number | string): string => `${Number(amount) < 0 ? '-' : ''}$${Math.abs(Number(amount)).toFixed(2)}`;
+
+/** "Billed", "Not billed yet", "Closed", or nothing when the copy couldn't say. */
+function otherLineState(l: PoOtherLine): string | null {
+  if (l.billed_by?.length) return 'Billed';
+  if (l.closed) return 'Closed';
+  if (l.billed_by && l.closed === false) return 'Not billed yet';
+  return null;
+}
+
 interface VendorPo {
   id: string;
   netsuite_id: string | null;
@@ -53,6 +76,7 @@ interface VendorPo {
   made_in_fleetsuite: boolean;
   url: string | null;
   lines: PoLine[];
+  other_lines?: PoOtherLine[];
 }
 
 type Dialog = ReturnType<typeof useDialog>;
@@ -295,7 +319,7 @@ export default function VendorPosTab({ isAdmin, onChanged, startNew = false, ini
                   );
                 })()}
               </div>
-              {po.lines.length === 0 && (
+              {po.lines.length === 0 && !po.other_lines?.length && (
                 <div style={{ padding: '10px 14px', fontSize: '12px', color: theme.textMuted }}>No lines synced yet.</div>
               )}
               {po.lines.map(line => {
@@ -338,6 +362,17 @@ export default function VendorPosTab({ isAdmin, onChanged, startNew = false, ini
                   </div>
                 );
               })}
+              {(po.other_lines || []).map(other => (
+                <div key={other.id} style={{ padding: '9px 14px', borderTop: `1px solid ${theme.border}`, display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{other.account_name || 'Other line'}</div>
+                    {other.memo && <div style={{ fontSize: '11px', color: theme.textSecondary }}>{other.memo}</div>}
+                  </div>
+                  <div style={{ fontSize: '11px', color: theme.textSecondary, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                    {[otherLineState(other), canSeeMoney && other.amount != null ? otherLineAmount(other.amount) : null].filter(Boolean).join(' · ')}
+                  </div>
+                </div>
+              ))}
             </div>
           );
         })}

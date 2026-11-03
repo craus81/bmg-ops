@@ -4,7 +4,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   billPayload,
   fixedOwnBillPayload,
+  poBillExpenseLines,
   poBillLines,
+  readPoCopyExpenses,
   readPoCopyLines,
   saveFixedOwnBill,
   saveOwnBill,
@@ -13,6 +15,7 @@ import {
   type FixedBillCopy,
   type MadeBill,
   type PoCopyLine,
+  type PoExpenseLine,
 } from './own-bills';
 
 const line = (over: Partial<PoCopyLine> = {}): PoCopyLine => ({
@@ -56,6 +59,50 @@ describe("a Parts Mail bill's lines", () => {
   });
 });
 
+/** One of the PO's other lines (migration 515), as FleetSuite's copy of the PO has it. Made-up accounts. */
+const other = (over: Partial<PoExpenseLine> = {}): PoExpenseLine => ({
+  line_id: '5', account_netsuite_id: '612', account_name: '5100 Freight In', memo: 'Freight', amount: '45.50', closed: false, billed_by: [], ...over,
+});
+
+describe("a PO's bill's other lines (migration 515)", () => {
+  it('takes each line no bill has yet and NetSuite has open, its amount to its account, numbered on from the item lines', () => {
+    const { lines, known, priced } = poBillExpenseLines([
+      other({ line_id: '9', account_netsuite_id: '613', memo: ' ', amount: 12 }),
+      other(),
+      // An earlier bill has it, or NetSuite closed it.
+      other({ line_id: '6', billed_by: ['8790'] }),
+      other({ line_id: '7', closed: true }),
+    ], '8801', 2);
+    expect({ known, priced }).toEqual({ known: true, priced: true });
+    expect(lines).toEqual([
+      { lineNo: 3, accountId: '612', itemId: null, itemNumber: null, description: 'Freight', quantity: null, rate: null, cents: 4550, poLineId: '5' },
+      { lineNo: 4, accountId: '613', itemId: null, itemNumber: null, description: null, quantity: null, rate: null, cents: 1200, poLineId: '9' },
+    ]);
+    expect(poBillExpenseLines([], '8801', 0)).toEqual({ lines: [], known: true, priced: true });
+  });
+
+  it("doesn't know them when the copy hasn't read them, or can't say a line's bills, whether it's closed, or its account", () => {
+    expect(poBillExpenseLines(null, '8801', 0)).toEqual({ lines: [], known: false, priced: true });
+    expect(poBillExpenseLines([other(), other({ line_id: '6', billed_by: null })], '8801', 0)).toMatchObject({ known: false, lines: [{ poLineId: '5' }] });
+    expect(poBillExpenseLines([other({ closed: null })], '8801', 0)).toMatchObject({ known: false, lines: [] });
+    expect(poBillExpenseLines([other({ account_netsuite_id: null })], '8801', 0).known).toBe(false);
+    expect(poBillExpenseLines([other({ account_netsuite_id: 'Freight' })], '8801', 0).known).toBe(false);
+    // Closed, or on an earlier bill: whether it's closed or its account doesn't matter.
+    expect(poBillExpenseLines([other({ closed: true, account_netsuite_id: null }), other({ billed_by: ['8790'], closed: null })], '8801', 0).known).toBe(true);
+  });
+
+  it('knows nothing when the copy already shows a line on this bill: it read the PO since, so its item lines can\'t say', () => {
+    expect(poBillExpenseLines([other({ billed_by: ['8801'] })], '8801', 0)).toMatchObject({ known: false, lines: [] });
+    expect(poBillExpenseLines([other({ billed_by: ['8790', '8801'] })], '8801', 0).known).toBe(false);
+  });
+
+  it('says when a line has no amount', () => {
+    const { lines, priced } = poBillExpenseLines([other({ amount: null }), other({ line_id: '6', amount: 'n/a' })], '8801', 0);
+    expect(priced).toBe(false);
+    expect(lines.map((l) => l.cents)).toEqual([null, null]);
+  });
+});
+
 const AT = new Date('2026-10-25T03:00:00Z'); // 10 PM Central on the 24th
 const made = (over: Partial<MadeBill> = {}): MadeBill & { netsuiteId: string } => ({
   netsuiteId: '8801',
@@ -74,7 +121,7 @@ const made = (over: Partial<MadeBill> = {}): MadeBill & { netsuiteId: string } =
 
 describe("working out Books' own bill", () => {
   it("is one expense line for a CNI vendor invoice or payout, dated the day in Central time", () => {
-    const own = workOutOwnBill(made(), null, AT);
+    const own = workOutOwnBill(made(), null, AT, null);
     expect(own).toMatchObject({
       netsuiteId: '8801', netsuiteNumber: 'VI-1042', madeFrom: 'vendor_invoice', vendorId: '412', vendorName: 'Northside Install Co.',
       subsidiaryId: '2', locationId: '1', billDate: '2026-10-24', unknowns: [], invoiceCents: null, poId: null,
@@ -87,11 +134,43 @@ describe("working out Books' own bill", () => {
 
   it("is the PO's open lines for a Parts Mail bill, and says what it didn't know", () => {
     const partsMail = made({ madeFrom: 'parts_mail', expense: null, po: { copyId: 'po-1', netsuiteId: '5001', number: 'PO453-ACME' }, invoiceTotal: '2140.5' });
-    const own = workOutOwnBill(partsMail, [line()], AT);
+    const own = workOutOwnBill(partsMail, [line()], AT, []);
     expect(own).toMatchObject({ poId: '5001', poNumber: 'PO453-ACME', invoiceCents: 214050, unknowns: [] });
     expect(own.lines.map((l) => l.cents)).toEqual([214000]);
-    expect(workOutOwnBill(partsMail, null, AT)).toMatchObject({ lines: [], unknowns: ['lines'] });
-    expect(workOutOwnBill(partsMail, [line({ rate: null, amount: null })], AT).unknowns).toEqual(['prices']);
+    expect(workOutOwnBill(partsMail, null, AT, [])).toMatchObject({ lines: [], unknowns: ['lines'] });
+    expect(workOutOwnBill(partsMail, [line({ rate: null, amount: null })], AT, []).unknowns).toEqual(['prices']);
+  });
+
+  it("puts the PO's other lines no bill had yet after its item lines, and says when it didn't know them", () => {
+    const partsMail = made({ madeFrom: 'parts_mail', expense: null, po: { copyId: 'po-1', netsuiteId: '5001', number: 'PO453-ACME' } });
+    const own = workOutOwnBill(partsMail, [line()], AT, [other(), other({ line_id: '6', billed_by: ['8790'] })]);
+    expect(own.unknowns).toEqual([]);
+    expect(own.lines.map((l) => [l.lineNo, l.itemId, l.accountId, l.quantity, l.cents, l.poLineId])).toEqual([
+      [1, '9001', null, 12, 214000, '1'],
+      [2, null, '612', null, 4550, '5'],
+    ]);
+    // Not read yet, or a line's bills not known: the item lines, and it says it didn't know what was billed.
+    expect(workOutOwnBill(partsMail, [line()], AT, null)).toMatchObject({ unknowns: ['lines'], lines: [{ poLineId: '1' }] });
+    expect(workOutOwnBill(partsMail, [line()], AT, [other({ billed_by: null })]).unknowns).toEqual(['lines']);
+    expect(workOutOwnBill(partsMail, [line()], AT, [other({ amount: null })]).unknowns).toEqual(['prices']);
+    // A PO with only other lines left to bill, or only other lines at all.
+    expect(workOutOwnBill(partsMail, [line({ quantity_billed: '12' })], AT, [other()])).toMatchObject({ unknowns: [], lines: [{ lineNo: 1, accountId: '612', cents: 4550 }] });
+    expect(workOutOwnBill(partsMail, null, AT, [other()])).toMatchObject({ unknowns: [], lines: [{ lineNo: 1, accountId: '612' }] });
+    // Nothing left to bill at all, its other lines billed too.
+    expect(workOutOwnBill(partsMail, [line({ quantity_billed: '12' })], AT, [other({ billed_by: ['8790'] })])).toMatchObject({ unknowns: ['lines'], lines: [] });
+  });
+
+  it("numbers a snapped bill's line for what it had beyond the PO after the PO's other lines", () => {
+    const snapped = made({
+      madeFrom: 'snapped', expense: null, po: { copyId: 'po-1', netsuiteId: '5001', number: 'PO453-ACME' },
+      expenses: [{ accountId: '655', amount: 20, memo: 'Pallet charge' }],
+    });
+    const own = workOutOwnBill(snapped, [line()], AT, [other()]);
+    expect(own.lines.map((l) => [l.lineNo, l.itemId, l.accountId, l.description, l.cents, l.poLineId])).toEqual([
+      [1, '9001', null, 'Ladder rack', 214000, '1'],
+      [2, null, '612', 'Freight', 4550, '5'],
+      [3, null, '655', 'Pallet charge', 2000, null],
+    ]);
   });
 
   it("is each expense line sent for a snapped bill, dated as the vendor's bill is (Snap a bill)", () => {
@@ -103,7 +182,7 @@ describe("working out Books' own bill", () => {
         { accountId: '623', amount: -0.01 },
       ],
     });
-    const own = workOutOwnBill(snapped, null, AT);
+    const own = workOutOwnBill(snapped, null, AT, null);
     expect(own).toMatchObject({ madeFrom: 'snapped', madeFromId: 'snap-1', billDate: '2026-10-20', invoiceCents: 129683, unknowns: [] });
     expect(own.lines.map((l) => [l.lineNo, l.accountId, l.description, l.cents, l.itemId, l.quantity])).toEqual([
       [1, '623', 'Electric service, Sep 18 to Oct 17', 128433, null, null],
@@ -111,17 +190,17 @@ describe("working out Books' own bill", () => {
       [3, '623', null, -1, null, null],
     ]);
     // A date that isn't one falls back to the day FleetSuite made it.
-    expect(workOutOwnBill(made({ billDate: '10/20/2026' }), null, AT).billDate).toBe('2026-10-24');
-    expect(workOutOwnBill(made({ billDate: null }), null, AT).billDate).toBe('2026-10-24');
+    expect(workOutOwnBill(made({ billDate: '10/20/2026' }), null, AT, null).billDate).toBe('2026-10-24');
+    expect(workOutOwnBill(made({ billDate: null }), null, AT, null).billDate).toBe('2026-10-24');
   });
 
   it("keeps only numbers for NetSuite's ids", () => {
-    const own = workOutOwnBill(made({ vendorId: 'V-412', subsidiaryId: ' ', locationId: null }), null, AT);
+    const own = workOutOwnBill(made({ vendorId: 'V-412', subsidiaryId: ' ', locationId: null }), null, AT, null);
     expect(own).toMatchObject({ vendorId: null, subsidiaryId: null, locationId: null });
   });
 
   it('writes the copy as the database takes it', () => {
-    expect(billPayload(workOutOwnBill(made({ invoiceTotal: 1250 }), null, AT))).toEqual({
+    expect(billPayload(workOutOwnBill(made({ invoiceTotal: 1250 }), null, AT, null))).toEqual({
       netsuite_id: '8801', netsuite_number: 'VI-1042', subsidiary_id: '2', made_from: 'vendor_invoice', made_from_id: 'inv-1',
       vendor_netsuite_id: '412', vendor_name: 'Northside Install Co.', reference_no: 'VI-1042', bill_date: '2026-10-24',
       po_netsuite_id: null, po_number: null, location_netsuite_id: '1', invoice_total: '1250.00', unknowns: [], made_by: 'u-1',
@@ -130,24 +209,42 @@ describe("working out Books' own bill", () => {
         quantity: null, rate: null, amount: '1250.00', po_line_id: null,
       }],
     });
-    const unpriced = workOutOwnBill(made({ madeFrom: 'parts_mail', expense: null }), [line({ rate: null, amount: null })], AT);
+    const unpriced = workOutOwnBill(made({ madeFrom: 'parts_mail', expense: null }), [line({ rate: null, amount: null })], AT, []);
     expect((billPayload(unpriced).lines as Array<Record<string, unknown>>)[0].amount).toBeNull();
   });
 });
 
-/** Just enough of the service client: reads of netsuite_vendor_po_lines and the save. */
-function fakeService(opts: { poLines?: PoCopyLine[]; readError?: string; rpc?: { data?: unknown; error?: { message: string } } } = {}) {
+/**
+ * Just enough of the service client: reads of the copy of the PO (its item lines; when its other lines were read, and
+ * they) and the save. `others` null: the copy hasn't read the PO's other lines.
+ */
+function fakeService(opts: {
+  poLines?: PoCopyLine[];
+  readError?: string;
+  others?: PoExpenseLine[] | null;
+  othersError?: string;
+  rpc?: { data?: unknown; error?: { message: string } };
+} = {}) {
   const reads: Array<{ table: string; columns: string; filters: Array<[string, unknown]> }> = [];
   const rpc = vi.fn(async (_fn: string, _args: unknown) => opts.rpc ?? { data: { saved: true, lines: 1 }, error: null });
   const service = {
     from(table: string) {
       const read = { table, columns: '', filters: [] as Array<[string, unknown]> };
       reads.push(read);
+      const answer = () => {
+        if (table === 'netsuite_vendor_po_lines') {
+          return opts.readError ? { data: null, error: { message: opts.readError } } : { data: opts.poLines ?? [], error: null };
+        }
+        if (opts.othersError) return { data: null, error: { message: opts.othersError } };
+        if (table === 'netsuite_vendor_pos') return { data: { expense_lines_read_at: opts.others === null ? null : '2026-10-24T20:52:00Z' }, error: null };
+        if (table === 'netsuite_vendor_po_expense_lines') return { data: opts.others ?? [], error: null };
+        throw new Error(`stand-in has no ${table}`);
+      };
       const q: any = {
         select(columns: string) { read.columns = columns; return q; },
         eq(column: string, value: unknown) {
           read.filters.push([column, value]);
-          return Promise.resolve(opts.readError ? { data: null, error: { message: opts.readError } } : { data: opts.poLines ?? [], error: null });
+          return { then: (done: any, fail: any) => Promise.resolve(answer()).then(done, fail), maybeSingle: async () => answer() };
         },
       };
       return q;
@@ -165,6 +262,25 @@ describe('reading the PO copy', () => {
     expect(await readPoCopyLines(fakeService().service, 'po-1')).toBeNull();
     expect(await readPoCopyLines(fakeService().service, null)).toBeNull();
     await expect(readPoCopyLines(fakeService({ readError: 'timed out' }).service, 'po-1')).rejects.toThrow('timed out');
+  });
+
+  it("reads its other lines once the copy has, and says when it hasn't or they can't be read, without throwing", async () => {
+    const { service, reads } = fakeService({ others: [other()] });
+    expect(await readPoCopyExpenses(service, 'po-1')).toEqual([other()]);
+    expect(reads).toEqual([
+      { table: 'netsuite_vendor_pos', columns: 'expense_lines_read_at', filters: [['id', 'po-1']] },
+      { table: 'netsuite_vendor_po_expense_lines', columns: expect.stringContaining('billed_by'), filters: [['po_id', 'po-1']] },
+    ]);
+    // Read, with none: not the same as not read.
+    expect(await readPoCopyExpenses(fakeService().service, 'po-1')).toEqual([]);
+    const unread = fakeService({ others: null });
+    expect(await readPoCopyExpenses(unread.service, 'po-1')).toBeNull();
+    expect(unread.reads.map((r) => r.table)).toEqual(['netsuite_vendor_pos']);
+    expect(await readPoCopyExpenses(fakeService().service, null)).toBeNull();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await readPoCopyExpenses(fakeService({ othersError: 'column expense_lines_read_at does not exist' }).service, 'po-1')).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('column expense_lines_read_at does not exist'));
+    warn.mockRestore();
   });
 });
 
@@ -197,7 +313,7 @@ describe('saving the copy', () => {
       madeFrom: 'snapped', expense: null, locationId: null, billDate: '2026-10-22', po: { copyId: 'po-1', netsuiteId: '5001', number: 'PO453-ACME' },
       expenses: [{ accountId: '655', amount: 240, memo: 'Freight' }], invoiceTotal: 2380,
     }), AT);
-    expect(reads.map((r) => r.table)).toEqual(['netsuite_vendor_po_lines']);
+    expect(reads.map((r) => r.table)).toEqual(['netsuite_vendor_po_lines', 'netsuite_vendor_pos', 'netsuite_vendor_po_expense_lines']);
     expect(payloadOf(rpc)).toMatchObject({ made_from: 'snapped', po_netsuite_id: '5001', po_number: 'PO453-ACME', bill_date: '2026-10-22', invoice_total: '2380.00', unknowns: [] });
     expect(payloadOf(rpc).lines.map((l: Record<string, unknown>) => [l.line_no, l.item_netsuite_id, l.account_netsuite_id, l.description, l.amount]))
       .toEqual([[1, '9001', null, 'Ladder rack', '2140.00'], [2, null, '655', 'Freight', '240.00']]);
@@ -212,6 +328,20 @@ describe('saving the copy', () => {
     await saveOwnBill(service, made({ madeFrom: 'parts_mail', expense: null, po: { copyId: 'po-1', netsuiteId: '5001', number: 'PO453-ACME' } }), AT);
     expect(payloadOf(rpc)).toMatchObject({ made_from: 'parts_mail', po_netsuite_id: '5001', unknowns: [] });
     expect(payloadOf(rpc).lines).toEqual([expect.objectContaining({ item_netsuite_id: '9001', quantity: 12, amount: '2140.00', po_line_id: '1' })]);
+  });
+
+  it("saves a PO's bill with the PO's other lines, and still saves it when they can't be read, saying it didn't know them", async () => {
+    const po = { madeFrom: 'parts_mail' as const, expense: null, po: { copyId: 'po-1', netsuiteId: '5001', number: 'PO453-ACME' } };
+    const { service, rpc } = fakeService({ poLines: [line()], others: [other()] });
+    await saveOwnBill(service, made(po), AT);
+    expect(payloadOf(rpc).unknowns).toEqual([]);
+    expect(payloadOf(rpc).lines.map((l: Record<string, unknown>) => [l.line_no, l.item_netsuite_id, l.account_netsuite_id, l.amount, l.po_line_id]))
+      .toEqual([[1, '9001', null, '2140.00', '1'], [2, null, '612', '45.50', '5']]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const failing = fakeService({ poLines: [line()], othersError: 'statement timeout' });
+    expect(await saveOwnBill(failing.service, made(po), AT)).toEqual({ saved: true });
+    expect(payloadOf(failing.rpc)).toMatchObject({ unknowns: ['lines'], lines: [expect.objectContaining({ po_line_id: '1' })] });
+    expect(warn).toHaveBeenCalled();
   });
 
   it('says so when the bill was already saved', async () => {

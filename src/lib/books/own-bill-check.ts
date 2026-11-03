@@ -208,7 +208,7 @@ export const BILL_MADE_FROM_TEXT: Readonly<Record<BillMadeFrom, string>> = {
 };
 
 const UNKNOWN_TEXT: Readonly<Record<BillUnknown, string>> = {
-  lines: "what it billed (FleetSuite's copy of the purchase order didn't have the order)",
+  lines: "what it billed (FleetSuite's copy of the purchase order didn't say what was left to bill on it)",
   prices: "the price of a line (FleetSuite's copy of the purchase order had none)",
 };
 
@@ -511,15 +511,29 @@ export function checkOwnBill(pair: BillPairData, lists: BillLists, copies: BillC
   const workedOut: string[] = [];
   const madeOn = Number.isNaN(madeAt) ? null : chicagoDate(new Date(madeAt));
   const madeDay = fixes ? madeOn : own.date;
+  // A PO's bill: what FleetSuite's copy of the PO still had to bill, its other lines (an account and a line of the
+  // PO's, migration 515) with them, then what a snapped bill had beyond the PO (an account and no line of the PO's).
+  const poSaid = (po: string) => {
+    const said = [`NetSuite bills a purchase order at its own prices, so the lines are what FleetSuite's copy of ${po} still had to bill, each at the PO's price, to the cent.`];
+    const others = (own.lines ?? []).filter((l) => l.account_id && l.po_line_id);
+    if (others.length) said.push(`NetSuite copies the PO's other lines no bill had yet onto the bill too: ${listed(others.map((l) => accountName(l.account_id)))}.`);
+    return said;
+  };
   if (own.made_from === 'parts_mail') {
     workedOut.push(`Made by Create bill on a Parts Mail invoice${madeDay ? ` on ${dayText(madeDay)}` : ''}, from ${own.po_number ?? 'its purchase order'}.`);
-    if (!fixes) workedOut.push(`NetSuite bills a purchase order at its own prices, so the lines are what FleetSuite's copy of ${own.po_number ?? 'the purchase order'} still had to bill, each at the PO's price, to the cent.`);
+    if (!fixes) workedOut.push(...poSaid(own.po_number ?? 'the purchase order'));
     const invoice = cents(own.invoice_total);
     if (invoice !== null) workedOut.push(`The vendor's invoice says ${dollars(invoice)}.`);
   } else if (own.made_from === 'snapped') {
     workedOut.push(`Made with Snap a bill${madeOn ? ` on ${dayText(madeOn)}` : ''}: FleetSuite read a picture of the vendor's bill, and it was checked before Send to NetSuite.`);
     if (!fixes) {
-      workedOut.push(`${plural((own.lines ?? []).length, 'line', 'lines')}, as FleetSuite sent them: each line's amount to the account picked for it.`);
+      const beyond = (own.lines ?? []).filter((l) => !l.po_line_id).length;
+      if (own.po_id) {
+        workedOut.push(`It billed ${own.po_number ?? 'a purchase order'}.`, ...poSaid(own.po_number ?? 'the purchase order'));
+        if (beyond) workedOut.push(`Then what the vendor's bill had beyond the PO, as FleetSuite sent it: ${plural(beyond, 'line', 'lines')}, each its amount to the account picked for it.`);
+      } else {
+        workedOut.push(`${plural((own.lines ?? []).length, 'line', 'lines')}, as FleetSuite sent them: each line's amount to the account picked for it.`);
+      }
       workedOut.push("Dated as the vendor's bill is: FleetSuite sends NetSuite the bill's own date.");
     }
   } else {

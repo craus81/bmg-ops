@@ -213,6 +213,42 @@ describe("checking Books' own bill", () => {
     ]);
   });
 
+  it("pairs the PO's other lines NetSuite copied onto the bill by their account, and says it took them (migration 515)", () => {
+    const freight = { line_no: 3, account_id: '612', item_id: null, item_number: null, description: 'Freight', quantity: null, rate: null, amount: '45.50', po_line_id: '5' };
+    const own = partsMailBill({ invoice_total: '2245.47', lines: [...partsMailBill().lines, freight] });
+    const theirs = partsMailNetsuite({
+      total: '2245.47',
+      lines: [...partsMailNetsuite().lines!, { line_id: '3', item: null, account: '612', amount: '45.50', own_amount: '45.50', quantity: null, memo: 'Freight', tax: false }],
+    });
+    const check = checkOwnBill(pair(own, theirs), lists, SINCE);
+    expect(check).toMatchObject({ status: 'matches', fleetsuiteCents: 224547, netsuiteCents: 224547 });
+    expect(check.lines.at(-1)).toMatchObject({ label: '61200 Repairs', fleetsuite: { quantity: null, cents: 4550 }, netsuite: { cents: 4550 }, same: true });
+    expect(check.workedOut[2]).toBe("NetSuite copies the PO's other lines no bill had yet onto the bill too: 61200 Repairs.");
+    // Without the PO's other line, NetSuite's bill has a line Books' copy doesn't.
+    const short = checkOwnBill(pair(partsMailBill(), theirs), lists, SINCE);
+    expect(short.status).toBe('differs');
+    expect(short.lines.at(-1)!.why).toBe("NetSuite's bill has 61200 Repairs for $45.50, and Books' copy has no line for it.");
+  });
+
+  it("says a snapped bill that billed a PO took the PO's lines, then what the vendor's bill had beyond it", () => {
+    const snapped = partsMailBill({
+      made_from: 'snapped', made_from_id: 'snap-2', date: '2026-10-20',
+      lines: [
+        ...partsMailBill().lines,
+        { line_no: 3, account_id: '612', item_id: null, item_number: null, description: 'Freight', quantity: null, rate: null, amount: '45.50', po_line_id: '5' },
+        { line_no: 4, account_id: SUBCONTRACTORS, item_id: null, item_number: null, description: 'Pallet charge', quantity: null, rate: null, amount: '20.00', po_line_id: null },
+      ],
+    });
+    expect(checkOwnBill(pair(snapped, null), lists, BEFORE).workedOut).toEqual([
+      "Made with Snap a bill on Oct 21, 2026: FleetSuite read a picture of the vendor's bill, and it was checked before Send to NetSuite.",
+      'It billed PO453-ACME.',
+      "NetSuite bills a purchase order at its own prices, so the lines are what FleetSuite's copy of PO453-ACME still had to bill, each at the PO's price, to the cent.",
+      "NetSuite copies the PO's other lines no bill had yet onto the bill too: 61200 Repairs.",
+      "Then what the vendor's bill had beyond the PO, as FleetSuite sent it: 1 line, each its amount to the account picked for it.",
+      "Dated as the vendor's bill is: FleetSuite sends NetSuite the bill's own date.",
+    ]);
+  });
+
   it("tells another quantity, and an item only one side has", () => {
     const ns = partsMailNetsuite({
       total: '1840.00',
@@ -234,7 +270,7 @@ describe("checking Books' own bill", () => {
   it("is incomplete when FleetSuite didn't know the lines or a price, and compares the rest", () => {
     const noLines = checkOwnBill(pair(partsMailBill({ lines: [], unknowns: ['lines'] }), partsMailNetsuite()), lists, SINCE);
     expect(noLines).toMatchObject({ status: 'incomplete', fleetsuiteCents: null });
-    expect(noLines.summary).toBe("Matches where it can be checked. FleetSuite didn't know what it billed (FleetSuite's copy of the purchase order didn't have the order).");
+    expect(noLines.summary).toBe("Matches where it can be checked. FleetSuite didn't know what it billed (FleetSuite's copy of the purchase order didn't say what was left to bill on it).");
     expect(field(noLines, 'lines')).toMatchObject({ same: null, fleetsuite: null });
     expect(noLines.lines.every((l) => l.same === null)).toBe(true);
 

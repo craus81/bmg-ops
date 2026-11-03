@@ -280,6 +280,7 @@ admins can open it while fixing invoices is switched off.
 | Snap a bill tests | `src/lib/books/bill-reader.test.ts`, `src/lib/books/snap-a-bill.test.ts`, `src/lib/books/typed-dollars.test.ts`, `src/lib/books/snap-a-bill-sql.test.ts`; sending once is in `src/lib/bill-once.test.ts`, the bill NetSuite is sent in `src/lib/netsuite.test.ts` |
 | PO bills: the PO a snapped bill names, its checks, the extra line, and billing it | `migrations/444-books-po-bills.sql`, `src/lib/books/snap-po.ts`, `src/lib/books/snap-a-bill.ts`, `canBillPoStatus` and `loadPoMatchFacts` in `src/lib/three-way-match.ts`, `createBillFromPo` in `src/lib/netsuite.ts`; on Snap a bill's page and its API |
 | PO bill tests | `src/lib/books/snap-po.test.ts`, `src/lib/books/snap-a-bill.test.ts`, `src/lib/three-way-match.test.ts`, `src/lib/books/snap-a-bill-sql.test.ts`, `src/lib/books/own-bills.test.ts`, `src/lib/netsuite.test.ts` |
+| A PO's other lines (its Expenses tab: freight, say) on FleetSuite's copy of it, with the bills that have each, and on the bills FleetSuite makes from it | `migrations/515-po-expense-lines.sql`, `syncPoExpenseLines` in `src/lib/vendor-po-sync.ts`, `poBillExpenseLines` and `readPoCopyExpenses` in `src/lib/books/own-bills.ts`, `poLinesBilled` and `poLeftCents` in `src/lib/books/snap-po.ts`, Purchasing → Vendor POs (`src/components/VendorPosTab.tsx`, `src/app/api/purchase-requests/vendor-pos/route.ts`); tests `src/lib/vendor-po-sync-expenses.test.ts`, `src/lib/vendor-po-expense-lines-sql.test.ts`, `src/lib/books/own-bills.test.ts`, `src/lib/books/own-bill-check.test.ts`, `src/lib/books/snap-po.test.ts` |
 | Mistake checks: the night's look for likely mistakes in the copies of NetSuite's bills, checks and card charges, each kept for a super admin to clear | `migrations/431-books-mistake-checks.sql`, `src/lib/books/mistake-checks.ts`, `src/app/api/cron/books-mistake-checks/route.ts` |
 | Mistake checks page and its API | `src/app/(main)/admin/books/mistake-checks/page.tsx`, `src/app/api/admin/books/mistake-checks/route.ts` |
 | Mistake check tests | `src/lib/books/mistake-checks.test.ts`, `src/lib/books/mistake-checks-sql.test.ts`; the daily check's are in its test files |
@@ -3225,15 +3226,17 @@ NetSuite makes the bill (`saveOwnBill` in `src/lib/books/own-bills.ts`):
   NetSuite makes the bill from the invoice's purchase order, at the PO's
   prices, so the copy's lines are what FleetSuite's copy of the PO
   (`netsuite_vendor_po_lines`) still had to bill, each line's quantity less
-  what's billed, at the line's price, to the cent. The vendor's invoice
-  total is kept beside them, as the vendor's invoice says it. Its Reference
+  what's billed, at the line's price, to the cent, then the PO's other lines
+  no bill had yet, each its amount to its account ("A PO's other lines",
+  below). The vendor's invoice total is kept beside them, as the vendor's
+  invoice says it. Its Reference
   No. is the vendor's invoice number, or `PM-` and the start of the
   invoice's id when the scan read no number.
 - **Send to NetSuite on Snap a bill** (`/api/admin/books/snap-a-bill`):
   each line to the account and for the amount FleetSuite sent, with the
   bill's total beside them ("Snap a bill"). A snapped bill that billed a
-  PO is the PO's open lines, as a Parts Mail bill's are, then the line for
-  what the bill had beyond them ("PO bills").
+  PO is the PO's open lines and other lines, as a Parts Mail bill's are,
+  then the line for what the bill had beyond them ("PO bills").
 
 A bill is dated the day FleetSuite made it, in Central time: FleetSuite
 sends NetSuite no date for a bill, so NetSuite dates it that day. A snapped
@@ -3260,7 +3263,8 @@ logged (`[books] own copy of …`) and the work goes on. A copy is kept once;
 saving the same one again changes nothing. Bills and receipts made in
 NetSuite by hand have no copy. What FleetSuite can't work out is kept on the
 copy as unknown, never guessed from NetSuite: a Parts Mail bill's lines (its
-copy of the PO didn't have them yet) and a line's price.
+copy of the PO didn't have them yet, or didn't know which of the PO's other
+lines a bill had) and a line's price.
 
 ### Which company a PO is for
 
@@ -3282,6 +3286,48 @@ it is. When NetSuite can't be asked, the own copy is kept for BMG, as every
 Parts Mail bill and receipt was through November 2, 2026, and the check
 says when that's not the PO's company. Asking never stops the bill or the
 Receive.
+
+### A PO's other lines
+
+A PO's Expenses tab (freight, say) has lines with an account and no item,
+and a bill NetSuite makes from the PO takes each one no bill has yet and
+NetSuite hasn't closed, as it takes the item lines left to bill. Until
+November 3, 2026, FleetSuite's copy of a PO kept only the item lines, so
+Books' own copy of such a bill came out short by them. The copy keeps them
+now, apart from the item lines, in `netsuite_vendor_po_expense_lines`
+(migration 515), so nothing that reads the item lines (Receiving, what's on
+order, parts readiness) changes: each with its account, memo and amount,
+whether NetSuite closed it, and NetSuite's ids for the bills that have it
+(`billed_by`).
+
+The vendor PO sync reads them (`syncPoExpenseLines` in
+`src/lib/vendor-po-sync.ts`) for each PO NetSuite changed, and for up to a
+hundred of the copies it hasn't read yet, newest first, until it has read
+them all, in a share of the run that starts no read after ten seconds. A
+line's bills come from NetSuite's link tables, by line where NetSuite says,
+else by PO. What NetSuite doesn't say is kept as not known, never as none:
+a PO the sync hasn't read yet (`expense_lines_read_at` is null), and one
+NetSuite changed that a run didn't get to, which it marks not read again;
+a line no bill is linked to on a PO some bill came from; and whether a line
+is closed when NetSuite won't say. NetSuite may sign a PO's lines either way
+round, so they're turned together, its item lines counted with them, to add
+up to more than nothing, and a discount on the Expenses tab stays one.
+
+Books' own copy of a bill made from a PO (Create bill on Parts Mail, Bill
+PO on Snap a bill) takes, after the PO's item lines, each other line no
+bill has and NetSuite hasn't closed, its amount to its account
+(`poBillExpenseLines` in `src/lib/books/own-bills.ts`). When FleetSuite's
+copy of the PO doesn't know them, or can't say of one whether a bill has it
+or whether it's closed, or the bill itself is already on one, the copy says
+it didn't know what it billed (`lines`), so the check doesn't compare its
+lines or total. Snap a bill's What NetSuite bills counts them, the other
+lines a bill already has come off what's left on the PO (`poLeftCents`),
+and a PO whose other lines FleetSuite doesn't know yet says so under it.
+Purchasing → Vendor POs lists them after the PO's items, each Billed, Not
+billed yet or Closed, with its amount for those who see money.
+
+Copies made before November 3, 2026 left a PO's other lines out, so a bill
+that had them differs from NetSuite's by them.
 
 ### One bill each
 
@@ -3724,7 +3770,8 @@ company and location while it bills the PO: the PO brings them.
 
 Bill PO453-ACME, the default once the PO can take the bill, shows what
 NetSuite bills (the PO's open lines, each line's quantity less what's
-billed at its price, and the extra line) and Parts Mail's three-way match
+billed at its price, the PO's other lines no bill has yet, and the extra
+line) and Parts Mail's three-way match
 (`computeThreeWayMatch` in `src/lib/three-way-match.ts`), each leg on its
 own:
 
@@ -3752,8 +3799,9 @@ leaves the PO open, with what Receiving booked for it unsettled.
 ### The extra line
 
 The extra line is what the bill is more than what's left to bill on the PO:
-its total less what's billed on its lines at its prices (`poLeftCents`), so
-a second bill on a PO is set against what's left. Its words come from the
+its total less what's billed on its lines at its prices and its other
+lines a bill already has (`poLeftCents`), so a second bill on a PO is set
+against what's left. Its words come from the
 bill's own lines that aren't on the PO (not for one of its lines' amounts,
 nor naming one of its items): the one for exactly that amount, else all of
 them when they add up to it (`linesBeyondPo`, `extraWords`), else they're
@@ -3772,15 +3820,13 @@ Parts Mail's Create bill uses) with the bill number as its Reference No.,
 the bill's date, the due date, the memo and the extra line as an expense
 line after the PO's. The snapped bill is marked sent with the PO it billed
 (`billed_po_netsuite_id`, `billed_po_number`) and the extra line's amount
-(`billed_extra`), and Books keeps its own copy: the PO's open lines, as a
-Parts Mail bill's, then the extra line. Until FleetSuite's copy of the PO
+(`billed_extra`), and Books keeps its own copy: the PO's open lines and
+other lines, as a Parts Mail bill's, then the extra line. Until FleetSuite's copy of the PO
 shows it billed, a snapped bill that billed a PO counts as an earlier bill
 on it, for Parts Mail's Create bill too.
 
 ### What isn't done yet
 
-- FleetSuite's copy of a PO keeps only its item lines, so a PO's other
-  lines aren't shown, and Books' own copy differs from NetSuite's by them.
 - The totals check, as Parts Mail's, compares a second bill on a PO with
   the PO's whole total, so it needs a reason.
 - Mark it sent, once FleetSuite's copy shows the PO billed, keeps the bill
