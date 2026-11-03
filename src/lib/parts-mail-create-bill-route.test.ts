@@ -1,8 +1,8 @@
 // /api/parts-mail/create-bill (Parts Mail's Create NetSuite Bill): one bill per captured vendor invoice
 // (src/lib/bill-once.ts). NetSuite is asked for a bill it already has from the PO's vendor under the invoice's
 // Reference No. before one is made, so a bill whose billed stamp failed, or one entered in NetSuite by hand, isn't
-// made twice; Mark billed then marks the invoice with that bill, after asking NetSuite again. NetSuite and the
-// database are stand-ins. Made-up data.
+// made twice; Mark billed then marks the invoice with that bill, after asking NetSuite again. Books' own copy is
+// kept for the company the PO is for (migration 511). NetSuite and the database are stand-ins. Made-up data.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextRequest } from 'next/server';
 
@@ -17,10 +17,23 @@ const h = vi.hoisted(() => {
     /** What the billed stamp answers. */
     stampError: null as { message: string } | null,
     updates: [] as Record<string, any>[],
+    /** What's kept on FleetSuite's copy of the PO. */
+    poUpdates: [] as Record<string, any>[],
   };
   // vendor_parts_invoices, one row: the invoice read with its PO, the claim, letting it go, the stamp and Mark billed.
   const service = {
     from(table: string) {
+      if (table === 'netsuite_vendor_pos') {
+        return {
+          update(patch: Record<string, any>) {
+            const q: any = {
+              eq: () => q, is: () => q,
+              then(resolve: (v: unknown) => unknown) { state.poUpdates.push(patch); return Promise.resolve({ error: null }).then(resolve); },
+            };
+            return q;
+          },
+        };
+      }
       if (table !== 'vendor_parts_invoices') throw new Error(`stand-in has no ${table}`);
       return {
         select: () => {
@@ -55,7 +68,8 @@ const h = vi.hoisted(() => {
       };
     },
   };
-  const netsuite = { createBillFromPo: vi.fn(), findVendorBill: vi.fn() };
+  // suiteqlQueryAll: the PO's main line, when the route asks NetSuite which company the PO is for.
+  const netsuite = { createBillFromPo: vi.fn(), findVendorBill: vi.fn(), suiteqlQueryAll: vi.fn() };
   return {
     PO, state, service, netsuite,
     match: vi.fn(),
@@ -92,6 +106,8 @@ beforeEach(() => {
   h.state.po = { ...h.PO };
   h.state.stampError = null;
   h.state.updates = [];
+  h.state.poUpdates = [];
+  h.netsuite.suiteqlQueryAll.mockReset().mockResolvedValue([]);
   h.netsuite.createBillFromPo.mockReset().mockResolvedValue(MADE);
   h.netsuite.findVendorBill.mockReset().mockResolvedValue(null);
   h.match.mockReset().mockResolvedValue({ match: { verdict: 'green', variances: [] } });
@@ -263,5 +279,34 @@ describe('Mark billed with the bill NetSuite already has', () => {
     expect(await call({ recordBill: '8802' })).toEqual({ status: 409, body: { error: 'Already billed (VB-1042)' } });
     expect((await call({ recordBill: "8802' OR 1=1" })).status).toBe(400);
     expect(h.netsuite.findVendorBill).not.toHaveBeenCalled();
+  });
+});
+
+describe("the company Books' own copy is kept for", () => {
+  const keptFor = () => (h.saveOwnBill.mock.calls.at(-1) as any)?.[1]?.subsidiaryId;
+
+  it("is the one FleetSuite's copy of the PO says, without asking NetSuite", async () => {
+    h.state.po = { ...h.PO, subsidiary_netsuite_id: '3' };
+    expect((await call()).status).toBe(200);
+    expect(keptFor()).toBe('3');
+    expect(h.netsuite.suiteqlQueryAll).not.toHaveBeenCalled();
+  });
+
+  it("is asked of NetSuite when the copy doesn't say yet, and kept on the copy", async () => {
+    h.netsuite.suiteqlQueryAll.mockResolvedValue([{ id: '7001', subsidiary_id: '3' }]);
+    expect((await call()).status).toBe(200);
+    expect(keptFor()).toBe('3');
+    expect(h.netsuite.suiteqlQueryAll.mock.calls[0][0]).toMatch(/t\.id = 7001\b/);
+    expect(h.state.poUpdates).toEqual([{ subsidiary_netsuite_id: '3' }]);
+  });
+
+  it("is left to Books (BMG) when NetSuite can't say, and the bill still counts", async () => {
+    h.netsuite.suiteqlQueryAll.mockRejectedValue(new Error('NetSuite is down'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await call()).toEqual({ status: 200, body: { billId: '8801', billNumber: 'VB-1042', po: 'PO2290' } });
+    expect(keptFor()).toBeNull();
+    expect(h.state.row).toMatchObject({ status: 'billed', netsuite_bill_id: '8801' });
+    expect(h.state.poUpdates).toEqual([]);
+    warn.mockRestore();
   });
 });

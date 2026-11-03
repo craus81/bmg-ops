@@ -23,6 +23,76 @@ export function isOpenPoStatus(status: string | null | undefined): boolean {
   return !CLOSED_PO_STATUSES.includes(String(status || '').toUpperCase());
 }
 
+/**
+ * The company each purchase order is for (migration 511): NetSuite makes a
+ * PO's bills and item receipts in the PO's subsidiary, which its main line
+ * carries, as every transaction's does. Books keeps its own copy of a Parts
+ * Mail bill or a Receive for the company whose subsidiary it is.
+ */
+const subsidiaryQuery = (where: string) => `
+  SELECT t.id, tl.subsidiary AS subsidiary_id
+  FROM transaction t
+  JOIN transactionline tl ON tl.transaction = t.id AND tl.mainline = 'T'
+  WHERE t.type = 'PurchOrd'
+    AND ${where}
+`;
+
+/** Each PO's subsidiary from a subsidiaryQuery read, by NetSuite's id for the PO; rows without both ids are left out. */
+export function subsidiariesByPo(rows: readonly any[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const r of rows) {
+    const po = String(r?.id ?? '').trim();
+    const subsidiary = String(r?.subsidiary_id ?? '').trim();
+    if (/^\d+$/.test(po) && /^\d+$/.test(subsidiary)) out.set(po, subsidiary);
+  }
+  return out;
+}
+
+/** PostgREST's answer when the column isn't in its schema yet (migration 511 run, the schema not reloaded). */
+const noCompanyColumn = (error: { code?: string; message?: string } | null) =>
+  !!error && (error.code === 'PGRST204' || /subsidiary_netsuite_id/.test(error.message ?? ''));
+
+const why = (err: unknown) => String((err as any)?.message || err).slice(0, 200);
+
+/**
+ * The company a purchase order is for, as NetSuite's id for its subsidiary:
+ * what FleetSuite's copy of the PO keeps, or, when the copy doesn't have it
+ * yet (a PO made in FleetSuite since the sync last read it, or one it hasn't
+ * read since migration 511), what NetSuite says, kept on the copy. Null when
+ * neither says. Never throws: it only tells Books' own copy of a bill or a
+ * receipt which company it's for, so it never stops the bill or the Receive.
+ */
+export async function poCompanyOf(
+  service: SupabaseClient,
+  po: { id?: string | null; netsuite_id?: string | number | null; subsidiary_netsuite_id?: string | null },
+): Promise<string | null> {
+  const kept = String(po.subsidiary_netsuite_id ?? '').trim();
+  if (/^\d+$/.test(kept)) return kept;
+  // Put in SuiteQL, so only ever a bare number.
+  const id = String(po.netsuite_id ?? '').trim();
+  if (!/^\d+$/.test(id)) return null;
+  let subsidiary: string | null;
+  try {
+    subsidiary = subsidiariesByPo(await suiteqlQueryAll(subsidiaryQuery(`t.id = ${id}`))).get(id) ?? null;
+  } catch (err) {
+    console.warn(`vendor-po-sync: couldn't ask NetSuite which company PO ${id} is for: ${why(err)}`);
+    return null;
+  }
+  if (subsidiary && po.id) {
+    try {
+      const { error } = await service
+        .from('netsuite_vendor_pos')
+        .update({ subsidiary_netsuite_id: subsidiary })
+        .eq('id', po.id)
+        .is('subsidiary_netsuite_id', null);
+      if (error) throw new Error(error.message);
+    } catch (err) {
+      console.warn(`vendor-po-sync: the company PO ${id} is for wasn't kept on its copy: ${why(err)}`);
+    }
+  }
+  return subsidiary;
+}
+
 export interface VendorPoSyncResult {
   modified: number;
   synced: number;
@@ -32,6 +102,9 @@ export interface VendorPoSyncResult {
   /** POs served by the no-quantityshiprecv fallback — their previous
    *  received quantities were preserved rather than zeroed. */
   receivedDegraded?: number;
+  /** Why the POs' subsidiaries couldn't be read this run; their copies keep
+   *  the company they had (poCompanyOf asks NetSuite when one has none). */
+  companyError?: string;
   error?: string;
   /** Outcome of the sync_state heartbeat write — not persisted, only reported. */
   syncStateWrite?: HeartbeatResult;
@@ -79,6 +152,19 @@ export async function syncVendorPos(
       WHERE t.type = 'PurchOrd'
         AND t.lastmodifieddate >= TO_DATE('${sinceStr}', 'MM/DD/YYYY')
     `);
+  }
+
+  // The company each PO is for. A read that fails costs only that: the copies
+  // keep the company they had, and the sync goes on.
+  let companies = new Map<string, string>();
+  let companyError: string | undefined;
+  if (pos.length > 0) {
+    try {
+      companies = subsidiariesByPo(await suiteqlQueryAll(subsidiaryQuery(`t.lastmodifieddate >= TO_DATE('${sinceStr}', 'MM/DD/YYYY')`)));
+    } catch (err) {
+      companyError = why(err);
+      console.warn(`vendor-po-sync: couldn't read which company each PO is for, so their copies keep what they had: ${companyError}`);
+    }
   }
 
   let synced = 0;
@@ -132,24 +218,37 @@ export async function syncVendorPos(
     }
   }
 
+  // The company goes in only when it was read, so a copy never loses one; and
+  // once the column turns out not to be in the API's schema yet, not again
+  // this run.
+  let writeCompany = true;
+  const upsertHeader = (row: Record<string, unknown>) => service
+    .from('netsuite_vendor_pos')
+    .upsert(row, { onConflict: 'netsuite_id' })
+    .select('id')
+    .single();
   for (const po of pos) {
     const nsId = String(po.id);
-    const { data: header, error } = await service
-      .from('netsuite_vendor_pos')
-      .upsert({
-        netsuite_id: nsId,
-        tranid: po.tranid || null,
-        vendor_netsuite_id: po.vendor_id ? String(po.vendor_id) : null,
-        vendor_name: po.vendor_name || null,
-        trandate: po.trandate || null,
-        status: po.status || null,
-        status_label: po.status_label || null,
-        memo: po.memo || null,
-        total: po.total != null ? Math.abs(parseFloat(po.total)) || null : null,
-        last_synced_at: new Date().toISOString(),
-      }, { onConflict: 'netsuite_id' })
-      .select('id')
-      .single();
+    const row: Record<string, unknown> = {
+      netsuite_id: nsId,
+      tranid: po.tranid || null,
+      vendor_netsuite_id: po.vendor_id ? String(po.vendor_id) : null,
+      vendor_name: po.vendor_name || null,
+      trandate: po.trandate || null,
+      status: po.status || null,
+      status_label: po.status_label || null,
+      memo: po.memo || null,
+      total: po.total != null ? Math.abs(parseFloat(po.total)) || null : null,
+      last_synced_at: new Date().toISOString(),
+    };
+    const company = companies.get(nsId);
+    if (company && writeCompany) row.subsidiary_netsuite_id = company;
+    let { data: header, error } = await upsertHeader(row);
+    if (error && 'subsidiary_netsuite_id' in row && noCompanyColumn(error)) {
+      writeCompany = false;
+      delete row.subsidiary_netsuite_id;
+      ({ data: header, error } = await upsertHeader(row));
+    }
     if (error || !header) {
       // A skipped header means this PO's mirror is silently stale — count
       // it into the heartbeat instead of burying it (Stage 4 finding:
@@ -207,7 +306,12 @@ export async function syncVendorPos(
       // visible condition, not a silent one.
       ...(headerErrors > 0 ? { headerErrors, headerErrorSamples } : {}),
       ...(degradedSynced > 0 ? { receivedDegraded: degradedSynced } : {}),
+      ...(companyError ? { companyError } : {}),
     },
   );
-  return { modified: pos.length, synced, lines: lineCount, headerErrors, receivedDegraded: degradedSynced, syncStateWrite };
+  return {
+    modified: pos.length, synced, lines: lineCount, headerErrors, receivedDegraded: degradedSynced,
+    ...(companyError ? { companyError } : {}),
+    syncStateWrite,
+  };
 }
