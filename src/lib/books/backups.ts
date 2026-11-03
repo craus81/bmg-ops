@@ -91,6 +91,7 @@ export const BACKUP_TABLES: readonly string[] = [
 
 /** Tables migrations from 359 on make that aren't the books, and what they are instead. */
 export const NOT_BOOKS: Readonly<Record<string, string>> = {
+  part_price_mismatches: "Parts whose FleetSuite and NetSuite prices differ, found again each night.",
   customer_holds: "Sales: a hold on a customer's orders.",
   customer_hold_overrides: 'Sales: an order let through a hold.',
   photo_shares: 'Photo links sent to customers.',

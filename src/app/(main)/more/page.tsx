@@ -216,6 +216,7 @@ export default function MorePage() {
     { group: 'cni', title: 'Import Installs', sub: 'Bulk-import installs from a spreadsheet, credited to a CNI installer', path: '/admin/import-installs', show: F('data_import') },
 
     { group: 'part-setup', title: 'Part Tagging Rules', sub: 'Auto-categorize parts by vendor & name instead of one dropdown at a time', path: '/admin/part-category-rules', show: F('part_admin') },
+    { group: 'part-setup', title: 'Update Prices', sub: 'Upload new prices & costs; FleetSuite sends them to NetSuite. Shows prices that don’t match', path: '/admin/update-prices', show: isAdmin },
     { group: 'part-setup', title: 'Vendor Costs', sub: 'Upload vendor cost & target margin for outsourced parts', path: '/admin/vendor-costs', show: F('part_admin') },
     { group: 'part-setup', title: 'Fill In Part Display Names', sub: 'Copy graphic package or description into blank display names', path: '/admin/part-display-names', show: isAdmin },
     { group: 'part-setup', title: 'Part Dimensions', sub: 'Record W×D×H per part so the 3D Upfit Designer can place it', path: '/admin/part-dimensions', show: F('part_admin') },

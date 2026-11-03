@@ -6,6 +6,7 @@ import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { updateItemFields } from '@/lib/netsuite';
 import { logAudit } from '@/lib/audit';
+import { NS_FIELD, SYNC_DURABLE, isRealNetsuiteId } from '@/lib/part-netsuite-write';
 
 // Writing back to NetSuite (RESTlet round-trip) can exceed the default ceiling.
 export const maxDuration = 60;
@@ -76,29 +77,7 @@ const Schema = z
     { message: 'Provide at least one field to update' },
   );
 
-// Maps a local netsuite_parts column to the NetSuite field name(s) the RESTlet
-// reports back in `fieldsSet`, so we can confirm the write actually landed.
-const NS_FIELD: Record<string, string[]> = {
-  item_number: ['itemid'],
-  display_name: ['displayname'],
-  sales_price: ['baseprice'],
-  purchase_price: ['cost'],
-  description: ['salesdescription', 'purchasedescription'],
-};
-
-// Columns whose local value now SURVIVES the parts sync, so an edit to them
-// sticks in FleetSuite even when the write-back to NetSuite doesn't land.
-// sales_price is the only one: FleetSuite is the pricing authority and the
-// sync fills sales_price only where this catalog has none (resolveSalesPrice
-// in src/lib/parts-sync.ts). Every other column here is rewritten from
-// NetSuite on the next run, so a local-only edit to those would silently
-// revert — they stay all-or-nothing, exactly as before.
-const SYNC_DURABLE = new Set(['sales_price']);
-
-// A real NetSuite-synced part has a numeric internal id, not a local placeholder
-// (manual parts have a NULL id; create-item mirrors use a `bmg-`/`LOCAL-` stub).
-// Only real parts get written back to NetSuite; local ones just update locally.
-const isRealNetsuiteId = (id: string | null) => !!id && !/^(LOCAL-|bmg-)/i.test(id);
+// What reaches NetSuite and what survives the parts sync: src/lib/part-netsuite-write.ts.
 
 // Edit a catalog part. For real NetSuite-synced parts the server still writes
 // the change back to NetSuite first, then mirrors it locally so the UI updates
