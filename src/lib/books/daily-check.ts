@@ -15,6 +15,7 @@ import {
   type DiffData, type DiffDocumentData,
 } from './differences';
 import { checkOwnInvoices, type OwnInvoiceCheck, type OwnPairsData } from './own-invoice-check';
+import { checkOwnCreditMemos, type OwnCreditMemoCheck, type OwnCreditPairsData } from './own-credit-memo-check';
 import { checkOwnFulfillments, type CopiesThrough, type FulfilPairsData, type OwnFulfillmentCheck } from './own-fulfillment-check';
 import { BOOKS_BILLS_SYNC } from './netsuite-bills';
 import { checkOwnBills, type BillCopiesThrough, type BillPairsData, type OwnBillCheck } from './own-bill-check';
@@ -75,6 +76,12 @@ import { centralTime, lookAtOutsideChanges, markOutsideChangesTold, TABLES, type
  * second if it still differs, as is one where more differs than before.
  * FleetSuite keeps them only from the day it began to, so none is known to
  * differ beforehand, even at the check's first look at them.
+ *
+ * So, too, is each credit memo FleetSuite makes against an invoice (NetSuite
+ * Exit Checklist, "Gaps in what's built", 2026-11-03;
+ * src/lib/books/own-credit-memo-check.ts): Books' own copy that differs from
+ * NetSuite's credit memo is noted at the first look and told about at the
+ * second if it still differs, as is one where more differs than before.
  *
  * So, too, is each of FleetSuite's own fulfillments (owner decision
  * 2026-10-19, "Fulfillments"; src/lib/books/own-fulfillment-check.ts): one
@@ -142,7 +149,8 @@ import { centralTime, lookAtOutsideChanges, markOutsideChangesTold, TABLES, type
  * books_balance_differs, books_own_invoice_differs,
  * books_own_fulfillment_differs, books_own_bill_differs,
  * books_own_receipt_differs, books_mistake_found), but for the Inventory
- * Adjusts (books_own_adjustment_differs), the sends
+ * Adjusts (books_own_adjustment_differs), the own credit memos
+ * (books_own_credit_memo_differs), the sends
  * (books_netsuite_send_unsure), what changed in NetSuite
  * (books_record_changed_in_netsuite), own numbers (books_own_number),
  * invoice PDFs (books_invoice_pdf), backups (books_backup), their restore test
@@ -151,8 +159,8 @@ import { centralTime, lookAtOutsideChanges, markOutsideChangesTold, TABLES, type
  * with "Copy me on new alerts" ticked (Craig, 2026-10-28). The record in
  * sync_state, 'books_daily_check', holds which months differ and how many of
  * their documents, which items' counts differ and by about how many, whose
- * balances differ and in how many documents, which own invoices,
- * fulfillments, bills, receipts and adjustments differ and in how many
+ * balances differ and in how many documents, which own invoices, credit
+ * memos, fulfillments, bills, receipts and adjustments differ and in how many
  * things, and which likely mistakes are open, never an amount (each send,
  * and each change in NetSuite, told about is marked on its own row instead), and is left
  * out of HEALTH_MONITORS like the other books jobs; Differences vs NetSuite
@@ -205,6 +213,8 @@ export interface DailyCheckState {
    * invoice, each with how many of the things compared differ. Absent until the check has looked at them.
    */
   own?: CompanyCheck;
+  /** Books' own credit memos that differ from NetSuite's, as its own invoices, by NetSuite's id for the credit memo. */
+  creditMemos?: CompanyCheck;
   /** FleetSuite's own fulfillments that differ from NetSuite's, as its own invoices, by NetSuite's id for the fulfillment. */
   fulfillments?: CompanyCheck;
   /** Books' own bills that differ from NetSuite's, as its own invoices, by NetSuite's id for the bill. */
@@ -222,7 +232,7 @@ const MONTH_RE = /^\d{4}-\d{2}-01$/;
 const STOCK_KEY_RE = /^\d+(\|\d*)?$/;
 /** A customer, by FleetSuite's id, or a vendor, by NetSuite's; nothing after the colon for the lines FleetSuite can't name. */
 const BALANCE_KEY_RE = /^(c:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?|v:(\d+)?)$/;
-/** An own invoice or own fulfillment, by NetSuite's id for it. */
+/** An own invoice, credit memo or fulfillment, by NetSuite's id for it. */
 const OWN_KEY_RE = /^\d+$/;
 /** A likely mistake, by its id on Mistake checks. */
 const MISTAKE_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -279,6 +289,7 @@ export function parseCheckState(lastResult: unknown): DailyCheckState {
     return known && noted ? { known, noted } : null;
   };
   const own = byId(last.own);
+  const creditMemos = byId(last.creditMemos);
   const fulfillments = byId(last.fulfillments);
   const bills = byId(last.bills);
   const receipts = byId(last.receipts, RECEIPT_KEY_RE);
@@ -289,6 +300,7 @@ export function parseCheckState(lastResult: unknown): DailyCheckState {
     ...(stock ? { stock } : {}),
     ...(Object.keys(balances).length ? { balances } : {}),
     ...(own ? { own } : {}),
+    ...(creditMemos ? { creditMemos } : {}),
     ...(fulfillments ? { fulfillments } : {}),
     ...(bills ? { bills } : {}),
     ...(receipts ? { receipts } : {}),
@@ -338,7 +350,8 @@ export interface CheckAlert {
   url: string;
   /**
    * Set on a notification about stock by item (books_stock_differs), a customer's or vendor's balance
-   * (books_balance_differs), FleetSuite's own invoices (books_own_invoice_differs), its own fulfillments
+   * (books_balance_differs), FleetSuite's own invoices (books_own_invoice_differs) and credit memos
+   * (books_own_credit_memo_differs), its own fulfillments
    * (books_own_fulfillment_differs), Books' own bills (books_own_bill_differs) and receipts
    * (books_own_receipt_differs), the Inventory Adjusts (books_own_adjustment_differs), likely mistakes
    * (books_mistake_found), sends to NetSuite FleetSuite isn't sure about (books_netsuite_send_unsure), what changed
@@ -347,8 +360,8 @@ export interface CheckAlert {
    * changes made to the books outside FleetSuite (books_changed_outside); one about months has none
    * (books_month_differs).
    */
-  about?: 'stock' | 'balance' | 'own' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change' | 'number' | 'pdf'
-    | 'backup' | 'drill' | 'outside';
+  about?: 'stock' | 'balance' | 'own' | 'credit_memo' | 'fulfillment' | 'bill' | 'receipt' | 'adjustment' | 'mistake' | 'send' | 'change'
+    | 'number' | 'pdf' | 'backup' | 'drill' | 'outside';
 }
 
 /** What a notification about a month names: its documents that differ, the largest differences first, and how many of its accounts differ. */
@@ -546,6 +559,35 @@ export function ownAlertsFor(news: MonthNews[], checks: Map<string, OwnInvoiceCh
     body: `${check.summary} ${why}`,
     url: deepLinks.booksOwnInvoice(check.netsuiteId),
     about: 'own',
+  }));
+}
+
+/**
+ * What the super admins are told about Books' own credit memos, as about its own invoices: a notification for each,
+ * linking to its check, or one for them all, linking to the month of the newest with the ones that differ, when there
+ * are more than ONE_BY_ONE.
+ */
+export function creditMemoAlertsFor(news: MonthNews[], checks: Map<string, OwnCreditMemoCheck>): CheckAlert[] {
+  const told = news.map((n) => ({ n, check: checks.get(n.month) })).filter((t): t is { n: MonthNews; check: OwnCreditMemoCheck } => !!t.check);
+  if (!told.length) return [];
+  const why = 'Own credit memos shows why.';
+  const name = (c: OwnCreditMemoCheck) => (c.customer ? `${c.number} (${c.customer})` : c.number);
+  if (told.length > ONE_BY_ONE) {
+    const newest = [...told].sort((a, b) => b.check.date.localeCompare(a.check.date))[0].check;
+    return [{
+      title: `Own credit memos: ${told.length} differ from NetSuite's now`,
+      body: `${listed([...told.slice(0, ONE_BY_ONE).map((t) => name(t.check)), `${told.length - ONE_BY_ONE} more`])}. ${why}`,
+      url: deepLinks.booksOwnCreditMemos(newest.date, true),
+      about: 'credit_memo',
+    }];
+  }
+  return told.map(({ n, check }) => ({
+    title: n.before === null
+      ? `Own credit memos: ${name(check)} differs from NetSuite's`
+      : `Own credit memos: more of ${name(check)} differs from NetSuite's`,
+    body: `${check.summary} ${why}`,
+    url: deepLinks.booksOwnCreditMemo(check.netsuiteId),
+    about: 'credit_memo',
   }));
 }
 
@@ -1124,6 +1166,24 @@ async function lookAtOwnInvoices(service: SupabaseClient): Promise<{ now: Differ
   return { now, checks };
 }
 
+/** Books' own credit memos that differ from NetSuite's now, as Own credit memos checks them, by NetSuite's id for each. */
+async function lookAtOwnCreditMemos(service: SupabaseClient): Promise<{ now: DifferingMonths; checks: Map<string, OwnCreditMemoCheck> }> {
+  const months = await service.rpc('gl_own_credit_memo_months');
+  if (months.error) throw new Error(`couldn't list the months (${months.error.message})`);
+  const now: DifferingMonths = {};
+  const checks = new Map<string, OwnCreditMemoCheck>();
+  await runLimited(((months.data ?? []) as Array<{ month: string }>).map(({ month }) => async () => {
+    const res = await service.rpc('gl_own_credit_memo_pairs', { p_from: month, p_to: monthEnd(month), p_netsuite_id: null });
+    if (res.error) throw new Error(`couldn't check ${monthText(month)}'s credit memos (${res.error.message})`);
+    for (const check of checkOwnCreditMemos(res.data as OwnCreditPairsData).creditMemos) {
+      if (check.status !== 'differs') continue;
+      now[check.netsuiteId] = Math.max(1, check.differing);
+      checks.set(check.netsuiteId, check);
+    }
+  }), LOOKUPS);
+  return { now, checks };
+}
+
 /** FleetSuite's own fulfillments that differ from NetSuite's now, as Own fulfillments checks them, by NetSuite's id for each. */
 async function lookAtOwnFulfillments(
   service: SupabaseClient,
@@ -1336,7 +1396,7 @@ async function balanceNews(
 
 export interface DailyCheckResult {
   look: Look;
-  /** Months, items, balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes and sends told about. */
+  /** Months, items, balances, own invoices, credit memos, fulfillments, bills, receipts and adjustments, likely mistakes and sends told about. */
   told: number;
   /** What the look couldn't do; a company it couldn't look at keeps what the check held for it. */
   error?: string;
@@ -1435,6 +1495,19 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     told += news.length;
   } catch (err) {
     errors.push(`Own invoices: ${reason(err)}`);
+  }
+
+  // Books' own credit memos, against the copies of NetSuite's credit memos and ledger. They too start the day FleetSuite
+  // began making them.
+  let creditMemos = held.creditMemos;
+  try {
+    const { now, checks } = await lookAtOwnCreditMemos(service);
+    const { check, news } = nextCheck(held.creditMemos ?? { known: {}, noted: {} }, now, opts.look);
+    creditMemos = check;
+    alerts.push(...creditMemoAlertsFor(news, checks));
+    told += news.length;
+  } catch (err) {
+    errors.push(`Own credit memos: ${reason(err)}`);
   }
 
   // FleetSuite's own fulfillments, against the copies of NetSuite's stock moves and ledger, as far as they had come.
@@ -1627,6 +1700,7 @@ export async function runDailyCheck(service: SupabaseClient, opts: DailyCheckOpt
     ...(stock ? { stock } : {}),
     ...(Object.keys(balances).length ? { balances } : {}),
     ...(own ? { own } : {}),
+    ...(creditMemos ? { creditMemos } : {}),
     ...(fulfillments ? { fulfillments } : {}),
     ...(bills ? { bills } : {}),
     ...(receipts ? { receipts } : {}),

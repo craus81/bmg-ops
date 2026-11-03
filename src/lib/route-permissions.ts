@@ -107,6 +107,7 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/netsuite-feed/route.ts': books(['read', 'keep']),
   'src/app/api/admin/books/own-adjustments/route.ts': books(['read']),
   'src/app/api/admin/books/own-bills/route.ts': books(['read']),
+  'src/app/api/admin/books/own-credit-memos/route.ts': books(['read']),
   'src/app/api/admin/books/own-fulfillments/route.ts': books(['read']),
   'src/app/api/admin/books/own-invoices/route.ts': books(['read']),
   'src/app/api/admin/books/own-invoices/pdf/route.ts': books(['read', 'owner']),

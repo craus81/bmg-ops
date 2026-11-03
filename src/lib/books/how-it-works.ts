@@ -170,6 +170,15 @@ export const POSTING_RULES: readonly PostingRuleInfo[] = [
     code: 'src/lib/books/own-invoice-posting.ts', docs: "Posting FleetSuite's own invoices",
   },
   {
+    id: 'own_credit_memo@1', name: "FleetSuite's own credit memos", group: 'own',
+    from: "A credit memo FleetSuite made against an invoice, from Books' own copy of it.",
+    posts: [
+      "The credit memo rule on the copy's own lines, with the sales tax it gives back to the account FleetSuite's own invoices post theirs to.",
+    ],
+    note: "The stock it puts back on the shelf is the stock rule's, from NetSuite's credit memo.",
+    code: 'src/lib/books/own-credit-memo-posting.ts', docs: "Posting FleetSuite's own credit memos",
+  },
+  {
     id: 'own_bill@1', name: "FleetSuite's own bills", group: 'own',
     from: "A bill FleetSuite made from Parts Mail, a CNI vendor invoice, an installer payout or Snap a bill, from Books' own copy of it.",
     posts: [
@@ -358,7 +367,7 @@ export const MONEY_STEPS: readonly MoneyStep[] = [
   },
   {
     key: 'credit_memo', area: 'sales', step: 'Make a credit memo', where: 'Credit on an invoice',
-    holders: [feature('invoicing')], switch: 'credit_memos', posts: ['credit_memo@1'],
+    holders: [feature('invoicing')], switch: 'credit_memos', posts: ['credit_memo@1', 'own_credit_memo@1', 'stock@1'],
     route: { file: 'src/app/api/invoices/credit-memo/route.ts', guard: 'feature', markers: ["requireFeature(req, 'invoicing')", "switchIsOn(service, 'credit_memos')"] },
   },
   {

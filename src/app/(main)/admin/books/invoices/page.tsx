@@ -431,22 +431,23 @@ const amountsText = (amounts: NonNullable<Invoice['amounts']>, one: string) => (
   : `NetSuite's own amounts for this ${one}'s lines don't add up to it, so FleetSuite took each line at its net amount.`);
 
 /**
- * Where FleetSuite's own copy of a document is, next to NetSuite's: Own invoices, Own fulfillments, Own receipts, Own
- * adjustments or Own bills; null for one of a kind it has no copies of, or an item receipt or adjustment whose copy
- * isn't known.
+ * Where FleetSuite's own copy of a document is, next to NetSuite's: Own invoices, Own credit memos, Own fulfillments,
+ * Own receipts, Own adjustments or Own bills; null for one of a kind it has no copies of, or an item receipt or
+ * adjustment whose copy isn't known.
  */
-function ownCopyLink(invoice: Invoice): string | null {
+function ownCopyLink(invoice: Invoice, kind: Kind): string | null {
   if (invoice.type === 'ItemShip') return deepLinks.booksOwnFulfillment(invoice.netsuiteId);
   if (invoice.type === 'ItemRcpt') return invoice.books?.own?.receiptKey ? deepLinks.booksOwnReceipt(invoice.books.own.receiptKey) : null;
   if (invoice.type === 'InvAdjst') return invoice.books?.own?.adjustmentId ? deepLinks.booksOwnAdjustment(invoice.books.own.adjustmentId) : null;
   if (invoice.type === 'VendBill') return deepLinks.booksOwnBill(invoice.netsuiteId);
   // An invoice's cost: what FleetSuite's own invoice took from stock is on the invoice's own page.
   if (invoice.type === 'CustInvc') return deepLinks.booksOwnInvoice(invoice.netsuiteId);
-  return invoice.type ? null : deepLinks.booksOwnInvoice(invoice.netsuiteId);
+  if (invoice.type) return null;
+  return kind === 'credit_memo' ? deepLinks.booksOwnCreditMemo(invoice.netsuiteId) : deepLinks.booksOwnInvoice(invoice.netsuiteId);
 }
 
-function InvoiceDetail({ invoice, accounts, one }: { invoice: Invoice; accounts: Record<string, string>; one: string }) {
-  const own = invoice.books?.own || invoice.books?.from === 'fleetsuite' ? ownCopyLink(invoice) : null;
+function InvoiceDetail({ invoice, kind, accounts, one }: { invoice: Invoice; kind: Kind; accounts: Record<string, string>; one: string }) {
+  const own = invoice.books?.own || invoice.books?.from === 'fleetsuite' ? ownCopyLink(invoice, kind) : null;
   return (
     <div style={{ padding: '8px 10px 12px', background: 'var(--bg)' }}>
       {invoice.booked && (
@@ -1101,6 +1102,7 @@ export default function BooksInvoicesPage() {
                         <td colSpan={data.posts ? 6 : 5} style={{ padding: 0 }}>
                           <InvoiceDetail
                             invoice={inv}
+                            kind={kind}
                             accounts={data.accounts}
                             one={inv.type === 'DepAppl' ? 'deposit application' : inv.type === 'CustDep' ? 'deposit'
                               : inv.type === 'VendCred' ? 'bill credit' : inv.type === 'VendBill' ? 'bill'

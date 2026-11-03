@@ -584,6 +584,20 @@ export const deepLinks = {
    *  the daily books check's notification about one own invoice. Open to
    *  whoever opens the books. */
   booksOwnInvoice: (netsuiteId: string) => `/admin/books/own-invoices/invoice?${new URLSearchParams({ id: netsuiteId })}`,
+  /** Books → Own credit memos on the month ('YYYY-MM' or 'YYYY-MM-01')
+   *  they were made in, the newest month when it's left out, only those
+   *  that differ from NetSuite's with `differs`: the landing for the daily
+   *  books check's notification about several own credit memos
+   *  (src/lib/books/daily-check.ts). Open to whoever opens the books. */
+  booksOwnCreditMemos: (month?: string | null, differs = false) => {
+    const query = new URLSearchParams({ ...(month ? { month: month.slice(0, 7) } : {}), ...(differs ? { only: 'differs' } : {}) }).toString();
+    return `/admin/books/own-credit-memos${query ? `?${query}` : ''}`;
+  },
+  /** Books → Own credit memos → Books' own copy of one credit memo, by
+   *  NetSuite's id for it, next to NetSuite's line by line: the landing for
+   *  the daily books check's notification about one own credit memo. Open
+   *  to whoever opens the books. */
+  booksOwnCreditMemo: (netsuiteId: string) => `/admin/books/own-credit-memos/credit-memo?${new URLSearchParams({ id: netsuiteId })}`,
   /** Books → Own fulfillments on the month ('YYYY-MM' or 'YYYY-MM-01')
    *  they were made in, the newest month when it's left out, only those
    *  that differ from NetSuite's with `differs`: the landing for the daily

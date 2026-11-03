@@ -205,6 +205,12 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Super admins, the only people who can open the books.' },
+  // Books' own credit memos (migration 518), a new alert, copied the same way.
+  { type: 'books_own_credit_memo_differs', label: "An own credit memo differs from NetSuite's", description: "FleetSuite's daily check found one of Books' own credit memos (the copy it keeps of each credit memo FleetSuite makes against an invoice) that credits differently from NetSuite's credit memo (its lines, sales tax, total, date, customer or location), or one where more differs than before. Opens that credit memo's check on Own credit memos, or the ones that differ when there are several.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, the only people who can open the books.' },
   // Journal entries typed in FleetSuite (migration 469), once switched on:
   // asked for approval, and approved or sent back. Emailed like the
   // Inventory Adjust alert, only to anyone with "Copy me on new alerts".

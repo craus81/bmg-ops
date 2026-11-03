@@ -36,6 +36,7 @@ import {
   type PaymentPosting, type SpendingPosting, type StockPosting,
 } from '@/lib/books/invoice-posting';
 import { OWN_COMPANY } from '@/lib/books/own-invoices';
+import { ownCreditPick, readOwnCreditCopies, type OwnCreditCopies } from '@/lib/books/own-credit-memo-posting';
 import { ownCopyDays, ownPick, readOwnCopies, salesTaxAccount, type OwnCopies } from '@/lib/books/own-invoice-posting';
 import { chartNames, ownStockPick, readOwnStockCopies, readOwnStockSince, type OwnStockCopies } from '@/lib/books/own-stock-posting';
 import { ownBillPick, readOwnBillCopies, readOwnBillSince, type OwnBillCopies } from '@/lib/books/own-bill-posting';
@@ -88,9 +89,10 @@ const POSTING_BUDGET_MS = 240_000;
  * that it has nothing to post, and `lastRun` is how the last one went. An
  * invoice FleetSuite made also says which copy its entry was made from and
  * whether the books post FleetSuite's own copy of it, or why not (migration
- * 409, src/lib/books/own-invoice-posting.ts), and so does a fulfillment, item
- * receipt or bill Books has its own copy of (migration 456,
- * src/lib/books/own-stock-posting.ts and own-bill-posting.ts).
+ * 409, src/lib/books/own-invoice-posting.ts), and so does a credit memo
+ * FleetSuite made (migration 518, src/lib/books/own-credit-memo-posting.ts)
+ * and a fulfillment, item receipt or bill Books has its own copy of
+ * (migration 456, src/lib/books/own-stock-posting.ts and own-bill-posting.ts).
  *
  * Super admins, the bookkeeper and the CPA (docs/books.md "Who can open the
  * books"). It only reads; posting now (POST) isn't the CPA's.
@@ -426,12 +428,14 @@ export async function GET(req: NextRequest) {
   const lastLists = (lists.data?.last_result ?? null) as { taxAccounts?: TaxAccountCount[]; itemAccounts?: ItemAccountCount[] } | null;
   const taxAccounts = Array.isArray(lastLists?.taxAccounts) ? lastLists.taxAccounts : null;
 
-  // FleetSuite's own copies of the month's invoices, as the posting run reads them, so what this shows is what it posts.
+  // Books' own copies of the month's invoices or credit memos, as the posting run reads them, so what this shows is what it posts.
   let copies: OwnCopies = new Map();
-  const days = postings && kind === 'invoice' && company === OWN_COMPANY ? ownCopyDays(invoices) : null;
+  let creditCopies: OwnCreditCopies = new Map();
+  const days = postings && (kind === 'invoice' || kind === 'credit_memo') && company === OWN_COMPANY ? ownCopyDays(invoices) : null;
   if (days) {
     try {
-      copies = await readOwnCopies(service, days.from, days.to);
+      if (kind === 'invoice') copies = await readOwnCopies(service, days.from, days.to);
+      else creditCopies = await readOwnCreditCopies(service, days.from, days.to);
     } catch (err) {
       return NextResponse.json({ error: (err as Error).message }, { status: 500 });
     }
@@ -449,8 +453,13 @@ export async function GET(req: NextRequest) {
       facts,
     },
     postings
-      ? (w, month) => invoiceBooks(w, postingFor(postings!, w), decides,
-        ownPick(w, entryLines(w), copies.get(w.invoice.netsuite_id), { company, accounts: month.accounts, names: month.names, salesTax }))
+      ? (w, month) => {
+        const ownMonth = { company, accounts: month.accounts, names: month.names, salesTax };
+        const id = w.invoice.netsuite_id;
+        return invoiceBooks(w, postingFor(postings!, w), decides, w.invoice.doc_type === 'credit_memo'
+          ? ownCreditPick(w, entryLines(w), creditCopies.get(id), ownMonth)
+          : ownPick(w, entryLines(w), copies.get(id), ownMonth));
+      }
       : undefined,
   );
 

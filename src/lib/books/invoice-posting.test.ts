@@ -416,6 +416,71 @@ describe('credit memos', () => {
     expect(decide(worked(memo({ lines: invoice().lines })), undefined)).toEqual({ kind: 'leave', why: 'total' });
     expect(decide(worked(memo({ total: '170.00' })), held())).toEqual({ kind: 'leave', why: 'total' });
   });
+
+  describe("posted from Books' own copy (migration 518)", () => {
+    // Books' own copy of CM105, making the entry NetSuite's makes, line by line its own.
+    const ownEntry: NonNullable<OwnPick['entry']> = {
+      lines: [
+        { account: '120', cents: -16200, lineId: '0', itemNumber: null, division: null },
+        { account: '400', cents: 10000, lineId: 'own:1', itemNumber: 'PART-A', division: 'upfit' },
+        { account: '400', cents: 5000, lineId: 'own:2', itemNumber: 'INSTALL LABOR', division: 'upfit' },
+        { account: '220', cents: 1200, lineId: 'own:tax', itemNumber: null, division: null },
+      ],
+      date: '2026-09-15',
+      customerId: CUSTOMER,
+    };
+    const posts: OwnPick = { entry: ownEntry, why: null };
+    const doesnt: OwnPick = {
+      entry: null, why: "FleetSuite's own copy differs from NetSuite's credit memo, so the books post NetSuite's, since that's what the customer was credited.",
+    };
+    const fromNetsuite = held({ current: { ...held().current!, posting_rule: 'credit_memo@1' } });
+    /** What the journal holds when CM105 posted from its copy as entry 9, NetSuite's entry 7 reversed by 8. */
+    const fromOwn = held({
+      entries: 2,
+      unreversed: ['e9'],
+      history: [{ entry_no: 7, entry_date: '2026-09-15', reversed_by: 8 }, { entry_no: 9, entry_date: '2026-09-15', reversed_by: null }],
+      current: {
+        id: 'e9', entry_no: 9, entry_date: '2026-09-15', posting_rule: 'own_credit_memo@1',
+        lines: [
+          { account: '120', debit: '0.00', credit: '162.00', division: null, source_line_ref: '0', customer_id: CUSTOMER },
+          { account: '400', debit: '100.00', credit: '0.00', division: 'upfit', source_line_ref: 'own:1', customer_id: null },
+          { account: '400', debit: '50.00', credit: '0.00', division: 'upfit', source_line_ref: 'own:2', customer_id: null },
+          { account: '220', debit: '12.00', credit: '0.00', division: null, source_line_ref: 'own:tax', customer_id: null },
+        ],
+      },
+    });
+
+    it("replaces NetSuite's entry with the copy's when the copy posts, keeps that, and goes back when it no longer does", () => {
+      expect(decide(worked(memo()), fromNetsuite, posts)).toEqual({ kind: 'replace' });
+      expect(decide(worked(memo()), fromOwn, posts)).toEqual({ kind: 'keep' });
+      expect(decide(worked(memo()), fromOwn, doesnt)).toEqual({ kind: 'replace' });
+      expect(decide(worked(memo()), fromOwn, null)).toEqual({ kind: 'replace' });
+      expect(decide(worked(memo()), fromNetsuite, doesnt)).toEqual({ kind: 'keep' });
+      // An own invoice's rule is never a credit memo's own.
+      expect(decide(worked(memo()), held({ current: { ...fromOwn.current!, posting_rule: 'own_invoice@1' } }), posts)).toEqual({ kind: 'replace' });
+    });
+
+    it("posts the copy's lines under the own credit memo rule, with NetSuite's key and memo", () => {
+      const { entry } = invoiceJournalEntry(worked(memo()), 'BMG', 2, ids, ownEntry);
+      expect(entry).toMatchObject({
+        entryDate: '2026-09-15', sourceType: 'credit_memo', sourceId: '105', postingRule: 'own_credit_memo@1',
+        idempotencyKey: 'credit_memo:105:2', memo: 'CM105, A Customer',
+      });
+      expect(entry!.lines.map((l) => [l.accountId, l.debit, l.credit, l.sourceLineRef])).toEqual([
+        ['a-120', null, '162.00', '0'], ['a-400', '100.00', null, 'own:1'], ['a-400', '50.00', null, 'own:2'], ['a-220', '12.00', null, 'own:tax'],
+      ]);
+    });
+
+    it('says which copy the entry was made from, and in the reversal\'s memo when it changes copies', () => {
+      expect(invoiceBooks(worked(memo()), fromOwn, true, posts))
+        .toEqual({ entryNo: 9, next: null, earlier: [{ entryNo: 7, reversedBy: 8 }], from: 'fleetsuite', own: { posts: true } });
+      expect(invoiceBooks(worked(memo()), fromNetsuite, true, doesnt))
+        .toEqual({ entryNo: 7, next: null, earlier: [], from: 'netsuite', own: { posts: false, why: doesnt.why } });
+      expect(replaceMemo('CM105', fromNetsuite.current, posts, 'credit_memo')).toBe("CM105 now posts from FleetSuite's own copy");
+      expect(replaceMemo('CM105', fromOwn.current, doesnt, 'credit_memo')).toBe("CM105 now posts from NetSuite's credit memo");
+      expect(replaceMemo('CM105', fromOwn.current, posts, 'credit_memo')).toBe('CM105 changed in NetSuite');
+    });
+  });
 });
 
 describe('payments', () => {

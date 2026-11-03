@@ -133,6 +133,7 @@ describe('direct messages and mentions', () => {
 
 describe.each([
   ["Books' Inventory Adjusts", 'books_own_adjustment_differs', "An Inventory Adjust differs from NetSuite's"],
+  ["Books' own credit memos", 'books_own_credit_memo_differs', "An own credit memo differs from NetSuite's"],
   ["sends to NetSuite FleetSuite isn't sure about", 'books_netsuite_send_unsure', "FleetSuite isn't sure NetSuite took a send"],
   ["a customer's, vendor's or item's details changed in NetSuite", 'books_record_changed_in_netsuite', "A customer's, vendor's or item's details changed in NetSuite"],
   ["FleetSuite's own numbers", 'books_own_number', "NetSuite didn't keep FleetSuite's number, or something was made in NetSuite"],

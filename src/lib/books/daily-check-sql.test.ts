@@ -12,11 +12,12 @@
 // sales orders and POs made in NetSuite instead, through migration 497's, and
 // at the invoice PDFs NetSuite refused or FleetSuite isn't sure about, through
 // migration 498's, and at the backups of the books and their restore test,
-// through migrations 506's and 507's, and at the changes made to the books
-// outside FleetSuite, through migration 508's.
+// through migrations 506's and 507's, at the changes made to the books
+// outside FleetSuite, through migration 508's, and at Books' own credit memos
+// the way Own credit memos does, through migration 518's.
 // This runs the same migrations as differences-sql.test.ts, with 401, 406, 407,
-// 416, 431, 435, 454, 457, 477, 480, 497, 498, 506, 507 and 508 (but for its
-// triggers), in an in-memory Postgres (PGlite) as the app's
+// 416, 431, 435, 454, 457, 466, 477, 480, 497, 498, 506, 507, 508 (but for its
+// triggers) and 518, in an in-memory Postgres (PGlite) as the app's
 // server login, copies a made-up handful of NetSuite documents for BMG and
 // 1084, posts FleetSuite's entries for some of them, copies a few stock moves
 // and NetSuite's counts, saves an own invoice, an own fulfillment, a few
@@ -57,7 +58,7 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migrations 314, 416, 435, 454 and 497 point at in the app's own schema.
+    -- What migrations 314, 416, 435, 454, 466 and 497 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY, full_name TEXT);
     CREATE TABLE public.netsuite_parts (id UUID PRIMARY KEY);
     CREATE FUNCTION public.is_admin() RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT false $$;
@@ -70,16 +71,11 @@ async function freshDb(): Promise<PGlite> {
       netsuite_id TEXT NOT NULL UNIQUE, tranid TEXT, vendor_name TEXT, trandate DATE, created_by_name TEXT
     );
     CREATE TABLE public.drop_ship_orders (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), purchase_order_id TEXT);
-    CREATE TABLE public.gl_own_credit_memos (netsuite_id TEXT PRIMARY KEY, netsuite_number TEXT);
     CREATE TABLE public.vendor_invoices (id UUID PRIMARY KEY);
     CREATE TABLE public.payouts (id UUID PRIMARY KEY);
     CREATE TABLE public.po_receipts (id UUID PRIMARY KEY, ns_status TEXT);
     CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
-    -- The books switches as migration 466 makes them, for migration 480 to add its piece to.
-    CREATE TABLE public.books_switches (
-      piece TEXT PRIMARY KEY CHECK (piece IN ('credit_memos')), is_on BOOLEAN NOT NULL DEFAULT false,
-      changed_by UUID REFERENCES profiles(id) ON DELETE SET NULL, changed_at TIMESTAMPTZ
-    );
+    CREATE TABLE public.quote_settings (id INTEGER PRIMARY KEY CHECK (id = 1), updated_at TIMESTAMPTZ, updated_by UUID);
   `);
   for (const file of [
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
@@ -91,7 +87,7 @@ async function freshDb(): Promise<PGlite> {
     '393-books-journal-entries.sql', '394-books-bank-deposits.sql', '395-books-stock-cost.sql', '401-books-stock-by-item.sql',
     '402-books-stock-values.sql', '406-books-party-balances.sql', '407-books-own-invoices.sql', '416-books-own-fulfillments.sql',
     '431-books-mistake-checks.sql', '435-books-own-bills.sql', '454-inventory-adjustments.sql', '457-books-own-adjustments.sql',
-    '477-netsuite-sends.sql', '480-fleetsuite-record-wins.sql', '497-books-own-numbers.sql',
+    '466-credit-memos-in-fleetsuite.sql', '477-netsuite-sends.sql', '480-fleetsuite-record-wins.sql', '497-books-own-numbers.sql',
   ]) {
     await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8'));
   }
@@ -106,6 +102,7 @@ async function freshDb(): Promise<PGlite> {
   const [triggers, telling] = [history.indexOf("-- ── Where it's written down"), history.indexOf('-- ── Telling about changes made outside FleetSuite')];
   if (triggers < 0 || telling < triggers) throw new Error("migration 508's triggers aren't where this test leaves them out");
   await pg.exec(history.slice(0, triggers) + history.slice(telling));
+  await pg.exec(readFileSync(path.resolve(__dirname, '../../../migrations', '518-books-own-credit-memo-posting.sql'), 'utf8'));
   await pg.exec(`UPDATE gl_companies SET netsuite_subsidiary_id = '5' WHERE code = '1084'`);
   for (const [ns, name, type] of ACCOUNTS) {
     await pg.query(
@@ -176,13 +173,14 @@ describe('the daily books check', () => {
   /** When a function or a read of a table fails, by what it was asked (a read's `where`). */
   let failing: ((fn: string, args: Record<string, unknown>) => boolean) | null = null;
   /**
-   * What a look told about months and stock; about balances, own invoices, fulfillments, bills, receipts and adjustments, likely mistakes,
+   * What a look told about months and stock; about balances, own invoices and credit memos, fulfillments, bills, receipts and adjustments, likely mistakes,
    * sends to NetSuite, changes in NetSuite, FleetSuite's own numbers, its invoice PDFs, the backups and their restore test, and
    * changes made outside FleetSuite, apart.
    */
   let told: CheckAlert[] = [];
   let toldBalances: CheckAlert[] = [];
   let toldOwn: CheckAlert[] = [];
+  let toldCredits: CheckAlert[] = [];
   let toldFulfillments: CheckAlert[] = [];
   let toldBills: CheckAlert[] = [];
   let toldReceipts: CheckAlert[] = [];
@@ -284,6 +282,7 @@ describe('the daily books check', () => {
     told = [];
     toldBalances = [];
     toldOwn = [];
+    toldCredits = [];
     toldFulfillments = [];
     toldBills = [];
     toldReceipts = [];
@@ -297,7 +296,7 @@ describe('the daily books check', () => {
     toldDrills = [];
     toldOutside = [];
     const into = (alert: CheckAlert) => (alert.about === 'balance' ? toldBalances : alert.about === 'own' ? toldOwn
-      : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
+      : alert.about === 'credit_memo' ? toldCredits : alert.about === 'fulfillment' ? toldFulfillments : alert.about === 'bill' ? toldBills : alert.about === 'receipt' ? toldReceipts
         : alert.about === 'adjustment' ? toldAdjustments : alert.about === 'mistake' ? toldMistakes : alert.about === 'send' ? toldSends
           : alert.about === 'change' ? toldChanges : alert.about === 'number' ? toldNumbers : alert.about === 'pdf' ? toldPdfs
             : alert.about === 'backup' ? toldBackups : alert.about === 'drill' ? toldDrills : alert.about === 'outside' ? toldOutside : told);
@@ -480,6 +479,7 @@ describe('the daily books check', () => {
       receipts: { known: {}, noted: {} },
       adjustments: { known: {}, noted: {} },
       mistakes: { known: {}, noted: {} },
+      creditMemos: { known: {}, noted: {} },
     });
   });
 
@@ -643,7 +643,8 @@ describe('the daily books check', () => {
   it('records items and how far apart their counts are, never an amount', () => {
     const record = store.get(BOOKS_DAILY_CHECK)!.last_result as Record<string, unknown>;
     expect(Object.keys(record).sort()).toEqual([
-      'adjustments', 'balances', 'bills', 'companies', 'fulfillments', 'look', 'mistakes', 'own', 'receipts', 'stock', 'told',
+      'adjustments', 'balances', 'bills', 'companies', 'creditMemos', 'fulfillments', 'look', 'mistakes', 'own', 'receipts', 'stock',
+      'told',
     ]);
     expect(record.stock).toEqual({ by: 'item', known: { [LADDER]: 1, [BINS]: 5 }, noted: {} });
   });
@@ -802,6 +803,96 @@ describe('the daily books check', () => {
 
   it('records which own invoices differ and in how many things, never an amount', () => {
     expect(heldOwn()).toEqual({ known: { 5201: 1 }, noted: {} });
+  });
+
+  // ── Books' own credit memos ────────────────────────────────────────────
+
+  const heldCredits = () => (store.get(BOOKS_DAILY_CHECK)?.last_result as any)?.creditMemos;
+
+  it("tells when one of Books' own credit memos stops matching NetSuite's, linking to its check", async () => {
+    // Books' copy of a credit memo FleetSuite made on Oct 20 against Acme's INV5201, giving back the shelf and its tax...
+    await pg.query('SELECT gl_own_credit_memo_save($1::jsonb)', [JSON.stringify({
+      netsuite_id: '5202', netsuite_number: 'CM5202', invoice_netsuite_id: '5201', invoice_number: 'INV5201', customer_netsuite_id: '9001',
+      customer_id: ACME, credit_date: '2026-10-20', location_netsuite_id: '1', reason: 'The shelf came bent', tax_rule: 'credit_tax@1',
+      tax_rate: '0.084880', tax_rate_from: 'invoice', subtotal: '100.00', tax: '8.49', total: '108.49',
+      lines: [{ line_no: 1, invoice_line: 1, item_netsuite_id: '55', item_number: 'SHELF-1', quantity: 1, rate: 100, amount: '100.00', taxable: true, tax: '8.49' }],
+    })]);
+    // A second, made Oct 22, whose credit memo the ledger mirror hasn't copied from NetSuite yet: it waits, and isn't told.
+    await pg.query('SELECT gl_own_credit_memo_save($1::jsonb)', [JSON.stringify({
+      netsuite_id: '5203', netsuite_number: 'CM5203', invoice_netsuite_id: '5201', invoice_number: 'INV5201', customer_netsuite_id: '9001',
+      customer_id: ACME, credit_date: '2026-10-22', location_netsuite_id: '1', reason: 'The other shelf came bent', tax_rule: 'credit_tax@1',
+      tax_rate: '0.084880', tax_rate_from: 'invoice', subtotal: '100.00', tax: '8.49', total: '108.49',
+      lines: [{ line_no: 1, invoice_line: 1, item_netsuite_id: '55', item_number: 'SHELF-1', quantity: 1, rate: 100, amount: '100.00', taxable: true, tax: '8.49' }],
+    })]);
+    // ...and NetSuite's for the first, dated the day after and giving back two shelves for the same $100, which posted as
+    // FleetSuite posted it, so the books and the balances still match.
+    await pg.query(
+      `INSERT INTO gl_netsuite_transactions (netsuite_id, tran_type, tranid, trandate, posting_month, content_hash, sweep)
+       VALUES ('5202', 'CustCred', 'CM5202', '2026-10-21', $1, 'x', 's')`,
+      [OCT],
+    );
+    for (const [line, account, cents, location] of [['0', '120', -10849, '1'], ['1', '400', 10000, '1'], ['2', '220', 849, null]] as const) {
+      await pg.query(
+        `INSERT INTO gl_netsuite_lines (transaction_id, line_id, company_id, netsuite_account_id, posting_month, trandate, debit, credit, entity_id, location_id)
+         SELECT '5202', $1, id, $2, $3, '2026-10-21', $4, $5, '9001', $6 FROM gl_companies WHERE code = 'BMG'`,
+        [line, account, OCT, cents > 0 ? money(cents) : '0', cents < 0 ? money(cents) : '0', location],
+      );
+    }
+    await post(pg, 'BMG', 'credit_memo', '5202', '2026-10-21', [['120', -10849, ACME], ['400', 10000], ['220', 849]]);
+    const doc = await pg.query<{ id: string }>(
+      `INSERT INTO ledger_invoices (source, external_id, external_ref, doc_type, doc_number, doc_date, total, customer_netsuite_id, party_name, voided, deleted_at, lines_synced_at)
+       VALUES ('netsuite', 'CustCred/5202', '5202', 'credit_memo', 'CM5202', '2026-10-21', 108.49, '9001', 'Acme Fleet Services', false, NULL, now())
+       RETURNING id`,
+    );
+    for (const [line, kind, item, amount, quantity] of [['1', 'item', '55', '100.00', '2'], ['2', 'tax', '77', '8.49', null]] as const) {
+      await pg.query(
+        `INSERT INTO ledger_invoice_lines (document_id, line_external_id, line_no, line_kind, item_external_id, amount, quantity, raw)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+        [doc.rows[0].id, line, Number(line), kind, item, amount, quantity, JSON.stringify({ netamount: amount })],
+      );
+    }
+
+    await look('first');
+    expect(toldCredits).toEqual([]);
+    expect(heldCredits()).toEqual({ known: {}, noted: { 5202: 2 } });
+
+    expect(await look('second')).toMatchObject({ told: 1 });
+    expect(toldCredits).toEqual([{
+      title: "Own credit memos: CM5202 (Acme Fleet) differs from NetSuite's",
+      body: "Date: FleetSuite made it Oct 20, 2026, and NetSuite's credit memo is dated 1 day later. The lines differ too. Own credit memos shows why.",
+      url: '/admin/books/own-credit-memos/credit-memo?id=5202',
+      about: 'credit_memo',
+    }]);
+    expect(told).toEqual([]);
+    expect(toldBalances).toEqual([]);
+    expect(toldOwn).toEqual([]);
+    expect(heldCredits()).toEqual({ known: { 5202: 2 }, noted: {} });
+
+    // The next morning, nothing more.
+    await look('first');
+    await look('second');
+    expect(toldCredits).toEqual([]);
+  });
+
+  it("keeps what it held for the own credit memos when it couldn't look, and says why", async () => {
+    const before = heldCredits();
+    for (const [fn, error] of [
+      ['gl_own_credit_memo_months', "Own credit memos: couldn't list the months (gl_own_credit_memo_months failed)"],
+      ['gl_own_credit_memo_pairs', "Own credit memos: couldn't check October 2026's credit memos (gl_own_credit_memo_pairs failed)"],
+    ] as const) {
+      failing = (name) => name === fn;
+      try {
+        const result = await look('first');
+        expect(result.error).toBe(error);
+        expect(heldCredits()).toEqual(before);
+      } finally {
+        failing = null;
+      }
+    }
+  });
+
+  it('records which own credit memos differ and in how many things, never an amount', () => {
+    expect(heldCredits()).toEqual({ known: { 5202: 2 }, noted: {} });
   });
 
   // ── FleetSuite's own fulfillments ──────────────────────────────────────

@@ -28,6 +28,7 @@ import { STOCK_RULE } from './stock-rule';
 import { OWN_INVOICE_RULE } from './own-invoice-posting';
 import { OWN_BILL_RULE } from './own-bill-posting';
 import { OWN_ADJUSTMENT_RULE, OWN_FULFILLMENT_RULE, OWN_INVOICE_COST_RULE, OWN_RECEIPT_RULE } from './own-stock-posting';
+import { OWN_CREDIT_MEMO_RULE } from './own-credit-memo-posting';
 import { OPENING_RULE } from './opening-balances';
 import { OWN_TAX_RULE, SETTINGS_TAX_RULE } from './own-invoices';
 import { CREDIT_TAX_RULE } from '@/lib/credit-memo';
@@ -55,7 +56,7 @@ describe('the posting rules, written down', () => {
   it("has each rule the journal posts by, at the version the code posts it with, and so each version's words get looked at again", () => {
     expect(POSTING_RULES.map((r) => r.id)).toEqual([
       INVOICE_RULE, CREDIT_MEMO_RULE, PAYMENT_RULE, DEPOSIT_RULE, BILL_RULE, BILL_PAYMENT_RULE, SPENDING_RULE,
-      JOURNAL_ENTRY_RULE, BANK_RULE, STOCK_RULE, OWN_INVOICE_RULE, OWN_BILL_RULE, OWN_FULFILLMENT_RULE,
+      JOURNAL_ENTRY_RULE, BANK_RULE, STOCK_RULE, OWN_INVOICE_RULE, OWN_CREDIT_MEMO_RULE, OWN_BILL_RULE, OWN_FULFILLMENT_RULE,
       OWN_RECEIPT_RULE, OWN_ADJUSTMENT_RULE, OWN_INVOICE_COST_RULE, OPENING_RULE,
     ]);
     expect(WORKED_OUT_RULES.map((r) => r.id)).toEqual([

@@ -1,10 +1,12 @@
 // Migration 367 posts NetSuite's invoices to FleetSuite's own journal, and
 // migration 370 its credit memos; migration 380 puts each in the month
 // NetSuite booked it to, migration 387 lets one post to an account NetSuite
-// has made inactive since, and migration 409 has an invoice FleetSuite made
-// post from FleetSuite's own copy of it (migration 407) when that matches.
+// has made inactive since, migration 409 has an invoice FleetSuite made
+// post from FleetSuite's own copy of it (migration 407) when that matches,
+// and migration 518 a credit memo it made from Books' own copy of it
+// (migration 466).
 // This runs migration 314 (with stand-ins for the app tables it points at)
-// and migrations 359–364, 367, 370, 380, 387, 407 and 409, with the ones the
+// and migrations 359–364, 367, 370, 380, 387, 407, 409, 466 and 518, with the ones the
 // job reads payments, deposits, bills, bill payments, checks, card charges,
 // journal entries, bank deposits, transfers, refunds and stock documents
 // through (374, 376, 377, 382–386, 389–395, 397 and 399), and the ones it
@@ -34,6 +36,8 @@ import { BOOKS_LISTS_SYNC } from './netsuite-lists';
 import { BOOKS_GL_SYNC } from './netsuite-gl';
 import type { InvoiceMonthData } from './invoice-check';
 import { savePayload, workOutOwnInvoice, type OwnInvoiceFacts, type OwnInvoiceInput } from './own-invoices';
+import { NO_EARLIER, parseInvoiceRecord, workOutCreditMemo, type CreditLineDraft } from '@/lib/credit-memo';
+import { ownCreditMemoPayload } from './own-credit-memos';
 
 const CUSTOMER = '6f1f6a52-8a43-4b8e-9a0e-2d9c1f0b7c11';
 /**
@@ -66,7 +70,7 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migrations 314, 407, 416, 435 and 454 point at in the app's own schema.
+    -- What migrations 314, 407, 416, 435, 454 and 466 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
     CREATE TABLE public.netsuite_parts (id UUID PRIMARY KEY);
     CREATE FUNCTION public.is_admin() RETURNS BOOLEAN LANGUAGE sql STABLE AS $$ SELECT false $$;
@@ -78,6 +82,7 @@ async function freshDb(): Promise<PGlite> {
     CREATE TABLE public.vendor_invoices (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), status TEXT NOT NULL DEFAULT 'approved');
     CREATE TABLE public.payouts (id UUID PRIMARY KEY DEFAULT gen_random_uuid(), status TEXT NOT NULL DEFAULT 'approved');
     CREATE TABLE public.po_receipts (id UUID PRIMARY KEY, ns_status TEXT NOT NULL);
+    CREATE TABLE public.quote_settings (id INTEGER PRIMARY KEY CHECK (id = 1), updated_at TIMESTAMPTZ, updated_by UUID);
     CREATE FUNCTION public.get_my_roles() RETURNS TEXT[] LANGUAGE sql STABLE AS $$ SELECT ARRAY[]::text[] $$;
   `);
   for (const file of [
@@ -97,8 +102,11 @@ async function freshDb(): Promise<PGlite> {
     // Books' own fulfillments, receipts and bills, which the job reads with NetSuite's.
     '416-books-own-fulfillments.sql', '435-books-own-bills.sql', '436-books-snap-a-bill.sql', '454-inventory-adjustments.sql',
     '456-books-own-postings.sql', '457-books-own-adjustments.sql',
+    // Books' own credit memos, which the job reads with BMG's credit memos.
+    '466-credit-memos-in-fleetsuite.sql',
     // Going live: each customer's balance on the day, and the opening entries posted.
     '476-books-going-live.sql',
+    '518-books-own-credit-memo-posting.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -1051,6 +1059,134 @@ describe('the posting job against the real functions', () => {
       for (const [fn, error] of [
         ['gl_own_invoice_months', "Reading the months of FleetSuite's own invoices: gl_own_invoice_months failed"],
         ['gl_own_invoice_pairs', "Reading FleetSuite's own copies of BMG's invoices for Mar 2025: gl_own_invoice_pairs failed"],
+      ]) {
+        failing.set(fn, () => true);
+        try {
+          expect((await run()).error).toBe(error);
+        } finally {
+          failing.delete(fn);
+        }
+      }
+      expect(await journal()).toEqual(before);
+      expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 0, failedCount: 0 });
+    });
+
+    it("reads nothing of Books' own credit memos for months that have none, so it can't stop over them", async () => {
+      failing.set('gl_own_credit_memo_months', () => true);
+      try {
+        const r = await run();
+        expect(r.error).toBeUndefined();
+        expect(r).toMatchObject({ months: [JAN, FEB, MAR], posted: 0, replaced: 0, reversed: 0, failedCount: 0 });
+      } finally {
+        failing.delete('gl_own_credit_memo_months');
+      }
+    });
+  });
+
+  describe("Books' own credit memos", () => {
+    // Made-up credit memos FleetSuite made in March 2025 against INV601: CM701 gives back the part, which comes back on
+    // the shelf, with its tax, as NetSuite's credit memo does, and CM702's copy gives back $5 less labor than NetSuite's.
+    const made = (ref: string, number: string, date: string, lines: NsLine[]): NsInvoice => ({
+      kind: 'credit_memo', ref, number, date, company: 'BMG', customerId: CUSTOMER, customerNsId: '9001', location: '1', lines,
+    });
+    const MEMOS = (): NsInvoice[] => [
+      made('701', 'CM701', '2025-03-20', [part('40.00'), tax('3.00', '2')]),
+      made('702', 'CM702', '2025-03-21', [labor('60.00')]),
+    ];
+    /** INV601 as NetSuite gives it to Make credit memo: the part taxed at 7.5%, the labor not. */
+    const INV601 = parseInvoiceRecord({
+      id: '601', tranId: 'INV601', tranDate: '2025-03-10', entity: { id: '9001', refName: 'A Customer' },
+      location: { id: '1', refName: "O'Fallon" }, subtotal: 100, taxTotal: 3, total: 103, taxRate: 7.5,
+      item: { items: [
+        { line: 1, item: { id: '11', refName: 'PART-A' }, itemType: 'InvtPart', quantity: 1, rate: 40, amount: 40, isTaxable: true },
+        { line: 2, item: { id: '13', refName: 'INSTALL LABOR' }, itemType: 'Service', quantity: 1, rate: 60, amount: 60, isTaxable: false },
+      ] },
+    });
+    /** Books saves its own copy of a credit memo FleetSuite made against INV601, crediting `drafts`. */
+    const saveCopy = async (memo: NsInvoice, drafts: CreditLineDraft[]) => {
+      const worked = workOutCreditMemo(INV601, drafts, [], { earlier: NO_EARLIER, creditItem: null, reason: 'Returned' });
+      expect(worked.problems).toEqual([]);
+      const payload = ownCreditMemoPayload(
+        {
+          netsuiteId: memo.ref, netsuiteNumber: memo.number, invoice: INV601, worked, reason: 'Returned',
+          madeFromId: 'b0000000-0000-4000-8000-000000000701', madeBy: null,
+        },
+        { customerId: CUSTOMER, creditDate: memo.date },
+      );
+      await pg.query('SELECT gl_own_credit_memo_save($1::jsonb)', [JSON.stringify(payload)]);
+    };
+    /** Which rule made the entry that stands for a credit memo, and its number. */
+    const standing = async (ref: string) => (await pg.query<{ no: number; rule: string }>(
+      `SELECT e.entry_no::int AS no, e.posting_rule AS rule FROM gl_entries e
+       WHERE e.source_type = 'credit_memo' AND e.source_id = $1 AND NOT EXISTS (SELECT 1 FROM gl_entries r WHERE r.reverses_entry_id = e.id)`,
+      [ref],
+    )).rows;
+
+    beforeAll(async () => {
+      await startOver();
+      await pg.exec(`
+        UPDATE customers SET company_name = 'A Customer', netsuite_id = '9001', tax_exempt = false WHERE id = '${CUSTOMER}';
+        INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details) VALUES
+          ('location', '1', 'O''Fallon', true, '{}'),
+          ('customer', '9001', 'A Customer', true, '{"taxable": "T"}')
+        ON CONFLICT DO NOTHING;
+      `);
+      for (const memo of MEMOS()) {
+        ns.invoices.set(memo.ref, memo);
+        await copy(pg, memo);
+      }
+    });
+
+    it("posts NetSuite's credit memos while Books has no copies of its own", async () => {
+      expect(await run()).toMatchObject({ months: [JAN, FEB, MAR], posted: 5, replaced: 0, reversed: 0, failedCount: 0 });
+      for (const ref of ['701', '702']) expect((await standing(ref)).map((e) => e.rule)).toEqual(['credit_memo@1']);
+    });
+
+    it("posts Books' own copy in place of NetSuite's credit memo when it matches, and nothing in the books moves", async () => {
+      const before = await balances();
+      const was = (await standing('701'))[0].no;
+      await saveCopy(ns.invoices.get('701')!, [{ line: 1, quantity: 1, price: 40, backToStock: true }]);
+      await saveCopy(ns.invoices.get('702')!, [{ line: 2, quantity: 1, price: 55 }]);
+
+      expect(await run()).toMatchObject({ posted: 0, replaced: 1, reversed: 0, failedCount: 0 });
+      const last = (await journal()).slice(-2);
+      expect(last).toEqual([
+        { no: expect.any(Number), date: '2025-03-20', key: null, reverses: was, memo: "CM701 now posts from FleetSuite's own copy" },
+        { no: expect.any(Number), date: '2025-03-20', key: 'credit_memo:701:2', reverses: null, memo: 'CM701, A Customer' },
+      ]);
+      expect(await linesOf(last[1].no)).toEqual([
+        { account: '120', debit: '0.00', credit: '43.00', division: null, customer_id: CUSTOMER, item_number: null, source_line_ref: '0' },
+        { account: '400', debit: '40.00', credit: '0.00', division: 'upfit', customer_id: null, item_number: 'PART-A', source_line_ref: 'own:1' },
+        { account: '220', debit: '3.00', credit: '0.00', division: null, customer_id: null, item_number: null, source_line_ref: 'own:tax' },
+      ]);
+      expect(await standing('701')).toEqual([{ no: last[1].no, rule: 'own_credit_memo@1' }]);
+      // CM702's copy gives back less than NetSuite's credit memo, so NetSuite's stands.
+      expect((await standing('702')).map((e) => e.rule)).toEqual(['credit_memo@1']);
+      expect(await balances()).toEqual(before);
+
+      expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 0, failedCount: 0 });
+    });
+
+    it("goes back to NetSuite's credit memo when NetSuite changes it, since that's what the customer was credited", async () => {
+      await edit('701', (memo) => { memo.lines = [part('30.00'), tax('2.25', '2')]; });
+      expect(await run()).toMatchObject({ posted: 0, replaced: 1, reversed: 0, failedCount: 0 });
+      const last = (await journal()).slice(-2);
+      expect(last).toEqual([
+        { no: expect.any(Number), date: '2025-03-20', key: null, reverses: expect.any(Number), memo: "CM701 now posts from NetSuite's credit memo" },
+        { no: expect.any(Number), date: '2025-03-20', key: 'credit_memo:701:3', reverses: null, memo: 'CM701, A Customer' },
+      ]);
+      expect((await linesOf(last[1].no)).map((l: any) => [l.source_line_ref, l.debit, l.credit])).toEqual([
+        ['0', '0.00', '32.25'], ['1', '30.00', '0.00'], ['2', '2.25', '0.00'],
+      ]);
+      expect(await standing('701')).toEqual([{ no: last[1].no, rule: 'credit_memo@1' }]);
+      expect(await run()).toMatchObject({ posted: 0, replaced: 0, reversed: 0 });
+    });
+
+    it("stops the run, saying what it was reading, when the copies or their months can't be read", async () => {
+      const before = await journal();
+      for (const [fn, error] of [
+        ['gl_own_credit_memo_months', "Reading the months of Books' own credit memos: gl_own_credit_memo_months failed"],
+        ['gl_own_credit_memo_pairs', "Reading Books' own copies of BMG's credit memos for Mar 2025: gl_own_credit_memo_pairs failed"],
       ]) {
         failing.set(fn, () => true);
         try {

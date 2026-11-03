@@ -95,6 +95,11 @@ export interface NetsuiteLineData {
   amount: string;
   /** NetSuite's own, signed, a sale negative; null when the mirror didn't keep it. */
   netamount: string | null;
+  /**
+   * The line books the cost of stock (to a cost of goods sold account or an item's inventory asset account in the copy
+   * of NetSuite's general ledger), not what was sold, as gl_netsuite_cost_lines recognizes them; since migration 518.
+   */
+  cost?: boolean;
 }
 
 export interface NetsuiteInvoiceData {
@@ -368,6 +373,11 @@ export function explainTax(t: TaxSides): string | null {
 
 // ── Lines ──────────────────────────────────────────────────────────────────
 
+/** Why NetSuite's cost lines aren't compared, in a sentence: `n` of them, on `doc`, for the stock `moved` ('it took'). */
+export const costLinesText = (n: number, doc: string, moved: string) =>
+  `${doc} books the cost of the stock ${moved} on ${plural(n, 'line', 'lines')} of its own, which ${n === 1 ? "isn't" : "aren't"} compared here: `
+  + 'that cost posts under Stock and cost.';
+
 /** NetSuite's item types for a discount or markup, which it spreads over the lines it applies to. */
 const SPREAD_TYPES = new Set(['Discount', 'Markup']);
 
@@ -417,8 +427,20 @@ export function takeApartSpread<L extends { itemId: string | null; quantity: num
   return { lines: out.map((l) => (l === spread ? { ...l, cents: off } : l)), spread };
 }
 
-type OwnSide = NonNullable<OwnLinePair['fleetsuite']> & { itemId: string | null; itemNumber: string | null };
-type NetSide = NonNullable<OwnLinePair['netsuite']> & { itemId: string | null; itemNumber: string | null };
+export type OwnSide = NonNullable<OwnLinePair['fleetsuite']> & { itemId: string | null; itemNumber: string | null };
+export type NetSide = NonNullable<OwnLinePair['netsuite']> & { itemId: string | null; itemNumber: string | null };
+
+/** What the document does with its lines, in the line pairing's sentences. */
+export interface LineWords {
+  /** 'billed' */
+  did: string;
+  /** 'bill' */
+  do: string;
+  /** 'invoice': NetSuite's is "NetSuite's invoice". */
+  doc: string;
+}
+
+export const INVOICE_LINE_WORDS: LineWords = { did: 'billed', do: 'bill', doc: 'invoice' };
 
 /**
  * FleetSuite's lines paired with NetSuite's by item, a line at the same amount first, then in order. `isCharge` says
@@ -429,7 +451,9 @@ export function pairLines(
   netsuite: NetSide[],
   itemName: (id: string | null, number: string | null, description: string | null) => string,
   isCharge: (itemId: string | null) => boolean = () => false,
+  words: LineWords = INVOICE_LINE_WORDS,
 ): OwnLinePair[] {
+  const theirs = `NetSuite's ${words.doc}`;
   const taken = new Set<number>();
   const match = new Map<number, number>();
   for (const exact of [true, false]) {
@@ -450,8 +474,8 @@ export function pairLines(
     if (!n) {
       const amount = o.priced ? ` (${dollars(o.cents)})` : '';
       const why = isCharge(o.itemId)
-        ? `FleetSuite's copy has ${item}${amount}, shipping NetSuite added to the invoice, and NetSuite's invoice doesn't have it now.`
-        : `FleetSuite billed ${item}${amount}, and NetSuite's invoice doesn't have it.`;
+        ? `FleetSuite's copy has ${item}${amount}, shipping NetSuite added to the invoice, and ${theirs} doesn't have it now.`
+        : `FleetSuite ${words.did} ${item}${amount}, and ${theirs} doesn't have it.`;
       return { item, itemId: o.itemId, fleetsuite, netsuite: null, same: false, why };
     }
     const netsuiteSide = { lineId: n.lineId, description: n.description, quantity: n.quantity, rate: n.rate, cents: n.cents };
@@ -463,13 +487,13 @@ export function pairLines(
     const same = quantitySame && amountSame;
     let why: string | null = null;
     if (!quantitySame && !amountSame) {
-      why = `FleetSuite billed ${qty(o.quantity!)} of ${item} for ${dollars(o.cents)}, and NetSuite ${qty(n.quantity!)} for ${dollars(n.cents)}.`;
+      why = `FleetSuite ${words.did} ${qty(o.quantity!)} of ${item} for ${dollars(o.cents)}, and NetSuite ${qty(n.quantity!)} for ${dollars(n.cents)}.`;
     } else if (!quantitySame) {
-      why = `FleetSuite billed ${qty(o.quantity!)} of ${item}, and NetSuite ${qty(n.quantity!)}.`;
+      why = `FleetSuite ${words.did} ${qty(o.quantity!)} of ${item}, and NetSuite ${qty(n.quantity!)}.`;
     } else if (!amountSame) {
       why = isCharge(o.itemId)
-        ? `FleetSuite's copy has ${item} at ${dollars(o.cents)}, and NetSuite's invoice at ${dollars(n.cents)}.`
-        : `FleetSuite billed ${item} for ${dollars(o.cents)}, and NetSuite for ${dollars(n.cents)}.`;
+        ? `FleetSuite's copy has ${item} at ${dollars(o.cents)}, and ${theirs} at ${dollars(n.cents)}.`
+        : `FleetSuite ${words.did} ${item} for ${dollars(o.cents)}, and NetSuite for ${dollars(n.cents)}.`;
     } else if (!o.priced) {
       why = `NetSuite priced ${item} at ${dollars(n.cents)}.`;
     }
@@ -487,11 +511,26 @@ export function pairLines(
       netsuite: { lineId: n.lineId, description: n.description, quantity: n.quantity, rate: n.rate, cents: n.cents },
       same: false,
       why: isCharge(n.itemId)
-        ? `NetSuite added ${item}${amount} to the invoice as shipping or handling, and FleetSuite's copy doesn't have it.`
-        : `NetSuite's invoice has ${item}${amount}, and FleetSuite didn't bill it.`,
+        ? `NetSuite added ${item}${amount} to the ${words.doc} as shipping or handling, and FleetSuite's copy doesn't have it.`
+        : `${theirs} has ${item}${amount}, and FleetSuite didn't ${words.do} it.`,
     });
   });
   return pairs;
+}
+
+/** The list's sentence for a copy that differs: its first difference, and what else differs that doesn't follow from it. */
+export function differsSummary(fields: OwnFieldCheck[]): string {
+  const first = fields.find((f) => f.same === false);
+  if (!first) return '';
+  const what = first.why ?? `FleetSuite ${first.fleetsuite ?? 'nothing'}, NetSuite ${first.netsuite ?? 'nothing'}.`;
+  const differs = (f: OwnField) => fields.some((x) => x.field === f && x.same === false);
+  // The total follows from what's before tax and the tax, what's before tax from the lines.
+  const follows = (f: OwnField) => (f === 'total' && (differs('subtotal') || differs('tax'))) || (f === 'subtotal' && differs('lines'));
+  const others = fields.filter((f) => f.same === false && f !== first && !follows(f.field)).map((f) => f.field);
+  const too = listed(others.map((f) => FIELD_WORDS[f]));
+  return `${first.label}: ${what}${others.length
+    ? ` ${too.charAt(0).toUpperCase()}${too.slice(1)} ${others.length > 1 || others[0] === 'lines' ? 'differ' : 'differs'} too.`
+    : ''}`;
 }
 
 // ── One invoice ────────────────────────────────────────────────────────────
@@ -525,6 +564,8 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
   let nsTax = 0;
   let nsTaxReadable = true;
   const nsRates = new Set<number | null>();
+  // The cost of the stock an invoice took itself, on lines of their own, posts under Stock and cost: it isn't billed.
+  let nsCostLines = 0;
   for (const l of ns?.lines ?? []) {
     if (l.kind === 'tax') {
       const cents = netsuiteCents(l, null);
@@ -533,6 +574,7 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
       if (cents) nsRates.add(l.item_id ? lists.taxCodes.get(l.item_id)?.rate ?? null : null);
       continue;
     }
+    if (l.cost) { nsCostLines++; continue; }
     const type = l.item_id ? lists.items.get(l.item_id)?.type ?? null : null;
     if (l.item_id && isLayoutItem(l.item_id, type)) continue;
     nsBilled.push({
@@ -717,16 +759,7 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
     summary = "Waiting for the copy of NetSuite's general ledger to reach the invoice.";
   } else if (differing) {
     status = 'differs';
-    const first = fields.find((f) => f.same === false)!;
-    const what = first.why ?? `FleetSuite ${first.fleetsuite ?? 'nothing'}, NetSuite ${first.netsuite ?? 'nothing'}.`;
-    const differs = (f: OwnField) => fields.some((x) => x.field === f && x.same === false);
-    // The total follows from what's before tax and the tax, what's before tax from the lines.
-    const follows = (f: OwnField) => (f === 'total' && (differs('subtotal') || differs('tax'))) || (f === 'subtotal' && differs('lines'));
-    const others = fields.filter((f) => f.same === false && f !== first && !follows(f.field)).map((f) => f.field);
-    const too = listed(others.map((f) => FIELD_WORDS[f]));
-    summary = `${first.label}: ${what}${others.length
-      ? ` ${too.charAt(0).toUpperCase()}${too.slice(1)} ${others.length > 1 || others[0] === 'lines' ? 'differ' : 'differs'} too.`
-      : ''}`;
+    summary = differsSummary(fields);
   } else if (unknownWords.length) {
     status = 'incomplete';
     summary = `Matches where it can be checked. FleetSuite didn't know ${listed(unknownWords)}.`;
@@ -765,6 +798,7 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
     workedOut.push(`NetSuite spread ${discount} over the lines it applies to, so NetSuite's lines are taken at their quantities times their prices, `
       + `and ${discount} at the difference.`);
   }
+  if (nsCostLines) workedOut.push(costLinesText(nsCostLines, "NetSuite's invoice", 'it took'));
 
   return {
     netsuiteId: own.netsuite_id,

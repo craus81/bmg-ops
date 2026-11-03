@@ -14,15 +14,16 @@ export const maxDuration = 300;
  * Differences vs NetSuite does, each item's count next to NetSuite's, as
  * Stock by item does, each customer's and vendor's balance next to
  * NetSuite's, as Customer and vendor balances does, each of FleetSuite's
- * own invoices next to NetSuite's, as Own invoices does, each of its own
- * fulfillments next to NetSuite's, as Own fulfillments does, each of
- * Books' own bills and receipts next to NetSuite's, as Own bills and Own
- * receipts do, and each Inventory Adjust next to NetSuite's adjustment, as
- * Own adjustments does, and tells the super admins in FleetSuite, in the app
- * and by push, when a month, an item, a balance, an own invoice,
- * fulfillment, bill, receipt or adjustment stops matching, when the
- * night's mistake checks found a likely mistake nobody has cleared, when
- * FleetSuite isn't sure NetSuite took a send nobody has looked for yet, or
+ * own invoices and credit memos next to NetSuite's, as Own invoices and Own
+ * credit memos do, each of its own fulfillments next to NetSuite's, as Own
+ * fulfillments does, each of Books' own bills and receipts next to
+ * NetSuite's, as Own bills and Own receipts do, and each Inventory Adjust
+ * next to NetSuite's adjustment, as Own adjustments does, and tells the
+ * super admins in FleetSuite, in the app and by push, when a month, an item,
+ * a balance, an own invoice, credit memo, fulfillment, bill, receipt or
+ * adjustment stops matching, when the night's mistake checks found a likely
+ * mistake nobody has cleared, when FleetSuite isn't sure NetSuite took a
+ * send nobody has looked for yet, or
  * when the night's backup of the books didn't work (08:11) or didn't pass its
  * restore test (08:51), or when someone changed the books outside FleetSuite,
  * straight in the database, with a link to it there
@@ -49,11 +50,12 @@ export async function GET(req: NextRequest) {
   }
 
   // Super admins only, not the bookkeeper or the CPA; never by email, but
-  // for an Inventory Adjust, a send to NetSuite FleetSuite isn't sure about,
-  // a change made in NetSuite to a customer or vendor, FleetSuite's own
-  // numbers, its invoice PDFs, the backups of the books and their restore
-  // test, or a change made to the books outside FleetSuite, to one with "Copy
-  // me on new alerts" ticked (the email books_own_adjustment_differs,
+  // for an Inventory Adjust, an own credit memo, a send to NetSuite FleetSuite
+  // isn't sure about, a change made in NetSuite to a customer or vendor,
+  // FleetSuite's own numbers, its invoice PDFs, the backups of the books and
+  // their restore test, or a change made to the books outside FleetSuite, to
+  // one with "Copy me on new alerts" ticked (the email
+  // books_own_adjustment_differs, books_own_credit_memo_differs,
   // books_netsuite_send_unsure, books_record_changed_in_netsuite,
   // books_own_number, books_invoice_pdf, books_backup, books_restore_drill and
   // books_changed_outside fix in the registry).
@@ -64,6 +66,7 @@ export async function GET(req: NextRequest) {
       if (alert.about === 'stock') await notifyMany(ids, { type: 'books_stock_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'balance') await notifyMany(ids, { type: 'books_balance_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'own') await notifyMany(ids, { type: 'books_own_invoice_differs', ...sent, channels: ['in_app', 'push'] });
+      else if (alert.about === 'credit_memo') await notifyMany(ids, { type: 'books_own_credit_memo_differs', ...sent, channels: ['in_app', 'push', 'email'] });
       else if (alert.about === 'fulfillment') await notifyMany(ids, { type: 'books_own_fulfillment_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'bill') await notifyMany(ids, { type: 'books_own_bill_differs', ...sent, channels: ['in_app', 'push'] });
       else if (alert.about === 'receipt') await notifyMany(ids, { type: 'books_own_receipt_differs', ...sent, channels: ['in_app', 'push'] });
