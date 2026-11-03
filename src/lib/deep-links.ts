@@ -118,6 +118,9 @@ export const deepLinks = {
   /** Parts page — opens the part's record: switches to its catalog tab,
    *  expands the row, scrolls to it, and highlights it (page reads ?part=). */
   part: (partId: string) => `/parts?part=${partId}`,
+  /** Admin → Update Prices on "Prices that don't match"; with a part, that
+   *  part's row is scrolled to and highlighted (page reads ?tab= and ?part=). */
+  priceMismatches: (partId?: string | null) => `/admin/update-prices?tab=mismatch${partId ? `&part=${partId}` : ''}`,
   /** Wrap-quote list — opens that quote (page reads ?id=). from: 'quotes'
    *  makes closing it return to that row on the Quotes page. */
   wrapQuote: (quoteId: string, opts?: { from?: 'quotes' }) =>

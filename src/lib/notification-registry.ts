@@ -270,6 +270,14 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
       email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
     },
     audience: 'Super admins, the only people who can open the books.' },
+  // The nightly FleetSuite vs NetSuite price check (migration 513, owner ask
+  // 2026-11-03). Every channel to anyone with "Copy me on new alerts" (Craig's
+  // standing rule, 2026-10-28).
+  { type: 'price_mismatch_found', label: "A part's price differs in NetSuite", description: "The nightly price check found parts whose selling price in NetSuite isn't FleetSuite's: someone changed it in NetSuite, or NetSuite didn't take an update. Told once per part. Opens Admin → Update Prices → Prices that don't match, to send FleetSuite's price to NetSuite or use NetSuite's.", area: 'money', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Super admins, plus anyone with "Copy me on new alerts" (Admin → Users → Settings).' },
   // A change made in NetSuite to a customer, vendor or item once FleetSuite's
   // record wins (parts 48 and 49, migration 480). Emailed like the send alert,
   // only to anyone with "Copy me on new alerts" (Craig's standing rule,
