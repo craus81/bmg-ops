@@ -204,6 +204,15 @@ export const POSTING_RULES: readonly PostingRuleInfo[] = [
     code: 'src/lib/books/own-stock-posting.ts', docs: "FleetSuite's own adjustments",
   },
   {
+    id: 'own_invoice_cost@1', name: "FleetSuite's own invoices' cost", group: 'own',
+    from: "What an invoice FleetSuite made without a sales order took from stock, from FleetSuite's own copy of the invoice.",
+    posts: [
+      "Credit each item's inventory asset account and debit the cost account NetSuite's last fulfillment or invoice of it used, at the item's average cost at the invoice's location just before.",
+    ],
+    note: "A kit's items are its parts, as NetSuite takes them from stock: each the kit's quantity times what one kit holds.",
+    code: 'src/lib/books/own-stock-posting.ts', docs: "Posting FleetSuite's own invoices' cost",
+  },
+  {
     id: 'opening_balance@1', name: 'Opening balances', group: 'opening',
     from: "Once for each company, on the day its books go live, dated the last day of the month before.",
     posts: [
@@ -339,7 +348,7 @@ export const MONEY_STEPS: readonly MoneyStep[] = [
   // Customers
   {
     key: 'invoice', area: 'sales', step: 'Make an invoice', where: 'Invoicing → New invoice, scans and graphics jobs',
-    holders: [feature('invoicing')], posts: ['invoice@1', 'own_invoice@1'],
+    holders: [feature('invoicing')], posts: ['invoice@1', 'own_invoice@1', 'stock@1', 'own_invoice_cost@1'],
     route: { file: 'src/app/api/invoices/new/route.ts', guard: 'feature', markers: ["requireFeature(req, 'invoicing')"] },
   },
   {
@@ -354,7 +363,7 @@ export const MONEY_STEPS: readonly MoneyStep[] = [
   },
   {
     key: 'invoice_fix', area: 'sales', step: 'Fix an invoice after it is made', where: 'Fix on an invoice',
-    holders: [feature('invoicing')], switch: 'invoice_fixes', posts: ['invoice@1', 'own_invoice@1'],
+    holders: [feature('invoicing')], switch: 'invoice_fixes', posts: ['invoice@1', 'own_invoice@1', 'stock@1', 'own_invoice_cost@1'],
     route: { file: 'src/app/api/invoices/fix/route.ts', guard: 'feature', markers: ["requireFeature(req, 'invoicing')", "switchIsOn(service, 'invoice_fixes')"] },
   },
   {

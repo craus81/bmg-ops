@@ -1746,11 +1746,12 @@ posts as a journal entry does: once, in the month NetSuite booked it into,
 reversed and posted again when NetSuite changes what it posts, and
 reversed when the GL copy no longer holds a line of it for the company (for
 an invoice or credit memo, a cost line); 1084's post the same way (Both
-companies). A fulfillment FleetSuite made, a Receive NetSuite took, or a
-change made with Inventory Adjust, posts from Books' own copy of it instead
-when that copy matches NetSuite's document and makes the same entry
+companies). A fulfillment FleetSuite made, a Receive NetSuite took, a
+change made with Inventory Adjust, or the cost lines of an invoice
+FleetSuite made without a sales order, posts from Books' own copy of it
+instead when that copy matches NetSuite's document and makes the same entry
 ("Posting FleetSuite's own fulfillments, receipts and bills", "FleetSuite's
-own adjustments").
+own adjustments", "Posting FleetSuite's own invoices' cost").
 The entries are filed as `item_fulfillment`, `item_receipt`,
 `inventory_adjustment`, `inventory_transfer`, `assembly_build`,
 `assembly_unbuild` and `invoice_cost` (an invoice's and a credit memo's
@@ -2986,7 +2987,10 @@ account up by. The entry is dated as NetSuite's is, in the month NetSuite
 booked the invoice into, keyed as NetSuite's is (`invoice:<NetSuite
 id>:<n>`) with the same memo, and its lines name FleetSuite's own
 (`own:<line>`, `own:tax`). Only BMG's invoices have copies; credit memos
-and 1084's invoices post as before.
+and 1084's invoices post as before. The cost lines of an invoice made
+without a sales order post apart from the sale, from the copy too when what
+it took from stock matches NetSuite's ("Posting FleetSuite's own invoices'
+cost").
 
 The posting run reads the copies of each BMG month's invoices, from the
 first month FleetSuite made any (`readOwnCopies`), and checks each as Own
@@ -3008,7 +3012,8 @@ posts when it does, and links to FleetSuite's copy.
 - Credit memos, and the documents Books has no copies of, post from
   NetSuite's. Fulfillments, receipts and bills post from Books' own copies
   from part 30 ("Posting FleetSuite's own fulfillments, receipts and
-  bills").
+  bills"), and an invoice's cost lines from 2026-11-03 ("Posting
+  FleetSuite's own invoices' cost").
 - There's no history: copies start the day part 23 shipped.
 - FleetSuite's sales tax is one rate for everything but Social Circle, while
   NetSuite picks a tax code for each invoice. Where that differs, the check
@@ -3592,15 +3597,110 @@ and opening it links to its copy.
 
 ### What isn't done yet
 
-- Transfers, builds and unbuilds and invoices' cost lines post from
-  NetSuite's: Books keeps no copies of them yet. So do inventory
-  adjustments made in NetSuite by hand, which have no Inventory Adjust.
+- Transfers, builds and unbuilds post from NetSuite's: Books keeps no
+  copies of them yet. So do inventory adjustments made in NetSuite by hand,
+  which have no Inventory Adjust. Invoices' cost lines post from their
+  copies from 2026-11-03 ("Posting FleetSuite's own invoices' cost").
 - Bill credits and bill payments post from NetSuite's. A Receive NetSuite
   didn't take posts nothing until it's entered there by hand, and then
   NetSuite's receipt posts, as Receiving doesn't know which it is.
 - An item's cost of goods account is learned from NetSuite's fulfillments,
   so after NetSuite moves an item to another account, its next fulfillment
   posts from NetSuite's, and the one after takes the new account.
+
+## Posting FleetSuite's own invoices' cost
+
+An invoice FleetSuite makes without a sales order (from the Scan Log, a
+PO's open quantities, a graphics job, or typed in FleetSuite) takes its
+stock itself: NetSuite takes each item it bills that NetSuite keeps in
+stock, and each part of a kit it bills, from the invoice's location, and
+books what that cost on cost lines of the invoice, which the books post
+apart from the sale (`invoice_cost`, "Stock and cost"). An invoice off a
+sales order takes nothing: the order's fulfillment did. From 2026-11-03
+(NetSuite Exit Checklist, "Gaps in what's built", migration 517) the books
+post that cost from FleetSuite's own copy of the invoice ("FleetSuite's own
+invoices") in place of NetSuite's cost lines when:
+
+- what the copy took from stock **matches** NetSuite's invoice; and
+- the entry it makes is the one NetSuite's cost lines make: the same amount
+  to each account, on the same date.
+
+Otherwise NetSuite's cost lines post, as they always have, and switching
+copies never moves anything in the books, as for fulfillments ("Posting
+FleetSuite's own fulfillments, receipts and bills").
+
+What the copy took is checked as Own fulfillments checks a fulfillment
+(`checkOwnInvoiceCost` in `src/lib/books/own-invoice-cost-check.ts`, with
+the fulfillment check's `checkTaken`), against NetSuite's invoice as the
+copy of its stock moves has it (migration 401), valued from the copy of
+its general ledger (`gl_own_invoice_cost_pairs`):
+
+- **Its items** are the lines it bills that NetSuite keeps in stock, as the
+  copy of NetSuite's items has them; a service takes nothing. A kit is
+  taken apart into its parts, each the kit's quantity times what one kit
+  holds, since NetSuite takes a kit's parts, not the kit. An item the copy
+  of NetSuite's items doesn't have may be kept in stock, and leaves the
+  copy incomplete.
+- **Where from** is where FleetSuite told NetSuite to book the invoice.
+  When FleetSuite didn't tell it, where it took stock from isn't known, and
+  the copy is incomplete.
+- **What it cost** is each item's average at the invoice's location just
+  before the invoice, as Stock by item counts it, a line its quantity at
+  that average, to the cent.
+- **Its date** is the invoice's. A copy FleetSuite fixed since it made it
+  (Fix an invoice) waits for the copies of NetSuite made since the fix.
+
+A copy waits, is gone, differs, is incomplete or matches as a fulfillment's
+does. An invoice that took nothing, and whose NetSuite invoice took nothing
+either, has no cost to post.
+
+The copy's entry, `own_invoice_cost@1` (`src/lib/books/own-stock-posting.ts`,
+the fulfillment's entry worked on the invoice's items), takes each item's
+cost off its asset account, as the copy of NetSuite's items has it, and
+puts it in the cost account NetSuite's last fulfillment or invoice of the
+item before this one debited, or, for an item NetSuite hasn't shipped or
+sold before, the one most of the company's fulfillments debit theirs to
+(`gl_own_invoice_cost_accounts`, migration 517). When NetSuite's invoice
+put an item's cost in another account, its page says so, and the item's
+next invoice takes NetSuite's account from it. The entry is dated as
+NetSuite's is, in the month NetSuite booked the invoice into, keyed as
+NetSuite's cost lines are (`invoice_cost:<NetSuite id>:<n>`), and its lines
+name the copy's own (`own:<item>:cost`, `own:<item>:asset`). Only BMG's
+invoices have copies.
+
+The posting run reads the copies of each month's invoices made without a
+sales order, from the first month FleetSuite made any invoice
+(`gl_own_invoice_months`), and checks each as the invoice's page does.
+`gl_stock_postings` says which rule made the entry that stands (migration
+456), so a cost whose entry was made by the other copy's rule has it
+replaced, reversed and posted again in one transaction, as for a
+fulfillment. So the first run after this shipped replaced the cost entry of
+each invoice whose copy matched, and each lists NetSuite's as an earlier
+entry. A read of the copies that fails stops the run, saying what it was
+reading.
+
+On Own invoices, the page of an invoice made without a sales order shows
+**What it took from stock**: whether it matches NetSuite's, what the books
+hold for its cost with a link to it on Invoices vs NetSuite, its date,
+location, items and cost next to NetSuite's, its cost entry next to the
+one NetSuite's cost lines make, account by account, and each item with
+where it was taken from and what it cost, opening its moves on Stock by
+item. How FleetSuite worked the cost out follows how it worked the invoice
+out. The section doesn't show for an invoice that took nothing, nor for
+one off a sales order. On Invoices vs NetSuite an invoice's cost posted
+from its copy reads "Entry 902 · own copy" under Stock and cost, and
+opening it links to the invoice's own page.
+
+### What isn't done yet
+
+- The daily check doesn't look at what invoices took from stock: the
+  invoice's own check (Own invoices) and Differences do.
+- Credit memos' cost lines post from NetSuite's: Books' copies of credit
+  memos don't post yet.
+- An item's cost account is learned from NetSuite's fulfillments and
+  invoices, so after NetSuite moves an item to another account, its next
+  invoice's cost posts from NetSuite's, and the one after takes the new
+  account.
 
 ## Snap a bill
 

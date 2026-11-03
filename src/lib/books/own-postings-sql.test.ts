@@ -625,15 +625,15 @@ describe("the posting job, with Books' own fulfillments, receipts and bills", ()
   it("stops the run, saying what it was reading, when the copies, their months or how far NetSuite's copies had come can't be read", async () => {
     const before = await journal();
     for (const [read, error] of [
-      ['gl_own_fulfillment_months', "Reading the months of Books' own fulfillments, receipts and adjustments: gl_own_fulfillment_months failed"],
-      ['gl_own_receipt_months', "Reading the months of Books' own fulfillments, receipts and adjustments: gl_own_receipt_months failed"],
+      ['gl_own_fulfillment_months', "Reading the months of Books' own fulfillments, receipts, adjustments and invoices: gl_own_fulfillment_months failed"],
+      ['gl_own_receipt_months', "Reading the months of Books' own fulfillments, receipts, adjustments and invoices: gl_own_receipt_months failed"],
       ['gl_own_bill_months', "Reading the months of Books' own bills: gl_own_bill_months failed"],
       [BOOKS_STOCK_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_STOCK_SYNC} failed`],
       [BOOKS_BILLS_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_BILLS_SYNC} failed`],
       [BOOKS_GL_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_GL_SYNC} failed`],
-      ['gl_own_fulfillment_pairs', "Reading Books' own copies of BMG's fulfillments, receipts and adjustments for Feb 2025: gl_own_fulfillment_pairs failed"],
-      ['gl_own_stock_accounts', "Reading Books' own copies of BMG's fulfillments, receipts and adjustments for Feb 2025: gl_own_stock_accounts failed"],
-      ['gl_own_receipt_pairs', "Reading Books' own copies of BMG's fulfillments, receipts and adjustments for Mar 2025: gl_own_receipt_pairs failed"],
+      ['gl_own_fulfillment_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments and invoices for Feb 2025: gl_own_fulfillment_pairs failed"],
+      ['gl_own_stock_accounts', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments and invoices for Feb 2025: gl_own_stock_accounts failed"],
+      ['gl_own_receipt_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments and invoices for Mar 2025: gl_own_receipt_pairs failed"],
       ['gl_own_bill_pairs', "Reading Books' own copies of BMG's bills for Mar 2025: gl_own_bill_pairs failed"],
     ]) {
       failing.add(read);

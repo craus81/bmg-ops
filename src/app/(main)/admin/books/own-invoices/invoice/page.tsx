@@ -11,6 +11,10 @@ import { openPdfBytes } from '@/lib/native-files';
 import { pdfStatusLine, type InvoicePdfView, type PdfTone } from '@/lib/books/invoice-pdf-status';
 import type { OwnCheckStatus, OwnInvoiceCheck, OwnLinePair } from '@/lib/books/own-invoice-check';
 import type { OwnBooks } from '@/lib/books/own-invoice-posting';
+import type { OwnInvoiceCostCheck } from '@/lib/books/own-invoice-cost-check';
+import type { OwnPostingView } from '@/lib/books/own-posting-view';
+import { OwnBooksLine, OwnEntry } from '@/components/BooksOwnPosting';
+import { NetSuitePosted, TakenItems } from '@/components/BooksTakenStock';
 
 /**
  * Books → Own invoices → one of FleetSuite's own invoices, next to
@@ -21,7 +25,13 @@ import type { OwnBooks } from '@/lib/books/own-invoice-posting';
  * differ; each line FleetSuite billed paired with NetSuite's; what FleetSuite
  * couldn't work out; how it worked its copy out; and which copy the books
  * posted the invoice from (migration 409,
- * src/lib/books/own-invoice-posting.ts). FleetSuite's own PDF of it opens
+ * src/lib/books/own-invoice-posting.ts). One made without a sales order
+ * also shows what it took from stock next to what NetSuite's invoice took,
+ * each item with where it was taken from and what it cost, and how that cost
+ * posts: what the books hold for it and the copy's cost entry next to
+ * NetSuite's (migration 517, src/lib/books/own-invoice-cost-check.ts,
+ * docs/books.md "Posting FleetSuite's own invoices' cost"); it shows nothing
+ * there when neither took anything. FleetSuite's own PDF of it opens
  * here, with whether NetSuite's invoice has it (migration 498,
  * docs/books.md "Invoice PDFs"); a super admin can send it from here. Open
  * to whoever opens the books; opened from Own invoices, Invoices vs
@@ -29,7 +39,17 @@ import type { OwnBooks } from '@/lib/books/own-invoice-posting';
  * invoice).
  */
 
-type Invoice = OwnInvoiceCheck & { books: OwnBooks | null; pdf?: InvoicePdfView; pdfError?: string };
+/** What an invoice made without a sales order took from stock, and how that cost posts. */
+type Cost = { check: OwnInvoiceCostCheck; posting: OwnPostingView };
+
+type Invoice = OwnInvoiceCheck & {
+  books: OwnBooks | null;
+  pdf?: InvoicePdfView;
+  pdfError?: string;
+  /** Null for one off a sales order: the order's fulfillment took its stock. */
+  cost?: Cost | null;
+  costError?: string;
+};
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', currencySign: 'accounting' });
 const fmt = (cents: number) => money.format(cents / 100);
@@ -203,6 +223,13 @@ export default function BooksOwnInvoicePage() {
   };
 
   const s = invoice ? STATUS[invoice.status] : null;
+  const cost = invoice?.cost ?? null;
+  // Nothing to say of an invoice that took nothing from stock, nor NetSuite's either.
+  const costShown = !!cost && (cost.check.items.length > 0 || cost.check.status !== 'matches');
+  const cs = cost ? STATUS[cost.check.status] : null;
+  // What FleetSuite couldn't work out of its cost and how it worked that out follow the invoice's own.
+  const unknowns = [...new Set([...(invoice?.unknowns ?? []), ...(costShown && cost ? cost.check.unknowns : [])])];
+  const workedOut = [...(invoice?.workedOut ?? []), ...(costShown && cost ? cost.check.workedOut : [])];
   const pdfLine = invoice?.pdf ? pdfStatusLine(invoice.pdf, invoice.status) : null;
   const canSendPdf = !!pdfLine?.canSend && booksAllows(booksAccess(hasRole), 'owner');
 
@@ -318,18 +345,77 @@ export default function BooksOwnInvoicePage() {
             </>
           )}
 
-          {invoice.unknowns.length > 0 && (
+          {costShown && cost && cs && (
+            <div id="cost">
+              <div style={heading}>What it took from stock</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 8px' }}>
+                <span style={chip(cs.color)}>{cs.chip}</span>
+                <span style={{ fontSize: '12px', color: cost.check.status === 'differs' ? RED : 'var(--text-muted)' }}>{cost.check.summary}</span>
+              </div>
+              {/* Its cost posts apart from the sale, as NetSuite's invoice's cost lines do. */}
+              <OwnBooksLine
+                posting={cost.posting}
+                status={cost.check.status}
+                theirs="invoice"
+                company="BMG"
+                kind="stock"
+                netsuiteId={invoice.netsuiteId}
+                date={invoice.date}
+              />
+              <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px', marginTop: '8px' }}>
+                <table className="rep-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', background: 'var(--card)' }}>
+                  <thead>
+                    <tr style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>
+                      <th className="rep-label" style={{ ...cell, textAlign: 'left' }}>Compared</th>
+                      <th style={sideHead}>FleetSuite</th>
+                      <th style={sideHead}>NetSuite</th>
+                      <th style={markHead} aria-label="Same" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cost.check.fields.map((f) => (
+                      <TableRow
+                        key={f.field}
+                        label={<div><div style={{ fontWeight: 700 }}>{f.label}</div><Why text={f.why} differs={f.same === false} /></div>}
+                        style={{ borderTop: '1px solid var(--border)' }}
+                      >
+                        <td style={{ ...cell, whiteSpace: 'normal', color: f.fleetsuite === null ? 'var(--text-muted)' : undefined }}>{f.fleetsuite ?? 'Not known'}</td>
+                        <td style={{ ...cell, whiteSpace: 'normal', color: f.netsuite === null ? 'var(--text-muted)' : undefined }}>{f.netsuite ?? 'Not copied'}</td>
+                        <td style={cell}><Mark same={f.same} /></td>
+                      </TableRow>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <OwnEntry posting={cost.posting} title="Its cost entry" />
+              <TakenItems
+                items={cost.check.items}
+                locationId={cost.check.locationId}
+                copied={cost.check.fields.some((f) => f.field === 'items' && f.netsuite !== null)}
+                title="Items it took"
+              />
+              {/* The cost entry above puts NetSuite's posting next to this copy's once it's worked out. */}
+              {!cost.posting.entry?.length && <NetSuitePosted entry={cost.check.entry} title="What NetSuite's invoice posted for its cost" />}
+            </div>
+          )}
+          {invoice.costError && (
+            <div style={{ fontSize: '12px', color: RED, fontWeight: 700, marginTop: '12px' }}>
+              Couldn&apos;t read what it took from stock: {invoice.costError}
+            </div>
+          )}
+
+          {unknowns.length > 0 && (
             <>
               <div style={heading}>What FleetSuite didn&apos;t know</div>
               <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-                {invoice.unknowns.map((u) => <li key={u}>{u.charAt(0).toUpperCase()}{u.slice(1)}.</li>)}
+                {unknowns.map((u) => <li key={u}>{u.charAt(0).toUpperCase()}{u.slice(1)}.</li>)}
               </ul>
             </>
           )}
 
           <div style={heading}>How FleetSuite worked it out</div>
           <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-            {invoice.workedOut.map((w) => <li key={w}>{w}</li>)}
+            {workedOut.map((w) => <li key={w}>{w}</li>)}
           </ul>
         </>
       )}
