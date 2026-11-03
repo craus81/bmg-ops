@@ -1,8 +1,10 @@
 // Migration 431 keeps each likely mistake the nightly mistake checks find in
 // the copies of NetSuite's bills, checks and card charges. This runs
-// migrations 314, 359–363, 384 and 391 with 431 in an in-memory Postgres
-// (PGlite) as the app's server login, copies a made-up year of bills and card
-// charges the way the copies keep them, and runs the look
+// migrations 314, 359–363, 384 and 391 with 431, and 516 for the journal
+// entries the look also reads (mistake-checks-journals-sql.test.ts tests
+// those), in an in-memory Postgres (PGlite) as the app's server login, copies
+// a made-up year of bills and card charges the way the copies keep them, and
+// runs the look
 // (src/lib/books/mistake-checks.ts) against it the way the cron does, night
 // after night, with a super admin clearing what it finds in between: what
 // gl_mistake_docs hands the look, what gl_mistake_checks_save,
@@ -16,6 +18,7 @@ import {
   accountNamer, BOOKS_MISTAKE_CHECKS, mistakeView, runMistakeChecks, type MistakeDoc, type MistakeView,
 } from './mistake-checks';
 import { BOOKS_BILLS_SYNC } from './netsuite-bills';
+import { BOOKS_GL_SYNC } from './netsuite-gl';
 import { BOOKS_SPENDING_SYNC } from './netsuite-spending';
 
 /** Made-up vendors, by NetSuite's id; Harbor Hardware isn't in the copy of NetSuite's vendors list. */
@@ -51,7 +54,7 @@ async function freshDb(): Promise<PGlite> {
   for (const file of [
     '314-ledger.sql', '359-books-ledger-core.sql', '360-books-netsuite-accounts.sql', '361-books-netsuite-gl.sql',
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '384-books-vendor-bills.sql',
-    '391-books-checks-and-cards.sql', '431-books-mistake-checks.sql',
+    '391-books-checks-and-cards.sql', '431-books-mistake-checks.sql', '516-books-mistake-checks-credits-journals.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -183,10 +186,11 @@ describe('migration 431: mistake checks', () => {
     FROM gl_mistake_checks m JOIN gl_companies c ON c.id = m.company_id
     ORDER BY m.key`)).rows;
   const item = async (key: string) => (await items()).find((i) => i.key === key)!;
-  /** When the copies of NetSuite's bills and of its checks and card charges last had all of NetSuite's changes. */
-  const copied = (bills: Date, spending = bills) => {
+  /** When the copies of NetSuite's bills, of its checks and card charges, and of its ledger last had all of NetSuite's changes. */
+  const copied = (bills: Date, spending = bills, ledger = bills) => {
     store.set(BOOKS_BILLS_SYNC, { last_synced_at: bills.toISOString(), updated_at: bills.toISOString() });
     store.set(BOOKS_SPENDING_SYNC, { last_synced_at: spending.toISOString(), updated_at: spending.toISOString() });
+    store.set(BOOKS_GL_SYNC, { last_synced_at: ledger.toISOString(), updated_at: ledger.toISOString() });
   };
 
   beforeAll(async () => {
@@ -303,6 +307,10 @@ describe('migration 431: mistake checks', () => {
     // A look before both copies have run again leaves the one said to be fixed alone: the copies have only what NetSuite
     // had by the older of the two.
     copied(new Date(Date.now() + 3_600_000), new Date(Date.now() - 3_600_000));
+    expect(await night('2026-10-24')).toMatchObject({ found: 3, added: 0, back: 0, gone: 0 });
+    expect(await item('twice:8001+8002')).toMatchObject({ state: 'cleared', cleared_how: 'fixed' });
+    // Nor before the copy of NetSuite's ledger, where the journal entries come from, has run again.
+    copied(new Date(Date.now() + 3_600_000), new Date(Date.now() + 3_600_000), new Date(Date.now() - 3_600_000));
     expect(await night('2026-10-24')).toMatchObject({ found: 3, added: 0, back: 0, gone: 0 });
     expect(await item('twice:8001+8002')).toMatchObject({ state: 'cleared', cleared_how: 'fixed' });
 

@@ -20,7 +20,7 @@ import { BOOKS_BILLS_SYNC } from './netsuite-bills';
 import { checkOwnBills, type BillCopiesThrough, type BillPairsData, type OwnBillCheck } from './own-bill-check';
 import { checkOwnReceipts, type OwnReceiptCheck, type ReceiptCopiesThrough, type ReceiptPairsData } from './own-receipt-check';
 import { checkOwnAdjustments, INVENTORY_ADJUST_ACCOUNT, type AdjustPairsData, type OwnAdjustmentCheck } from './own-adjustment-check';
-import { MISTAKE_KINDS, type MistakeKind } from './mistake-checks';
+import { MISTAKE_KINDS, mistakeSubject, type MistakeKind } from './mistake-checks';
 import { readClosedMonths } from './months';
 import { readNames } from './netsuite-feed';
 import { describeSend, isInvoicePdfSend, NO_ANSWER_MS, type SendAction } from '@/lib/netsuite-sends';
@@ -671,7 +671,10 @@ export interface MistakeAlertItem {
   id: string;
   company: BooksCompany;
   kind: MistakeKind;
+  /** Its vendor or payee, or the journal entry it's about (mistakeSubject). */
   party: string | null;
+  /** About journal entries, not a vendor's documents. */
+  journal?: boolean;
   why: string;
 }
 
@@ -705,7 +708,8 @@ export function mistakeAlertsFor(news: MonthNews[], items: Map<string, MistakeAl
     }];
   }
   return told.map((i) => ({
-    title: `Mistake checks: ${MISTAKE_TITLES[i.kind](party(i))}`,
+    // A journal entry far off the usual is one ten times, or a tenth of, the same entry's steady amount.
+    title: `Mistake checks: ${i.journal && i.kind === 'far_off' ? `${party(i)} may have a slipped decimal point` : MISTAKE_TITLES[i.kind](party(i))}`,
     body: `${i.why} Mistake checks shows it.`,
     url: deepLinks.booksMistakeChecks(i.company, i.id),
     about: 'mistake',
@@ -1209,9 +1213,9 @@ async function lookAtOwnAdjustments(
 /** The likely mistakes open on Mistake checks, each counted once, with what to name for each. */
 async function lookAtMistakes(service: SupabaseClient): Promise<{ now: DifferingMonths; items: Map<string, MistakeAlertItem> }> {
   const [rows, companies] = await Promise.all([
-    fetchAllRows<{ id: string; company_id: string; kind: MistakeKind; party_name: string | null; why: string }>((from, to) => service
+    fetchAllRows<{ id: string; company_id: string; kind: MistakeKind; party_name: string | null; why: string; docs: unknown }>((from, to) => service
       .from('gl_mistake_checks')
-      .select('id, company_id, kind, party_name, why')
+      .select('id, company_id, kind, party_name, why, docs')
       .eq('state', 'open')
       .order('id', { ascending: true })
       .range(from, to)),
@@ -1226,7 +1230,8 @@ async function lookAtMistakes(service: SupabaseClient): Promise<{ now: Differing
     const company = codes.get(r.company_id);
     if (!company || !POSTING_COMPANIES.includes(company as BooksCompany) || !MISTAKE_KINDS.includes(r.kind)) continue;
     now[r.id] = 1;
-    items.set(r.id, { id: r.id, company: company as BooksCompany, kind: r.kind, party: r.party_name, why: r.why });
+    const subject = mistakeSubject(r);
+    items.set(r.id, { id: r.id, company: company as BooksCompany, kind: r.kind, party: subject.name, journal: subject.journal, why: r.why });
   }
   return { now, items };
 }

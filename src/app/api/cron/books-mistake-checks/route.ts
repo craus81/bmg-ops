@@ -9,12 +9,14 @@ export const maxDuration = 300;
 /**
  * GET /api/cron/books-mistake-checks — 09:46 UTC.
  *
- * Looks through the copies of NetSuite's bills, checks and card charges for
- * likely mistakes and keeps what it finds for Books → Mistake checks
+ * Looks through the copies of NetSuite's bills, checks and card charges,
+ * their credits and refunds, and its journal entries for likely mistakes and
+ * keeps what it finds for Books → Mistake checks
  * (src/lib/books/mistake-checks.ts, docs/books.md "Mistake checks"). Minute
  * 46 is free in vercel.json, and the run comes after the copies of NetSuite's
- * checks and card charges (:33 on odd hours) and bills (:39), and before the
- * daily check (:58), which tells the super admins about new ones.
+ * ledger (:26 on odd hours), checks and card charges (:33) and bills (:39),
+ * and before the daily check (:58), which tells the super admins about new
+ * ones.
  *
  * The books are visible only to super admins, so this response says only how
  * the look went, and manual triggering is super admin only too.

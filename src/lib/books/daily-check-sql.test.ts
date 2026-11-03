@@ -1102,6 +1102,40 @@ describe('the daily books check', () => {
     expect(heldMistakes()).toEqual({ known: { [await idOf(TWICE.key)]: 1 }, noted: {} });
   });
 
+  it('names the journal entry one about journal entries is about (migration 516)', async () => {
+    const JOURNAL = {
+      key: 'twice:8101+8102', kind: 'twice', company: 'BMG', party: null, party_name: null, date: '2026-10-09', amount: 1250, strength: 2,
+      docs: [
+        { netsuite_id: '8101', type: 'Journal', number: 'JE-1040', date: '2026-10-03', total: '1250.00', label: 'Journal entry JE-1040, Oct 3' },
+        { netsuite_id: '8102', type: 'Journal', number: 'JE-1046', date: '2026-10-09', total: '1250.00', label: 'Journal entry JE-1046, Oct 9' },
+      ],
+      why: 'Two journal entries with the same lines, to the same accounts for the same amounts: one dated Oct 3, the other Oct 9. It may be one entered twice.',
+    };
+    // One far off the usual is a slipped decimal point: there's no vendor whose usual it is.
+    const SLIP = {
+      key: 'far_off:8110', kind: 'far_off', company: 'BMG', party: null, party_name: null, date: '2026-10-28', amount: 12500, strength: 2,
+      docs: [{ netsuite_id: '8110', type: 'Journal', number: 'DEP-10', date: '2026-10-28', total: '12500.00', label: 'Journal entry DEP-10, Oct 28' }],
+      why: 'The last 9 journal entries to 1650 Accumulated Depreciation and 6900 Depreciation were $1,250.00 each. '
+        + 'This one is ten times that, which can be a slipped decimal point.',
+    };
+    await found([TWICE, JOURNAL, SLIP]);
+    const id = await idOf(JOURNAL.key);
+    const slipId = await idOf(SLIP.key);
+    await look('first');
+    expect(await look('second')).toMatchObject({ told: 2 });
+    expect(toldMistakes).toEqual([{
+      title: 'Mistake checks: Journal entry JE-1046 may be entered twice',
+      body: `${JOURNAL.why} Mistake checks shows it.`,
+      url: `/admin/books/mistake-checks?company=BMG&item=${id}`,
+      about: 'mistake',
+    }, {
+      title: 'Mistake checks: Journal entry DEP-10 may have a slipped decimal point',
+      body: `${SLIP.why} Mistake checks shows it.`,
+      url: `/admin/books/mistake-checks?company=BMG&item=${slipId}`,
+      about: 'mistake',
+    }]);
+  });
+
   it("keeps what it held for each company when it couldn't read when their books went live, and says why", async () => {
     const before = held();
     failing = (name) => name === 'gl_companies';
