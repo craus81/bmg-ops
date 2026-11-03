@@ -62,8 +62,9 @@ const JOURNAL_ENTRIES = 1000;
  * them: the journal and its months and years, the copies of NetSuite's
  * books, FleetSuite's own documents, and what the books' pieces keep
  * (switches, saved reports, sends to NetSuite, payment runs, bank
- * reconciliations, sales tax, own numbers, counts). Every table a migration
- * from 359 on makes is either here or in NOT_BOOKS (backups.test.ts).
+ * reconciliations, sales tax, own numbers, counts, the CPA's reviews).
+ * Every table a migration from 359 on makes is either here or in NOT_BOOKS
+ * (backups.test.ts).
  */
 export const BACKUP_TABLES: readonly string[] = [
   'gl_companies', 'gl_accounts', 'gl_periods', 'gl_period_events', 'gl_entries', 'gl_lines',
@@ -85,7 +86,7 @@ export const BACKUP_TABLES: readonly string[] = [
   'rent_mortgage_setups', 'rent_mortgage_months', 'bank_rec_starts', 'bank_recs', 'bank_rec_ticks', 'bank_rec_events',
   'inventory_adjustment_asks', 'sales_tax_rates', 'sales_tax_returns',
   'own_number_series', 'own_numbers', 'own_number_outside_told', 'own_invoice_pdfs', 'stock_counts', 'stock_count_lines',
-  'books_saved_reports', 'gl_year_closes', 'gl_year_close_events', 'books_money_changes',
+  'books_saved_reports', 'gl_year_closes', 'gl_year_close_events', 'books_money_changes', 'books_rules_reviews',
 ];
 
 /** Tables migrations from 359 on make that aren't the books, and what they are instead. */

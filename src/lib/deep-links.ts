@@ -734,6 +734,13 @@ export const deepLinks = {
     }).toString();
     return `/admin/books/change-history${query ? `?${query}` : ''}`;
   },
+  /** Books → How the books work: what posts what, who can change what, what
+   *  the database refuses, the controls, jobs and backups, written down for
+   *  BMG's CPA and the IRS with a dated PDF to sign, and the CPA's last
+   *  review next to the rules as they're written now
+   *  (src/lib/books/how-it-works.ts). Open to whoever opens the books; the
+   *  CPA, or a super admin for a review on paper, marks it reviewed. */
+  booksHowItWorks: () => '/admin/books/how-it-works',
   /** Books → Own numbers: the numbers FleetSuite gives each sales order, PO,
    *  invoice and credit memo it makes in NetSuite once FleetSuite's own
    *  numbers is on (src/lib/books/own-numbers.ts), the numbers of one kind

@@ -95,6 +95,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/admin/books/deposits/route.ts': books(['keep']),
   'src/app/api/admin/books/differences/route.ts': books(['read']),
   'src/app/api/admin/books/going-live/route.ts': books(['read', 'owner']),
+  // Marking it reviewed is the CPA's, or a super admin's for a review the CPA did on paper.
+  'src/app/api/admin/books/how-it-works/route.ts': books(['read'], 'reviewerAs('),
+  'src/app/api/admin/books/how-it-works/download/route.ts': books(['read']),
   'src/app/api/admin/books/inventory-value/route.ts': books(['read']),
   'src/app/api/admin/books/inventory-value/download/route.ts': books(['read']),
   'src/app/api/admin/books/invoices/route.ts': books(['read', 'keep']),

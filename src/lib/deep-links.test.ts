@@ -373,6 +373,7 @@ describe('Books backups links', () => {
 describe('Books change history links', () => {
   it('opens every change, the ones made outside FleetSuite, or one record\'s history', () => {
     expect(deepLinks.twoStepSettings()).toBe('/settings#two-step');
+    expect(deepLinks.booksHowItWorks()).toBe('/admin/books/how-it-works');
     expect(deepLinks.booksChangeHistory()).toBe('/admin/books/change-history');
     expect(deepLinks.booksChangeHistory(null, null)).toBe('/admin/books/change-history');
     expect(deepLinks.booksChangeHistory('outside')).toBe('/admin/books/change-history?show=outside');
