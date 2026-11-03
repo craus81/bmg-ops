@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { PoLineRow, PoMatchFacts } from '@/lib/three-way-match';
+import type { PoExpenseLine } from './own-bills';
 import {
   extraWords, findPo, linesBeyondPo, NO_PO, pickOpenPos, poLeftCents, poLinesBilled, poStatusWords, readOpenPos, readPoFacts, viewPo,
   type OpenPo, type PoFacts, type PoForm, type SnapPo,
@@ -38,10 +39,19 @@ const acmePo = (over: Partial<SnapPo> = {}, facts: Partial<PoMatchFacts> = {}): 
   statusLabel: 'Purchase Order : Pending Bill',
   totalCents: 214000,
   facts: matchFacts(facts),
+  expenses: [],
   ...over,
 });
 
 const found = (po: SnapPo = acmePo()): PoFacts => ({ found: po, open: [] });
+
+/** The PO's freight, on its Expenses tab (migration 515): made-up account. */
+const freightLine = (over: Partial<PoExpenseLine> = {}): PoExpenseLine => ({
+  line_id: '3', account_netsuite_id: '655', account_name: '51200 Freight In', memo: 'Freight', amount: '240.00', closed: false, billed_by: [], ...over,
+});
+/** The PO with its freight: $2,380.00 in all. */
+const withFreight = (over: Partial<SnapPo> = {}, facts: Partial<PoMatchFacts> = {}) =>
+  acmePo({ totalCents: 238000, expenses: [freightLine()], ...over }, { poTotal: 2380, ...facts });
 
 /** The bill's lines for the PO's: the racks and the clamps. */
 const PO_LINES = [{ description: 'RACK-48 Contractor rack', cents: 194000 }, { description: 'CLAMP-ACX Street side clamp kit', cents: 20000 }];
@@ -91,14 +101,32 @@ describe('poLinesBilled', () => {
   it("is each line with some still to bill, its open quantity at the PO's price, and what they come to", () => {
     expect(poLinesBilled(acmePo())).toEqual({
       lines: [
-        { item: 'RACK-48', description: 'Contractor rack, 8 ft bed', quantity: 4, rate: 485, cents: 194000 },
-        { item: 'CLAMP-ACX', description: 'Street side clamp kit', quantity: 4, rate: 50, cents: 20000 },
+        { item: 'RACK-48', account: null, description: 'Contractor rack, 8 ft bed', quantity: 4, rate: 485, cents: 194000 },
+        { item: 'CLAMP-ACX', account: null, description: 'Street side clamp kit', quantity: 4, rate: 50, cents: 20000 },
       ],
       cents: 214000,
+      othersKnown: true,
     });
     const part = acmePo({}, { rows: [{ ...ROWS[0], quantity_billed: '1' }, { ...ROWS[1], quantity_billed: '4' }] });
-    expect(poLinesBilled(part)).toEqual({ lines: [{ item: 'RACK-48', description: 'Contractor rack, 8 ft bed', quantity: 3, rate: 485, cents: 145500 }], cents: 145500 });
+    expect(poLinesBilled(part)).toEqual({
+      lines: [{ item: 'RACK-48', account: null, description: 'Contractor rack, 8 ft bed', quantity: 3, rate: 485, cents: 145500 }],
+      cents: 145500,
+      othersKnown: true,
+    });
     expect(poLinesBilled(acmePo({}, { rows: [{ ...ROWS[0], rate: null, amount: null }] })).cents).toBeNull();
+  });
+
+  it("takes the PO's other lines no bill has yet, by their account, and says nothing of what they come to when it doesn't know them", () => {
+    const both = poLinesBilled(withFreight({ expenses: [freightLine(), freightLine({ line_id: '4', account_name: null, account_netsuite_id: '656', amount: '15', billed_by: ['8790'] })] }));
+    expect(both.lines.at(-1)).toEqual({ item: null, account: '51200 Freight In', description: 'Freight', quantity: null, rate: null, cents: 24000 });
+    expect(both).toMatchObject({ cents: 238000, othersKnown: true });
+    expect(both.lines).toHaveLength(3);
+    // An account the copy has no name for.
+    expect(poLinesBilled(withFreight({ expenses: [freightLine({ account_name: null })] })).lines.at(-1)?.account).toBe('NetSuite account 655');
+    // Not read yet, or a line's bills not known.
+    expect(poLinesBilled(withFreight({ expenses: null }))).toMatchObject({ cents: null, othersKnown: false });
+    expect(poLinesBilled(withFreight({ expenses: [freightLine({ billed_by: null })] }))).toMatchObject({ cents: null, othersKnown: false });
+    expect(poLinesBilled(withFreight({ expenses: [freightLine({ amount: null })] }))).toMatchObject({ cents: null, othersKnown: true });
   });
 });
 
@@ -108,6 +136,16 @@ describe('poLeftCents', () => {
     expect(poLeftCents(acmePo({}, { rows: [{ ...ROWS[0], quantity_billed: '1' }, ROWS[1]] }))).toBe(165500);
     // No price on the line: its amount over its quantity.
     expect(poLeftCents(acmePo({}, { rows: [{ ...ROWS[0], rate: null, quantity_billed: '2' }, ROWS[1]] }))).toBe(117000);
+  });
+  it("takes off the PO's other lines a bill has, and none it doesn't", () => {
+    expect(poLeftCents(withFreight())).toBe(238000);
+    expect(poLeftCents(withFreight({ expenses: [freightLine({ billed_by: ['8790'] })] }))).toBe(214000);
+    // A discount on the Expenses tab that a bill has leaves more to bill.
+    expect(poLeftCents(withFreight({ expenses: [freightLine({ billed_by: ['8790'] }), freightLine({ line_id: '4', amount: '-20', billed_by: ['8790'] })] }))).toBe(216000);
+    expect(poLeftCents(withFreight({ expenses: [freightLine({ billed_by: ['8790'], amount: null })] }))).toBeNull();
+    // Not read, or not known which bills have it: nothing to take off.
+    expect(poLeftCents(withFreight({ expenses: null }))).toBe(238000);
+    expect(poLeftCents(withFreight({ expenses: [freightLine({ billed_by: null })] }))).toBe(238000);
   });
   it("is nothing to go on without the PO's total, or a price for a line that's billed", () => {
     expect(poLeftCents(acmePo({ totalCents: null }))).toBeNull();
@@ -195,6 +233,37 @@ describe('viewPo', () => {
     expect(view({}, found(nothingLeft))).toMatchObject({
       tone: 'red', canBill: false, text: 'Everything on PO453-ACME is billed already. If this is an extra charge, enter it as a plain bill.',
     });
+    expect(view({}, found({ ...nothingLeft, expenses: [freightLine({ billed_by: ['8790'] })] })).text).toBe('Everything on PO453-ACME is billed already. If this is an extra charge, enter it as a plain bill.');
+    expect(view({}, found({ ...nothingLeft, expenses: null }))).toMatchObject({
+      tone: 'red', canBill: false,
+      text: "Every item on PO453-ACME is billed already, and FleetSuite doesn't know its other lines, such as freight, yet. If this is an extra charge, enter it as a plain bill.",
+    });
+    // Its freight still to bill: NetSuite bills that.
+    expect(view({ totalCents: 24000, lines: [FREIGHT] }, found({ ...nothingLeft, totalCents: 238000, expenses: [freightLine()] }))).toMatchObject({
+      canBill: true, billsCents: 24000, lines: [{ account: '51200 Freight In', cents: 24000 }],
+    });
+  });
+
+  it("counts the PO's freight in what NetSuite bills, so a bill for the PO with its freight is the PO's total", () => {
+    const v = view({ totalCents: 238000, lines: [...PO_LINES, FREIGHT] }, found(withFreight()));
+    expect(v).toMatchObject({ overCents: 0, extraCents: 0, billsCents: 238000, billsNote: null, verdict: 'green', needsReason: false });
+    expect(v.lines.map((l) => [l.item ?? l.account, l.quantity, l.cents])).toEqual([['RACK-48', 4, 194000], ['CLAMP-ACX', 4, 20000], ['51200 Freight In', null, 24000]]);
+    expect(leg(v, 'Totals')?.text).toBe("The bill's $2,380.00 is the PO's total.");
+    // The bill's own freight is the PO's, so it isn't beyond it: a pallet charge is.
+    const pallet = view({ totalCents: 240000, lines: [...PO_LINES, FREIGHT, { description: 'Pallet charge', cents: 2000 }] }, found(withFreight()));
+    expect(pallet).toMatchObject({ overCents: 2000, extraCents: 2000, billsCents: 240000 });
+    expect(leg(pallet, 'Totals')?.text).toBe("The bill is the PO's $2,380.00 plus $20.00 for pallet charge, which goes on its own line.");
+  });
+
+  it("says what NetSuite bills isn't known while the copy doesn't know the PO's other lines", () => {
+    const v = view({ totalCents: 238000, lines: [...PO_LINES, FREIGHT] }, found(withFreight({ expenses: null })));
+    expect(v).toMatchObject({
+      canBill: true, billing: true, billsCents: null, overCents: 0,
+      billsNote: "Which of PO453-ACME's other lines, such as freight, NetSuite bills too isn't known yet.",
+    });
+    expect(v.lines.map((l) => l.item)).toEqual(['RACK-48', 'CLAMP-ACX']);
+    expect(leg(v, 'Totals')?.text).toBe("The bill's $2,380.00 is the PO's total.");
+    expect(view({}, found(withFreight({ expenses: [freightLine({ billed_by: null })] }))).billsNote).toMatch(/isn't known yet\.$/);
   });
 
   it("bills a PO that matches with one tap: what NetSuite bills, and all three checks green", () => {
@@ -429,6 +498,7 @@ describe('readOpenPos and readPoFacts', () => {
       poRow({ id: 'po-6', netsuite_id: '44100', tranid: null, status: 'F' }),
     ],
     netsuite_vendor_po_lines: ROWS.map((r) => ({ ...r, po_id: 'po-1' })),
+    netsuite_vendor_po_expense_lines: [{ ...freightLine(), po_id: 'po-1' }, { ...freightLine({ line_id: '7' }), po_id: 'po-2' }],
   };
 
   it("reads the vendor's POs that can take a bill", async () => {
@@ -465,5 +535,18 @@ describe('readOpenPos and readPoFacts', () => {
     expect(facts.found?.facts).toMatchObject({ poIsOpen: true, earlierBills: ['INV-5530'], billedUnits: 0 });
     expect(facts.found?.facts.rows).toHaveLength(2);
     expect(reads.find((r) => r.table === 'gl_snapped_bills')?.calls).toEqual(['eq billed_po_netsuite_id 45310', 'eq status sent']);
+    // The copy hasn't read the PO's other lines yet.
+    expect(facts.found?.expenses).toBeNull();
+    expect(reads.some((r) => r.table === 'netsuite_vendor_po_expense_lines')).toBe(false);
+  });
+
+  it("reads the PO's other lines once the copy has", async () => {
+    const { service, reads } = fakeService({
+      ...tables,
+      netsuite_vendor_pos: tables.netsuite_vendor_pos.map((r) => (r.id === 'po-1' ? { ...r, expense_lines_read_at: '2026-10-25T01:52:00Z' } : r)),
+    });
+    const facts = await readPoFacts(service, { poNumber: 'PO453-ACME', vendorId: '412', totalCents: 238000 }, null);
+    expect(facts.found?.expenses).toEqual([{ ...freightLine(), po_id: 'po-1' }]);
+    expect(reads.find((r) => r.table === 'netsuite_vendor_po_expense_lines')?.calls).toEqual(['eq po_id po-1']);
   });
 });

@@ -711,11 +711,14 @@ export default function BooksSnapBillPage() {
                   {view.po.lines.map((l, i) => (
                     <div key={i} style={{ padding: '10px 12px', borderTop: i ? '1px solid var(--border)' : 'none', display: 'flex', gap: '10px', justifyContent: 'space-between', alignItems: 'baseline' }}>
                       <span style={{ minWidth: 0 }}>
-                        <span style={{ fontWeight: 700 }}>{l.item ?? 'Item'}</span>
+                        {/* An item line, or one of the PO's other lines (freight, say), by its account. */}
+                        <span style={{ fontWeight: 700 }}>{l.item ?? l.account ?? 'Item'}</span>
                         {l.description && <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-secondary)' }}>{l.description}</span>}
-                        <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)' }}>
-                          {l.quantity} × {l.rate === null ? 'no price' : money.format(l.rate)}
-                        </span>
+                        {l.quantity !== null && (
+                          <span style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)' }}>
+                            {l.quantity} × {l.rate === null ? 'no price' : money.format(l.rate)}
+                          </span>
+                        )}
                       </span>
                       <span style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{l.cents === null ? '' : fmt(l.cents)}</span>
                     </div>
@@ -775,6 +778,7 @@ export default function BooksSnapBillPage() {
                     <span style={{ color: 'var(--text-secondary)' }}>What NetSuite bills</span>
                     <span style={{ fontWeight: 800 }}>{view.po.billsCents === null ? '' : fmt(view.po.billsCents)}</span>
                   </div>
+                  {view.po.billsNote && <div style={{ padding: '0 12px 10px', fontSize: '12px', color: 'var(--text-muted)' }}>{view.po.billsNote}</div>}
                 </div>
                 <div style={noteText()}>The company, location and items come from the PO.</div>
 

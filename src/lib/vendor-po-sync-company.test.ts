@@ -16,6 +16,8 @@ const h = vi.hoisted(() => {
     upserts: [] as Record<string, any>[],
     updates: [] as Array<{ patch: Record<string, any>; eq: [string, unknown][]; is: [string, unknown][] }>,
     updateError: null as { message: string } | null,
+    /** The other lines written (migration 515): each call's POs. */
+    puts: [] as unknown[][],
   };
   const suiteql = vi.fn(async (sql: string) => {
     if (/tl\.subsidiary AS subsidiary_id/.test(sql)) {
@@ -42,6 +44,11 @@ const h = vi.hoisted(() => {
       }
       if (table !== 'netsuite_vendor_pos') throw new Error(`stand-in has no ${table}`);
       return {
+        // The copies whose other lines were never read: none here.
+        select() {
+          const q: any = { is: () => q, order: () => q, limit: async () => ({ data: [], error: null }) };
+          return q;
+        },
         upsert(row: Record<string, any>) {
           state.upserts.push({ ...row });
           const answer = state.noColumn && 'subsidiary_netsuite_id' in row
@@ -63,10 +70,18 @@ const h = vi.hoisted(() => {
       };
     },
   };
+  (service as any).rpc = async (fn: string, args: { p_pos: unknown[] }) => {
+    if (fn !== 'vendor_po_expense_lines_put') throw new Error(`stand-in has no ${fn}`);
+    state.puts.push(args.p_pos);
+    return { data: 0, error: null };
+  };
   return { state, suiteql, service, heartbeat: vi.fn(async (..._args: unknown[]) => ({ ok: true })) };
 });
 
-vi.mock('@/lib/netsuite', () => ({ suiteqlQueryAll: h.suiteql }));
+vi.mock('@/lib/netsuite', () => ({
+  suiteqlQueryAll: h.suiteql,
+  isSuiteqlError: (err: unknown) => err instanceof Error && typeof (err as any).status === 'number',
+}));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: h.heartbeat }));
 
 import { poCompanyOf, subsidiariesByPo, syncVendorPos } from './vendor-po-sync';
@@ -78,7 +93,7 @@ const header = (id: string, tranid: string) => ({
 const subsidiaryReads = () => h.suiteql.mock.calls.map((c) => c[0] as string).filter((sql) => /tl\.subsidiary AS subsidiary_id/.test(sql));
 
 beforeEach(() => {
-  Object.assign(h.state, { headers: [], mains: [], mainsFail: false, noColumn: false, upserts: [], updates: [], updateError: null });
+  Object.assign(h.state, { headers: [], mains: [], mainsFail: false, noColumn: false, upserts: [], updates: [], updateError: null, puts: [] });
   h.suiteql.mockClear();
   h.heartbeat.mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -105,6 +120,9 @@ describe('the vendor PO sync', () => {
     const result = await syncVendorPos(service);
     expect(result).toMatchObject({ modified: 2, synced: 2, headerErrors: 0 });
     expect(result.companyError).toBeUndefined();
+    // Their other lines (none) are read and kept too, the copies marked read.
+    expect(h.state.puts).toEqual([[{ po_id: 'copy-7001', lines: [] }, { po_id: 'copy-7002', lines: [] }]]);
+    expect(result.expenses).toEqual({ pos: 2, lines: 0, unread: 0, billsUnknown: 0 });
     expect(h.state.upserts.map((r) => [r.netsuite_id, r.subsidiary_netsuite_id])).toEqual([['7001', '2'], ['7002', '3']]);
     const [sql] = subsidiaryReads();
     expect(sql).toMatch(/JOIN transactionline tl ON tl\.transaction = t\.id AND tl\.mainline = 'T'/);

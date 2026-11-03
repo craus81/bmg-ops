@@ -95,7 +95,7 @@ const partsMailBill = (netsuiteId = '8802') => billPayload(workOutOwnBill({
   netsuiteId, netsuiteNumber: 'INV-5521', madeFrom: 'parts_mail', madeFromId: 'parts-1', vendorId: 77,
   vendorName: 'Acme Truck Racks', referenceNo: 'INV-5521', po: { copyId: 'po-1', netsuiteId: '5001', number: 'PO453-ACME' },
   invoiceTotal: '2199.97', expense: null,
-}, PO_LINES, AT));
+}, PO_LINES, AT, []));
 
 /** Ten racks where twelve were billed, the bins as they were, and freight added, as the Fix screen's lines come (ownCopyLines). */
 const FIXED: FixedBillCopy = {

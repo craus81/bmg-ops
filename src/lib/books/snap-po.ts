@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { canBillPoStatus, computeThreeWayMatch, loadPoMatchFacts, type MatchVerdict, type PoMatchFacts } from '@/lib/three-way-match';
-import { poBillLines, toCents } from './own-bills';
+import { poBillExpenseLines, poBillLines, readPoCopyExpenses, toCents, type PoExpenseLine } from './own-bills';
 
 /**
  * PO bills (migration 444; owner decision 2026-10-25, thread "Replacing
@@ -20,6 +20,11 @@ import { poBillLines, toCents } from './own-bills';
  * it (snap-a-bill.ts). When that's only lines the bill prints that aren't on
  * the PO, the totals are checked without them, so freight needs no reason
  * (owner decision 2026-10-26, "No reason for freight").
+ *
+ * NetSuite's bill from the PO takes its other lines (freight, say: its
+ * Expenses tab) that no bill has yet too, so what NetSuite bills counts them
+ * once FleetSuite's copy of the PO has read them (migration 515), and isn't
+ * said until it has.
  *
  * The PO comes from FleetSuite's copy of NetSuite's POs (netsuite_vendor_pos,
  * every two hours): by its number as read off the bill or typed, else the
@@ -43,6 +48,8 @@ export interface SnapPo {
   /** The PO's total, else its lines added up, in whole cents. */
   totalCents: number | null;
   facts: PoMatchFacts;
+  /** The PO's other lines (its Expenses tab: freight, say) as the copy has them; null when it hasn't read them. */
+  expenses: PoExpenseLine[] | null;
 }
 
 /** One of the vendor's POs that can take a bill, offered when the bill names none. */
@@ -83,11 +90,14 @@ export interface PoLeg {
   text: string;
 }
 
-/** A line NetSuite bills from the PO: its open quantity at the PO's price. */
+/** A line NetSuite bills from the PO: an item line's open quantity at the PO's price, or one of the PO's other lines. */
 export interface PoViewLine {
   item: string | null;
+  /** One of the PO's other lines: its account. */
+  account: string | null;
   description: string | null;
-  quantity: number;
+  /** Null for one of the PO's other lines, which has none. */
+  quantity: number | null;
   rate: number | null;
   /** Null when the copy has no price for it. */
   cents: number | null;
@@ -112,8 +122,10 @@ export interface PoView {
   overCents: number;
   /** The extra line's amount: overCents, unless someone left it off. */
   extraCents: number;
-  /** What NetSuite bills: the PO's open lines and the extra line; null when a line has no price. */
+  /** What NetSuite bills: the PO's open lines and the extra line; null when a line has no price, or the copy doesn't know the PO's other lines. */
   billsCents: number | null;
+  /** Under What NetSuite bills, when the copy doesn't know which of the PO's other lines it bills. */
+  billsNote: string | null;
   legs: PoLeg[];
   verdict: MatchVerdict | null;
   /** The match's own sentences for what didn't pass, worst first, as Parts Mail's audit log keeps them. */
@@ -167,20 +179,39 @@ export function pickOpenPos(pos: OpenPo[], billCents: number | null, most = OPEN
     .map(({ p }) => p);
 }
 
-/** The PO's lines NetSuite bills: each line with some still to bill, its open quantity at the PO's price. Pure. */
-export function poLinesBilled(po: SnapPo): { lines: PoViewLine[]; cents: number | null } {
-  const { lines, priced } = poBillLines(po.facts.rows);
+/**
+ * The PO's lines NetSuite bills: each item line with some still to bill, its open quantity at the PO's price, then each
+ * of its other lines no bill has yet. What they come to is null when a line has no price, or the copy doesn't know the
+ * PO's other lines (othersKnown). Pure.
+ */
+export function poLinesBilled(po: Pick<SnapPo, 'facts' | 'expenses'>): { lines: PoViewLine[]; cents: number | null; othersKnown: boolean } {
+  const items = poBillLines(po.facts.rows);
+  const others = poBillExpenseLines(po.expenses, null, items.lines.length);
+  const names = new Map((po.expenses ?? []).map((e) => [String(e.line_id), e.account_name ?? null]));
+  const lines: PoViewLine[] = [
+    ...items.lines.map((l) => ({ item: l.itemNumber, account: null, description: l.description, quantity: l.quantity ?? 0, rate: l.rate, cents: l.cents })),
+    ...others.lines.map((l) => ({
+      item: null,
+      account: names.get(String(l.poLineId)) ?? `NetSuite account ${l.accountId}`,
+      description: l.description,
+      quantity: null,
+      rate: null,
+      cents: l.cents,
+    })),
+  ];
   return {
-    lines: lines.map((l) => ({ item: l.itemNumber, description: l.description, quantity: l.quantity ?? 0, rate: l.rate, cents: l.cents })),
-    cents: priced ? lines.reduce((n, l) => n + (l.cents ?? 0), 0) : null,
+    lines,
+    cents: items.priced && others.priced && others.known ? lines.reduce((n, l) => n + (l.cents ?? 0), 0) : null,
+    othersKnown: others.known,
   };
 }
 
 /**
- * What's left to bill on the PO in whole cents: its total less what's billed on its lines, so a second bill on a PO is
- * set against what's left on it. Null when the copy has no total, or no price for a line that's billed. Pure.
+ * What's left to bill on the PO in whole cents: its total less what's billed on its lines, the other lines a bill has
+ * with them, so a second bill on a PO is set against what's left on it. Null when the copy has no total, or no price
+ * for a line that's billed. Pure.
  */
-export function poLeftCents(po: Pick<SnapPo, 'totalCents' | 'facts'>): number | null {
+export function poLeftCents(po: Pick<SnapPo, 'totalCents' | 'facts' | 'expenses'>): number | null {
   if (po.totalCents === null) return null;
   const num = (v: number | string | null) => (v === null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
   let billed = 0;
@@ -192,6 +223,12 @@ export function poLeftCents(po: Pick<SnapPo, 'totalCents' | 'facts'>): number | 
     const rate = num(r.rate) ?? (amount !== null && quantity > 0 ? amount / quantity : null);
     if (rate === null) return null;
     billed += toCents(done * rate);
+  }
+  for (const e of po.expenses ?? []) {
+    if (!e.billed_by?.length) continue;
+    const amount = num(e.amount);
+    if (amount === null) return null;
+    billed += toCents(amount);
   }
   return po.totalCents - billed;
 }
@@ -238,7 +275,7 @@ const someLines = (ls: Array<{ itemNumber: string; ordered: number; received: nu
 export function viewPo(form: PoForm, facts: PoFacts | null, who: string, today: string): PoView {
   const none: PoView = {
     tone: null, text: null, open: [], vendor: null, canBill: false, billing: false, number: null, lines: [], overCents: 0,
-    extraCents: 0, billsCents: null, legs: [], verdict: null, variances: [], needsReason: false, how: null,
+    extraCents: 0, billsCents: null, billsNote: null, legs: [], verdict: null, variances: [], needsReason: false, how: null,
   };
   const named = form.poNumber?.trim() ?? '';
   if (!named) {
@@ -257,7 +294,13 @@ export function viewPo(form: PoForm, facts: PoFacts | null, who: string, today: 
   }
 
   const billed = poLinesBilled(po);
-  const base: PoView = { ...none, number: po.number, lines: billed.lines, billsCents: billed.cents };
+  const base: PoView = {
+    ...none,
+    number: po.number,
+    lines: billed.lines,
+    billsCents: billed.cents,
+    billsNote: billed.othersKnown ? null : `Which of ${po.number}'s other lines, such as freight, NetSuite bills too isn't known yet.`,
+  };
   if (!form.vendorId) {
     return {
       ...base,
@@ -273,7 +316,10 @@ export function viewPo(form: PoForm, facts: PoFacts | null, who: string, today: 
     return { ...base, tone: 'red', text: `${po.number} is ${poStatusWords(po)} in NetSuite, so it can't take another bill. If this is an extra charge, enter it as a plain bill.` };
   }
   if (!billed.lines.length) {
-    return { ...base, tone: 'red', text: `Everything on ${po.number} is billed already. If this is an extra charge, enter it as a plain bill.` };
+    const what = billed.othersKnown
+      ? `Everything on ${po.number} is billed already.`
+      : `Every item on ${po.number} is billed already, and FleetSuite doesn't know its other lines, such as freight, yet.`;
+    return { ...base, tone: 'red', text: `${what} If this is an extra charge, enter it as a plain bill.` };
   }
 
   const ordered = po.date ? `, ordered ${shortDay(po.date, today)}` : '';
@@ -458,7 +504,10 @@ export async function readPoFacts(
   if (!named) return { found: null, open: form.vendorId ? pickOpenPos(await readOpenPos(service, form.vendorId), form.totalCents) : [] };
   const row = await findPo(service, named, form.vendorId);
   if (!row) return NO_PO;
-  const facts = await loadPoMatchFacts(service, row.id, snappedId ? { snappedId } : {});
+  const [facts, expenses] = await Promise.all([
+    loadPoMatchFacts(service, row.id, snappedId ? { snappedId } : {}),
+    readPoCopyExpenses(service, row.id),
+  ]);
   return {
     found: {
       copyId: row.id,
@@ -471,6 +520,7 @@ export async function readPoFacts(
       statusLabel: row.status_label,
       totalCents: facts.poTotal === null ? null : toCents(facts.poTotal),
       facts,
+      expenses,
     },
     open: [],
   };

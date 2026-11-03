@@ -207,7 +207,7 @@ describe('migration 436: Snap a bill', () => {
         { accountId: LATE_FEES, amount: 12.5, memo: 'Late payment charge' },
       ],
       billDate: '2026-10-20', invoiceTotal: '1296.83',
-    }, null, AT));
+    }, null, AT, null));
     // Other places a bill comes from are still refused.
     await expect(saveBill(pg, { ...made, made_from: 'photo' })).rejects.toThrow(/check/i);
     expect(await saveBill(pg, made)).toEqual({ saved: true, lines: 2 });
@@ -362,7 +362,7 @@ describe('migration 444: PO bills', () => {
       po: { copyId: null, netsuiteId: '45310', number: 'PO453-ACME' },
       expenses: [{ accountId: FREIGHT, amount: 240, memo: 'Freight' }],
       billDate: '2026-10-20', invoiceTotal: '2180.00',
-    }, poLines, AT));
+    }, poLines, AT, []));
     expect(await saveBill(pg, made)).toEqual({ saved: true, lines: 2 });
 
     await call(pg, 'gl_netsuite_bills_apply', {

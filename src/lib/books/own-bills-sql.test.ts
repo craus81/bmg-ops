@@ -115,7 +115,7 @@ const apBill = (over: Partial<MadeBill> = {}) => billPayload(workOutOwnBill({
   netsuiteId: '8801', netsuiteNumber: 'VI-1042', madeFrom: 'vendor_invoice', madeFromId: 'inv-1', vendorId: 412,
   vendorName: 'Northside Install Co.', referenceNo: 'VI-1042', subsidiaryId: '2', locationId: OFALLON,
   expense: { accountId: SUBCONTRACTORS, amount: 1250, memo: 'Install for job 1042' }, ...over,
-} as MadeBill & { netsuiteId: string }, null, AT));
+} as MadeBill & { netsuiteId: string }, null, AT, null));
 
 /** FleetSuite's copy of PO453-ACME: 12 racks, and 4 bins of which 1 is billed. */
 const PO_LINES: PoCopyLine[] = [
@@ -126,7 +126,7 @@ const partsMailBill = () => billPayload(workOutOwnBill({
   netsuiteId: '8802', netsuiteNumber: 'INV-5521', madeFrom: 'parts_mail', madeFromId: 'parts-1', vendorId: 77,
   vendorName: 'Acme Truck Racks', referenceNo: 'INV-5521', po: { copyId: 'po-1', netsuiteId: '5001', number: 'PO453-ACME' },
   invoiceTotal: '2199.97', expense: null,
-}, PO_LINES, AT));
+}, PO_LINES, AT, []));
 
 /** NetSuite's bill as the copy of its bills has it (migration 384). */
 const nsBill = (id: string, number: string, vendor: [string, string], total: string, lines: unknown[]) => ({
