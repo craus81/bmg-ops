@@ -25,14 +25,18 @@ import { findVendorBill } from '@/lib/netsuite';
  * nobody bills the row again while it reads approved.
  *
  * Send to NetSuite on Snap a bill (migration 436) bills its snapped bill the
- * same way, while the bill is a draft.
+ * same way, while the bill is a draft, and Create NetSuite Bill on Parts Mail
+ * (/api/parts-mail/create-bill) its captured vendor invoice: Parts Mail's
+ * claim, which the others took their shape from, now asks NetSuite too.
  */
 
 /** The rows a bill button bills. */
-export type BillOnceTable = 'vendor_invoices' | 'payouts' | 'gl_snapped_bills';
+export type BillOnceTable = 'vendor_invoices' | 'payouts' | 'gl_snapped_bills' | 'vendor_parts_invoices';
 
 /** The status a row has while it can be billed. */
-const READY: Record<BillOnceTable, string> = { vendor_invoices: 'approved', payouts: 'approved', gl_snapped_bills: 'draft' };
+const READY: Record<BillOnceTable, string> = {
+  vendor_invoices: 'approved', payouts: 'approved', gl_snapped_bills: 'draft', vendor_parts_invoices: 'captured',
+};
 
 /** A claim this old is taken over: the try that held it died without letting it go. */
 export const STALE_CLAIM_MS = 15 * 60_000;
@@ -42,7 +46,8 @@ type Found = { billId: string; billNumber: string } | null;
 
 export type BillOnce =
   | { ok: true; billId: string; billNumber: string; claimedAt: string | null }
-  | { ok: false; status: number; error: string };
+  /** found: the bill NetSuite already has, when that's why nothing was made. */
+  | { ok: false; status: number; error: string; found?: { billId: string; billNumber: string } };
 
 export async function makeBillOnce(
   service: SupabaseClient,
@@ -94,12 +99,14 @@ export async function makeBillOnce(
   if (found) {
     await letGo();
     const number = found.billNumber || found.billId;
-    // The vendor invoice and payout pages can record a bill made in NetSuite; Snap a bill has nothing to record.
-    const record = table === 'gl_snapped_bills' ? '' : ` If that's this one's bill, use Record Bill with ${number}.`;
+    // The vendor invoice and payout pages record a bill made in NetSuite with Record Bill; Parts Mail offers to mark
+    // its invoice billed with the one found; Snap a bill has nothing to record.
+    const record = table === 'vendor_invoices' || table === 'payouts' ? ` If that's this one's bill, use Record Bill with ${number}.` : '';
     return {
       ok: false,
       status: 409,
       error: `NetSuite already has bill ${number} from ${bill.vendorName}, so FleetSuite didn't make another.${record}`,
+      found: { billId: found.billId, billNumber: found.billNumber },
     };
   }
 

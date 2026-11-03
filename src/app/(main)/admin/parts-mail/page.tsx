@@ -232,6 +232,28 @@ export default function PartsMailPage() {
     setBusy(null);
   };
 
+  // NetSuite already has the vendor's bill under this invoice's number (one whose billed
+  // stamp failed, or one entered in NetSuite by hand), so none was made: mark this
+  // invoice billed with that one. The route asks NetSuite again before it does.
+  const markBilledWith = async (inv: InvoiceRow, found: { billId: string; billNumber: string }, why: string) => {
+    const number = found.billNumber || found.billId;
+    const ok = await dialog.confirm(`${why}\n\nMark this invoice billed with ${number}?`, {
+      title: 'Already in NetSuite', confirmLabel: 'Mark billed', cancelLabel: 'Leave it',
+    });
+    if (!ok) return;
+    const res = await fetch('/api/parts-mail/create-bill', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invoiceId: inv.id, recordBill: found.billId }),
+    });
+    const data = await res.json();
+    if (!res.ok) await dialog.alert(data.error || 'Marking it billed failed');
+    else {
+      await dialog.alert(`Marked billed with ${data.billNumber || data.billId}.`);
+      load();
+    }
+  };
+
   const createBill = async (inv: InvoiceRow) => {
     const label = `${inv.vendor_name || 'vendor'} invoice ${inv.invoice_number || inv.file_name}${inv.total ? ` for $${Number(inv.total).toLocaleString()}` : ''}`;
     // Non-green three-way match → the confirm becomes a typed override
@@ -265,11 +287,13 @@ export default function PartsMailPage() {
       if (res.status === 409 && data.canOverride && data.match) {
         setMatches(prev => ({ ...prev, [inv.id]: data.match }));
         await dialog.alert(`${data.error}\n\n${(data.match.variances || []).map((v: string) => `• ${v}`).join('\n')}`);
+      } else if (res.status === 409 && data.found?.billId) {
+        await markBilledWith(inv, data.found, data.error);
       } else {
         await dialog.alert(data.error || 'Bill creation failed');
       }
     } else {
-      await dialog.alert(`Bill created${data.billNumber ? `: ${data.billNumber}` : ''} from PO ${data.po || ''}.`);
+      await dialog.alert(data.warning || `Bill created${data.billNumber ? `: ${data.billNumber}` : ''} from PO ${data.po || ''}.`);
       load();
     }
     setBusy(null);

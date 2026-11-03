@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
-import { createBillFromPo } from '@/lib/netsuite';
+import { createBillFromPo, findVendorBill } from '@/lib/netsuite';
 import { loadThreeWayMatchForPo } from '@/lib/three-way-match';
 import { logAudit } from '@/lib/audit';
 import { saveOwnBill } from '@/lib/books/own-bills';
+import { madeOrFound, makeBillOnce, STALE_CLAIM_MS } from '@/lib/bill-once';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -18,14 +19,29 @@ const Schema = z.object({
   // explicitly overrides with a recorded reason (audit-logged).
   override: z.boolean().optional(),
   overrideReason: z.string().max(500).optional(),
+  // Mark billed: NetSuite's id for the bill it already has from the vendor
+  // under this invoice's Reference No., which Create bill found and named.
+  // NetSuite is asked again before the invoice is marked.
+  recordBill: z.string().regex(/^\d{1,20}$/).optional(),
 });
+
+/**
+ * The bill's Reference No.: the vendor's invoice number, or, when the scan
+ * read none, one made from the invoice's id, so NetSuite can always be asked
+ * whether it already has the bill (src/lib/bill-once.ts).
+ */
+const referenceFor = (invoice: { id: string; invoice_number: string | null }) =>
+  (invoice.invoice_number?.trim() || `PM-${invoice.id.slice(0, 8)}`).slice(0, 40);
 
 /**
  * POST /api/parts-mail/create-bill — turn a captured vendor parts invoice
  * into a NetSuite vendor bill by transforming its matched purchase order
  * (vendor, items, amounts all carry over; the vendor's invoice number
  * becomes the bill's Reference No.). Posting real financials, so it's an
- * explicit admin/finance click — never automatic.
+ * explicit admin/finance click — never automatic. One bill per invoice
+ * (src/lib/bill-once.ts): when NetSuite already has the vendor's bill under
+ * that Reference No., none is made, and { recordBill } marks the invoice
+ * billed with it instead.
  */
 export async function POST(req: NextRequest) {
   const auth = await requireRole(req, ['admin', 'finance']);
@@ -43,9 +59,64 @@ export async function POST(req: NextRequest) {
   if (invoice.status === 'billed') {
     return NextResponse.json({ error: `Already billed (${invoice.netsuite_bill_number || invoice.netsuite_bill_id})` }, { status: 409 });
   }
+  if (invoice.status !== 'captured') {
+    return NextResponse.json({ error: "This invoice was dismissed, so it isn't billed from Parts Mail." }, { status: 409 });
+  }
   const po = (invoice as any).netsuite_vendor_pos;
   if (!po?.netsuite_id) {
     return NextResponse.json({ error: 'Link this invoice to a vendor PO first — the bill is created from the PO.' }, { status: 422 });
+  }
+  // NetSuite is asked for a bill it already has from the PO's vendor before one is made, so the vendor is needed.
+  if (!/^\d+$/.test(po.vendor_netsuite_id ?? '')) {
+    return NextResponse.json({
+      error: `FleetSuite's copy of PO ${po.tranid} doesn't have its vendor yet, so it can't check NetSuite for a bill already made from this invoice. Nothing was billed. Tap Sync POs, then try again.`,
+    }, { status: 422 });
+  }
+  const vendorName: string = po.vendor_name || invoice.vendor_name || 'the vendor';
+  const referenceNo = referenceFor(invoice);
+
+  if (parsed.data.recordBill) {
+    // Only the bill NetSuite still has from the vendor under this Reference No. marks the invoice.
+    let found: Awaited<ReturnType<typeof findVendorBill>>;
+    try {
+      found = await findVendorBill(po.vendor_netsuite_id, referenceNo);
+    } catch (e: any) {
+      return NextResponse.json({
+        error: `Couldn't ask NetSuite for bill ${referenceNo}, so this invoice wasn't marked billed. Try again. (${e?.message || e})`,
+      }, { status: 502 });
+    }
+    if (!found || found.billId !== parsed.data.recordBill) {
+      return NextResponse.json({
+        error: `NetSuite doesn't have that bill from ${vendorName} under ${referenceNo} now, so this invoice wasn't marked billed. Refresh and try again.`,
+      }, { status: 409 });
+    }
+    // Left to a try that's billing it right now (src/lib/bill-once.ts); one that died long ago doesn't hold it.
+    const staleCutoff = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
+    const { data: marked, error: markErr } = await service.from('vendor_parts_invoices').update({
+      status: 'billed',
+      netsuite_bill_id: found.billId,
+      netsuite_bill_number: found.billNumber || null,
+      billed_by: auth.user!.id,
+      billed_at: new Date().toISOString(),
+      bill_claimed_at: null,
+    }).eq('id', invoice.id)
+      .eq('status', 'captured')
+      .or(`bill_claimed_at.is.null,bill_claimed_at.lt.${staleCutoff}`)
+      .select('id');
+    if (markErr) {
+      return NextResponse.json({ error: `Couldn't mark this invoice billed (${markErr.message}). Try again.` }, { status: 500 });
+    }
+    if (!marked || marked.length === 0) {
+      return NextResponse.json({ error: 'A bill for this invoice is being made, or it was just marked billed. Wait a moment and refresh.' }, { status: 409 });
+    }
+    await logAudit(service, {
+      actorId: auth.user!.id,
+      table: 'vendor_parts_invoices',
+      recordId: invoice.id,
+      action: 'record_bill',
+      detail: { po: po.tranid, invoiceNumber: invoice.invoice_number, referenceNo, netsuite_bill_id: found.billId, billNumber: found.billNumber || null },
+    });
+    return NextResponse.json({ billId: found.billId, billNumber: found.billNumber, po: po.tranid, recorded: true });
   }
 
   // R4-8 three-way match, enforced server-side on every click (the card's
@@ -76,43 +147,27 @@ export async function POST(req: NextRequest) {
     }, { status: 409 });
   }
 
-  // Atomic claim (migration 251): the status check above is check-then-act,
-  // so two concurrent clicks could both pass it and post two real vendor
-  // bills (Round 3 §7.2.4). Degrades gracefully while the schema cache
-  // lags (#741).
-  let claimActive = false;
-  const staleCutoff = new Date(Date.now() - 15 * 60_000).toISOString();
-  const { data: claimRows, error: claimErr } = await service
-    .from('vendor_parts_invoices')
-    .update({ bill_claimed_at: new Date().toISOString() })
-    .eq('id', invoice.id)
-    .or(`bill_claimed_at.is.null,bill_claimed_at.lt.${staleCutoff}`)
-    .select('id');
-  if (claimErr) {
-    if ((claimErr as any).code === 'PGRST204' || /bill_claimed_at/i.test(claimErr.message || '')) {
-      console.warn('create-bill: claim column not in schema cache yet — proceeding unclaimed');
-    } else {
-      return NextResponse.json({ error: 'Could not reserve this invoice for billing — try again' }, { status: 503 });
-    }
-  } else if (!claimRows || claimRows.length === 0) {
-    return NextResponse.json({ error: 'A bill for this invoice is already being created — wait a moment and refresh.' }, { status: 409 });
-  } else {
-    claimActive = true;
+  // One bill per invoice (src/lib/bill-once.ts): an atomic claim on the
+  // captured invoice (migration 251), so two clicks at once can't post two
+  // real vendor bills (Round 3 §7.2.4); then NetSuite is asked for a bill it
+  // already has from the vendor under this Reference No., so a bill whose
+  // billed stamp failed, or one entered in NetSuite by hand, isn't made
+  // again. A bill NetSuite kept without saying so is found right after.
+  const findThisBill = () => findVendorBill(po.vendor_netsuite_id, referenceNo);
+  const once = await makeBillOnce(service, 'vendor_parts_invoices', invoice.id, {
+    vendorId: po.vendor_netsuite_id,
+    vendorName,
+    referenceNo,
+    create: () => madeOrFound(() => createBillFromPo({
+      purchaseOrderId: po.netsuite_id,
+      referenceNo,
+      memo: `Parts invoice ${invoice.invoice_number || invoice.file_name} (via FleetSuite parts mail)`,
+    }), findThisBill),
+  }, findThisBill);
+  if (!once.ok) {
+    return NextResponse.json({ error: once.error, ...(once.found ? { found: once.found } : {}) }, { status: once.status });
   }
-
-  const bill = await createBillFromPo({
-    purchaseOrderId: po.netsuite_id,
-    referenceNo: invoice.invoice_number || undefined,
-    memo: `Parts invoice ${invoice.invoice_number || invoice.file_name} (via FleetSuite parts mail)`,
-  });
-  if (!bill.success) {
-    if (claimActive) {
-      try {
-        await service.from('vendor_parts_invoices').update({ bill_claimed_at: null }).eq('id', invoice.id);
-      } catch { /* stale takeover covers a lost release */ }
-    }
-    return NextResponse.json({ error: bill.error || 'NetSuite bill creation failed' }, { status: 502 });
-  }
+  const bill = { billId: once.billId, billNumber: once.billNumber };
 
   // Books keeps its own copy of what was billed: the PO's open lines at its
   // prices, as FleetSuite's copy of the PO has them (src/lib/books/own-bills.ts).
@@ -125,7 +180,7 @@ export async function POST(req: NextRequest) {
     madeBy: auth.user!.id,
     vendorId: po.vendor_netsuite_id,
     vendorName: po.vendor_name || invoice.vendor_name,
-    referenceNo: invoice.invoice_number,
+    referenceNo,
     po: { copyId: po.id, netsuiteId: po.netsuite_id, number: po.tranid },
     invoiceTotal: invoice.total,
   });
@@ -160,17 +215,19 @@ export async function POST(req: NextRequest) {
     netsuite_bill_number: bill.billNumber || null,
     billed_by: auth.user!.id,
     billed_at: new Date().toISOString(),
-    ...(claimActive ? { bill_claimed_at: null } : {}),
+    ...(once.claimedAt ? { bill_claimed_at: null } : {}),
   }).eq('id', invoice.id);
   if (stampErr) {
-    // Keep the claim held so a retry can't double-bill while the stamp is
-    // missing; the stale takeover reopens it after 15 minutes.
+    // The claim stays held, so nothing bills it while the stamp is missing.
+    // Once it's gone stale, Create bill finds this bill in NetSuite and
+    // offers to mark the invoice billed with it.
     console.error('create-bill: billed stamp failed after NetSuite create:', stampErr.message);
+    const number = bill.billNumber || bill.billId || referenceNo;
     return NextResponse.json({
       billId: bill.billId,
       billNumber: bill.billNumber,
       po: po.tranid,
-      warning: `The bill was created in NetSuite but the billed stamp failed (${stampErr.message}) — mark this invoice billed by hand before retrying anything.`,
+      warning: `The bill was made in NetSuite, but marking this invoice billed failed (${stampErr.message}). Nothing will bill it again: in 15 minutes, Create NetSuite Bill finds bill ${number} and offers to mark this invoice billed with it.`,
     });
   }
 

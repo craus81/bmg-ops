@@ -104,6 +104,7 @@ describe('makeBillOnce', () => {
       ok: false,
       status: 409,
       error: "NetSuite already has bill VI-1042 from Northside Install Co., so FleetSuite didn't make another. If that's this one's bill, use Record Bill with VI-1042.",
+      found: { billId: '8801', billNumber: 'VI-1042' },
     });
     expect(b.create).not.toHaveBeenCalled();
     expect(row.bill_claimed_at).toBeNull();
@@ -198,7 +199,34 @@ describe('makeBillOnce', () => {
   it("doesn't offer Record Bill for a snapped bill NetSuite already has: Snap a bill has nothing to record", async () => {
     const made = await makeBillOnce(fakeService({ id: 'snap-1', status: 'draft', bill_claimed_at: null }).service, 'gl_snapped_bills', 'snap-1', bill(),
       vi.fn(async () => ({ billId: '8801', billNumber: 'VI-1042' })), NOW);
-    expect(made).toEqual({ ok: false, status: 409, error: "NetSuite already has bill VI-1042 from Northside Install Co., so FleetSuite didn't make another." });
+    expect(made).toEqual({
+      ok: false, status: 409, error: "NetSuite already has bill VI-1042 from Northside Install Co., so FleetSuite didn't make another.",
+      found: { billId: '8801', billNumber: 'VI-1042' },
+    });
+  });
+
+  it("claims a Parts Mail invoice while it's captured, and not once it's billed or dismissed", async () => {
+    const captured: Row = { id: 'pm-1', status: 'captured', bill_claimed_at: null };
+    const { service, tables } = fakeService(captured);
+    const made = await makeBillOnce(service, 'vendor_parts_invoices', 'pm-1', bill(), vi.fn(async () => null), NOW);
+    expect(made.ok).toBe(true);
+    expect(captured.bill_claimed_at).toBe(NOW.toISOString());
+    expect(tables).toEqual(['vendor_parts_invoices']);
+    for (const status of ['billed', 'dismissed']) {
+      const row: Row = { id: 'pm-1', status, bill_claimed_at: null };
+      const b = bill();
+      expect((await makeBillOnce(fakeService(row).service, 'vendor_parts_invoices', 'pm-1', b, vi.fn(async () => null), NOW)).ok).toBe(false);
+      expect(b.create).not.toHaveBeenCalled();
+    }
+  });
+
+  it('gives Parts Mail the bill NetSuite already has, to mark its invoice billed with, rather than Record Bill', async () => {
+    const made = await makeBillOnce(fakeService({ id: 'pm-1', status: 'captured', bill_claimed_at: null }).service, 'vendor_parts_invoices', 'pm-1', bill(),
+      vi.fn(async () => ({ billId: '8801', billNumber: '' })), NOW);
+    expect(made).toEqual({
+      ok: false, status: 409, error: "NetSuite already has bill 8801 from Northside Install Co., so FleetSuite didn't make another.",
+      found: { billId: '8801', billNumber: '' },
+    });
   });
 
   it('gives back empty strings for a bill NetSuite made without saying its id or number', async () => {
