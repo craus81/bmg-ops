@@ -43,7 +43,7 @@ import { OWN_BILL_RULE, ownBillPick, readOwnBillCopies, readOwnBillSince, type O
 import { BOOKS_STOCK_SYNC } from './netsuite-stock';
 import { BOOKS_BILLS_SYNC } from './netsuite-bills';
 import { postOpeningEntries } from './going-live';
-import { centralDate } from './mistake-checks';
+import { centralDate, centralMonth } from '@/lib/central-day';
 import { readClosedMonths } from './months';
 
 /**
@@ -1537,7 +1537,7 @@ export async function postInvoices(
     }
 
     // 2. Every month, from where the last run stopped: for a company whose books are live, from the month they went live.
-    const months = monthsBetween(COPY_FROM, monthOfDate(new Date(now()).toISOString().slice(0, 10))!);
+    const months = monthsBetween(COPY_FROM, centralMonth(new Date(now())));
     const skippedMonths: string[] = [];
     let skippedWhy = '';
     const leftTotal: Array<{ number: string; kind: keyof typeof DOCUMENT_WORDS }> = [];

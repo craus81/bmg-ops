@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate, monthsBetween } from '@/lib/books/netsuite-gl';
+import { BOOKS_GL_SYNC, COPY_FROM, monthsBetween } from '@/lib/books/netsuite-gl';
+import { centralLastMonth, centralMonth } from '@/lib/central-day';
 import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
 import { RULES, type SalesDocKind } from '@/lib/books/invoice-rule';
 import { checkMonth, type ChartAccount, type InvoiceMonthData, type ItemAccountCount, type LineFactsRead, type TaxAccountCount } from '@/lib/books/invoice-check';
@@ -119,13 +120,9 @@ export async function GET(req: NextRequest) {
   const company = asked && codes.includes(asked) ? asked : codes.includes('BMG') ? 'BMG' : codes[0];
   if (!company) return NextResponse.json({ error: 'No companies set up' }, { status: 500 });
 
-  // Every month from January 2025, defaulting to last month.
-  const today = new Date().toISOString().slice(0, 10);
-  const months = monthsBetween(COPY_FROM, monthOfDate(today)!);
-  const lastCalendar = new Date();
-  lastCalendar.setUTCDate(1);
-  lastCalendar.setUTCMonth(lastCalendar.getUTCMonth() - 1);
-  const previous = monthOfDate(lastCalendar.toISOString().slice(0, 10))!;
+  // Every month from January 2025, defaulting to last month, as O'Fallon's calendar has them.
+  const months = monthsBetween(COPY_FROM, centralMonth());
+  const previous = centralLastMonth();
   const askedMonth = params.get('month');
   const month = askedMonth && /^\d{4}-\d{2}$/.test(askedMonth) && months.includes(`${askedMonth}-01`)
     ? `${askedMonth}-01`

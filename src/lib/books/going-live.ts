@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { failureReason, postEntry, type BooksCompany } from './journal';
 import { BOOKS_GL_SYNC, monthOfDate, toCents } from './netsuite-gl';
-import { centralDate } from './mistake-checks';
+import { centralDate } from '@/lib/central-day';
 import {
   addDays, lastDay, longDate, openingJournalEntry, PLANNED_LIVE_FROM, workOutOpeningEntry,
   type OpeningAccount, type OpeningData, type OpeningEntry, type OpeningPartyData,

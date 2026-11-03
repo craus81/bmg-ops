@@ -6,7 +6,7 @@ import { booksAllows, type BooksAccess } from '@/lib/books/access';
 import { createServiceClient } from '@/lib/supabase-service';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
-import { centralDate } from '@/lib/books/mistake-checks';
+import { centralDate } from '@/lib/central-day';
 import { readAccounts, readCompanies } from '@/lib/books/snap-a-bill';
 import { SWITCH_ON_DATE_TEXT, switchIsOn } from '@/lib/books/switches';
 import {

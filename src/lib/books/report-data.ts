@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate, toCents } from './netsuite-gl';
+import { centralLastMonth, centralMonth } from '@/lib/central-day';
+import { BOOKS_GL_SYNC, COPY_FROM, toCents } from './netsuite-gl';
 import { BOOKS_INVOICE_POSTING, type InvoicePostingResult } from './invoice-posting';
 import type { BuilderAsk, Parties, PartyAmount, SplitAmount } from './report-builder';
 import { BUILDER_BY, BUILDER_MONTHS, BUILDER_ROWS, type BuilderBy, type BuilderMonths, type BuilderRows } from './report-builder-words';
@@ -65,11 +66,8 @@ export async function loadReports(service: SupabaseClient, asked: string | null)
     fleetsuite: (fleetsuite.data ?? []) as ReportAmount[],
   };
 
-  const currentMonth = monthOfDate(new Date().toISOString().slice(0, 10))!;
-  const lastCalendar = new Date();
-  lastCalendar.setUTCDate(1);
-  lastCalendar.setUTCMonth(lastCalendar.getUTCMonth() - 1);
-  const previous = monthOfDate(lastCalendar.toISOString().slice(0, 10))!;
+  const currentMonth = centralMonth();
+  const previous = centralLastMonth();
 
   const copied = (copy.data?.last_result ?? null) as { error?: string } | null;
   return {

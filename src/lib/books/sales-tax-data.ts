@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { centralDate } from '@/lib/central-day';
 import { getSalesTaxRate } from '@/lib/sales-tax';
 import type { TaxAccountCount } from './invoice-check';
 import { valueMonth } from './inventory-value-data';
@@ -100,7 +101,7 @@ async function readNames(service: SupabaseClient, ids: Array<string | null>): Pr
 export async function loadSalesTax(
   service: SupabaseClient,
   params: URLSearchParams,
-  today = new Date().toISOString().slice(0, 10),
+  today = centralDate(),
 ): Promise<LoadedSalesTax | { error: string }> {
   const { month, through } = valueMonth(params, today);
   try {

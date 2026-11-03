@@ -4,7 +4,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { attachmentDisposition } from '@/lib/estimate-approval-downloads';
 import { loadInventoryValue } from '@/lib/books/inventory-value-data';
 import { POSTING_COMPANIES } from '@/lib/books/invoice-posting';
-import { centralDate } from '@/lib/books/mistake-checks';
+import { centralDate } from '@/lib/central-day';
 import { monthOfDate } from '@/lib/books/netsuite-gl';
 import { buildReport, type BuilderAsk } from '@/lib/books/report-builder';
 import { loadSplit } from '@/lib/books/report-data';

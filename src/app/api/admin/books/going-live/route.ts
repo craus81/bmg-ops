@@ -9,7 +9,7 @@ import {
   GO_LIVE_FROM, goLiveRefusal, openingMonth, openingWait, readChart, readCompanies, readLastCopy, readOpeningEntries,
   readOpeningParties, readTotals, withCompanies,
 } from '@/lib/books/going-live';
-import { centralDate } from '@/lib/books/mistake-checks';
+import { centralDate } from '@/lib/central-day';
 import { lastMonth } from '@/lib/books/trial-balance';
 
 export const dynamic = 'force-dynamic';

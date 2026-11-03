@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 vi.mock('@/lib/system-health', () => ({ recordHeartbeat: vi.fn(async () => ({ ok: true })) }));
 
-import { builderAsk, monthsFor, postingOf, type LoadedReports } from './report-data';
+import { builderAsk, loadReports, monthsFor, postingOf, type LoadedReports } from './report-data';
 
 describe('the report builder’s months that move with the calendar', () => {
   it('works each out from last month', () => {
@@ -84,5 +85,38 @@ describe('how the last posting run went', () => {
     expect(postingOf({ last_result: { posted: 3 }, updated_at: at })).toEqual({ at, error: null, partial: false });
     expect(postingOf({ last_result: { partial: true }, updated_at: at })).toEqual({ at, error: null, partial: true });
     expect(postingOf({ last_result: { error: 'Deadlock', partial: false }, updated_at: at })).toEqual({ at, error: 'Deadlock', partial: false });
+  });
+});
+
+describe('the months the reports open on', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  // Just enough of supabase-js for loadReports: one company, no accounts, nothing posted or copied yet.
+  const service = {
+    from: (table: string) => {
+      const rows = table === 'gl_companies' ? [{ id: 'c2', code: 'BMG', name: 'BMG', legal_name: null, netsuite_subsidiary_id: '2' }] : [];
+      const q: any = {
+        select: () => q, order: () => q, eq: () => q,
+        range: async (from: number, to: number) => ({ data: rows.slice(from, to + 1), error: null }),
+        maybeSingle: async () => ({ data: null, error: null }),
+        then: (done: (v: unknown) => unknown, failed: (e: unknown) => unknown) => Promise.resolve({ data: rows, error: null }).then(done, failed),
+      };
+      return q;
+    },
+    rpc: async (name: string) => ({ data: name === 'gl_netsuite_totals' ? {} : [], error: null }),
+  } as unknown as SupabaseClient;
+  const months = async (at: string) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(at));
+    const loaded = await loadReports(service, null) as LoadedReports;
+    return { through: loaded.through, lastMonth: loaded.lastMonth };
+  };
+
+  it("are O'Fallon's: the evening of the 31st is still that month", async () => {
+    // 10:30 PM CDT on October 31: UTC is in November already.
+    expect(await months('2026-11-01T03:30:00Z')).toEqual({ through: '2026-10-01', lastMonth: '2026-09-01' });
+    expect(await months('2026-11-01T05:30:00Z')).toEqual({ through: '2026-11-01', lastMonth: '2026-10-01' });
+    // New Year's Eve, then New Year's Day.
+    expect(await months('2027-01-01T03:00:00Z')).toEqual({ through: '2026-12-01', lastMonth: '2026-11-01' });
+    expect(await months('2027-01-01T06:30:00Z')).toEqual({ through: '2027-01-01', lastMonth: '2026-12-01' });
   });
 });

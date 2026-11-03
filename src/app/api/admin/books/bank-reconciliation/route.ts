@@ -5,7 +5,7 @@ import { booksAllows } from '@/lib/books/access';
 import { createServiceClient } from '@/lib/supabase-service';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
-import { centralDate } from '@/lib/books/mistake-checks';
+import { centralDate } from '@/lib/central-day';
 import { MAX_LINE_CENTS } from '@/lib/typed-journal-entries';
 import { FIRST_MONTH, LANDLORD } from '@/lib/books/rent-and-mortgage';
 import { DOCS_MAX, readBankRec, type BankRecRead } from '@/lib/books/bank-reconciliation-data';

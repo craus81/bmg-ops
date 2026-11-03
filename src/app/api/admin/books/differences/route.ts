@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate } from '@/lib/books/netsuite-gl';
+import { BOOKS_GL_SYNC, COPY_FROM } from '@/lib/books/netsuite-gl';
+import { centralLastMonth, centralMonth } from '@/lib/central-day';
 import { BOOKS_INVOICE_POSTING, POSTING_COMPANIES, type InvoicePostingResult } from '@/lib/books/invoice-posting';
 import { BOOKS_DAILY_CHECK, type DailyCheckResult } from '@/lib/books/daily-check';
 import {
@@ -66,16 +67,12 @@ export async function GET(req: NextRequest) {
 
   const posted = postedKinds(data, (POSTING_COMPANIES as readonly string[]).includes(company));
   const index = indexMonths(data);
-  const currentMonth = monthOfDate(new Date().toISOString().slice(0, 10))!;
-  const through = lastMonth(data, currentMonth);
+  const through = lastMonth(data, centralMonth());
 
   // Default to last month, the newest one NetSuite may already have closed, as the trial balance does.
   const askedMonth = params.get('month');
   const fromParam = askedMonth && /^\d{4}-\d{2}$/.test(askedMonth) ? `${askedMonth}-01` : null;
-  const lastCalendar = new Date();
-  lastCalendar.setUTCDate(1);
-  lastCalendar.setUTCMonth(lastCalendar.getUTCMonth() - 1);
-  const previous = monthOfDate(lastCalendar.toISOString().slice(0, 10))!;
+  const previous = centralLastMonth();
   const month = fromParam && fromParam >= COPY_FROM && fromParam <= through ? fromParam
     : previous >= COPY_FROM ? previous : COPY_FROM;
 
