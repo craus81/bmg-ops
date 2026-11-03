@@ -273,6 +273,8 @@ export default function BooksAccountsPage() {
             <Link href={deepLinks.booksBackups()} style={{ color: 'var(--text-secondary)' }}>Backups</Link>
             {' · '}
             <Link href={deepLinks.booksChangeHistory()} style={{ color: 'var(--text-secondary)' }}>Change history</Link>
+            {' · '}
+            <Link href={deepLinks.booksHowItWorks()} style={{ color: 'var(--text-secondary)' }}>How the books work</Link>
           </div>
         </div>
         {canKeep && (

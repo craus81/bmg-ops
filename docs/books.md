@@ -169,7 +169,7 @@ its own receipts at `/admin/books/own-receipts` and one's check at
 `/admin/books/own-receipts/receipt`, the Inventory Adjusts at
 `/admin/books/own-adjustments` and one's check at
 `/admin/books/own-adjustments/adjustment`, the mistake checks at
-`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, the year end at `/admin/books/year-end`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, the own numbers at `/admin/books/own-numbers`, the backups at `/admin/books/backups`, the change history at `/admin/books/change-history`, the 1099s at `/admin/books/1099s`, and filing them at `/admin/books/1099s/file`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
+`/admin/books/mistake-checks`, Snap a bill at `/admin/books/snap-a-bill`, sales by location at `/admin/books/sales`, the switches at `/admin/books/switches`, going live at `/admin/books/going-live`, the months at `/admin/books/months`, the year end at `/admin/books/year-end`, 1084's rent and mortgage at `/admin/books/rent-and-mortgage`, 1084's bank reconciliation at `/admin/books/bank-reconciliation`, inventory value at `/admin/books/inventory-value`, sales tax at `/admin/books/sales-tax`, the NetSuite feed at `/admin/books/netsuite-feed`, what changed in NetSuite at `/admin/books/changed-in-netsuite`, the own numbers at `/admin/books/own-numbers`, the backups at `/admin/books/backups`, the change history at `/admin/books/change-history`, how the books work at `/admin/books/how-it-works`, the 1099s at `/admin/books/1099s`, and filing them at `/admin/books/1099s/file`, which super admins, the bookkeeper and the CPA open ("Who can open the books"). Only they see the Books entry on the More page (Money & Books), which opens
 the accounts page, and Home opens it for a bookkeeper or CPA with no other
 role; the others are linked from there. The credit memo
 screen, `/invoices/credit-memo`, is staff's, opened from Invoicing: only
@@ -7675,6 +7675,94 @@ migration 509.
   Supabase doesn't. Admin → Users still says since when each person's is
   on, and Reset takes it away.
 
+## How the books work
+
+Part 88 (migration 510, `src/lib/books/how-it-works.ts`,
+`/api/admin/books/how-it-works`) writes down how FleetSuite's books work,
+the NetSuite Exit Checklist's "How the books work, written down": what posts
+what, who can change what, what the database won't let anyone do, how
+backups work and which jobs run by themselves, in words BMG's CPA can read
+and sign off. The IRS covers records kept in software in Revenue Procedure
+98-25, which asks for a description of the system; this is that
+description, dated. It only reads the books and keeps the CPA's reviews, so
+it needs no switch.
+
+**Written next to the code.** The words are in
+`src/lib/books/how-it-works.ts`, and `how-it-works.test.ts` holds them to
+the code, so a change that makes them wrong fails the tests:
+
+- Every posting rule the journal is posted by (16) is written down at the
+  version the code posts it with, and no other; a rule moving to a new
+  version fails until its words are looked at again. The same holds for
+  the rules that work out what FleetSuite sends to NetSuite or keeps on
+  its own copies (7: tax, credit memo tax, vendor credits, card charges,
+  typed journal entries, inventory transfers).
+- Each money step (45, from billing to resetting someone's two-step
+  sign-in) names who can take it, and its guard is the one its route
+  carries in `src/lib/route-permissions.ts`. Every Books route that
+  changes something, and every route that waits on a switch, is written
+  down or says in the test why not.
+- What the database refuses is in the database's own words, and the jobs
+  are `vercel.json`'s, at their times, said in Central time.
+
+What the books hold today is read from them as of now
+(`src/lib/books/how-it-works-data.ts`): each company's live date, last
+closed month and closed years; how many entries each rule has posted, how
+many of them were reversed, and the first and last date
+(`gl_posting_rule_use()`), with any rule the journal holds that isn't
+written down named in red; who holds each step now, from their roles and
+what More → Admin → Permissions gives them; who has each level of the
+books and two-step sign-in; the switches; when the posting run and the
+ledger copy last ran; the last good backup and restore drill; the chart
+of accounts; and the CPA's last review. A part that can't be read is named
+at the top and the rest still shows.
+
+**Books → How the books work** (`/admin/books/how-it-works`,
+`deepLinks.booksHowItWorks`, linked from the Books page) shows it in parts,
+each opening to its detail: what posts what, who can change what,
+two-step sign-in, what the database won't let anyone do, controls, the
+switches, the jobs that run by themselves, backups, the records kept, what
+the IRS asks, and the chart of accounts. Whoever opens the books sees it
+("Who can open the books"). It shows no amounts.
+
+**The PDF** (`/api/admin/books/how-it-works/download`,
+`src/lib/books/how-it-works-pdf.ts`). Download PDF makes the same
+description as a letter-size PDF dated now: contents with each section's
+page, its 13 sections, the CPA's review as it stands, a sign-off box (name,
+signature, date and notes) with how many rules it covers and their
+fingerprint, and the chart of accounts, with the date and Page X of Y on
+every page. It's named by its Central date,
+`How-the-books-work-2026-11-03.pdf`. No tax ID or bank number is in it.
+
+**The CPA's review** (`books_rules_reviews`). Once the CPA has read it,
+they sign the PDF and press Mark reviewed, with a note if they like; a
+super admin can mark it for a review the CPA signed on paper. FleetSuite
+keeps who marked it, as what (the CPA or a super admin), when, the rules
+it held (name@version) and a fingerprint (SHA-256) of how they were
+written (`rulesFingerprint()`), and audits it (`reviewed`). The page and
+the PDF then say the review is current while the rules read as reviewed;
+once a rule is added, gone or reworded, they name what changed and say
+it's due another review. A review of rules that changed since the page
+opened is refused (409). Nobody is told: it sends nothing.
+
+A review stays as it was made, and only FleetSuite's server reads and
+writes them (the service role). The reviews are one of the books' tables,
+so each backup holds them ("Backups") and one added outside FleetSuite is
+written in the change history ("Change history").
+
+`src/lib/books/how-it-works.test.ts` holds the words to the code;
+`how-it-works-data.test.ts` what the page reads; `how-it-works-sql.test.ts`
+migration 510; `how-it-works-pdf.test.ts` and `how-it-works-words.test.ts`
+the PDF and the words it shares with the page; `how-it-works-route.test.ts`
+the routes.
+
+### What isn't done yet
+
+- BMG's CPA hasn't reviewed it: download the PDF, have the CPA read and
+  sign it, and mark it reviewed.
+- Each backup's manifest names every table's columns, their types and its
+  key, but what each column means isn't written down column by column.
+
 ## Who can open the books
 
 Part 52 (migration 483, `src/lib/books/access.ts`) opens the books to two
@@ -7684,9 +7772,9 @@ a staff one:
 
 | Who | Level | What they can do |
 | --- | --- | --- |
-| Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, reopening a closed month, closing and reopening a year, making and downloading backups, and the change history of the vendors' bank numbers and the ACH setups and files |
+| Super admin | `owner` | Everything, including the steps only the owner takes: the switches, going live, keeping FleetSuite's or taking NetSuite's on Changed in NetSuite, reopening a closed month, closing and reopening a year, making and downloading backups, the change history of the vendors' bank numbers and the ACH setups and files, and marking How the books work reviewed for a review the CPA did on paper |
 | Bookkeeper | `keep` | Everything else: Sync now and Copy now, Post now, Look now, closing a month, clearing and reopening mistake checks, Looked at it on the NetSuite feed, Snap a bill, NetSuite's 1099 report, and checking the 1099s in NetSuite and making their file |
-| CPA | `read` | Every Books page and Excel download, changing nothing, and its own adjustments journal on Journal entries ("The CPA's adjustments journal") |
+| CPA | `read` | Every Books page and Excel download, changing nothing, its own adjustments journal on Journal entries ("The CPA's adjustments journal"), and marking How the books work reviewed ("How the books work") |
 
 How it's held:
 

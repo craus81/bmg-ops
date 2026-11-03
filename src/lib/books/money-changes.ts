@@ -70,7 +70,7 @@ export const AREAS: ReadonlyArray<{ key: ChangeArea; name: string }> = [
   { key: 'reconciling', name: 'Reconciliations, sales tax and rent' },
   { key: 'journal', name: 'The journal' },
   { key: 'copies', name: "NetSuite's copies and sends" },
-  { key: 'other', name: 'Mistake checks and saved reports' },
+  { key: 'other', name: "Mistake checks, saved reports and the CPA's reviews" },
 ];
 
 /** The area only super admins see: the vendors' bank numbers and the ACH setups and files, whose screens are theirs. */
@@ -183,6 +183,7 @@ export const TABLES: Readonly<Record<string, TableInfo>> = {
   bank_rec_events: outside('Bank reconciliation done or undone', 'reconciling'),
   gl_mistake_checks: outside('Mistake check', 'other'),
   books_saved_reports: outside('Saved report', 'other'),
+  books_rules_reviews: outside("CPA's review of how the books work", 'other'),
 };
 
 /** The tables in an area. */
