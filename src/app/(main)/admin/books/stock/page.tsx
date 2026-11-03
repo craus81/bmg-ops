@@ -8,6 +8,7 @@ import { booksAccess, booksAllows } from '@/lib/books/access';
 import { apiFetch } from '@/lib/api-client';
 import { deepLinks } from '@/lib/deep-links';
 import { looseMatcher } from '@/lib/loose-search';
+import { centralMonth } from '@/lib/central-day';
 import type { CountsBy, LedgerEntry, LedgerPart, StockLine, StockSetup } from '@/lib/books/stock-items';
 
 /**
@@ -231,7 +232,7 @@ function SetupList({ setup }: { setup: StockSetup }) {
 /** An inventory account's difference: amber on stock, quieter on a fixed asset account, where most of it is the company's own. */
 const partColor = (part: LedgerPart, cents: number) => (!cents ? 'var(--text-muted)' : part.fixedAsset ? 'var(--text-secondary)' : AMBER);
 
-const thisMonth = () => new Date().toISOString().slice(0, 7);
+const thisMonth = () => centralMonth().slice(0, 7);
 
 /** A document that posted to an inventory account without a stocked item: its number (opening its check), what, when, and what it posted. */
 function EntryRow({ entry, company }: { entry: LedgerEntry; company: string }) {

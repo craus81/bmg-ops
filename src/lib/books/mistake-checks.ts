@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
+import { centralDate } from '@/lib/central-day';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { BOOKS_COMPANIES, type BooksCompany } from './journal';
 import { centsToString, COPY_FROM, toCents } from './netsuite-gl';
@@ -201,9 +202,6 @@ const TIMES = ['', 'once', 'twice', 'three times', 'four times', 'five times', '
 const times = (n: number) => TIMES[n] ?? `${n} times`;
 
 // ── Dates ──────────────────────────────────────────────────────────────────
-
-/** Today's date in Central time, 'YYYY-MM-DD'. */
-export const centralDate = (at: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(at);
 
 const dayNumber = (iso: string) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / 86_400_000;
 const daysApart = (a: string, b: string) => Math.abs(dayNumber(a) - dayNumber(b));

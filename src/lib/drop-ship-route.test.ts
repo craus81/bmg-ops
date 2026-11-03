@@ -1,7 +1,8 @@
 // /api/estimates/[id]/drop-ship POST: the number the drop ship PO NetSuite
 // made ends up with. NetSuite's own, with the ending when one was asked for,
 // and FleetSuite's next PO number once FleetSuite's own numbers is on
-// (src/lib/books/own-numbers.ts), with what became of that number kept.
+// (src/lib/books/own-numbers.ts), with what became of that number kept. And
+// the date the PO's row in FleetSuite takes, the day in O'Fallon.
 // NetSuite and the database are stand-ins. Made-up data.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -96,6 +97,7 @@ beforeEach(() => {
 afterEach(() => {
   setNumberKeeper(undefined);
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 const answer = async (res: Response) => ({ status: res.status, body: await res.json() });
@@ -175,5 +177,16 @@ describe("a drop ship PO's number", () => {
     expect(netsuite.setPurchaseOrderNumber).toHaveBeenCalledWith('9101', 'PO2301-ACME');
     expect(res.body.dropShips[0].purchaseOrderNumber).toBe('PO2301-ACME');
     expect(res.body.warnings).toEqual(["FleetSuite couldn't give PO PO2301 its own number, so it keeps NetSuite's."]);
+  });
+});
+
+describe("a drop ship PO's row in FleetSuite", () => {
+  it("is dated the day in O'Fallon until the sync brings NetSuite's, the evening of the 31st too", async () => {
+    keeper({ off: true });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 10:30 PM CDT on October 31: UTC is on November 1 already.
+    vi.setSystemTime(new Date('2026-11-01T03:30:00Z'));
+    expect((await post()).status).toBe(200);
+    expect(state.upserted[0]).toMatchObject({ netsuite_id: '9101', trandate: '2026-10-31', drop_ship: true });
   });
 });

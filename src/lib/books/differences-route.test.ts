@@ -84,6 +84,18 @@ describe('Differences vs NetSuite: a month closed in the books', () => {
     expect((await get()).body.closed).toBe(false);
   });
 
+  it("opens on last month as O'Fallon's calendar has it, on the evening of a month's last day too", async () => {
+    // 9 PM CDT on March 31: UTC is in April already, which hasn't started in O'Fallon.
+    vi.setSystemTime(new Date('2027-04-01T02:00:00Z'));
+    expect((await get()).body).toMatchObject({ month: '2027-02-01' });
+    expect((await get('month=2027-03')).body).toMatchObject({ month: '2027-03-01' });
+    expect((await get('month=2027-04')).body).toMatchObject({ month: '2027-02-01' });
+    // From midnight it's April.
+    vi.setSystemTime(new Date('2027-04-01T05:30:00Z'));
+    expect((await get()).body).toMatchObject({ month: '2027-03-01' });
+    expect((await get('month=2027-04')).body).toMatchObject({ month: '2027-04-01' });
+  });
+
   it("says what failed when it can't read whether the month is closed", async () => {
     errors = { gl_periods: { message: 'gl_periods is down' } };
     expect(await get()).toEqual({ status: 500, body: { error: 'gl_periods is down' } });

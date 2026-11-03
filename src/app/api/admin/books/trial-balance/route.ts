@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
 import { fetchAllRows } from '@/lib/fetch-all';
-import { BOOKS_GL_SYNC, COPY_FROM, copyNetSuiteGl, monthOfDate } from '@/lib/books/netsuite-gl';
+import { BOOKS_GL_SYNC, COPY_FROM, copyNetSuiteGl } from '@/lib/books/netsuite-gl';
+import { centralLastMonth, centralMonth } from '@/lib/central-day';
 import { lastMonth, monthStatuses, START, trialBalance, type TbAccount, type TbData } from '@/lib/books/trial-balance';
 
 export const dynamic = 'force-dynamic';
@@ -55,17 +56,13 @@ export async function GET(req: NextRequest) {
     copied: t.copied ?? [],
   };
 
-  const currentMonth = monthOfDate(new Date().toISOString().slice(0, 10))!;
-  const through = lastMonth(data, currentMonth);
+  const through = lastMonth(data, centralMonth());
   const months = monthStatuses(data, through);
 
   // Default to last month, the newest one NetSuite may already have closed.
   const askedMonth = params.get('month');
   const fromParam = askedMonth && /^\d{4}-\d{2}$/.test(askedMonth) ? `${askedMonth}-01` : null;
-  const lastCalendar = new Date();
-  lastCalendar.setUTCDate(1);
-  lastCalendar.setUTCMonth(lastCalendar.getUTCMonth() - 1);
-  const previous = monthOfDate(lastCalendar.toISOString().slice(0, 10))!;
+  const previous = centralLastMonth();
   const month = askedMonth === START
     ? START
     : fromParam && fromParam >= COPY_FROM && fromParam <= through ? fromParam

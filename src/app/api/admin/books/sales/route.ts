@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireBooks } from '@/lib/api-auth';
 import { createServiceClient } from '@/lib/supabase-service';
-import { BOOKS_GL_SYNC, COPY_FROM, monthOfDate } from '@/lib/books/netsuite-gl';
+import { BOOKS_GL_SYNC, COPY_FROM, monthsBetween } from '@/lib/books/netsuite-gl';
+import { centralMonth } from '@/lib/central-day';
 import { monthParam } from '@/lib/books/report-data';
 import { salesReport, type SalesLine } from '@/lib/books/sales-report';
 
@@ -36,7 +37,8 @@ export async function GET(req: NextRequest) {
   const company = asked && codes.includes(asked) ? asked : codes.includes('BMG') ? 'BMG' : codes[0];
   if (!company) return NextResponse.json({ error: 'No companies set up' }, { status: 500 });
 
-  const months = monthsThrough(new Date());
+  // Every month from the start of the copy through this one in O'Fallon.
+  const months = monthsBetween(COPY_FROM, centralMonth());
   const through = months[months.length - 1];
   const last = months.length > 1 ? months[months.length - 2] : through;
   const to = monthParam(params.get('to'), through) ?? last;
@@ -56,17 +58,4 @@ export async function GET(req: NextRequest) {
     ...salesReport((lines.data ?? []) as SalesLine[]),
     lastCopy: copy.data ? { at: copy.data.updated_at, error: copied?.error ?? null } : null,
   });
-}
-
-/** Every month from the start of the copy through this one, as YYYY-MM-01. */
-function monthsThrough(now: Date): string[] {
-  const current = monthOfDate(now.toISOString().slice(0, 10))!;
-  const out: string[] = [];
-  for (let m = COPY_FROM; m <= current;) {
-    out.push(m);
-    const d = new Date(`${m}T00:00:00Z`);
-    d.setUTCMonth(d.getUTCMonth() + 1);
-    m = d.toISOString().slice(0, 10);
-  }
-  return out;
 }

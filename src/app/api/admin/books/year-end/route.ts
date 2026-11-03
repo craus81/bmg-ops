@@ -5,7 +5,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { booksErrorFrom } from '@/lib/books/journal';
-import { centralDate } from '@/lib/books/mistake-checks';
+import { centralDate } from '@/lib/central-day';
 import { PLANNED_LIVE_FROM } from '@/lib/books/opening-balances';
 import { closeYearRefusal, reopenYearRefusal, yearView, REASON_MAX } from '@/lib/books/year-end';
 import { booksCompanies, pickYear, readYear } from '@/lib/books/year-end-data';

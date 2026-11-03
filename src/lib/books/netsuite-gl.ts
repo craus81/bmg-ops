@@ -3,6 +3,7 @@ import { isSuiteqlError, suiteqlQuery, suiteqlQueryAll } from '@/lib/netsuite';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { writeSyncStateCursor } from '@/lib/ledger/write';
 import { isoDate } from '@/lib/financials-data';
+import { centralMonth } from '@/lib/central-day';
 import type { BooksCompany } from './journal';
 
 /**
@@ -779,7 +780,7 @@ export async function copyNetSuiteGl(
     const differing = monthsThatDiffer(totals.months, ((copiedTotals.data as any)?.copied ?? []) as MonthRow[]);
     result.monthsDiffering = differing;
 
-    const currentMonth = monthOfDate(new Date(now()).toISOString().slice(0, 10))!;
+    const currentMonth = centralMonth(new Date(now()));
     const lastMonth = totals.months.reduce((max, r) => (r.month > max ? r.month : max), currentMonth);
     const allMonths = monthsBetween(COPY_FROM, lastMonth);
     result.monthsChecked = allMonths.length;

@@ -2047,6 +2047,10 @@ months picked with From and To, as NetSuite's reports do (the owner chose
 any range over a fixed twelve months the same day); the balance sheet and
 trial balance are at the To month's end. Months run from January 2025 to
 the latest month either side has, and the page opens on last month.
+"Last month" and "this month", here and on every Books page, are O'Fallon's:
+Central time's calendar (`centralMonth` and `centralLastMonth` in
+`src/lib/central-day.ts`), so on the evening of a month's last day, when
+UTC is in the next month already, the page still opens on the month before.
 
 FleetSuite's side is its journal: migration 396's `gl_books_totals` sums
 one company's `gl_lines` per account and month by each entry's date, keyed
@@ -3119,8 +3123,11 @@ first row in `po_receipts`, as one tap of Receive is one receipt: each item
 and how many, at the price FleetSuite's copy of the PO has for its line,
 with NetSuite's id for the item receipt when NetSuite took it, or what
 NetSuite said when it didn't. It's dated as FleetSuite dated it for
-NetSuite, and kept for BMG, as FleetSuite's copy of a PO doesn't say the
-company.
+NetSuite: the day of the Receive in O'Fallon (`centralDate` in
+`src/lib/central-day.ts`). Through November 2, 2026, it was the day in
+UTC, so a Receive after 7 PM Central (6 PM in winter) took the next day's
+date, in NetSuite and in the copy alike. It's kept for BMG, as FleetSuite's copy
+of a PO doesn't say the company.
 
 Saving never stops a bill or a Receive: a copy that can't be saved is
 logged (`[books] own copy of …`) and the work goes on. A copy is kept once;
@@ -3207,8 +3214,6 @@ bills"). The daily check tells the super admins when one stops matching
 - There's no history: copies start the day part 27 shipped.
 - FleetSuite's copy of a PO doesn't say the company, so a Parts Mail bill
   and a receipt are kept for BMG, and one for 1084 differs on its company.
-- Receiving dates a receipt by the day in UTC, which in the evening, Central
-  time, is already the next day, and NetSuite takes that date.
 - Parts Mail's own claim on its bills doesn't ask NetSuite for the bill
   before making one, and isn't taken over when it's left behind.
 

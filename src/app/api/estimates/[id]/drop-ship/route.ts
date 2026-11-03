@@ -14,6 +14,7 @@ import { cleanPoSuffix, withPoSuffix } from '@/lib/po-number';
 import { ownNumberFor } from '@/lib/books/own-numbers';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
 import { logAudit } from '@/lib/audit';
+import { centralDate } from '@/lib/central-day';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -243,7 +244,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const shipToChanged = !sameShipTo(shipTo, shipToFromRecord(before.record));
   const suffix = cleanPoSuffix(body.poSuffix);
   const vendorName = body.vendorName?.trim() || null;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = centralDate();
   const made: any[] = [];
 
   for (const g of poIds.values()) {

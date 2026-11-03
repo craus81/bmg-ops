@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { centralDate } from '@/lib/central-day';
 import { billedCertWarning } from '@/lib/customer-tax-exempt';
 import { roundCentsHalfEven } from '@/lib/estimate-totals';
 import { KNOWN_LOCATION_IDS, pickInvoiceLocation } from '@/lib/invoice-location';
@@ -158,10 +159,8 @@ export interface OwnInvoice extends Omit<OwnInvoiceInput, 'lines'> {
 const DAY_MS = 86_400_000;
 const norm = (s: string | null | undefined) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
-/** The America/Chicago calendar date (YYYY-MM-DD) for an instant. */
-export function chicagoDate(at: Date = new Date()): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(at);
-}
+/** The America/Chicago calendar date (YYYY-MM-DD) for an instant: centralDate (src/lib/central-day.ts) under the name the money routes import. */
+export const chicagoDate = centralDate;
 
 /** 'YYYY-MM-DD' plus whole days. */
 export function addDays(date: string, days: number): string {

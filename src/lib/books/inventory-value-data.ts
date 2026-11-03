@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { centralDate } from '@/lib/central-day';
 import { BOOKS_INVOICE_POSTING, type InvoicePostingResult } from './invoice-posting';
 import { BOOKS_STOCK_SYNC, type StockCopyResult } from './netsuite-stock';
 import { COPY_FROM, monthOfDate } from './netsuite-gl';
@@ -58,7 +59,7 @@ export function valueMonth(params: URLSearchParams, today: string): { month: str
 export async function loadInventoryValue(
   service: SupabaseClient,
   params: URLSearchParams,
-  today = new Date().toISOString().slice(0, 10),
+  today = centralDate(),
 ): Promise<LoadedInventoryValue | { error: string }> {
   const { month, through } = valueMonth(params, today);
   const [read, companies, copy, posting] = await Promise.all([

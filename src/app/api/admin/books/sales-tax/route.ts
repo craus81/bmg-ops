@@ -7,7 +7,7 @@ import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { monthAfter } from '@/lib/books/bank-reconciliation';
 import { monthText } from '@/lib/books/differences';
-import { centralDate } from '@/lib/books/mistake-checks';
+import { centralDate } from '@/lib/central-day';
 import { COPY_FROM } from '@/lib/books/netsuite-gl';
 import { dayText } from '@/lib/books/own-invoice-check';
 import { netsuiteCheck } from '@/lib/books/report-detail';

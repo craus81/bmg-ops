@@ -9,6 +9,7 @@ import { mapReceiptLines, type NsPoLine } from '@/lib/po-receiving';
 import { normalizeItemNumber, isOpenPoStatus } from '@/lib/vendor-po-sync';
 import { computePartsReadiness } from '@/lib/parts-readiness';
 import { saveOwnReceipt } from '@/lib/books/own-receipts';
+import { centralDate } from '@/lib/central-day';
 
 const supabase = createServiceClient();
 
@@ -147,8 +148,9 @@ export async function POST(req: NextRequest) {
   }
 
   // ── NetSuite item receipt attempt — failure is a worklist row, never a
-  // blocked dock. ──
-  const today = new Date().toISOString().slice(0, 10);
+  // blocked dock. Dated the day in O'Fallon, which an evening receipt's UTC
+  // date isn't (src/lib/central-day.ts). ──
+  const today = centralDate();
   let nsError: string | null = null;
   let nsPosted = false;
   let receiptId: string | null = null;

@@ -7,7 +7,7 @@ import { validateBody, z } from '@/lib/validate';
 import { logAudit } from '@/lib/audit';
 import { readCompanies, type CompanyRow } from '@/lib/books/going-live';
 import { BOOKS_COMPANIES, BooksError, setPeriodStatus, type BooksCompany } from '@/lib/books/journal';
-import { centralDate } from '@/lib/books/mistake-checks';
+import { centralDate } from '@/lib/central-day';
 import { closeRefusal, monthRows, readMonthFacts, reopenRefusal } from '@/lib/books/months';
 import { PLANNED_LIVE_FROM } from '@/lib/books/opening-balances';
 import { closedYears, readYears } from '@/lib/books/year-end';

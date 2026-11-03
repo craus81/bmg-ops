@@ -10,6 +10,7 @@ import { cleanPoSuffix, withPoSuffix } from '@/lib/po-number';
 import { locationIdForName } from '@/lib/invoice-location';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
 import { loadGenericItems } from '@/lib/generic-lines-server';
+import { centralDate } from '@/lib/central-day';
 
 const supabase = createServiceClient();
 
@@ -193,7 +194,8 @@ export async function POST(req: NextRequest) {
   const soList = projects.map(p => p.netsuite_so_number).filter(Boolean).join(', ');
 
   const vendorName = body.vendorName?.trim() || (requests as any[]).find(r => r.vendor_name)?.vendor_name || null;
-  const today = new Date().toISOString().slice(0, 10);
+  // The day in O'Fallon, as po-add.ts reads "dated today or yesterday" (src/lib/central-day.ts).
+  const today = centralDate();
   const memo = body.memo?.trim() || `FleetSuite purchase requests${soList ? ` — for SO ${soList}` : ''}`;
 
   // Anything thrown between claim and PO left rows permanently "being
