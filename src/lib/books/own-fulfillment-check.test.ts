@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   checkOwnFulfillment,
   checkOwnFulfillments,
+  checkTaken,
   costAt,
   eachText,
   fulfilLists,
@@ -9,6 +10,7 @@ import {
   type FulfilPairData,
   type NetsuiteFulfilLineData,
   type OwnFulfilLineData,
+  type TakenWords,
 } from './own-fulfillment-check';
 
 const LADDER = '9001';
@@ -814,6 +816,60 @@ describe('where each line was taken from', () => {
       before: [...BEFORE, { item_id: '9500', location_id: OFALLON, quantity: '1', value: '5.00' }],
     }));
     expect(field(taken, 'location')).toMatchObject({ fleetsuite: "O'Fallon and Wentzville", same: true });
+  });
+});
+
+describe('the same check the other way round, for a document that puts stock back', () => {
+  // A credit memo, as checkTaken words one that puts stock back on the shelf; its lines can each say where.
+  const BACK: TakenWords = {
+    theirs: "NetSuite's credit memo",
+    the: 'the credit memo',
+    notOnCopy: "FleetSuite's copy didn't credit it with Back to stock on",
+    linesUnknown: 'what the copy put back',
+    whereUnknown: "FleetSuite didn't know where the credit memo put stock back.",
+    whereDiffers: (ours, theirs) => `FleetSuite put stock back at ${ours}, and NetSuite at ${theirs}.`,
+    back: true,
+  };
+  // $100 a rack and $10 a bin at both places just before.
+  const before = [LADDER, BINS].flatMap((item) => [OFALLON, WENTZVILLE].map((location_id) => ({
+    item_id: item, location_id, quantity: '10', value: item === LADDER ? '1000.00' : '100.00',
+  })));
+  const back = (lines: OwnFulfilLineData[], netsuite: NetsuiteFulfilLineData[], cents: number) => checkTaken({
+    own: { netsuite_id: '8001', date: '2026-10-19', location_id: null, unknowns: [], made_at: MADE_AT, lines },
+    netsuite: { number: 'CM8001', type: 'CustCred', date: '2026-10-19', gone: false, lines: netsuite },
+    netsuite_gl: {
+      posting_month: '2026-10-01',
+      entry: [
+        { account_id: '190', debit: (cents / 100).toFixed(2), credit: '0.00' },
+        { account_id: '580', debit: '0.00', credit: (cents / 100).toFixed(2) },
+      ],
+    },
+    before,
+  }, LISTS, SINCE, BACK);
+
+  it('says how many each side put back at each place when that differs', () => {
+    const c = back(
+      [ownLine(LADDER, 2, { location_id: OFALLON }), ownLine(LADDER, 1, { line_no: 2, sales_order_line_id: '2', location_id: WENTZVILLE })],
+      [nsLine('1', LADDER, 1, '100.00', true, OFALLON), nsLine('2', LADDER, 2, '200.00')],
+      30000,
+    );
+    expect(c).toMatchObject({ status: 'differs', fleetsuiteCost: 30000, netsuiteCost: 30000 });
+    expect(c.items[0].why).toBe("FleetSuite put back 2 at O'Fallon and 1 at Wentzville, and NetSuite 1 at O'Fallon and 2 at Wentzville.");
+    expect(c.summary).toBe("Location: FleetSuite put back 2 of LDR-24 at O'Fallon and 1 at Wentzville, and NetSuite 1 at O'Fallon and 2 at Wentzville.");
+  });
+
+  it('says where each side put an item back, and how many other items differ on it', () => {
+    const c = back(
+      [ownLine(LADDER, 1, { location_id: OFALLON }), ownLine(BINS, 1, { line_no: 2, sales_order_line_id: '2', location_id: WENTZVILLE })],
+      [nsLine('1', LADDER, 1, '100.00'), nsLine('2', BINS, 1, '10.00', true, OFALLON)],
+      11000,
+    );
+    expect(c.items.map((i) => i.why)).toEqual([
+      "FleetSuite put it back at O'Fallon, and NetSuite at Wentzville.",
+      "FleetSuite put it back at Wentzville, and NetSuite at O'Fallon.",
+    ]);
+    expect(c.fields.find((f) => f.field === 'location')!.why)
+      .toBe("FleetSuite put LDR-24 back at O'Fallon, and NetSuite at Wentzville. 1 other item differs on where it was put back too.");
   });
 });
 

@@ -7,14 +7,16 @@ import type { OwnPostingView } from '@/lib/books/own-posting-view';
 import { ownBooksLinkText, ownBooksText, ownBooksWhy, type OwnCopyStatus } from '@/lib/books/own-posting-text';
 
 /**
- * What the books hold for Books' own copies of fulfillments, receipts, bills
- * and invoices' cost, on each one's page on Own fulfillments, Own receipts,
- * Own bills and Own invoices (migrations 456 and 517,
- * src/lib/books/own-posting-view.ts, docs/books.md "Posting FleetSuite's own
- * fulfillments, receipts and bills" and "Posting FleetSuite's own invoices'
- * cost"): the entry that stands, and the copy's entry next to NetSuite's. The
- * lists' chip and count are in src/lib/books/own-posting-text.ts. Open to
- * whoever opens the books, as the pages are.
+ * What the books hold for Books' own copies of fulfillments, receipts, bills,
+ * invoices' cost and the stock credit memos put back, on each one's page on
+ * Own fulfillments, Own receipts, Own bills, Own invoices and Own credit
+ * memos (migrations 456, 517 and 519, src/lib/books/own-posting-view.ts,
+ * docs/books.md "Posting FleetSuite's own fulfillments, receipts and bills",
+ * "Posting FleetSuite's own invoices' cost" and "Posting the stock a credit
+ * memo puts back"): the entry that stands, and the copy's entry next to
+ * NetSuite's. The lists' chip and count are in
+ * src/lib/books/own-posting-text.ts. Open to whoever opens the books, as the
+ * pages are.
  */
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });

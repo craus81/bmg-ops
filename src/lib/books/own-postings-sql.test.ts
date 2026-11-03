@@ -631,9 +631,9 @@ describe("the posting job, with Books' own fulfillments, receipts and bills", ()
       [BOOKS_STOCK_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_STOCK_SYNC} failed`],
       [BOOKS_BILLS_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_BILLS_SYNC} failed`],
       [BOOKS_GL_SYNC, `Reading how far the copies of NetSuite had come: ${BOOKS_GL_SYNC} failed`],
-      ['gl_own_fulfillment_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments and invoices for Feb 2025: gl_own_fulfillment_pairs failed"],
-      ['gl_own_stock_accounts', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments and invoices for Feb 2025: gl_own_stock_accounts failed"],
-      ['gl_own_receipt_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments and invoices for Mar 2025: gl_own_receipt_pairs failed"],
+      ['gl_own_fulfillment_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments, invoices and credit memos for Feb 2025: gl_own_fulfillment_pairs failed"],
+      ['gl_own_stock_accounts', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments, invoices and credit memos for Feb 2025: gl_own_stock_accounts failed"],
+      ['gl_own_receipt_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments, invoices and credit memos for Mar 2025: gl_own_receipt_pairs failed"],
       ['gl_own_bill_pairs', "Reading Books' own copies of BMG's bills for Mar 2025: gl_own_bill_pairs failed"],
     ]) {
       failing.add(read);

@@ -67,7 +67,7 @@ const WORKED_OUT = [
     + 'or the amount, and any amount of its own on the credit item.',
   "Sales tax given back at 8.488%, the invoice's own rate, on the lines the invoice taxed, each line's rounded to the cent.",
   "Its location is the invoice's: NetSuite makes the credit memo from the invoice.",
-  "SHELF-1 goes back on the shelf: the stock and its cost post from NetSuite's credit memo, under Stock and cost.",
+  "SHELF-1 goes back on the shelf: what that's worth posts apart from the credit, as NetSuite's credit memo's cost lines do, under What it put back on the shelf.",
 ];
 
 describe("an own credit memo next to NetSuite's", () => {
@@ -285,7 +285,7 @@ describe("an own credit memo next to NetSuite's", () => {
     const light = ownLine({ line_no: 3, invoice_line: 5, item_id: '57', item_number: 'LIGHT-2', rate: '100.0000', amount: '100.00', tax: '8.49' });
     const two = check({ own: own({ lines: [ownLine(), LABOR_LINE, light] }) });
     expect(two.backToStock).toBe(2);
-    expect(two.workedOut[4]).toBe("SHELF-1 and LIGHT-2 go back on the shelf: the stock and its cost post from NetSuite's credit memo, under Stock and cost.");
+    expect(two.workedOut[4]).toBe("SHELF-1 and LIGHT-2 go back on the shelf: what that's worth posts apart from the credit, as NetSuite's credit memo's cost lines do, under What it put back on the shelf.");
 
     const onCredit = (lineNo: number, amount: string) => ownLine({
       line_no: lineNo, invoice_line: lineNo === 1 ? 1 : null, item_id: '900', item_number: 'CREDIT', quantity: null, rate: null, amount,

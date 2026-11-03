@@ -6,11 +6,14 @@ import type { FulfilItemPair, FulfilPairData, FulfilPairsData, OwnFulfillmentChe
 import type { OwnReceiptCheck, ReceiptItemPair, ReceiptPairData, ReceiptPairsData } from './own-receipt-check';
 import type { AdjustPairData, AdjustPairsData, OwnAdjustmentCheck } from './own-adjustment-check';
 import type { InvoiceCostPairData, InvoiceCostPairsData, OwnInvoiceCostCheck } from './own-invoice-cost-check';
+import type { CreditCostPairData, CreditCostPairsData, OwnCreditCostCheck } from './own-credit-cost-check';
 import {
   ADJUSTMENT_BOOKS,
+  CREDIT_COST_BOOKS,
   FULFILLMENT_BOOKS,
   INVOICE_COST_BOOKS,
   OWN_ADJUSTMENT_RULE,
+  OWN_CREDIT_COST_RULE,
   OWN_FULFILLMENT_RULE,
   OWN_INVOICE_COST_RULE,
   OWN_RECEIPT_RULE,
@@ -87,6 +90,16 @@ const invoiceDoc = (over: Partial<StockDocument> = {}): StockDocument => ({
   ...over,
 });
 
+/**
+ * NetSuite's credit memo CM7401's cost lines: the ladder rack it put back on the shelf, its $151.67 onto inventory and
+ * out of 58500.
+ */
+const creditDoc = (over: Partial<StockDocument> = {}): StockDocument => ({
+  netsuite_id: '7401', type: 'CustCred', number: 'CM7401', date: '2026-10-26', posting_month: '2026-10-01', companies: ['BMG'],
+  lines: [gl('4', '585', -15167, 'Acme Fleet'), gl('5', '190', 15167, 'Acme Fleet')],
+  ...over,
+});
+
 /** The document as the stock rule works it out for the month's posting run. */
 const worked = (doc: StockDocument) => workOutStockMonth({ documents: [doc] }, { company: 'BMG', chart: CHART }).documents[0];
 
@@ -124,10 +137,13 @@ const receipt = (over: Partial<OwnReceiptCheck> = {}): OwnReceiptCheck => ({
 const FROM_5002: LearnedCost = { cost: '585', from: { netsuite_id: '5002', number: 'IF5002', date: '2026-09-10' }, netsuite: '585' };
 /** INV7290, earlier in October, sold ladder racks without a sales order and put their cost in 58500, as INV7301 does. */
 const FROM_7290: LearnedCost = { cost: '585', from: { netsuite_id: '7290', number: 'INV7290', date: '2026-10-02', type: 'CustInvc' }, netsuite: '585' };
+/** INV7301 sold the ladder rack CM7401 gives back, and put its cost in 58500; CM7401 takes it back out of there. */
+const FROM_7301: LearnedCost = { cost: '585', from: { netsuite_id: '7301', number: 'INV7301', date: '2026-10-21', type: 'CustInvc' }, netsuite: '585' };
 const ACCOUNTS: OwnStockAccountsData = {
   items: { [LADDER]: '190', [BINS]: '190', [HOOKS]: '190' },
   fulfillments: { 7001: { [LADDER]: FROM_5002 } },
   invoices: { 7301: { [LADDER]: FROM_7290 } },
+  credits: { 7401: { [LADDER]: FROM_7301 } },
   usual_cost: '580',
   received: [{ account: '210', documents: 12 }],
 };
@@ -145,8 +161,17 @@ const invoiceCost = (over: Partial<OwnInvoiceCostCheck> = {}): OwnInvoiceCostChe
   unknowns: [], items: [LADDERS], ...over,
 } as OwnInvoiceCostCheck);
 
+/** One ladder rack Books' own copy of CM7401 put back on the shelf, worth $151.67. */
+const RACK_BACK = { ...shipped('LDR-24', LADDER, 15167), fleetsuite: { ...shipped('LDR-24', LADDER, 15167).fleetsuite!, quantity: 1 } };
+
+/** Books' own copy of CM7401 as an own credit memo's stock check checked it: only what the pick reads matters here. */
+const creditCost = (over: Partial<OwnCreditCostCheck> = {}): OwnCreditCostCheck => ({
+  netsuiteId: '7401', number: 'CM7401', date: '2026-10-26', customer: 'Acme Fleet', status: 'matches', summary: "Matches NetSuite's credit memo.",
+  unknowns: [], items: [RACK_BACK], ...over,
+} as OwnCreditCostCheck);
+
 const copies = (over: Partial<OwnStockCopies> = {}): OwnStockCopies => ({
-  fulfillments: new Map(), receipts: new Map(), adjustments: new Map(), invoiceCosts: new Map(), accounts: ACCOUNTS, ...over,
+  fulfillments: new Map(), receipts: new Map(), adjustments: new Map(), invoiceCosts: new Map(), creditCosts: new Map(), accounts: ACCOUNTS, ...over,
 });
 
 /** What the books post for a fulfillment, given Books' copy of it. */
@@ -160,6 +185,10 @@ const pickReceipt = (check: OwnReceiptCheck | null = receipt(), doc = receiptDoc
 /** What the books post for an invoice's cost lines, given Books' own copy of the invoice. */
 const pickInvoice = (check: OwnInvoiceCostCheck | null = invoiceCost(), doc = invoiceDoc(), accounts = ACCOUNTS, company = 'BMG') =>
   ownStockPick(worked(doc), copies({ invoiceCosts: new Map(check ? [[check.netsuiteId, check]] : []), accounts }), { company, names: NAMES });
+
+/** What the books post for the stock a credit memo put back, given Books' own copy of the credit memo. */
+const pickCredit = (check: OwnCreditCostCheck | null = creditCost(), doc = creditDoc(), accounts = ACCOUNTS, company = 'BMG') =>
+  ownStockPick(worked(doc), copies({ creditCosts: new Map(check ? [[check.netsuiteId, check]] : []), accounts }), { company, names: NAMES });
 
 /** What the books post for an inventory adjustment, given the Inventory Adjust that made it. */
 const pickAdjust = (check: OwnAdjustmentCheck | null = adjustment(), doc = adjustDoc(), company = 'BMG') =>
@@ -180,15 +209,16 @@ const SAID_RACKS = "Each item's cost comes out of its asset account and goes to 
 const SHIP_DIFFERS = "FleetSuite's own copy matches NetSuite's fulfillment, but its entry doesn't match NetSuite's, so the books post NetSuite's: ";
 
 describe('the rules and the accounts', () => {
-  it("is a fulfillment's, an item receipt's, an adjustment's or an invoice's cost lines' own rule, and no other document's", () => {
+  it("is a fulfillment's, an item receipt's, an adjustment's, or an invoice's or credit memo's cost lines' own rule, and no other document's", () => {
     expect(ownStockRule('ItemShip')).toBe(OWN_FULFILLMENT_RULE);
     expect(ownStockRule('ItemRcpt')).toBe(OWN_RECEIPT_RULE);
     expect(ownStockRule('InvAdjst')).toBe(OWN_ADJUSTMENT_RULE);
     expect(ownStockRule('CustInvc')).toBe(OWN_INVOICE_COST_RULE);
-    expect([OWN_FULFILLMENT_RULE, OWN_RECEIPT_RULE, OWN_ADJUSTMENT_RULE, OWN_INVOICE_COST_RULE])
-      .toEqual(['own_fulfillment@1', 'own_receipt@1', 'own_adjustment@1', 'own_invoice_cost@1']);
+    expect(ownStockRule('CustCred')).toBe(OWN_CREDIT_COST_RULE);
+    expect([OWN_FULFILLMENT_RULE, OWN_RECEIPT_RULE, OWN_ADJUSTMENT_RULE, OWN_INVOICE_COST_RULE, OWN_CREDIT_COST_RULE])
+      .toEqual(['own_fulfillment@1', 'own_receipt@1', 'own_adjustment@1', 'own_invoice_cost@1', 'own_credit_memo_cost@1']);
     expect(ownStockRule('InvTrnfr')).toBeNull();
-    expect(ownStockRule('CustCred')).toBeNull();
+    expect(ownStockRule('Build')).toBeNull();
     expect(ownStockRule('VendBill')).toBeNull();
   });
 
@@ -247,6 +277,8 @@ describe('the rules and the accounts', () => {
     expect(RECEIPT_BOOKS).toEqual({ fn: 'gl_stock_postings', list: 'documents', sourceType: 'item_receipt', ownRule: 'own_receipt@1' });
     expect(ADJUSTMENT_BOOKS).toEqual({ fn: 'gl_stock_postings', list: 'documents', sourceType: 'inventory_adjustment', ownRule: 'own_adjustment@1' });
     expect(INVOICE_COST_BOOKS).toEqual({ fn: 'gl_stock_postings', list: 'documents', sourceType: 'invoice_cost', ownRule: 'own_invoice_cost@1' });
+    // A credit memo's cost lines are filed as an invoice's are.
+    expect(CREDIT_COST_BOOKS).toEqual({ fn: 'gl_stock_postings', list: 'documents', sourceType: 'invoice_cost', ownRule: 'own_credit_memo_cost@1' });
   });
 });
 
@@ -647,6 +679,97 @@ describe("what the books post for an invoice's cost, made without a sales order"
   });
 });
 
+describe('what the books post for the stock a credit memo FleetSuite made puts back', () => {
+  const CREDIT_DIFFERS = "FleetSuite's own copy matches NetSuite's credit memo, but its entry doesn't match NetSuite's, so the books post NetSuite's: ";
+  const LEAD = "Each item's cost goes back onto its asset account and comes out of the cost account NetSuite's last fulfillment, invoice or credit memo "
+    + 'of it used: ';
+  const RACK_BACK_ASSET = line(`own:${LADDER}:asset`, '190', 15167, 'Acme Fleet · LDR-24', 'LDR-24');
+  const RACK_BACK_COST = line(`own:${LADDER}:cost`, '585', -15167, 'Acme Fleet · LDR-24', 'LDR-24');
+
+  it("posts the copy's entry, each item put back onto its asset account and out of the cost account NetSuite last used for it", () => {
+    const entry = { lines: [RACK_BACK_ASSET, RACK_BACK_COST], date: '2026-10-26' };
+    expect(pickCredit()).toEqual({ entry, why: null, own: entry, differs: null, learned: [], costs: `${LEAD}58500 Cost of Goods Sold - Racks for it.` });
+    // Dated as NetSuite's, in the month it's booked into.
+    expect(pickCredit(creditCost({ date: '2026-11-02' }), creditDoc({ date: '2026-11-02' }))?.entry?.date).toBe('2026-10-31');
+  });
+
+  it("learns each item's cost account from the credit memo's own, not from an invoice's or fulfillment's of the same id", () => {
+    const accounts = { ...ACCOUNTS, fulfillments: { 7401: { [LADDER]: FROM_5002 } }, invoices: { 7401: { [LADDER]: FROM_7290 } }, credits: {} };
+    const p = pickCredit(creditCost(), creditDoc(), accounts);
+    expect(p?.entry).toBeNull();
+    expect(p?.own?.lines.map((l) => [l.account, l.cents])).toEqual([['190', 15167], ['580', -15167]]);
+    expect(p?.costs).toBe("FleetSuite hadn't seen LDR-24 shipped, sold or credited before, so its cost comes out of 58000 Cost of Goods Sold, "
+      + 'where most fulfillments put theirs.');
+    expect(p?.differs).toBe('it posts differently to 58000 Cost of Goods Sold and 58500 Cost of Goods Sold - Racks');
+  });
+
+  it("posts NetSuite's when the copy took an item's cost out of another account, naming the document it was learned from", () => {
+    const doc = creditDoc({ lines: [gl('4', '580', -15167), gl('5', '190', 15167)] });
+    const sold = pickCredit(creditCost(), doc, { ...ACCOUNTS, credits: { 7401: { [LADDER]: { ...FROM_7301, netsuite: '580' } } } });
+    const differs = "FleetSuite took LDR-24's $151.67 back out of 58500 Cost of Goods Sold - Racks, where NetSuite's last invoice of it, INV7301 on Oct 21, 2026, "
+      + 'put it, and NetSuite took it out of 58000 Cost of Goods Sold';
+    expect(sold).toEqual({
+      entry: null,
+      why: `${CREDIT_DIFFERS}${differs}.`,
+      own: { lines: [RACK_BACK_ASSET, RACK_BACK_COST], date: '2026-10-26' },
+      differs,
+      learned: ["From now on FleetSuite's own credit memos take LDR-24's cost out of 58000, as NetSuite did here."],
+      costs: `${LEAD}58500 Cost of Goods Sold - Racks for it.`,
+    });
+    // Learned from an earlier credit memo, which took it back out; or from a fulfillment, which put it there.
+    const credited = { cost: '585', from: { netsuite_id: '7390', number: 'CM7390', date: '2026-10-12', type: 'CustCred' }, netsuite: '580' };
+    expect(pickCredit(creditCost(), doc, { ...ACCOUNTS, credits: { 7401: { [LADDER]: credited } } })?.differs)
+      .toContain("where NetSuite's last credit memo of it, CM7390 on Oct 12, 2026, took it back out, and NetSuite took it out of 58000 Cost of Goods Sold");
+    const shippedFirst = { ...FROM_5002, from: { ...FROM_5002.from!, type: 'ItemShip' }, netsuite: '580' };
+    expect(pickCredit(creditCost(), doc, { ...ACCOUNTS, credits: { 7401: { [LADDER]: shippedFirst } } })?.differs)
+      .toContain("where NetSuite's last fulfillment of it, IF5002 on Sep 10, 2026, put it, and NetSuite took it out of");
+  });
+
+  it("posts NetSuite's when an item it hadn't seen shipped, sold or credited came out of another account than most fulfillments use", () => {
+    const bins = { ...shipped('BIN-10', BINS, 2000) };
+    const doc = creditDoc({ lines: [gl('4', '580', -2000), gl('5', '190', 2000)] });
+    const accounts = { ...ACCOUNTS, usual_cost: '585', credits: { 7401: { [BINS]: { cost: null, from: null, netsuite: '580' } } } };
+    const p = pickCredit(creditCost({ items: [bins] }), doc, accounts);
+    expect(p?.why).toBe(`${CREDIT_DIFFERS}FleetSuite hadn't seen BIN-10 shipped, sold or credited before, so it took its $20.00 back out of `
+      + '58500 Cost of Goods Sold - Racks, where most fulfillments put theirs, and NetSuite took it out of 58000 Cost of Goods Sold.');
+    expect(p?.learned).toEqual(["From now on FleetSuite's own credit memos take BIN-10's cost out of 58000, as NetSuite did here."]);
+    expect(p?.costs).toBe("FleetSuite hadn't seen BIN-10 shipped, sold or credited before, so its cost comes out of 58500 Cost of Goods Sold - Racks, "
+      + 'where most fulfillments put theirs.');
+  });
+
+  it("posts NetSuite's, saying why, when the copy doesn't match, or its entry can't be worked out", () => {
+    expect(pickCredit(creditCost({ status: 'differs' })))
+      .toEqual({ ...NOTHING, why: "FleetSuite's own copy differs from NetSuite's credit memo, so the books post NetSuite's." });
+    expect(pickCredit(creditCost({ status: 'waiting' }))?.why)
+      .toBe("FleetSuite's own copy is waiting for NetSuite's credit memo to be copied, so the books post NetSuite's for now.");
+    expect(pickCredit(creditCost({ status: 'incomplete', unknowns: ["what LDR-24 cost: it counted none at O'Fallon just before"] }))?.why).toBe(
+      "FleetSuite's own copy matches where it can be checked but is incomplete, so the books post NetSuite's credit memo: "
+        + "FleetSuite didn't know what LDR-24 cost: it counted none at O'Fallon just before.",
+    );
+    const lead = "FleetSuite's own copy matches NetSuite's credit memo, but its entry can't be worked out, so the books post NetSuite's. ";
+    expect(pickCredit(creditCost(), creditDoc(), { ...ACCOUNTS, items: {} })?.why).toBe(`${lead}LDR-24 has no asset account in the copy of NetSuite's items.`);
+    expect(pickCredit(creditCost(), creditDoc(), { ...ACCOUNTS, credits: {}, usual_cost: null })?.why).toBe(
+      `${lead}FleetSuite doesn't know which account LDR-24's cost comes back out of: no fulfillment in the copy of NetSuite's GL has debited a cost yet.`,
+    );
+    expect(pickCredit(creditCost({ status: 'voided' }))).toEqual(NOTHING);
+    expect(pickCredit(creditCost({ status: 'not_in_netsuite' as never }))).toEqual(NOTHING);
+  });
+
+  it('posts nothing when it put nothing back and NetSuite booked nothing', () => {
+    expect(pickCredit(creditCost({ items: [] }), creditDoc({ lines: [] }))).toEqual({ ...NOTHING, own: { lines: [], date: '2026-10-26' } });
+  });
+
+  it("has no say on an invoice, another company's credit memo, or another document with its id", () => {
+    expect(pickCredit(null)).toBeNull();
+    expect(pickCredit(creditCost(), creditDoc({ type: 'CustInvc' }))).toBeNull();
+    expect(pickCredit(creditCost(), creditDoc({ companies: ['1084'] }), ACCOUNTS, '1084')).toBeNull();
+    expect(pickCredit(creditCost(), creditDoc({ companies: ['BMG', '1084'] }))).toBeNull();
+    // An invoice's copy says nothing of a credit memo with its id.
+    const selling = copies({ invoiceCosts: new Map([['7401', invoiceCost({ netsuiteId: '7401' })]]) });
+    expect(ownStockPick(worked(creditDoc()), selling, { company: 'BMG', names: NAMES })).toBeNull();
+  });
+});
+
 describe('reading the copies and their accounts', () => {
   type Answer = { data: unknown; error: { message: string } | null };
   const service = (answers: Record<string, Answer>, calls: unknown[] = []) =>
@@ -677,7 +800,7 @@ describe('reading the copies and their accounts', () => {
   it('reads the accounts only the matching copies post to, and nothing when none matches', async () => {
     const calls: unknown[] = [];
     const none = await readOwnStockAccounts(service({}, calls), 'BMG', new Map([['7001', fulfillment({ status: 'differs' })]]), new Map([['7101', receipt({ status: 'waiting' })]]));
-    expect(none).toEqual({ items: {}, fulfillments: {}, invoices: {}, usual_cost: null, received: [] });
+    expect(none).toEqual({ items: {}, fulfillments: {}, invoices: {}, credits: {}, usual_cost: null, received: [] });
     expect(calls).toEqual([]);
 
     const answer = { items: { [LADDER]: '190' }, usual_cost: '580', received: [{ account: 210, documents: '12' }, { account: '211', documents: null }] };
@@ -686,10 +809,11 @@ describe('reading the copies and their accounts', () => {
       new Map([['7101', receipt()]]));
     expect(calls).toEqual([['gl_own_stock_accounts', { p_company: 'BMG', p_fulfillments: ['7001'], p_receipts: ['7101'] }]]);
     expect(got).toEqual({
-      items: { [LADDER]: '190' }, fulfillments: {}, invoices: {}, usual_cost: '580', received: [{ account: '210', documents: 12 }, { account: '211', documents: 0 }],
+      items: { [LADDER]: '190' }, fulfillments: {}, invoices: {}, credits: {}, usual_cost: '580',
+      received: [{ account: '210', documents: 12 }, { account: '211', documents: 0 }],
     });
     expect(await readOwnStockAccounts(service({}), 'BMG', new Map(), new Map([['7101', receipt()]])))
-      .toEqual({ items: {}, fulfillments: {}, invoices: {}, usual_cost: null, received: [] });
+      .toEqual({ items: {}, fulfillments: {}, invoices: {}, credits: {}, usual_cost: null, received: [] });
     await expect(readOwnStockAccounts(service({ gl_own_stock_accounts: failing('statement timeout') }), 'BMG', new Map([['7001', fulfillment()]]), new Map()))
       .rejects.toThrow('statement timeout');
   });
@@ -706,7 +830,9 @@ describe('reading the copies and their accounts', () => {
     const answer = { items: { [LADDER]: '190', [BINS]: '191' }, invoices: { 7301: { [LADDER]: FROM_7290 } }, usual_cost: '585' };
     const only = await readOwnStockAccounts(service({ gl_own_invoice_cost_accounts: { data: answer, error: null } }, calls), 'BMG', new Map(), new Map(), invoices);
     expect(calls).toEqual([['gl_own_invoice_cost_accounts', { p_company: 'BMG', p_items: { 7301: [LADDER, BINS] } }]]);
-    expect(only).toEqual({ items: { [LADDER]: '190', [BINS]: '191' }, fulfillments: {}, invoices: { 7301: { [LADDER]: FROM_7290 } }, usual_cost: '585', received: [] });
+    expect(only).toEqual({
+      items: { [LADDER]: '190', [BINS]: '191' }, fulfillments: {}, invoices: { 7301: { [LADDER]: FROM_7290 } }, credits: {}, usual_cost: '585', received: [],
+    });
 
     // With fulfillments and receipts too, both are read; most fulfillments' cost account is the same either way.
     const both: unknown[] = [];
@@ -720,16 +846,58 @@ describe('reading the copies and their accounts', () => {
     ]);
     expect(got).toEqual({
       items: { [HOOKS]: '190', [LADDER]: '190', [BINS]: '191' }, fulfillments: { 7001: { [LADDER]: FROM_5002 } }, invoices: { 7301: { [LADDER]: FROM_7290 } },
-      usual_cost: '580', received: [],
+      credits: {}, usual_cost: '580', received: [],
     });
     // Nothing read for invoices that don't match, or have nothing on their entries.
     const none: unknown[] = [];
     expect(await readOwnStockAccounts(service({}, none), 'BMG', new Map(), new Map(), new Map([...invoices].slice(1))))
-      .toEqual({ items: {}, fulfillments: {}, invoices: {}, usual_cost: null, received: [] });
+      .toEqual({ items: {}, fulfillments: {}, invoices: {}, credits: {}, usual_cost: null, received: [] });
     expect(none).toEqual([]);
     expect(await readOwnStockAccounts(service({}), 'BMG', new Map(), new Map(), invoices))
-      .toEqual({ items: {}, fulfillments: {}, invoices: {}, usual_cost: null, received: [] });
+      .toEqual({ items: {}, fulfillments: {}, invoices: {}, credits: {}, usual_cost: null, received: [] });
     await expect(readOwnStockAccounts(service({ gl_own_invoice_cost_accounts: failing('permission denied') }), 'BMG', new Map(), new Map(), invoices))
+      .rejects.toThrow('permission denied');
+  });
+
+  it("reads the accounts of the matching credit memos' items that go back on their entries, a kit's parts among them", async () => {
+    const calls: unknown[] = [];
+    const bins = shipped('BIN-10', BINS, 2000);
+    const credits = new Map([
+      ['7401', creditCost({ items: [RACK_BACK, bins, shipped('RACK-KIT', RACK_KIT, 1200, 'kit'), shipped('HOOK-1', HOOKS, 0)] })],
+      ['7402', creditCost({ netsuiteId: '7402', status: 'incomplete' })],
+      // Nothing on its entry: nothing to read for it.
+      ['7403', creditCost({ netsuiteId: '7403', items: [] })],
+    ]);
+    const answer = { items: { [LADDER]: '190', [BINS]: '191' }, credits: { 7401: { [LADDER]: FROM_7301 } }, usual_cost: '585' };
+    const only = await readOwnStockAccounts(service({ gl_own_credit_cost_accounts: { data: answer, error: null } }, calls), 'BMG',
+      new Map(), new Map(), new Map(), credits);
+    expect(calls).toEqual([['gl_own_credit_cost_accounts', { p_company: 'BMG', p_items: { 7401: [LADDER, BINS] } }]]);
+    expect(only).toEqual({
+      items: { [LADDER]: '190', [BINS]: '191' }, fulfillments: {}, invoices: {}, credits: { 7401: { [LADDER]: FROM_7301 } }, usual_cost: '585', received: [],
+    });
+
+    // With invoices too, both are read; the cost account most fulfillments use is the same either way.
+    const both: unknown[] = [];
+    const got = await readOwnStockAccounts(service({
+      gl_own_invoice_cost_accounts: { data: { items: { [HOOKS]: '190' }, invoices: { 7301: { [LADDER]: FROM_7290 } }, usual_cost: '580' }, error: null },
+      gl_own_credit_cost_accounts: { data: answer, error: null },
+    }, both), 'BMG', new Map(), new Map(), new Map([['7301', invoiceCost()]]), credits);
+    expect(both).toEqual([
+      ['gl_own_invoice_cost_accounts', { p_company: 'BMG', p_items: { 7301: [LADDER] } }],
+      ['gl_own_credit_cost_accounts', { p_company: 'BMG', p_items: { 7401: [LADDER, BINS] } }],
+    ]);
+    expect(got).toEqual({
+      items: { [HOOKS]: '190', [LADDER]: '190', [BINS]: '191' }, fulfillments: {}, invoices: { 7301: { [LADDER]: FROM_7290 } },
+      credits: { 7401: { [LADDER]: FROM_7301 } }, usual_cost: '580', received: [],
+    });
+    // Nothing read for credit memos that don't match, or put nothing on their entries.
+    const none: unknown[] = [];
+    expect(await readOwnStockAccounts(service({}, none), 'BMG', new Map(), new Map(), new Map(), new Map([...credits].slice(1))))
+      .toEqual({ items: {}, fulfillments: {}, invoices: {}, credits: {}, usual_cost: null, received: [] });
+    expect(none).toEqual([]);
+    expect(await readOwnStockAccounts(service({}), 'BMG', new Map(), new Map(), new Map(), credits))
+      .toEqual({ items: {}, fulfillments: {}, invoices: {}, credits: {}, usual_cost: null, received: [] });
+    await expect(readOwnStockAccounts(service({ gl_own_credit_cost_accounts: failing('permission denied') }), 'BMG', new Map(), new Map(), new Map(), credits))
       .rejects.toThrow('permission denied');
   });
 
@@ -838,6 +1006,32 @@ describe('reading the copies and their accounts', () => {
     locations: { 2: 'Wentzville' },
     accounts: { 190: { number: '19000', name: 'Inventory Asset' }, 585: { number: '58500', name: 'Cost of Goods Sold - Racks' } },
   };
+  // FleetSuite's own credit memo as gl_own_credit_cost_pairs returns it, next to NetSuite's credit memo: one ladder rack
+  // back on the shelf at O'Fallon, worth $151.67 there, as NetSuite put it back.
+  const creditPair = (netsuiteId: string, date: string): CreditCostPairData => ({
+    own: {
+      netsuite_id: netsuiteId, number: `CM${netsuiteId}`, invoice_id: '7301', invoice_number: 'INV7301', customer_netsuite_id: '9001', date,
+      location_id: '1', made_at: `${date}T15:00:00Z`,
+      lines: [{ line_no: 1, item_id: LADDER, item_number: 'LDR-24', description: null, item_type: 'InvtPart', quantity: '1' }],
+    },
+    netsuite: {
+      number: `CM${netsuiteId}`, type: 'CustCred', date, gone: false,
+      lines: [
+        { line_id: '1', item_id: LADDER, location_id: '1', quantity: '1', moves_stock: true, value: null },
+        { line_id: '5', item_id: LADDER, location_id: '1', quantity: '1', moves_stock: false, value: '151.67' },
+      ],
+    },
+    netsuite_gl: { posting_month: '2026-10-01', entry: [{ account_id: '190', debit: '151.67', credit: '0.00' }, { account_id: '585', debit: '0.00', credit: '151.67' }] },
+    before: [{ item_id: LADDER, location_id: '1', quantity: '12', value: '1820.00' }],
+    customer_name: 'Acme Fleet',
+  });
+  const CREDIT_PAIRS: CreditCostPairsData = {
+    // 7403 isn't one of the month's documents.
+    credit_memos: [creditPair('7402', '2026-10-26'), creditPair('7403', '2026-10-20')],
+    items: { [LADDER]: { number: 'LDR-24', type: 'InvtPart', display_name: 'Ladder rack 24 in', parts: null } },
+    locations: { 1: "O'Fallon" },
+    accounts: { 190: { number: '19000', name: 'Inventory Asset' }, 585: { number: '58500', name: 'Cost of Goods Sold - Racks' } },
+  };
   const DOCUMENTS: Array<Pick<StockDocument, 'netsuite_id' | 'type' | 'date'>> = [
     { netsuite_id: '7001', type: 'ItemShip', date: '2026-10-19' },
     { netsuite_id: '7003', type: 'ItemShip', date: '2026-10-05' },
@@ -846,8 +1040,9 @@ describe('reading the copies and their accounts', () => {
     { netsuite_id: '7201', type: 'InvAdjst', date: '2026-10-30' },
     { netsuite_id: '7301', type: 'CustInvc', date: '2026-10-21' },
     { netsuite_id: '7304', type: 'CustInvc', date: '2026-10-08' },
-    // A credit memo's cost lines: no copy of it says anything.
+    // Credit memos' cost lines.
     { netsuite_id: '7401', type: 'CustCred', date: '2026-10-02' },
+    { netsuite_id: '7402', type: 'CustCred', date: '2026-10-26' },
   ];
 
   it("checks the copies of the days the month's documents are dated across, keeping those of its documents, and reads their accounts", async () => {
@@ -869,7 +1064,9 @@ describe('reading the copies and their accounts', () => {
     expect([...read.receipts].map(([id, r]) => [id, r.status, r.receiptKey])).toEqual([['7101', 'matches', KEY]]);
     expect([...read.adjustments].map(([id, a]) => [id, a.status, a.id, a.fleetsuiteValue])).toEqual([['7201', 'matches', ADJUST_ID, -3000]]);
     expect(read.invoiceCosts).toEqual(new Map());
-    expect(read.accounts).toEqual({ items: { [LADDER]: '190', [BINS]: '190' }, fulfillments: {}, invoices: {}, usual_cost: null, received: [] });
+    // The months Books made credit memos in weren't read for it: none of the credit memos' copies is.
+    expect(read.creditCosts).toEqual(new Map());
+    expect(read.accounts).toEqual({ items: { [LADDER]: '190', [BINS]: '190' }, fulfillments: {}, invoices: {}, credits: {}, usual_cost: null, received: [] });
   });
 
   it("checks the invoices' copies of the days the month's invoices are dated across, and reads their accounts", async () => {
@@ -883,7 +1080,7 @@ describe('reading the copies and their accounts', () => {
       ['gl_own_invoice_cost_accounts', { p_company: 'BMG', p_items: { 7301: [LADDER] } }],
     ]);
     expect([...read.invoiceCosts].map(([id, c]) => [id, c.status, c.fleetsuiteCost, c.summary])).toEqual([['7301', 'matches', 45500, "Matches NetSuite's invoice."]]);
-    expect(read.accounts).toEqual({ items: { [LADDER]: '190' }, fulfillments: {}, invoices: { 7301: { [LADDER]: FROM_7290 } }, usual_cost: '580', received: [] });
+    expect(read.accounts).toEqual({ items: { [LADDER]: '190' }, fulfillments: {}, invoices: { 7301: { [LADDER]: FROM_7290 } }, credits: {}, usual_cost: '580', received: [] });
 
     // None from before Books made any; none of another company's; none read when no invoice is one of the month's.
     const later: unknown[] = [];
@@ -900,14 +1097,45 @@ describe('reading the copies and their accounts', () => {
       { fulfillments: null, receipts: null, adjustments: null, invoices: '2026-10-01' }, THROUGH)).rejects.toThrow('too many connections');
   });
 
+  it("checks the credit memos' copies of the days the month's credit memos are dated across, at O'Fallon, and reads their accounts", async () => {
+    const calls: unknown[] = [];
+    const since = { fulfillments: null, receipts: null, adjustments: null, invoices: null, creditMemos: '2026-10-01' };
+    const read = await readOwnStockCopies(service({
+      gl_own_credit_cost_pairs: { data: CREDIT_PAIRS, error: null },
+      gl_own_credit_cost_accounts: { data: { items: { [LADDER]: '190' }, credits: { 7402: { [LADDER]: FROM_7301 } }, usual_cost: '580' }, error: null },
+    }, calls), 'BMG', DOCUMENTS, since, THROUGH);
+    expect(calls).toEqual([
+      ['gl_own_credit_cost_pairs', { p_from: '2026-10-02', p_to: '2026-10-26', p_netsuite_id: null, p_location: '1' }],
+      ['gl_own_credit_cost_accounts', { p_company: 'BMG', p_items: { 7402: [LADDER] } }],
+    ]);
+    expect([...read.creditCosts].map(([id, c]) => [id, c.status, c.fleetsuiteCost, c.summary])).toEqual([['7402', 'matches', 15167, "Matches NetSuite's credit memo."]]);
+    expect(read.accounts).toEqual({ items: { [LADDER]: '190' }, fulfillments: {}, invoices: {}, credits: { 7402: { [LADDER]: FROM_7301 } }, usual_cost: '580', received: [] });
+
+    // None from before Books made any; none of another company's; none read when no credit memo is one of the month's.
+    const later: unknown[] = [];
+    await readOwnStockCopies(service({}, later), 'BMG', DOCUMENTS, { ...since, creditMemos: '2026-10-15' }, THROUGH);
+    expect(later).toEqual([['gl_own_credit_cost_pairs', { p_from: '2026-10-15', p_to: '2026-10-26', p_netsuite_id: null, p_location: '1' }]]);
+    const theirs: unknown[] = [];
+    await readOwnStockCopies(service({}, theirs), '1084', DOCUMENTS, since, THROUGH);
+    expect(theirs).toEqual([]);
+    const none: unknown[] = [];
+    await readOwnStockCopies(service({}, none), 'BMG', DOCUMENTS.filter((d) => d.type !== 'CustCred'), since, THROUGH);
+    expect(none).toEqual([]);
+    const unread: unknown[] = [];
+    await readOwnStockCopies(service({}, unread), 'BMG', DOCUMENTS, { ...since, creditMemos: null }, THROUGH);
+    expect(unread).toEqual([]);
+    await expect(readOwnStockCopies(service({ gl_own_credit_cost_pairs: failing('too many connections') }), 'BMG', DOCUMENTS, since, THROUGH))
+      .rejects.toThrow('too many connections');
+  });
+
   it("reads none from before Books had any, and no fulfillments for another company", async () => {
     const calls: unknown[] = [];
     const read = await readOwnStockCopies(service({}, calls), '1084', DOCUMENTS,
       { fulfillments: '2026-10-01', receipts: '2026-10-25', adjustments: '2026-10-01', invoices: '2026-10-01' }, THROUGH);
     expect(calls).toEqual([['gl_own_receipt_pairs', { p_from: '2026-10-25', p_to: '2026-10-28', p_key: null }]]);
     expect(read).toEqual({
-      fulfillments: new Map(), receipts: new Map(), adjustments: new Map(), invoiceCosts: new Map(),
-      accounts: { items: {}, fulfillments: {}, invoices: {}, usual_cost: null, received: [] },
+      fulfillments: new Map(), receipts: new Map(), adjustments: new Map(), invoiceCosts: new Map(), creditCosts: new Map(),
+      accounts: { items: {}, fulfillments: {}, invoices: {}, credits: {}, usual_cost: null, received: [] },
     });
 
     const later: unknown[] = [];

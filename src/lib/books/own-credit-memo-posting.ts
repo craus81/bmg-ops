@@ -33,7 +33,9 @@ import { OWN_COMPANY } from './own-invoices';
  * the credit memo's entry as NetSuite's is, keyed `credit_memo:<NetSuite
  * id>:<n>`, in the month NetSuite booked the credit memo into, and its lines
  * name the copy's own (`own:<line>`, `own:tax`). The stock it puts back on
- * the shelf posts from NetSuite's credit memo, under Stock and cost.
+ * the shelf posts apart, as NetSuite's credit memo's cost lines do: from
+ * Books' own copy too when what it put back matches (own_credit_memo_cost@1,
+ * migration 519, src/lib/books/own-stock-posting.ts).
  *
  * Pure but for readOwnCreditCopies. Amounts are whole cents, debit positive.
  */

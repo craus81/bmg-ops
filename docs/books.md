@@ -268,6 +268,8 @@ admins can open it while fixing invoices is switched off.
 | Books' own credit memos, checked against NetSuite's and posted in place of them when they match | `migrations/518-books-own-credit-memo-posting.sql`, `src/lib/books/own-credit-memo-check.ts`, `src/lib/books/own-credit-memo-posting.ts`, `src/lib/books/invoice-posting.ts`; the copies themselves are saved by Credit memos made in FleetSuite (`migrations/466-books-credit-memos.sql`, `src/lib/books/own-credit-memos.ts`) |
 | Own credit memos and one credit memo's check, and their API | `src/app/(main)/admin/books/own-credit-memos/page.tsx`, `src/app/(main)/admin/books/own-credit-memos/credit-memo/page.tsx`, `src/app/api/admin/books/own-credit-memos/route.ts` |
 | Own credit memo tests | `src/lib/books/own-credit-memo-check.test.ts`, `src/lib/books/own-credit-memo-posting.test.ts`, and end to end `src/lib/books/own-credit-memo-pairs-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` and `invoice-posting-sql.test.ts`, the daily check's in its test files |
+| What an invoice made without a sales order took from stock, checked against NetSuite's invoice and its cost posted from the copy when it matches | `migrations/517-books-own-invoice-costs.sql`, `src/lib/books/own-invoice-cost-check.ts`, `src/lib/books/own-stock-posting.ts`, `src/lib/books/invoice-posting.ts`; on Own invoices' invoice page; tests `src/lib/books/own-invoice-cost-check.test.ts`, `src/lib/books/own-stock-posting.test.ts`, and end to end `src/lib/books/own-invoice-costs-sql.test.ts` |
+| What a credit memo FleetSuite made put back on the shelf, checked against NetSuite's credit memo and posted from the copy when it matches | `migrations/519-books-own-credit-memo-stock.sql`, `src/lib/books/own-credit-cost-check.ts`, `src/lib/books/own-stock-posting.ts`, `src/lib/books/invoice-posting.ts`; on Own credit memos' credit memo page; tests `src/lib/books/own-credit-cost-check.test.ts`, `src/lib/books/own-stock-posting.test.ts`, and end to end, with the page's read, `src/lib/books/own-credit-costs-sql.test.ts` |
 | FleetSuite's own fulfillments, saved as each is made, costed from stock by item and checked against NetSuite's | `migrations/416-books-own-fulfillments.sql`, `migrations/512-books-kit-parts.sql` (a kit's parts), `migrations/514-books-fulfillment-locations.sql` (where each line was taken from), `src/lib/books/own-fulfillments.ts`, `src/lib/books/own-fulfillment-check.ts`; saved by `src/app/api/vehicle-tracking/invoice/route.ts` and `src/app/api/netsuite/create-invoice/route.ts` right after `fulfillSalesOrder` in `src/lib/netsuite.ts`, and by Fulfill & Invoice (`src/lib/so-fulfill-invoice-run.ts`) right after `fulfillSalesOrderLines` |
 | Own fulfillments and one fulfillment's check, and their API | `src/app/(main)/admin/books/own-fulfillments/page.tsx`, `src/app/(main)/admin/books/own-fulfillments/fulfillment/page.tsx`, `src/app/api/admin/books/own-fulfillments/route.ts` |
 | Own fulfillment tests | `src/lib/books/own-fulfillments.test.ts`, `src/lib/books/own-fulfillment-check.test.ts`, `src/lib/books/own-fulfillments-sql.test.ts`; the daily check's are in its test files |
@@ -1750,11 +1752,13 @@ reversed and posted again when NetSuite changes what it posts, and
 reversed when the GL copy no longer holds a line of it for the company (for
 an invoice or credit memo, a cost line); 1084's post the same way (Both
 companies). A fulfillment FleetSuite made, a Receive NetSuite took, a
-change made with Inventory Adjust, or the cost lines of an invoice
-FleetSuite made without a sales order, posts from Books' own copy of it
-instead when that copy matches NetSuite's document and makes the same entry
-("Posting FleetSuite's own fulfillments, receipts and bills", "FleetSuite's
-own adjustments", "Posting FleetSuite's own invoices' cost").
+change made with Inventory Adjust, the cost lines of an invoice
+FleetSuite made without a sales order, or the cost lines of a credit memo
+FleetSuite made that put parts back on the shelf, posts from Books' own copy
+of it instead when that copy matches NetSuite's document and makes the same
+entry ("Posting FleetSuite's own fulfillments, receipts and bills",
+"FleetSuite's own adjustments", "Posting FleetSuite's own invoices' cost",
+"Posting the stock a credit memo puts back").
 The entries are filed as `item_fulfillment`, `item_receipt`,
 `inventory_adjustment`, `inventory_transfer`, `assembly_build`,
 `assembly_unbuild` and `invoice_cost` (an invoice's and a credit memo's
@@ -3725,9 +3729,6 @@ opening it links to the invoice's own page.
 
 - The daily check doesn't look at what invoices took from stock: the
   invoice's own check (Own invoices) and Differences do.
-- What a credit memo puts back on the shelf, and its cost, posts from
-  NetSuite's credit memo: Books' own copy of a credit memo posts only what
-  it credits ("Posting FleetSuite's own credit memos").
 - An item's cost account is learned from NetSuite's fulfillments and
   invoices, so after NetSuite moves an item to another account, its next
   invoice's cost posts from NetSuite's, and the one after takes the new
@@ -3770,7 +3771,8 @@ copy next to NetSuite's credit memo as the ledger mirror copied it, from
   lines one taxed and the other didn't.
 
 NetSuite's lines that book the cost of the stock coming back aren't
-compared: that cost posts under Stock and cost. A copy **waits** until
+compared here: what the credit memo put back is checked and posts on its
+own ("Posting the stock a credit memo puts back"). A copy **waits** until
 NetSuite's credit memo, its lines and its posting are copied, is **voided**
 when NetSuite voided or deleted its credit memo, **differs** when anything
 compared differs, and **matches** otherwise. FleetSuite works every part of
@@ -3797,8 +3799,10 @@ reversed and posted again in one transaction, as for an invoice
 (`gl_invoice_postings` says which rule made the entry that stands). A read
 of the copies that fails stops the run, saying what it was reading.
 
-What a credit memo puts back on the shelf, and its cost, posts from
-NetSuite's credit memo under Stock and cost, as before (`invoice_cost`).
+What a credit memo puts back on the shelf, and its cost, posts apart, under
+Stock and cost (`invoice_cost`): from Books' own copy too since migration
+519, when what it put back matches ("Posting the stock a credit memo puts
+back").
 
 ### The pages
 
@@ -3809,9 +3813,10 @@ books hold for it and the sentence saying how it compares. Tapping one
 opens its check (`/admin/books/own-credit-memos/credit-memo?id=<NetSuite
 id>`, `deepLinks.booksOwnCreditMemo`): what's compared with FleetSuite's and
 NetSuite's side, each line, which copy the books posted it from with a link
-to it on Invoices vs NetSuite, and how FleetSuite worked it out. On
-Invoices vs NetSuite a credit memo posted from its copy reads "Entry 903 ·
-own copy", and opening one links to its copy. The daily check tells the
+to it on Invoices vs NetSuite, what it put back on the shelf when it put
+anything back, and how FleetSuite worked it out. On Invoices vs NetSuite a
+credit memo posted from its copy reads "Entry 903 · own copy", and opening
+one links to its copy. The daily check tells the
 super admins when one differs ("Daily check"). Open to whoever opens the
 books.
 
@@ -3819,9 +3824,97 @@ books.
 
 - Credit memos are made in FleetSuite only once Credit memos is on under
   Books → Switches, so the page has none until then.
-- What a credit memo puts back on the shelf posts from NetSuite's credit
-  memo; Books' own copy posts only what it credits.
 - A credit memo made in NetSuite has no copy, and posts from NetSuite's.
+
+## Posting the stock a credit memo puts back
+
+A credit memo FleetSuite makes against an invoice ("Credit memos made in
+FleetSuite") puts each part credited with Back to stock on back on the
+shelf at O'Fallon, the only location that keeps stock, and a kit's parts
+for a kit; a part credited on the credit item stays with the customer.
+NetSuite books what that's worth on cost lines of the credit memo, which
+the books post apart from the credit (`invoice_cost`, "Stock and cost").
+From 2026-11-03 (NetSuite Exit Checklist, "Gaps in what's built",
+migration 519) the books post them from Books' own copy of the credit memo
+in place of NetSuite's cost lines when:
+
+- what the copy put back **matches** NetSuite's credit memo; and
+- the entry it makes is the one NetSuite's cost lines make: the same amount
+  to each account, on the same date.
+
+Otherwise NetSuite's cost lines post, as they always have, and switching
+copies never moves anything in the books, as for an invoice's cost
+("Posting FleetSuite's own invoices' cost").
+
+What the copy put back is checked as an invoice's cost is, the other way
+round (`checkOwnCreditCost` in `src/lib/books/own-credit-cost-check.ts`,
+with the fulfillment check's `checkTaken`), against NetSuite's credit memo
+as the copy of its stock moves has it, valued from the copy of its general
+ledger (`gl_own_credit_cost_pairs`):
+
+- **Its items** are the parts it credits with Back to stock on that
+  NetSuite keeps in stock, as the copy of NetSuite's items has them. A kit
+  is taken apart into its parts, each the kit's quantity times what one
+  kit holds, since NetSuite puts a kit's parts back, not the kit. An item
+  the copy of NetSuite's items doesn't have may be kept in stock, and
+  leaves the copy incomplete.
+- **Where** is O'Fallon, where the credit memo screen puts every part that
+  comes back.
+- **What it was worth** is each item's average at O'Fallon just before the
+  credit memo, as Stock by item counts it, a line its quantity at that
+  average, to the cent. With none counted there just before, it can't be
+  worked out, and the copy is incomplete. NetSuite may value a return
+  otherwise (at what the invoice took it out at, say): then the two
+  differ, and NetSuite's cost lines post.
+- **Its date** is the credit memo's.
+
+A copy waits, is gone, differs, is incomplete or matches as an invoice's
+cost does. A credit memo that put nothing back, when nor did NetSuite's,
+has nothing to post.
+
+The copy's entry, `own_credit_memo_cost@1`
+(`src/lib/books/own-stock-posting.ts`, the invoice's cost entry the other
+way round), puts each item's worth back on its asset account, as the copy
+of NetSuite's items has it, and takes it out of the cost account NetSuite's
+last fulfillment, invoice or credit memo of the item before this one put
+its cost in or took it out of, or, for an item NetSuite hasn't shipped,
+sold or credited before, the one most of the company's fulfillments debit
+theirs to (`gl_own_credit_cost_accounts`, migration 519). When NetSuite's
+credit memo took an item's cost out of another account, its page says so,
+and the item's next credit memo takes NetSuite's account from it. The entry
+is dated as NetSuite's is, in the month NetSuite booked the credit memo
+into, keyed as NetSuite's cost lines are (`invoice_cost:<NetSuite id>:<n>`),
+and its lines name the copy's own (`own:<item>:asset`, `own:<item>:cost`).
+Only BMG's credit memos have copies.
+
+The posting run reads the copies of a BMG month's credit memos when the
+month has a credit memo's cost lines, from the first month FleetSuite made
+a credit memo (`gl_own_credit_memo_months`), and checks each as its page
+does. A cost whose entry was made by the other copy's rule has it replaced,
+reversed and posted again in one transaction, as for an invoice's cost
+(`gl_stock_postings` says which rule made the entry that stands). A read of
+the copies that fails stops the run, saying what it was reading.
+
+On Own credit memos, the page of a credit memo that put anything back, or
+whose NetSuite credit memo did, shows **What it put back on the shelf**:
+whether it matches NetSuite's, what the books hold for it with a link to it
+on Invoices vs NetSuite, its date, location, items and worth next to
+NetSuite's, its stock entry next to the one NetSuite's cost lines make,
+account by account, and each item with what it was worth, opening its
+moves on Stock by item. How FleetSuite worked it out follows how it worked
+the credit memo out. On Invoices vs NetSuite a credit memo's cost posted
+from its copy reads "Entry 904 · own copy" under Stock and cost, and
+opening it links to the credit memo's own page.
+
+### What isn't done yet
+
+- Credit memos are made in FleetSuite only once Credit memos is on under
+  Books → Switches, so none posts from its copy until then.
+- The daily check doesn't look at what credit memos put back: Own credit
+  memos and Differences do.
+- NetSuite values a return as it does; when that isn't the average at
+  O'Fallon just before, NetSuite's cost lines keep posting, and the page
+  says what each side valued it at.
 
 ## Snap a bill
 
@@ -4260,8 +4353,9 @@ puts the unit back on the shelf at O'Fallon.
 
 - Books' own copies are checked against NetSuite's credit memos on Books →
   Own credit memos, and post in their place when they match, from
-  2026-11-03 ("Posting FleetSuite's own credit memos"); what a credit memo
-  puts back on the shelf still posts from NetSuite's, under Stock and cost.
+  2026-11-03 ("Posting FleetSuite's own credit memos"), and so does what a
+  credit memo puts back on the shelf ("Posting the stock a credit memo puts
+  back").
 - Before switching on, check the first few in NetSuite: a credit memo with
   a discount line, one with a part coming back to O'Fallon from an invoice
   booked elsewhere, and how NetSuite applied it to the invoice.

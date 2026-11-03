@@ -6,11 +6,14 @@ import type { FulfilEntryLine, FulfilItemPair } from '@/lib/books/own-fulfillmen
 
 /**
  * What Books' own copy of a fulfillment, or of an invoice made without a
- * sales order, took from stock next to what NetSuite's took, on its page on
- * Own fulfillments or Own invoices (src/lib/books/own-fulfillment-check.ts
- * checkTaken, own-invoice-cost-check.ts; docs/books.md "FleetSuite's own
- * fulfillments" and "Posting FleetSuite's own invoices' cost"): each item
- * with where it was taken from and the count and value FleetSuite costed it
+ * sales order, took from stock next to what NetSuite's took, and what its
+ * copy of a credit memo put back on the shelf next to what NetSuite's put
+ * back, on its page on Own fulfillments, Own invoices or Own credit memos
+ * (src/lib/books/own-fulfillment-check.ts checkTaken,
+ * own-invoice-cost-check.ts, own-credit-cost-check.ts; docs/books.md
+ * "FleetSuite's own fulfillments", "Posting FleetSuite's own invoices' cost"
+ * and "Posting the stock a credit memo puts back"): each item with where it
+ * was taken from (or put back) and the count and value FleetSuite costed it
  * from (each item opens its moves there on Stock by item), and what
  * NetSuite's document posted when the copy's entry isn't worked out. Open to
  * whoever opens the books, as the pages are.
@@ -62,8 +65,8 @@ const Why = ({ text, differs }: { text: string | null; differs: boolean }) =>
   text ? <div style={{ fontSize: '11px', color: differs ? RED : 'var(--text-muted)', overflowWrap: 'anywhere' }}>{text}</div> : null;
 
 /** FleetSuite's side of an item: what it cost, quantity × cost each, and the count and value it was costed from. */
-function OwnSide({ side }: { side: FulfilItemPair['fleetsuite'] }) {
-  if (!side) return <span style={{ color: 'var(--text-muted)' }}>Not taken</span>;
+function OwnSide({ side, back }: { side: FulfilItemPair['fleetsuite']; back: boolean }) {
+  if (!side) return <span style={{ color: 'var(--text-muted)' }}>{back ? 'Not put back' : 'Not taken'}</span>;
   if (side.kind === 'kit') {
     return <div><div style={{ fontWeight: 700 }}>A kit</div><div style={muted}>{qty(side.quantity)}, parts not known</div></div>;
   }
@@ -83,10 +86,10 @@ function OwnSide({ side }: { side: FulfilItemPair['fleetsuite'] }) {
   );
 }
 
-/** NetSuite's side of an item: what it took off the inventory accounts, quantity × cost each, and where from. */
-function NetSuiteSide({ side, kit, copied }: { side: FulfilItemPair['netsuite']; kit: boolean; copied: boolean }) {
+/** NetSuite's side of an item: what it took off the inventory accounts (or put on them), quantity × cost each, and where. */
+function NetSuiteSide({ side, kit, copied, back }: { side: FulfilItemPair['netsuite']; kit: boolean; copied: boolean; back: boolean }) {
   // NetSuite takes a kit's parts, not the kit, and a document not copied yet took nothing that's known.
-  if (!side) return <span style={{ color: 'var(--text-muted)' }}>{kit ? 'Not compared' : copied ? 'Not taken' : 'Not copied'}</span>;
+  if (!side) return <span style={{ color: 'var(--text-muted)' }}>{kit ? 'Not compared' : !copied ? 'Not copied' : back ? 'Not put back' : 'Not taken'}</span>;
   return (
     <div>
       <div style={{ fontWeight: 700, color: side.cents === null ? 'var(--text-muted)' : undefined }}>{side.cents === null ? 'Not copied' : fmt(side.cents)}</div>
@@ -97,15 +100,16 @@ function NetSuiteSide({ side, kit, copied }: { side: FulfilItemPair['netsuite'];
 }
 
 /**
- * Each item the copy took from stock next to NetSuite's (`copied`: whether the copy of NetSuite's stock moves has its
- * document), each opening its moves where FleetSuite took it from on Stock by item (`locationId` when it took it from
- * more than one). Nothing when neither took anything.
+ * Each item the copy took from stock (or, `back`, put back on the shelf) next to NetSuite's (`copied`: whether the
+ * copy of NetSuite's stock moves has its document), each opening its moves where FleetSuite took it from on Stock by
+ * item (`locationId` when it took it from more than one). Nothing when neither took anything.
  */
-export function TakenItems({ items, locationId, copied, title = 'Items' }: {
+export function TakenItems({ items, locationId, copied, title = 'Items', back = false }: {
   items: FulfilItemPair[];
   locationId: string | null;
   copied: boolean;
   title?: string;
+  back?: boolean;
 }) {
   if (!items.length) return null;
   return (
@@ -140,8 +144,8 @@ export function TakenItems({ items, locationId, copied, title = 'Items' }: {
                 )}
                 style={{ borderTop: '1px solid var(--border)' }}
               >
-                <td style={cell}><OwnSide side={item.fleetsuite} /></td>
-                <td style={cell}><NetSuiteSide side={item.netsuite} kit={item.fleetsuite?.kind === 'kit'} copied={copied} /></td>
+                <td style={cell}><OwnSide side={item.fleetsuite} back={back} /></td>
+                <td style={cell}><NetSuiteSide side={item.netsuite} kit={item.fleetsuite?.kind === 'kit'} copied={copied} back={back} /></td>
                 <td style={cell}><Mark same={item.same} /></td>
               </TableRow>
             ))}

@@ -649,7 +649,7 @@ describe('the posting job, with Inventory Adjusts', () => {
     const before = await journal();
     for (const [read, error] of [
       ['gl_own_adjustment_months', "Reading the months of Books' own fulfillments, receipts, adjustments and invoices: gl_own_adjustment_months failed"],
-      ['gl_own_adjustment_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments and invoices for Feb 2025: gl_own_adjustment_pairs failed"],
+      ['gl_own_adjustment_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments, invoices and credit memos for Feb 2025: gl_own_adjustment_pairs failed"],
     ]) {
       failing.add(read);
       try {

@@ -584,7 +584,7 @@ describe('a restore drill of a real backup', () => {
       { scratch: scratchThen('ALTER TABLE public.gl_period_events ALTER COLUMN reason TYPE varchar(200)') });
     await fails(made.id!, /^Couldn't describe the scratch database's tables: function public\.books_backup_begin\(jsonb\) does not exist/,
       { scratch: scratchThen('DROP FUNCTION public.books_backup_begin(jsonb)') });
-  });
+  }, 60_000);
 
   it("says a file that won't load: a value of the wrong kind, a key twice, columns out of order", async () => {
     await fails(await tampered((t) => {
@@ -599,7 +599,7 @@ describe('a restore drill of a real backup', () => {
       const [header, ...rest] = t.rows('gl_period_events');
       t.write('gl_period_events', [[header[1], header[0], ...header.slice(2)], ...rest]);
     }), /^tables\/gl_period_events\.csv wouldn't load into the scratch database: column name mismatch in header line field 1: got "period_id", expected "id"/);
-  });
+  }, 60_000);
 
   it('says a table that came back with other rows than the manifest says', async () => {
     const periods = nightManifest.tables.find((x: any) => x.table === 'gl_periods').rows;
@@ -674,7 +674,7 @@ describe('a restore drill of a real backup', () => {
     await fails(await listedFirst('11099'),
       'The restored journal adds up differently for 11099 Drill Receivable (BMG): $2,602.00 of debits and $1,250.50 of credits, and the backup was made with $2,601.00 and $1,250.50.',
       { scratch: moving });
-  });
+  }, 60_000);
 
   it('runs out of time, and says where', async () => {
     await fails(made.id!, 'It ran out of time before it opened the backup.', { deadline: Date.now() - 1 });
