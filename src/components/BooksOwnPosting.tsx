@@ -7,13 +7,14 @@ import type { OwnPostingView } from '@/lib/books/own-posting-view';
 import { ownBooksLinkText, ownBooksText, ownBooksWhy, type OwnCopyStatus } from '@/lib/books/own-posting-text';
 
 /**
- * What the books hold for Books' own copies of fulfillments, receipts and
- * bills, on each one's page on Own fulfillments, Own receipts and Own bills
- * (migration 456, src/lib/books/own-posting-view.ts, docs/books.md "Posting
- * FleetSuite's own fulfillments, receipts and bills"): the entry that stands,
- * and the copy's entry next to NetSuite's. The lists' chip and count are in
- * src/lib/books/own-posting-text.ts. Open to whoever opens the books, as the
- * pages are.
+ * What the books hold for Books' own copies of fulfillments, receipts, bills
+ * and invoices' cost, on each one's page on Own fulfillments, Own receipts,
+ * Own bills and Own invoices (migrations 456 and 517,
+ * src/lib/books/own-posting-view.ts, docs/books.md "Posting FleetSuite's own
+ * fulfillments, receipts and bills" and "Posting FleetSuite's own invoices'
+ * cost"): the entry that stands, and the copy's entry next to NetSuite's. The
+ * lists' chip and count are in src/lib/books/own-posting-text.ts. Open to
+ * whoever opens the books, as the pages are.
  */
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -76,15 +77,15 @@ function Side({ cents }: { cents: number | null }) {
 }
 
 /**
- * The copy's entry next to NetSuite's, account by account, when it's worked out: why the books post this copy, or
- * how the entries differ and so why they post NetSuite's, and `note`, what NetSuite's side is when it isn't plain.
- * Nothing when the copy's entry isn't worked out.
+ * The copy's entry next to NetSuite's, account by account, when it's worked out, under `title`: why the books post
+ * this copy, or how the entries differ and so why they post NetSuite's, and `note`, what NetSuite's side is when it
+ * isn't plain. Nothing when the copy's entry isn't worked out.
  */
-export function OwnEntry({ posting, note }: { posting: OwnPostingView | null; note?: string }) {
+export function OwnEntry({ posting, note, title = 'The entry' }: { posting: OwnPostingView | null; note?: string; title?: string }) {
   if (!posting?.entry?.length) return null;
   return (
     <div id="entry">
-      <div style={heading}>The entry</div>
+      <div style={heading}>{title}</div>
       <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: '8px' }}>
         <table className="rep-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', background: 'var(--card)' }}>
           <thead>

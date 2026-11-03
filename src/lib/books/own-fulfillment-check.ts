@@ -36,6 +36,11 @@ import type { FulfilledFrom, FulfilUnknown, KeptType, LocationFrom } from './own
  *     work something out, which isn't compared;
  *   - matches otherwise.
  *
+ * What a copy took from stock is checked the same way whatever the document
+ * (checkTaken): since migration 517, an invoice FleetSuite made without a
+ * sales order is checked against NetSuite's invoice too
+ * (src/lib/books/own-invoice-cost-check.ts).
+ *
  * Pure. Amounts are whole cents, a cost positive.
  */
 
@@ -124,6 +129,34 @@ export interface CopiesThrough {
   stock: string | null;
   /** When the copy of NetSuite's general ledger last finished a whole run. */
   ledger: string | null;
+}
+
+/**
+ * A copy of a document that takes stock next to NetSuite's, as checkTaken compares them: a fulfillment
+ * (gl_own_fulfillment_pairs), or since migration 517 an invoice FleetSuite made without a sales order
+ * (gl_own_invoice_cost_pairs, src/lib/books/own-invoice-cost-check.ts). Its lines are what it took from stock.
+ */
+export interface TakenPairData {
+  own: Pick<OwnFulfillmentData, 'netsuite_id' | 'date' | 'location_id' | 'unknowns' | 'made_at' | 'lines'>;
+  netsuite: NetsuiteFulfillmentData | null;
+  netsuite_gl: FulfilPairData['netsuite_gl'];
+  before: PlaceData[];
+}
+
+/** The words checkTaken uses for the document it checks. */
+export interface TakenWords {
+  /** NetSuite's document: "NetSuite's fulfillment". */
+  theirs: string;
+  /** The document: "the fulfillment". */
+  the: string;
+  /** Why FleetSuite's copy doesn't have an item NetSuite took: "FleetSuite's copy of the sales order didn't have it still to bill". */
+  notOnCopy: string;
+  /** What FleetSuite didn't know when it didn't know what the copy took. */
+  linesUnknown: string;
+  /** Why FleetSuite didn't know where it took stock from, in a sentence. */
+  whereUnknown: string;
+  /** Why where FleetSuite took stock from isn't where NetSuite took it from, in a sentence, given each side's places in words. */
+  whereDiffers: (ours: string, theirs: string) => string;
 }
 
 // ── What the check says ────────────────────────────────────────────────────
@@ -215,6 +248,15 @@ export interface OwnFulfillmentCheck {
   workedOut: string[];
 }
 
+/** What checkTaken says of what a copy took: what a fulfillment's check says of it, and where the copy took stock from. */
+export interface TakenCheck extends Pick<OwnFulfillmentCheck,
+  'status' | 'summary' | 'differing' | 'fleetsuiteCost' | 'netsuiteCost' | 'fields' | 'items' | 'entry' | 'unknowns'> {
+  /** Where FleetSuite took stock from, NetSuite's ids, each once; null for lines where that isn't known. */
+  places: Array<string | null>;
+  /** Whether it took a kit apart into its parts. */
+  tookApart: boolean;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -269,11 +311,16 @@ export function fulfilLists(data: Pick<FulfilPairsData, 'items' | 'locations' | 
   };
 }
 
-/** What FleetSuite couldn't work out, in words. */
-const UNKNOWN_TEXT: Readonly<Record<FulfilUnknown, string>> = {
-  lines: "what it took from stock (FleetSuite's copy of the sales order didn't have the order yet)",
-  location: 'where it took stock from, so what it cost',
-};
+/** A location's name in the lists copy; 'no location' for none. */
+export const locationNameIn = (lists: Pick<FulfilLists, 'locations'>, id: string | null) =>
+  (id ? lists.locations.get(id) ?? `Location ${id}` : 'no location');
+
+/** Locations by name, each once, in order: "O'Fallon and Wentzville". */
+export const placesTextIn = (lists: Pick<FulfilLists, 'locations'>, ids: Iterable<string | null>) =>
+  listed([...new Set(ids)].map((id) => locationNameIn(lists, id)).sort());
+
+/** Where FleetSuite didn't know where it took stock from, in words. */
+const LOCATION_UNKNOWN = 'where it took stock from, so what it cost';
 
 /** What's compared, in a sentence. */
 const FIELD_WORDS: Readonly<Record<FulfilField, string>> = {
@@ -326,8 +373,11 @@ const samePlaces = (a: Iterable<string | null>, b: Iterable<string | null>) => {
 const sameSplit = (a: ReadonlyMap<string | null, number>, b: ReadonlyMap<string | null, number>) =>
   samePlaces(a.keys(), b.keys()) && [...a].every(([p, n]) => sameQuantity(n, b.get(p) ?? 0));
 
-/** FleetSuite's own fulfillment next to NetSuite's. */
-export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, copies: CopiesThrough): OwnFulfillmentCheck {
+/**
+ * What a copy took from stock next to what NetSuite's document took, `words` naming the document: its date, where it
+ * took stock from, each item and how many and from where, and what that cost.
+ */
+export function checkTaken(pair: TakenPairData, lists: FulfilLists, copies: CopiesThrough, words: TakenWords): TakenCheck {
   const own = pair.own;
   const unknowns = new Set(own.unknowns ?? []);
   const gone = !!pair.netsuite?.gone;
@@ -337,13 +387,10 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
   const stockRanSince = !!copies.stock && Date.parse(copies.stock) > madeAt;
   const ledgerRanSince = !!copies.ledger && Date.parse(copies.ledger) > madeAt + LEDGER_RUN_MS;
   const tookNothing = !ns && !gone && stockRanSince;
-  // NetSuite's cost is known once its ledger copy has the fulfillment, or has run since without it (no cost booked).
+  // NetSuite's cost is known once its ledger copy has the document, or has run since without it (no cost booked).
   const nsValued = tookNothing || (!!ns && (!!pair.netsuite_gl || ledgerRanSince));
 
-  const number = own.number || pair.netsuite?.number || `NetSuite ${own.netsuite_id}`;
-  const customer = pair.sales_order?.customer_name ?? null;
-  const salesOrder = pair.sales_order?.number || `NetSuite ${own.sales_order_id}`;
-  const locationName = (id: string | null) => (id ? lists.locations.get(id) ?? `Location ${id}` : 'no location');
+  const locationName = (id: string | null) => locationNameIn(lists, id);
   const itemName = (id: string, itemNumber: string | null) => itemNumber || lists.items.get(id)?.number || `NetSuite item ${id}`;
   const before = new Map((pair.before ?? []).map((b) => [placeKey(b.item_id, b.location_id), { count: num(b.quantity) ?? 0, valueCents: centsOf(b.value) ?? 0 }]));
   const ownLocation = own.location_id;
@@ -351,7 +398,7 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
   const placeOf = (item: string, at: string | null) => (at ? before.get(placeKey(item, at)) ?? { count: 0, valueCents: 0 } : null);
   /** Where a line was taken from: its own location, or on a copy made before migration 514 the copy's; null when that isn't known. */
   const lineAt = (l: OwnFulfilLineData) => l.location_id || ownLocation || null;
-  const placesText = (ids: Iterable<string | null>) => listed([...new Set(ids)].map(locationName).sort());
+  const placesText = (ids: Iterable<string | null>) => placesTextIn(lists, ids);
   /** How many were taken from each location, in words: "2 from O'Fallon and 1 from Wentzville" (`of` after the first quantity). */
   const splitText = (places: ReadonlyMap<string | null, number>, of = '') => listed([...places]
     .map(([at, n]) => ({ at: locationName(at), n }))
@@ -461,11 +508,11 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     } else if (!netsuite) {
       if (o.kind === 'unknown') {
         same = null;
-        why = `FleetSuite didn't know whether ${name} is kept in stock (the copy of NetSuite's items doesn't have it yet), and NetSuite's fulfillment took none of it from stock.`;
+        why = `FleetSuite didn't know whether ${name} is kept in stock (the copy of NetSuite's items doesn't have it yet), and ${words.theirs} took none of it from stock.`;
         takenUnknown = true;
       } else {
         same = false;
-        why = `FleetSuite took ${qty(o.quantity)} of ${name} from stock${o.cents !== null ? ` (${dollars(o.cents)})` : ''}, and NetSuite's fulfillment took none.`;
+        why = `FleetSuite took ${qty(o.quantity)} of ${name} from stock${o.cents !== null ? ` (${dollars(o.cents)})` : ''}, and ${words.theirs} took none.`;
         takenDiffers.push(why);
       }
     } else {
@@ -512,15 +559,15 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     const name = itemName(n.itemId, null);
     const cents = netCents(n);
     const netsuite = { quantity: n.quantity, locations: netLocations(n), cents, each: cents !== null && n.quantity > 0 ? cents / n.quantity : null };
-    const took = `NetSuite's fulfillment took ${qty(n.quantity)} of ${name}${cents !== null ? ` (${dollars(cents)})` : ''}`;
+    const took = `${words.theirs} took ${qty(n.quantity)} of ${name}${cents !== null ? ` (${dollars(cents)})` : ''}`;
     // With a kit in FleetSuite's copy this may be one of its parts, and the kit already leaves what was taken not known.
-    if (!kits.length && linesKnown) takenDiffers.push(`${took}, and FleetSuite's copy of the sales order didn't have it still to bill.`);
+    if (!kits.length && linesKnown) takenDiffers.push(`${took}, and ${words.notOnCopy}.`);
     const description = lists.items.get(n.itemId)?.displayName ?? null;
     items.push(kits.length
       ? { item: name, itemId: n.itemId, description, partOf: null, fleetsuite: null, netsuite, same: null,
         why: `${took}, which FleetSuite's copy doesn't have: it may be a part of ${kitNames}, ${kits.length > 1 ? 'kits' : 'a kit'} FleetSuite couldn't take apart.` }
       : { item: name, itemId: n.itemId, description, partOf: null, fleetsuite: null, netsuite, same: linesKnown ? false : null,
-        why: linesKnown ? `${took}, and FleetSuite's copy of the sales order didn't have it still to bill.` : null });
+        why: linesKnown ? `${took}, and ${words.notOnCopy}.` : null });
   }
 
   const fields: FulfilFieldCheck[] = [];
@@ -536,8 +583,8 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
       netsuite: ns ? dayText(ns.date) : null,
       same,
       why: same === false
-        ? `FleetSuite made it ${dayText(own.date)}, and NetSuite's fulfillment is dated ${plural(Math.abs(days), 'day', 'days')} ${days > 0 ? 'later' : 'earlier'}.`
-        : tookNothing ? "NetSuite's fulfillment isn't in the copy of its stock moves, which takes only documents that move stock." : null,
+        ? `FleetSuite made it ${dayText(own.date)}, and ${words.theirs} is dated ${plural(Math.abs(days), 'day', 'days')} ${days > 0 ? 'later' : 'earlier'}.`
+        : tookNothing ? `${words.theirs} isn't in the copy of its stock moves, which takes only documents that move stock.` : null,
     });
   }
 
@@ -550,20 +597,12 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     const same = ourPlaces.length && !locationUnknown && ns && theirs.length ? placesSame && !placeDiffers.length : null;
     let why: string | null = null;
     if (locationUnknown) {
-      why = own.location_from === 'order'
-        ? "FleetSuite didn't know where it took stock from: NetSuite's sales order couldn't be read as the copy was made, or doesn't say where each line is."
-        : `FleetSuite didn't know where it took stock from: its invoice location rule couldn't tell from ${customer ?? 'the customer'}.`;
+      why = words.whereUnknown;
     } else if (same === false && placesSame) {
       const more = placeDiffers.length - 1;
       why = `${placeDiffers[0]}${more > 0 ? ` ${plural(more, 'other item differs on where it was', 'other items differ on where they were')} taken from too.` : ''}`;
     } else if (same === false) {
-      const ourNames = placesText(ourPlaces);
-      const theirNames = placesText(theirs);
-      why = own.location_from === 'order'
-        ? `NetSuite's sales order has its lines at ${ourNames}, and NetSuite took stock from ${theirNames}.`
-        : own.location_from === 'sent'
-          ? `FleetSuite told NetSuite to take every line from ${ourNames}, and NetSuite took stock from ${theirNames}.`
-          : `${own.location_from === 'po_rule' ? "FleetSuite's PO location rule" : "FleetSuite's invoice location rule"} puts it in ${ourNames}, and NetSuite took stock from ${theirNames}.`;
+      why = words.whereDiffers(placesText(ourPlaces), placesText(theirs));
     }
     fields.push({
       field: 'location',
@@ -581,9 +620,9 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     const compared = linesKnown && nsKnown;
     const same = !compared ? null : takenDiffers.length ? false : takenUnknown ? null : true;
     let why: string | null = null;
-    if (!linesKnown) why = `FleetSuite didn't know ${UNKNOWN_TEXT.lines}.`;
+    if (!linesKnown) why = `FleetSuite didn't know ${words.linesUnknown}.`;
     else if (tookNothing && takenDiffers.length) {
-      why = "NetSuite's fulfillment took nothing from stock, or is gone from NetSuite: the copy of NetSuite's stock moves, made since, doesn't have it.";
+      why = `${words.theirs} took nothing from stock, or is gone from NetSuite: the copy of NetSuite's stock moves, made since, doesn't have it.`;
     } else if (compared && takenDiffers.length) {
       const more = takenDiffers.length - 1;
       why = `${takenDiffers[0]}${more > 0 ? ` ${plural(more, 'other item differs', 'other items differ')}.` : ''}`;
@@ -607,17 +646,17 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
   const uncostedNames = listed(uncosted.map((u) => u.name));
   const fleetsuiteCost = ownCostKnown ? [...ownItems.values()].reduce((sum, i) => sum + (i.cents ?? 0), 0) : null;
   const netsuiteCost = nsValued ? [...netItems.values()].reduce((sum, i) => sum - i.valueCents, 0) : null;
-  // The ledger copy has run since and has nothing for NetSuite's fulfillment.
+  // The ledger copy has run since and has nothing for NetSuite's document.
   const bookedNothing = !!ns && !pair.netsuite_gl && ledgerRanSince;
   {
     const same = fleetsuiteCost !== null && netsuiteCost !== null ? fleetsuiteCost === netsuiteCost : null;
     let why: string | null = null;
-    if (!linesKnown) why = `FleetSuite didn't know ${UNKNOWN_TEXT.lines}.`;
+    if (!linesKnown) why = `FleetSuite didn't know ${words.linesUnknown}.`;
     else if (locationUnknown) why = "FleetSuite didn't know where it took stock from, so not what it cost.";
     else if (kits.length) why = `FleetSuite didn't know the parts of ${kitNames}, so not what they cost.`;
     else if (unlisted.length) why = `FleetSuite didn't know whether ${listed(unlisted.map((i) => itemName(i.itemId, i.itemNumber)))} ${unlisted.length > 1 ? 'are' : 'is'} kept in stock, so not what ${unlisted.length > 1 ? 'they' : 'it'} cost.`;
     else if (uncosted.length) why = `FleetSuite counted none of ${noneOf} just before, so it can't work out what ${uncosted.length > 1 ? 'they' : 'it'} cost.`;
-    else if (bookedNothing) why = "NetSuite's fulfillment booked no cost: the copy of its general ledger, made since, has no entry for it.";
+    else if (bookedNothing) why = `${words.theirs} booked no cost: the copy of its general ledger, made since, has no entry for it.`;
     else if (same === false) why = apart(fleetsuiteCost!, netsuiteCost!);
     fields.push({
       field: 'cost',
@@ -631,8 +670,8 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
 
   const differing = fields.filter((f) => f.same === false).length;
   const unknownWords: string[] = [];
-  if (!linesKnown) unknownWords.push(UNKNOWN_TEXT.lines);
-  if (locationUnknown) unknownWords.push(UNKNOWN_TEXT.location);
+  if (!linesKnown) unknownWords.push(words.linesUnknown);
+  if (locationUnknown) unknownWords.push(LOCATION_UNKNOWN);
   if (kits.length) unknownWords.push(`the parts of ${kitNames}, ${kits.length > 1 ? 'kits' : 'a kit'}`);
   if (unlisted.length) {
     unknownWords.push(`whether ${listed(unlisted.map((i) => itemName(i.itemId, i.itemNumber)))} ${unlisted.length > 1 ? 'are' : 'is'} kept in stock (the copy of NetSuite's items doesn't have ${unlisted.length > 1 ? 'them' : 'it'} yet)`);
@@ -645,13 +684,13 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
   let summary: string;
   if (gone) {
     status = 'voided';
-    summary = "NetSuite's fulfillment is gone from NetSuite.";
+    summary = `${words.theirs} is gone from NetSuite.`;
   } else if (!ns && !tookNothing) {
     status = 'waiting';
-    summary = "Waiting for NetSuite's fulfillment: the copy of NetSuite's stock moves runs every two hours.";
+    summary = `Waiting for ${words.theirs}: the copy of NetSuite's stock moves runs every two hours.`;
   } else if (ns && !nsValued) {
     status = 'waiting';
-    summary = "Waiting for the copy of NetSuite's general ledger to reach the fulfillment.";
+    summary = `Waiting for the copy of NetSuite's general ledger to reach ${words.the}.`;
   } else if (differing) {
     status = 'differs';
     const first = fields.find((f) => f.same === false)!;
@@ -669,10 +708,10 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     summary = `Matches where it can be checked. FleetSuite didn't know ${listed(unknownWords)}.`;
   } else if (tookNothing) {
     status = 'matches';
-    summary = "Took nothing from stock, and nor did NetSuite's fulfillment.";
+    summary = `Took nothing from stock, and nor did ${words.theirs}.`;
   } else {
     status = 'matches';
-    summary = "Matches NetSuite's fulfillment.";
+    summary = `Matches ${words.theirs}.`;
   }
 
   const entry = (pair.netsuite_gl?.entry ?? []).map((e) => {
@@ -685,6 +724,52 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
   });
 
   const tookApart = [...ownItems.values()].some((o) => o.kitIds.length);
+
+  return {
+    status,
+    summary,
+    differing,
+    fleetsuiteCost,
+    netsuiteCost,
+    fields,
+    items,
+    entry,
+    unknowns: unknownWords,
+    places: ourPlaces,
+    tookApart,
+  };
+}
+
+/** The words a fulfillment's check uses, `customer` the sales order's. */
+function fulfillmentWords(own: OwnFulfillmentData, customer: string | null): TakenWords {
+  return {
+    theirs: "NetSuite's fulfillment",
+    the: 'the fulfillment',
+    notOnCopy: "FleetSuite's copy of the sales order didn't have it still to bill",
+    linesUnknown: "what it took from stock (FleetSuite's copy of the sales order didn't have the order yet)",
+    whereUnknown: own.location_from === 'order'
+      ? "FleetSuite didn't know where it took stock from: NetSuite's sales order couldn't be read as the copy was made, or doesn't say where each line is."
+      : `FleetSuite didn't know where it took stock from: its invoice location rule couldn't tell from ${customer ?? 'the customer'}.`,
+    whereDiffers: (ours, theirs) => (own.location_from === 'order'
+      ? `NetSuite's sales order has its lines at ${ours}, and NetSuite took stock from ${theirs}.`
+      : own.location_from === 'sent'
+        ? `FleetSuite told NetSuite to take every line from ${ours}, and NetSuite took stock from ${theirs}.`
+        : `${own.location_from === 'po_rule' ? "FleetSuite's PO location rule" : "FleetSuite's invoice location rule"} puts it in ${ours}, and NetSuite took stock from ${theirs}.`),
+  };
+}
+
+/** FleetSuite's own fulfillment next to NetSuite's. */
+export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, copies: CopiesThrough): OwnFulfillmentCheck {
+  const own = pair.own;
+  const number = own.number || pair.netsuite?.number || `NetSuite ${own.netsuite_id}`;
+  const customer = pair.sales_order?.customer_name ?? null;
+  const salesOrder = pair.sales_order?.number || `NetSuite ${own.sales_order_id}`;
+  const { places: ourPlaces, tookApart, ...taken } = checkTaken(pair, lists, copies, fulfillmentWords(own, customer));
+  const locationUnknown = ourPlaces.includes(null);
+  const ownLocation = own.location_id;
+  const locationName = (id: string | null) => locationNameIn(lists, id);
+  const placesText = (ids: Iterable<string | null>) => placesTextIn(lists, ids);
+
   const fromOrder = "Each line from where NetSuite's sales order has it, read from NetSuite as the copy was made: NetSuite fulfils a "
     + `whole order line by line, each line from its own location${tookApart ? ", and a kit's parts from the kit's line" : ''}.`;
   const where = own.location_from === 'sent'
@@ -722,15 +807,7 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     salesOrder,
     locationId: ownLocation,
     invoice: pair.invoice ? { netsuiteId: pair.invoice.netsuite_id, number: pair.invoice.number || `NetSuite ${pair.invoice.netsuite_id}` } : null,
-    status,
-    summary,
-    differing,
-    fleetsuiteCost,
-    netsuiteCost,
-    fields,
-    items,
-    entry,
-    unknowns: unknownWords,
+    ...taken,
     workedOut,
   };
 }

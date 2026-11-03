@@ -648,8 +648,8 @@ describe('the posting job, with Inventory Adjusts', () => {
   it("stops the run, saying what it was reading, when the Inventory Adjusts or their months can't be read", async () => {
     const before = await journal();
     for (const [read, error] of [
-      ['gl_own_adjustment_months', "Reading the months of Books' own fulfillments, receipts and adjustments: gl_own_adjustment_months failed"],
-      ['gl_own_adjustment_pairs', "Reading Books' own copies of BMG's fulfillments, receipts and adjustments for Feb 2025: gl_own_adjustment_pairs failed"],
+      ['gl_own_adjustment_months', "Reading the months of Books' own fulfillments, receipts, adjustments and invoices: gl_own_adjustment_months failed"],
+      ['gl_own_adjustment_pairs', "Reading Books' own copies of BMG's fulfillments, receipts, adjustments and invoices for Feb 2025: gl_own_adjustment_pairs failed"],
     ]) {
       failing.add(read);
       try {

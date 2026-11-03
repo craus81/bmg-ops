@@ -31,7 +31,11 @@ vi.mock('@/lib/api-auth', async () => {
 });
 vi.mock('@/lib/audit', () => ({ logAudit: vi.fn(async (_s: unknown, entry: Record<string, any>) => { h.audits.push(entry); }) }));
 vi.mock('@/lib/supabase-service', () => ({
-  createServiceClient: () => ({ rpc: async () => ({ data: {}, error: null }) }),
+  createServiceClient: () => ({
+    rpc: async () => ({ data: {}, error: null }),
+    // How far NetSuite's copies had come, for what an invoice took from stock: the copies haven't run.
+    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+  }),
 }));
 vi.mock('./invoice-pdfs', () => ({
   loadOwnInvoicePdf: h.load,
@@ -41,7 +45,10 @@ vi.mock('./invoice-pdfs', () => ({
   sendInvoicePdf: h.send,
 }));
 // The invoice's read, for the one invoice: its check and books are the Own invoices page's, held here.
-vi.mock('./own-invoice-check', () => ({ checkOwnInvoices: () => ({ invoices: h.invoice ? [h.invoice] : [] }) }));
+vi.mock('./own-invoice-check', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./own-invoice-check')>()),
+  checkOwnInvoices: () => ({ invoices: h.invoice ? [h.invoice] : [] }),
+}));
 vi.mock('./own-invoice-posting', () => ({ ownBooks: () => new Map() }));
 
 import { GET, POST, maxDuration } from '../../app/api/admin/books/own-invoices/pdf/route';
@@ -179,7 +186,8 @@ describe("the invoice's read", () => {
   it('says where its PDF is', async () => {
     const { status, body } = await answer(await read());
     expect(status).toBe(200);
-    expect(body.invoice).toEqual({ ...h.invoice, books: null, pdf: VIEW });
+    // Off a sales order, so the order's fulfillment took its stock: it has no cost of its own.
+    expect(body.invoice).toEqual({ ...h.invoice, books: null, pdf: VIEW, cost: null });
     expect(h.view).toHaveBeenCalledWith(expect.anything(), '123456');
   });
 
@@ -187,6 +195,6 @@ describe("the invoice's read", () => {
     h.view.mockRejectedValue(new Error("Couldn't read the invoice's PDF: down"));
     const { status, body } = await answer(await read());
     expect(status).toBe(200);
-    expect(body.invoice).toEqual({ ...h.invoice, books: null, pdfError: "Couldn't read the invoice's PDF: down" });
+    expect(body.invoice).toEqual({ ...h.invoice, books: null, pdfError: "Couldn't read the invoice's PDF: down", cost: null });
   });
 });

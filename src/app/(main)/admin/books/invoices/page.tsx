@@ -440,6 +440,8 @@ function ownCopyLink(invoice: Invoice): string | null {
   if (invoice.type === 'ItemRcpt') return invoice.books?.own?.receiptKey ? deepLinks.booksOwnReceipt(invoice.books.own.receiptKey) : null;
   if (invoice.type === 'InvAdjst') return invoice.books?.own?.adjustmentId ? deepLinks.booksOwnAdjustment(invoice.books.own.adjustmentId) : null;
   if (invoice.type === 'VendBill') return deepLinks.booksOwnBill(invoice.netsuiteId);
+  // An invoice's cost: what FleetSuite's own invoice took from stock is on the invoice's own page.
+  if (invoice.type === 'CustInvc') return deepLinks.booksOwnInvoice(invoice.netsuiteId);
   return invoice.type ? null : deepLinks.booksOwnInvoice(invoice.netsuiteId);
 }
 

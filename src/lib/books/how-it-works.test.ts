@@ -27,7 +27,7 @@ import { BANK_RULE } from './bank-rule';
 import { STOCK_RULE } from './stock-rule';
 import { OWN_INVOICE_RULE } from './own-invoice-posting';
 import { OWN_BILL_RULE } from './own-bill-posting';
-import { OWN_ADJUSTMENT_RULE, OWN_FULFILLMENT_RULE, OWN_RECEIPT_RULE } from './own-stock-posting';
+import { OWN_ADJUSTMENT_RULE, OWN_FULFILLMENT_RULE, OWN_INVOICE_COST_RULE, OWN_RECEIPT_RULE } from './own-stock-posting';
 import { OPENING_RULE } from './opening-balances';
 import { OWN_TAX_RULE, SETTINGS_TAX_RULE } from './own-invoices';
 import { CREDIT_TAX_RULE } from '@/lib/credit-memo';
@@ -56,7 +56,7 @@ describe('the posting rules, written down', () => {
     expect(POSTING_RULES.map((r) => r.id)).toEqual([
       INVOICE_RULE, CREDIT_MEMO_RULE, PAYMENT_RULE, DEPOSIT_RULE, BILL_RULE, BILL_PAYMENT_RULE, SPENDING_RULE,
       JOURNAL_ENTRY_RULE, BANK_RULE, STOCK_RULE, OWN_INVOICE_RULE, OWN_BILL_RULE, OWN_FULFILLMENT_RULE,
-      OWN_RECEIPT_RULE, OWN_ADJUSTMENT_RULE, OPENING_RULE,
+      OWN_RECEIPT_RULE, OWN_ADJUSTMENT_RULE, OWN_INVOICE_COST_RULE, OPENING_RULE,
     ]);
     expect(WORKED_OUT_RULES.map((r) => r.id)).toEqual([
       OWN_TAX_RULE, SETTINGS_TAX_RULE, CREDIT_TAX_RULE, VENDOR_CREDIT_RULE, CARD_CHARGE_RULE, TYPED_JOURNAL_RULE, TRANSFER_RULE,
@@ -145,6 +145,16 @@ const WHO_MARKERS = ['reviewerAs(', "getProfileRoles(auth.profile).includes('sup
 describe('who can change what, held to the routes', () => {
   it('names each step once', () => {
     expect(new Set(MONEY_STEPS.map((s) => s.key)).size).toBe(MONEY_STEPS.length);
+  });
+
+  it("has each step that makes or fixes an invoice post its cost from FleetSuite's own copy too: the invoice's, or its order's fulfillment's", () => {
+    const invoicing = MONEY_STEPS.filter((s) => s.posts?.includes(OWN_INVOICE_RULE));
+    expect(invoicing.map((s) => s.key)).toEqual(expect.arrayContaining(['invoice', 'fulfill_invoice', 'invoice_fix']));
+    for (const s of invoicing) {
+      expect(s.posts!.includes(OWN_INVOICE_COST_RULE) || s.posts!.includes(OWN_FULFILLMENT_RULE), s.key).toBe(true);
+    }
+    // An invoice made without a sales order takes its stock itself, so making one, or fixing one, posts its cost.
+    for (const key of ['invoice', 'invoice_fix']) expect(MONEY_STEPS.find((s) => s.key === key)!.posts, key).toContain(OWN_INVOICE_COST_RULE);
   });
 
   for (const s of MONEY_STEPS) {

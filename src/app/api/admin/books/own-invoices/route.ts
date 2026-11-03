@@ -4,11 +4,14 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { NS_MIRROR_SYNC_TYPE } from '@/lib/ledger/netsuite-mirror';
 import { BOOKS_GL_SYNC } from '@/lib/books/netsuite-gl';
 import { BOOKS_LISTS_SYNC } from '@/lib/books/netsuite-lists';
+import { BOOKS_STOCK_SYNC } from '@/lib/books/netsuite-stock';
 import { BOOKS_DAILY_CHECK } from '@/lib/books/daily-check';
 import { checkOwnInvoices, type OwnPairsData } from '@/lib/books/own-invoice-check';
 import { OWN_COMPANY } from '@/lib/books/own-invoices';
 import { ownBooks, type OwnBooks } from '@/lib/books/own-invoice-posting';
 import { readInvoicePdfView } from '@/lib/books/invoice-pdfs';
+import { checkOwnInvoiceCosts, type InvoiceCostPairsData } from '@/lib/books/own-invoice-cost-check';
+import { readOwnStockView } from '@/lib/books/own-posting-view';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,7 +36,12 @@ const monthEnd = (month: string) => {
  * when none stands. Amounts are whole cents. The one invoice also says
  * where FleetSuite's own PDF of it is in NetSuite (`pdf`, migration 498,
  * src/lib/books/invoice-pdf-status.ts), or why that couldn't be read
- * (`pdfError`).
+ * (`pdfError`); and, for one made without a sales order, what it took from
+ * stock next to what NetSuite's invoice took, and how that cost posts
+ * (`cost`: { check, posting }, migration 517,
+ * src/lib/books/own-invoice-cost-check.ts and own-posting-view.ts), null for
+ * one off a sales order, whose order's fulfillment took the stock, or why
+ * that couldn't be read (`costError`).
  *
  * Super admins, the bookkeeper and the CPA, as the rest of the books
  * (docs/books.md "FleetSuite's own invoices").
@@ -45,13 +53,34 @@ export async function GET(req: NextRequest) {
   const params = new URL(req.url).searchParams;
   const service = createServiceClient();
   const read = (syncType: string) =>
-    service.from('sync_state').select('last_result, updated_at').eq('sync_type', syncType).maybeSingle();
+    service.from('sync_state').select('last_synced_at, last_result, updated_at').eq('sync_type', syncType).maybeSingle();
   /** What the books hold for these invoices, by NetSuite's id. */
   const booksFor = async (ids: string[]): Promise<Map<string, OwnBooks> | { error: string }> => {
     if (!ids.length) return new Map();
     const res = await service.rpc('gl_invoice_postings', { p_company: OWN_COMPANY, p_source_ids: ids, p_lines: false });
     if (res.error) return { error: res.error.message };
     return ownBooks(((res.data ?? {}) as { invoices?: Parameters<typeof ownBooks>[0] }).invoices ?? []);
+  };
+
+  /**
+   * What an invoice made without a sales order took from stock, next to NetSuite's invoice, and how that cost posts;
+   * null for one off a sales order.
+   */
+  const readCost = async (netsuiteId: string) => {
+    // How far the copies of NetSuite's stock moves and ledger had come, which says whether NetSuite's side is still to come.
+    const [pairs, stock, ledger] = await Promise.all([
+      service.rpc('gl_own_invoice_cost_pairs', { p_from: null, p_to: null, p_netsuite_id: netsuiteId }),
+      read(BOOKS_STOCK_SYNC), read(BOOKS_GL_SYNC),
+    ]);
+    const error = pairs.error || stock.error || ledger.error;
+    if (error) throw new Error(error.message);
+    const copies = {
+      stock: (stock.data?.last_synced_at as string | null | undefined) ?? null,
+      ledger: (ledger.data?.last_synced_at as string | null | undefined) ?? null,
+    };
+    const [check] = checkOwnInvoiceCosts(pairs.data as InvoiceCostPairsData, copies).invoices;
+    if (!check) return null;
+    return { check, posting: await readOwnStockView(service, { kind: 'invoice_cost', check }) };
   };
 
   const id = params.get('id');
@@ -63,10 +92,13 @@ export async function GET(req: NextRequest) {
     if (!invoice) return NextResponse.json({ error: 'FleetSuite has no copy of that invoice' }, { status: 404 });
     const books = await booksFor([invoice.netsuiteId]);
     if ('error' in books) return NextResponse.json({ error: books.error }, { status: 500 });
-    // The PDF's line is one part of the page: a read of it that fails leaves the rest.
-    const pdf = await readInvoicePdfView(service, invoice.netsuiteId)
-      .then((view) => ({ pdf: view }), (err) => ({ pdfError: String(err?.message || err) }));
-    return NextResponse.json({ invoice: { ...invoice, books: books.get(invoice.netsuiteId) ?? null, ...pdf } });
+    // The PDF's line and the cost are each one part of the page: a read of either that fails leaves the rest.
+    const [pdf, cost] = await Promise.all([
+      readInvoicePdfView(service, invoice.netsuiteId)
+        .then((view) => ({ pdf: view }), (err) => ({ pdfError: String(err?.message || err) })),
+      readCost(invoice.netsuiteId).then((c) => ({ cost: c }), (err) => ({ costError: String(err?.message || err) })),
+    ]);
+    return NextResponse.json({ invoice: { ...invoice, books: books.get(invoice.netsuiteId) ?? null, ...pdf, ...cost } });
   }
 
   const [months, mirror, copy, lists, check] = await Promise.all([
