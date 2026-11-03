@@ -2,18 +2,19 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { STOCK_TYPES } from './bill-rule';
 import type { KitPart } from './netsuite-lists';
-import { chicagoDate, OWN_COMPANY, ruleLocation, type MadeFrom, type SaveResult } from './own-invoices';
+import { chicagoDate, OWN_COMPANY, type MadeFrom, type SaveResult } from './own-invoices';
 
 /**
  * FleetSuite's own copy of each fulfillment it makes (migration 416; owner
  * decision 2026-10-19, thread "Replacing NetSuite with FleetSuite",
  * "Fulfillments"; docs/books.md "FleetSuite's own fulfillments").
  *
- * FleetSuite fulfils a sales order before it invoices it, every open line
- * (fulfillSalesOrder in src/lib/netsuite.ts), from a finished vehicle or a
- * sales order's installed quantities. Right after NetSuite makes the
- * fulfillment, FleetSuite keeps its own copy of what it took from stock,
- * worked out from what it knows rather than read back from NetSuite:
+ * FleetSuite fulfils a sales order before it invoices it: every open line
+ * (fulfillSalesOrder in src/lib/netsuite.ts) from a finished vehicle or a
+ * sales order's installed quantities, or the lines Fulfill & Invoice ships
+ * (fulfillSalesOrderLines). Right after NetSuite makes the fulfillment,
+ * FleetSuite keeps its own copy of what it took from stock, worked out from
+ * what it knows rather than read back from NetSuite:
  *
  *   - the lines are what FleetSuite's copy of the sales order
  *     (netsuite_sales_order_lines, copied every two hours) still had to
@@ -30,9 +31,16 @@ import { chicagoDate, OWN_COMPANY, ruleLocation, type MadeFrom, type SaveResult 
  *     for a kit the order lists none for, its parts as the lists copy has
  *     them. A kit whose parts can't be known that way, and an item the lists
  *     copy doesn't have yet, are kept as they are, so the check can say so;
- *   - the location is where FleetSuite books the invoice: its PO location
- *     rule's for a sales order's installed quantities, its invoice location
- *     rule's from the customer for a finished vehicle;
+ *   - each line is taken from where NetSuite takes it (since 2026-11-03,
+ *     migration 514): from the location FleetSuite told NetSuite to ship
+ *     every line from (Fulfill & Invoice ships from O'Fallon), or, when
+ *     NetSuite fulfilled the whole order, which it does line by line, from
+ *     where NetSuite's sales order has the line, read from NetSuite's order
+ *     as the copy is made (the read a kit's parts come from); a kit's parts
+ *     from the kit's line. A line whose location the order doesn't give, or
+ *     an order that can't be read, leaves it unknown, for the check to say
+ *     so. Copies made before took every line from where FleetSuite booked
+ *     the invoice, by its PO location rule or its invoice location rule;
  *   - the date is the day FleetSuite made it, in Central time.
  *
  * What it cost isn't kept on the copy: the check works it out from stock by
@@ -52,8 +60,13 @@ export type FulfilUnknown = 'lines' | 'location';
 export type KeptType = 'InvtPart' | 'Assembly' | 'Kit';
 /** NetSuite's types for the items kept in stock. */
 export type StockType = Exclude<KeptType, 'Kit'>;
-/** 'po_rule': where FleetSuite's PO location rule books the PO's invoice; 'customer_rule': its invoice location rule's. */
-export type LocationFrom = 'po_rule' | 'customer_rule';
+/**
+ * Where a copy's lines were taken from. 'sent': the location FleetSuite told NetSuite to take every line from; 'order':
+ * each line from where NetSuite's sales order has it, as NetSuite fulfils a whole order (both since migration 514).
+ * Copies made before took every line from where FleetSuite booked the invoice: 'po_rule', where its PO location rule
+ * books the PO's invoice; 'customer_rule', its invoice location rule's.
+ */
+export type LocationFrom = 'po_rule' | 'customer_rule' | 'sent' | 'order';
 
 /** A line FleetSuite takes from stock, as its copy of the sales order had it still to bill. */
 export interface FulfilledLine {
@@ -67,6 +80,8 @@ export interface FulfilledLine {
   salesOrderLineId: string | null;
   /** NetSuite's id for the kit it was taken as a part of; null or absent for an item taken for itself. */
   kitId?: string | null;
+  /** Where it was taken from, NetSuite's id for the location; null or absent when that isn't known, or is the copy's. */
+  locationId?: string | null;
 }
 
 export interface OwnFulfillmentInput {
@@ -76,6 +91,7 @@ export interface OwnFulfillmentInput {
   madeFromId: string | null;
   salesOrderId: string;
   customerNetsuiteId: string | null;
+  /** Where every line was taken from, when FleetSuite told NetSuite (or a rule said, before migration 514); null from NetSuite's order, whose lines say. */
   locationId: string | null;
   locationFrom: LocationFrom | null;
   /** 'YYYY-MM-DD', the day FleetSuite made it in Central time. */
@@ -94,16 +110,23 @@ export interface OwnFulfillment extends Omit<OwnFulfillmentInput, 'lines'> {
   unknowns: FulfilUnknown[];
 }
 
-/** FleetSuite's own copy of a fulfillment it made, from what it knows. Pure. */
+/**
+ * FleetSuite's own copy of a fulfillment it made, from what it knows: each line where it was taken from, its own
+ * location or the copy's. A copy from NetSuite's order has a location when every line was taken from the same one, and
+ * where it took stock from isn't known when some line's isn't; any other copy's location is every line's. Pure.
+ */
 export function workOutOwnFulfillment(input: OwnFulfillmentInput): OwnFulfillment {
   const unknowns: FulfilUnknown[] = [];
   if (input.lines === null) unknowns.push('lines');
-  if (!input.locationId) unknowns.push('location');
   const lines = (input.lines ?? [])
     .filter((l) => Number.isFinite(l.quantity) && l.quantity > 0)
-    .map((l, i) => ({ ...l, lineNo: i + 1 }));
+    .map((l, i) => ({ ...l, locationId: l.locationId || input.locationId || null, lineNo: i + 1 }));
+  const fromOrder = input.locationFrom === 'order';
+  const places = [...new Set(lines.map((l) => l.locationId))];
+  const locationId = fromOrder ? (places.length === 1 ? places[0] : null) : input.locationId;
+  if (fromOrder ? places.includes(null) : !locationId) unknowns.push('location');
   const { lines: _fulfilled, ...header } = input;
-  return { ...header, locationFrom: input.locationId ? input.locationFrom : null, lines, unknowns };
+  return { ...header, locationId, locationFrom: locationId || fromOrder ? input.locationFrom : null, lines, unknowns };
 }
 
 /** The copy as gl_own_fulfillment_save takes it. */
@@ -130,6 +153,7 @@ export function fulfillmentPayload(own: OwnFulfillment): Record<string, unknown>
       quantity: l.quantity,
       sales_order_line_id: l.salesOrderLineId,
       kit_netsuite_id: l.kitId ?? null,
+      location_netsuite_id: l.locationId ?? null,
     })),
   };
 }
@@ -348,9 +372,9 @@ export async function readKitParts(service: SupabaseClient, kitIds: readonly str
   return new Map(kitIds.map((id) => [id, kitStockParts(id, items)]));
 }
 
-// ── The parts NetSuite's sales order lists ─────────────────────────────────
+// ── NetSuite's sales order: a kit's parts, and where each line is ──────────
 
-/** A line of NetSuite's sales order, as the read of a kit's parts takes it. */
+/** A line of NetSuite's sales order, as the read of a kit's parts and of where each line is takes it. */
 export interface OrderLine {
   lineId: string;
   itemId: string;
@@ -358,13 +382,15 @@ export interface OrderLine {
   quantity: number;
   /** The kit line it's a part of (transactionline.kitmemberof); null for a line of its own. */
   kitLineId: string | null;
+  /** The location the order has the line at, NetSuite's id; null when it doesn't say. */
+  locationId: string | null;
 }
 
-/** Every item line of a sales order in NetSuite, with the kit line each part of a kit is on. */
+/** Every item line of a sales order in NetSuite, with the kit line each part of a kit is on and the line's location. */
 export function orderLinesQuery(salesOrderId: string): string {
   if (!/^\d+$/.test(salesOrderId)) throw new Error(`Not a NetSuite sales order id: ${salesOrderId}`);
   return `
-      SELECT tl.id AS line_id, tl.item AS item_id, tl.quantity, tl.kitmemberof AS kit_line_id
+      SELECT tl.id AS line_id, tl.item AS item_id, tl.quantity, tl.kitmemberof AS kit_line_id, tl.location AS location_id
       FROM transactionline tl
       WHERE tl.transaction = ${salesOrderId}
         AND tl.mainline = 'F'
@@ -375,8 +401,8 @@ export function orderLinesQuery(salesOrderId: string): string {
 }
 
 /**
- * NetSuite's rows as order lines, a line with no quantity (a subtotal, say) for none; null when one can't be read
- * whole, so none is trusted. Pure.
+ * NetSuite's rows as order lines, a line with no quantity (a subtotal, say) for none and a location it can't read for
+ * none known; null when a line can't be read whole, so none is trusted. Pure.
  */
 export function mapOrderLines(rows: readonly Record<string, unknown>[]): OrderLine[] | null {
   const out: OrderLine[] = [];
@@ -387,13 +413,22 @@ export function mapOrderLines(rows: readonly Record<string, unknown>[]): OrderLi
     const kitLineId = given(r.kit_line_id) ? numericId(r.kit_line_id) : null;
     const quantity = given(r.quantity) ? num(r.quantity) : 0;
     if (!lineId || !itemId || quantity === null || (given(r.kit_line_id) && !kitLineId)) return null;
-    out.push({ lineId, itemId, quantity: Math.abs(quantity), kitLineId });
+    out.push({ lineId, itemId, quantity: Math.abs(quantity), kitLineId, locationId: numericId(r.location_id) });
   }
   return out;
 }
 
 /** Reads a sales order's lines from NetSuite (orderLinesQuery); null when they can't be read whole. */
 export type ReadOrderLines = (salesOrderId: string) => Promise<OrderLine[] | null>;
+
+/** A read of NetSuite's order made once however often it's asked for: a kit's parts and where each line is share it. */
+export function readOnce(read: ReadOrderLines): ReadOrderLines {
+  const made = new Map<string, Promise<OrderLine[] | null>>();
+  return (salesOrderId) => {
+    if (!made.has(salesOrderId)) made.set(salesOrderId, read(salesOrderId));
+    return made.get(salesOrderId)!;
+  };
+}
 
 /** How long the copy waits for NetSuite's order: the billing screen is waiting, and the invoice comes after. */
 export const ORDER_READ_TIMEOUT_MS = 6000;
@@ -536,6 +571,30 @@ export async function takeKitsApart(
   );
 }
 
+// ── Where each line was taken from ─────────────────────────────────────────
+
+/**
+ * Each line where NetSuite's sales order has it (`order`; null when it couldn't be read), as NetSuite takes each line
+ * of an order it fulfils whole from the location its order line has: a kit's part from the kit's line, which it's
+ * taken for. A line the order doesn't have, or doesn't give a location, is left not known. Pure.
+ */
+export function withOrderLocations(lines: readonly FulfilledLine[], order: readonly OrderLine[] | null): FulfilledLine[] {
+  const at = new Map((order ?? []).map((l) => [l.lineId, l.locationId]));
+  return lines.map((l) => ({ ...l, locationId: (l.salesOrderLineId && at.get(l.salesOrderLineId)) || null }));
+}
+
+/** NetSuite's order as `read` reads it for where each line is; null, and logged, when it can't be read whole. Never throws. */
+async function readLocations(read: ReadOrderLines, salesOrderId: string): Promise<OrderLine[] | null> {
+  try {
+    const order = await read(salesOrderId);
+    if (!order) console.error(`[books] NetSuite's sales order ${salesOrderId} couldn't be read whole, so where the copy took its lines from isn't known`);
+    return order;
+  } catch (err) {
+    console.error(`[books] where NetSuite's sales order ${salesOrderId} has its lines couldn't be read, so where the copy took them from isn't known: ${String((err as any)?.message || err).slice(0, 300)}`);
+    return null;
+  }
+}
+
 // ── Saving ─────────────────────────────────────────────────────────────────
 
 /** What one of the two ways of invoicing a sales order knows once NetSuite has fulfilled it. */
@@ -546,7 +605,10 @@ export interface MadeFulfillment {
   madeFromId?: string | null;
   madeBy?: string | null;
   salesOrderId: string | null | undefined;
-  /** Where FleetSuite's PO location rule books the PO's invoice, for a sales order's installed quantities. */
+  /**
+   * The location FleetSuite told NetSuite to take every line from (Fulfill & Invoice ships from O'Fallon); absent when
+   * NetSuite fulfilled the whole order, taking each line from where its sales order has it.
+   */
   locationId?: string | number | null;
   /** What shipped, by sales order line, when FleetSuite shipped part of the order; absent when it shipped every open line. */
   shipped?: { salesOrderLineId: string; quantity: number }[] | null;
@@ -568,20 +630,15 @@ export async function saveOwnFulfillment(
   if (!salesOrderId) return { saved: false, reason: 'No sales order was named' };
   try {
     const so = await readSalesOrderStock(service, salesOrderId);
-
-    let locationId = numericId(made.locationId);
-    let locationFrom: LocationFrom | null = locationId ? 'po_rule' : null;
-    if (!locationId) {
-      const locations = await service.from('gl_netsuite_lists').select('netsuite_id, name').eq('kind', 'location');
-      if (locations.error) throw new Error(locations.error.message);
-      locationId = ruleLocation(so.customerName, new Map(((locations.data ?? []) as Array<{ netsuite_id: string; name: string }>)
-        .map((l) => [String(l.netsuite_id), l.name])));
-      locationFrom = locationId ? 'customer_rule' : null;
-    }
+    const sent = numericId(made.locationId);
+    // A kit's parts and where each line is come from one read of NetSuite's order, made only when needed.
+    const read = readOnce(readOrder);
 
     const open = made.shipped && so.lines ? shippedLines(so.lines, made.shipped) : so.lines;
     // A kit is taken apart once what shipped of it is known: NetSuite takes a kit's parts from stock, not the kit.
-    const lines = open ? await takeKitsApart(service, salesOrderId, open, so.items, readOrder) : open;
+    const apart = open ? await takeKitsApart(service, salesOrderId, open, so.items, read) : open;
+    // Fulfilling a whole order, NetSuite takes each line from where its sales order has it.
+    const lines = apart?.length && !sent ? withOrderLocations(apart, await readLocations(read, salesOrderId)) : apart;
 
     const own = workOutOwnFulfillment({
       netsuiteId,
@@ -590,8 +647,8 @@ export async function saveOwnFulfillment(
       madeFromId: made.madeFromId ?? null,
       salesOrderId,
       customerNetsuiteId: so.customerNetsuiteId,
-      locationId,
-      locationFrom,
+      locationId: sent,
+      locationFrom: sent ? 'sent' : 'order',
       fulfilDate: chicagoDate(at),
       lines,
       madeBy: made.madeBy ?? null,

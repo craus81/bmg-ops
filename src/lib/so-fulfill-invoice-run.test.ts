@@ -7,10 +7,11 @@ vi.mock('@/lib/books/own-invoices', () => ({ saveOwnInvoice: vi.fn() }));
 vi.mock('@/lib/portal-invoice-notify', () => ({ notifyPortalInvoice: vi.fn() }));
 vi.mock('@/lib/audit', () => ({ logAudit: vi.fn() }));
 
-import { createInvoiceFromSO } from '@/lib/netsuite';
+import { createInvoiceFromSO, fulfillSalesOrderLines } from '@/lib/netsuite';
 import { markDropShipLines } from '@/lib/so-fulfill-invoice-read';
+import { saveOwnFulfillment } from '@/lib/books/own-fulfillments';
 import { saveOwnInvoice } from '@/lib/books/own-invoices';
-import { claimSalesOrder, runFulfillInvoice } from './so-fulfill-invoice-run';
+import { claimSalesOrder, OFALLON, runFulfillInvoice } from './so-fulfill-invoice-run';
 
 /** A so_invoice_claims table in memory, enough for claimSalesOrder. */
 function fakeClaims(rows: Record<string, string | null> = {}) {
@@ -82,5 +83,23 @@ describe('runFulfillInvoice', () => {
     // With no invoice id there's no copy to warn from, only that the id is missing.
     expect((await run({ invoiceId: '', invoiceNumber: '' }, { saved: false, reason: "NetSuite didn't say which invoice it made" })).body.warning)
       .toBe('NetSuite did not return the invoice id — find the new invoice in NetSuite');
+  });
+
+  it("ships what it bills from O'Fallon, and FleetSuite's copy of the fulfillment takes it from there", async () => {
+    const RACK = { ...LABOR, lineSeq: 2, lineId: '12', itemId: '57', itemNumber: 'RACK-1', description: 'Ladder rack', itemType: 'InvtPart', ordered: 2, rate: 400, amount: 800, onHand: 3 };
+    vi.mocked(markDropShipLines).mockResolvedValue({
+      status: 'B', soNumber: 'SO1177', customerName: 'Sample Fleet Co', customerNetsuiteId: '9001', poNumber: null, lines: [LABOR, RACK],
+    });
+    vi.mocked(fulfillSalesOrderLines).mockResolvedValue({ success: true, fulfillmentId: '7001', fulfillmentNumber: 'IF801' } as any);
+    vi.mocked(createInvoiceFromSO).mockResolvedValue({ success: true, invoiceId: '5001', invoiceNumber: 'INV2401' } as any);
+    vi.mocked(saveOwnInvoice).mockResolvedValue({ saved: true });
+    vi.mocked(saveOwnFulfillment).mockClear();
+    const r = await runFulfillInvoice({} as any, { soId: '1177', billNow: { 2: 1 }, actorId: 'user-1', estimate: null });
+    expect(r).toMatchObject({ status: 200, body: { success: true, invoiceNumber: 'INV2401' } });
+    expect(vi.mocked(fulfillSalesOrderLines).mock.calls[0][0]).toMatchObject({ salesOrderId: '1177', shipLines: [{ orderLine: 2, quantity: 1 }], locationId: OFALLON });
+    expect(saveOwnFulfillment).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(saveOwnFulfillment).mock.calls[0][1]).toMatchObject({
+      netsuiteId: '7001', salesOrderId: '1177', locationId: OFALLON, shipped: [{ salesOrderLineId: '12', quantity: 1 }],
+    });
   });
 });

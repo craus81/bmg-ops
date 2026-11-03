@@ -264,7 +264,7 @@ admins can open it while fixing invoices is switched off.
 | Own invoice tests | `src/lib/books/own-invoices.test.ts`, `src/lib/books/own-invoice-check.test.ts`, `src/lib/books/own-invoices-sql.test.ts`; the customers list's are in the lists test files, the daily check's in its own |
 | FleetSuite's own invoices posted in place of NetSuite's when they match | `migrations/409-books-own-invoice-posting.sql`, `src/lib/books/own-invoice-posting.ts`, `src/lib/books/invoice-posting.ts` |
 | Own invoice posting tests | `src/lib/books/own-invoice-posting.test.ts`; the posting decisions are in `invoice-posting.test.ts`, end to end in `invoice-posting-sql.test.ts` |
-| FleetSuite's own fulfillments, saved as each is made, costed from stock by item and checked against NetSuite's | `migrations/416-books-own-fulfillments.sql`, `src/lib/books/own-fulfillments.ts`, `src/lib/books/own-fulfillment-check.ts`; saved by `src/app/api/vehicle-tracking/invoice/route.ts` and `src/app/api/netsuite/create-invoice/route.ts` right after `fulfillSalesOrder` in `src/lib/netsuite.ts` |
+| FleetSuite's own fulfillments, saved as each is made, costed from stock by item and checked against NetSuite's | `migrations/416-books-own-fulfillments.sql`, `migrations/512-books-kit-parts.sql` (a kit's parts), `migrations/514-books-fulfillment-locations.sql` (where each line was taken from), `src/lib/books/own-fulfillments.ts`, `src/lib/books/own-fulfillment-check.ts`; saved by `src/app/api/vehicle-tracking/invoice/route.ts` and `src/app/api/netsuite/create-invoice/route.ts` right after `fulfillSalesOrder` in `src/lib/netsuite.ts`, and by Fulfill & Invoice (`src/lib/so-fulfill-invoice-run.ts`) right after `fulfillSalesOrderLines` |
 | Own fulfillments and one fulfillment's check, and their API | `src/app/(main)/admin/books/own-fulfillments/page.tsx`, `src/app/(main)/admin/books/own-fulfillments/fulfillment/page.tsx`, `src/app/api/admin/books/own-fulfillments/route.ts` |
 | Own fulfillment tests | `src/lib/books/own-fulfillments.test.ts`, `src/lib/books/own-fulfillment-check.test.ts`, `src/lib/books/own-fulfillments-sql.test.ts`; the daily check's are in its test files |
 | Books' own bills and receipts, saved as FleetSuite makes each and checked against NetSuite's, and one bill per approved vendor invoice or payout | `migrations/435-books-own-bills.sql`, `src/lib/books/own-bills.ts`, `src/lib/books/own-receipts.ts`, `src/lib/books/own-bill-check.ts`, `src/lib/books/own-receipt-check.ts`, `src/lib/bill-once.ts`, `findVendorBill` in `src/lib/netsuite.ts`; saved by `src/app/api/vendor-invoices/workflow/route.ts`, `src/app/api/admin/payouts/route.ts`, `src/app/api/parts-mail/create-bill/route.ts` and `src/app/api/po-receipts/route.ts` |
@@ -3021,7 +3021,8 @@ what day, worked out from what it knows rather than read back from
 NetSuite, and it works out what that cost itself, from stock by item (owner
 decision 2026-10-19, "Fulfillments"). FleetSuite fulfils a sales order
 before it invoices it, every open line (`fulfillSalesOrder` in
-`src/lib/netsuite.ts`), so its fulfillments are the cost side of its
+`src/lib/netsuite.ts`) or the lines Fulfill & Invoice ships
+(`fulfillSalesOrderLines`), so its fulfillments are the cost side of its
 invoices: what leaves stock, and the cost of goods sold it books. The copies
 are `gl_own_fulfillments` and `gl_own_fulfillment_lines` (migration 416).
 From part 30 the books post a copy in place of NetSuite's fulfillment when
@@ -3029,11 +3030,13 @@ it matches it and makes the same entry ("Posting FleetSuite's own
 fulfillments, receipts and bills"), and NetSuite's otherwise ("Stock and
 cost"). Nothing is written to NetSuite.
 
-Both ways FleetSuite invoices a sales order save a copy right after NetSuite
-makes the fulfillment (`saveOwnFulfillment` in
+Each way FleetSuite invoices a sales order saves a copy right after
+NetSuite makes the fulfillment (`saveOwnFulfillment` in
 `src/lib/books/own-fulfillments.ts`): a finished vehicle
 (`/api/vehicle-tracking/invoice`) and a sales order's installed quantities
-(`/api/netsuite/create-invoice`). An order NetSuite already had fulfilled is
+(`/api/netsuite/create-invoice`), which fulfil the whole order, and Fulfill
+& Invoice (`src/lib/so-fulfill-invoice-run.ts`), which ships the lines it's
+given, every one from O'Fallon. An order NetSuite already had fulfilled is
 skipped, as `fulfillSalesOrder` skips it, and has no copy. Saving never
 stops an invoice: a copy that can't be saved is logged (`[books] own copy of
 NetSuite fulfillment … not saved`) and the invoice goes on. A copy is kept
@@ -3045,7 +3048,8 @@ in NetSuite by hand have no copy.
 - **Items.** What FleetSuite's copy of the sales order
   (`netsuite_sales_order_lines`, copied every two hours) still had to bill,
   each line's quantity less what's billed, since FleetSuite fulfils an order
-  just before it bills it, of the items that can move stock: inventory items
+  just before it bills it (from Fulfill & Invoice, what it shipped of each
+  line, `shippedLines`), of the items that can move stock: inventory items
   and assemblies, by their types in the lists copy. An item the lists copy
   doesn't have yet is kept, so the check can say so. Services, non-inventory
   items, discounts and the like are left out.
@@ -3073,33 +3077,50 @@ in NetSuite by hand have no copy.
   lists …`) and the items' copy is used, and parts that copy can't give are
   logged too (`[books] the parts of … couldn't be read`), keeping those kits
   whole.
-- **Location.** Where FleetSuite books the invoice: for a sales order's
-  installed quantities, where its PO location rule puts the PO's invoice
-  (`resolveLocationWithOverride` in `src/lib/invoice-location.ts`); for a
-  finished vehicle, where its invoice location rule puts the customer's
-  invoices, when the rule is sure.
+- **Location.** Each line is taken from where NetSuite takes it (from
+  2026-11-03, migration 514: `location_netsuite_id` on each line). Fulfill &
+  Invoice tells NetSuite to take every line from O'Fallon, so the copy does
+  (`location_from` `sent`). Fulfilling a whole order, NetSuite takes each
+  line from the location its sales order line has, so the copy reads from
+  NetSuite, as it's made, where the order has each line, in the same read a
+  kit's parts come from (`orderLinesQuery`, made once for both,
+  `readOnce`), and takes a kit's parts from the kit's line
+  (`withOrderLocations`; `order`). The copy's own location is the one its
+  lines were all taken from, and none when they were taken from more than
+  one. Where a line was taken from isn't known when the order can't be read
+  (the read waits six seconds at most) or doesn't give that line a
+  location; an order that can't be read is logged (`[books] … where the
+  copy took … from isn't known`). Copies made before took every line from
+  where FleetSuite booked the invoice: its PO location rule's for a sales
+  order's installed quantities (`po_rule`, `resolveLocationWithOverride` in
+  `src/lib/invoice-location.ts`), its invoice location rule's from the
+  customer for a finished vehicle (`customer_rule`). That isn't always where
+  the order has the lines, a Masterack plant's invoice off an order whose
+  lines are at O'Fallon, say, and NetSuite took them from there.
 - **Date.** The day FleetSuite made it, in Central time.
 
-What FleetSuite can't work out is kept on the copy as unknown, never guessed
-from NetSuite: the items (its copy of the order didn't have the order yet)
-and the location (a Masterack order with no plant named).
+What FleetSuite can't work out is kept on the copy as unknown, never taken
+from NetSuite's fulfillment: the items (its copy of the order didn't have
+the order yet) and where it took a line from (NetSuite's order couldn't be
+read, or doesn't say; on a copy made before 2026-11-03, a Masterack order
+with no plant named).
 
 ### What it cost
 
 The cost isn't kept on the copy. It's worked out each time the copy is
 checked, from stock by item ("Stock by item"), FleetSuite's own count and
-value of each item at each location: an item's cost each is the value
-FleetSuite counted of it at that location just before the fulfillment, over
-the count there, from its count and value on December 31, 2024 and every
-NetSuite document since that comes before the fulfillment, by date and then
-by NetSuite's id (`gl_own_fulfillment_pairs`). That's the item's average
-cost at the location, as NetSuite costs an average-cost item. A line costs
-its quantity at that, rounded half away from zero to the cent, and a copy
-costs its lines added up. Working it out each time means a document NetSuite
-dates earlier that reaches the copies later, a receipt entered the next day
-and dated back say, counts, as it does in NetSuite, which costs the
-fulfillment again. An item FleetSuite counted none of there can't be
-costed.
+value of each item at each location: a line's cost each is the value
+FleetSuite counted of its item at the location the line was taken from just
+before the fulfillment, over the count there, from its count and value on
+December 31, 2024 and every NetSuite document since that comes before the
+fulfillment, by date and then by NetSuite's id (`gl_own_fulfillment_pairs`).
+That's the item's average cost at the location, as NetSuite costs an
+average-cost item. A line costs its quantity at that, rounded half away from
+zero to the cent, and a copy costs its lines added up. Working it out each
+time means a document NetSuite dates earlier that reaches the copies later,
+a receipt entered the next day and dated back say, counts, as it does in
+NetSuite, which costs the fulfillment again. An item FleetSuite counted none
+of there can't be costed.
 
 NetSuite's cost is what its fulfillment took off the inventory accounts, as
 the copy of its general ledger has it, line by line.
@@ -3109,7 +3130,7 @@ the copy of its general ledger has it, line by line.
 `checkOwnFulfillment` (`src/lib/books/own-fulfillment-check.ts`) puts each
 copy next to NetSuite's fulfillment as the copy of NetSuite's stock moves
 has it (migration 401): its date, where it took stock from, each item and
-how many, and what it cost. A copy:
+how many and from where, and what it cost. A copy:
 
 - **waits** until the copy of NetSuite's stock moves has NetSuite's
   fulfillment and the copy of its general ledger has its entry. The stock
@@ -3133,6 +3154,16 @@ taken from and what it cost. So a fulfillment taken from another location
 says so once, and the list's sentence doesn't name the cost too, which
 follows from what was taken and from where.
 
+Where it was taken from is compared item by item (from 2026-11-03): each
+item from the same locations on both sides, and as many from each when both
+took as many of it, so an item FleetSuite took two of from O'Fallon and one
+from Wentzville, and NetSuite one and two, differs. The Location line
+compares the places either side took from in all, and differs too when
+they're the same but an item was taken from another place, two items taken
+from each other's location say, naming the first. An item FleetSuite didn't
+know is kept in stock counts in where it took stock from only when NetSuite
+took it too.
+
 A kit's parts are compared as any item is, with what NetSuite's fulfillment
 took of them. NetSuite's own line for the kit moves nothing and posts
 nothing, so it isn't compared.
@@ -3147,9 +3178,10 @@ ledger and lists and the daily check went, and a search. Each opens
 `/admin/books/own-fulfillments/fulfillment?id=`
 (`deepLinks.booksOwnFulfillment`, by NetSuite's id for the fulfillment):
 what's compared, side by side with why it differs; each item with its
-quantity, cost each and cost on both sides and the count and value
-FleetSuite costed it from, and which kit it was a part of, linking to its
-moves on Stock by item; the
+quantity, where each side took it from, cost each and cost on both sides
+and the count and value FleetSuite costed it from, and which kit it was a
+part of, linking to its moves on Stock by item where FleetSuite took it
+from (at every location, when it took it from more than one); the
 copy's entry next to NetSuite's, or what NetSuite's fulfillment posted,
 account by account, when the copy's isn't worked out; what FleetSuite
 didn't know; how it worked the copy out; and FleetSuite's own invoice off
@@ -3163,8 +3195,9 @@ when one stops matching ("Daily check").
 - A kit whose parts neither NetSuite's sales order nor the copy of
   NetSuite's items has stays whole, so a fulfillment of it is incomplete.
   Copies made before 2026-11-03 kept every kit whole.
-- A fulfillment NetSuite took from more than one location differs on
-  location: FleetSuite takes each one from one.
+- Copies made before 2026-11-03 took every line from where FleetSuite
+  booked the invoice, so one whose order had its lines elsewhere still
+  differs on location.
 
 ## FleetSuite's own bills and receipts
 

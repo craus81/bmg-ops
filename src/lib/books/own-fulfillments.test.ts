@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
@@ -15,11 +17,13 @@ import {
   orderLinesQuery,
   ORDER_READ_TIMEOUT_MS,
   readKitParts,
+  readOnce,
   readOrderLines,
   readSalesOrderStock,
   saveOwnFulfillment,
   takeKitsApart,
   withKitParts,
+  withOrderLocations,
   workOutOwnFulfillment,
   type FulfilledLine,
   type KitPartLine,
@@ -65,6 +69,29 @@ describe("working out FleetSuite's own fulfillment", () => {
     expect(workOutOwnFulfillment(input({ lines: null, locationId: null })).unknowns).toEqual(['lines', 'location']);
   });
 
+  it("takes each line from where it says, or the copy's; a copy from NetSuite's order is where all its lines are, if one place", () => {
+    const line = (salesOrderLineId: string, locationId: string | null) => ({
+      itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart' as const, quantity: 1, salesOrderLineId, locationId,
+    });
+    // Told where to take every line from, each line is taken from there.
+    const sent = workOutOwnFulfillment(input({ locationId: '1', locationFrom: 'sent', lines: [line('1', null), line('2', null)] }));
+    expect(sent).toMatchObject({ locationId: '1', locationFrom: 'sent', unknowns: [] });
+    expect(sent.lines.map((l) => l.locationId)).toEqual(['1', '1']);
+    // From NetSuite's order: where every line is, when that's one place.
+    const order = (lines: ReturnType<typeof line>[] | null) => workOutOwnFulfillment(input({ locationId: null, locationFrom: 'order', lines }));
+    expect(order([line('1', '2'), line('2', '2')])).toMatchObject({ locationId: '2', locationFrom: 'order', unknowns: [] });
+    // Two places: none for the copy, each line its own, nothing unknown.
+    const two = order([line('1', '1'), line('2', '2')]);
+    expect(two).toMatchObject({ locationId: null, locationFrom: 'order', unknowns: [] });
+    expect(two.lines.map((l) => l.locationId)).toEqual(['1', '2']);
+    // A line the order doesn't place leaves where it took stock from unknown, but says where from.
+    expect(order([line('1', '1'), line('2', null)])).toMatchObject({ locationId: null, locationFrom: 'order', unknowns: ['location'] });
+    expect(order([line('1', null)])).toMatchObject({ locationId: null, locationFrom: 'order', unknowns: ['location'] });
+    // Where nothing was taken from doesn't matter.
+    expect(order([])).toMatchObject({ locationId: null, locationFrom: 'order', unknowns: [] });
+    expect(order(null)).toMatchObject({ locationId: null, locationFrom: 'order', unknowns: ['lines'] });
+  });
+
   it('writes the copy as the database takes it', () => {
     expect(fulfillmentPayload(workOutOwnFulfillment(input({ madeBy: 'u-1' })))).toEqual({
       netsuite_id: '7001', netsuite_number: 'IF7001', company: 'BMG', made_from: 'vehicle', made_from_id: 'checkin-1',
@@ -72,16 +99,25 @@ describe("working out FleetSuite's own fulfillment", () => {
       location_from: 'customer_rule', unknowns: [], made_by: 'u-1',
       lines: [{
         line_no: 1, item_netsuite_id: '55', item_number: 'SHELF-1', description: 'Shelf', item_type: 'InvtPart', quantity: 2,
-        sales_order_line_id: '1', kit_netsuite_id: null,
+        sales_order_line_id: '1', kit_netsuite_id: null, location_netsuite_id: '1',
       }],
     });
-    // A kit's part says which kit it was taken for.
+    // A kit's part says which kit it was taken for, and each line where it was taken from.
     const part = fulfillmentPayload(workOutOwnFulfillment(input({
-      lines: [{ itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 4, salesOrderLineId: '3', kitId: '70' }],
+      locationId: null,
+      locationFrom: 'order',
+      lines: [
+        { itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 4, salesOrderLineId: '3', kitId: '70', locationId: '2' },
+        { itemId: '56', itemNumber: 'RACK-1', description: null, itemType: 'InvtPart', quantity: 1, salesOrderLineId: '4' },
+      ],
     })));
+    expect(part).toMatchObject({ location_netsuite_id: null, location_from: 'order', unknowns: ['location'] });
     expect(part.lines).toEqual([{
       line_no: 1, item_netsuite_id: '55', item_number: 'SHELF-1', description: null, item_type: 'InvtPart', quantity: 4,
-      sales_order_line_id: '3', kit_netsuite_id: '70',
+      sales_order_line_id: '3', kit_netsuite_id: '70', location_netsuite_id: '2',
+    }, {
+      line_no: 2, item_netsuite_id: '56', item_number: 'RACK-1', description: null, item_type: 'InvtPart', quantity: 1,
+      sales_order_line_id: '4', kit_netsuite_id: null, location_netsuite_id: null,
     }]);
   });
 
@@ -209,8 +245,14 @@ describe('saving the copy', () => {
   beforeEach(() => { vi.mocked(suiteqlQueryAll).mockResolvedValue([]); });
   afterEach(() => { vi.restoreAllMocks(); });
 
-  it("copies a finished vehicle's fulfillment from FleetSuite's copy of the order, where the invoice location rule books it", async () => {
-    const { service, rpc } = fakeService(database());
+  it("copies a finished vehicle's fulfillment from FleetSuite's copy of the order, each line from where NetSuite's order has it", async () => {
+    // NetSuite's order has the shelf at O'Fallon and the kit at Wentzville: one read of it serves the kit and where each line is.
+    vi.mocked(suiteqlQueryAll).mockClear().mockResolvedValue([
+      { line_id: '1', item_id: '55', quantity: '-2', kit_line_id: null, location_id: '1' },
+      { line_id: '2', item_id: '56', quantity: '-3', kit_line_id: null, location_id: '1' },
+      { line_id: '3', item_id: '57', quantity: '-1', kit_line_id: null, location_id: 2 },
+    ]);
+    const { service, rpc, queries } = fakeService(database());
     const r = await saveOwnFulfillment(service, {
       netsuiteId: '7001', netsuiteNumber: 'IF7001', madeFrom: 'vehicle', madeFromId: 'checkin-1', madeBy: 'u-1', salesOrderId: '700',
     }, AT);
@@ -218,11 +260,19 @@ describe('saving the copy', () => {
     expect(rpc).toHaveBeenCalledWith('gl_own_fulfillment_save', expect.anything());
     expect(payloadOf(rpc)).toMatchObject({
       netsuite_id: '7001', netsuite_number: 'IF7001', made_from: 'vehicle', made_from_id: 'checkin-1', made_by: 'u-1',
-      sales_order_id: '700', customer_netsuite_id: '9001', location_netsuite_id: '1', location_from: 'customer_rule',
+      // Two places, so none for the copy: each line says.
+      sales_order_id: '700', customer_netsuite_id: '9001', location_netsuite_id: null, location_from: 'order',
       // 10:30 PM Central on the 19th.
       fulfil_date: '2026-10-19', unknowns: [],
     });
-    expect(payloadOf(rpc).lines.map((l: Row) => [l.line_no, l.item_number, l.item_type, l.quantity])).toEqual([[1, 'SHELF-1', 'InvtPart', 2], [2, 'RACK-KIT', 'Kit', 1]]);
+    expect(payloadOf(rpc).lines.map((l: Row) => [l.line_no, l.item_number, l.item_type, l.quantity, l.location_netsuite_id])).toEqual([
+      [1, 'SHELF-1', 'InvtPart', 2, '1'],
+      [2, 'RACK-KIT', 'Kit', 1, '2'],
+    ]);
+    expect(suiteqlQueryAll).toHaveBeenCalledTimes(1);
+    expect(suiteqlQueryAll).toHaveBeenCalledWith(orderLinesQuery('700'), 1000, { retries: 1 });
+    // Where FleetSuite books the invoice doesn't come into it.
+    expect(queries.some((q) => q.table === 'gl_netsuite_lists' && q.filters.some(([, , v]) => v === 'location'))).toBe(false);
   });
 
   it("takes a kit apart before saving: as NetSuite's order lists its parts, else as the lists copy has them unless the order names one", async () => {
@@ -231,17 +281,19 @@ describe('saving the copy', () => {
       netsuite_sales_order_lines: [soLine('1', '55', 2, 0), soLine('3', '57', 2, 0), soLine('4', '55', 4, 0)],
     });
     (db.gl_netsuite_lists as Row[])[2].details = { item_type: 'Kit', parts: [{ item: '55', quantity: 1 }] };
-    vi.mocked(suiteqlQueryAll).mockResolvedValue([
-      { line_id: '1', item_id: '55', quantity: '-2', kit_line_id: null },
-      { line_id: '3', item_id: '57', quantity: '-2', kit_line_id: null },
-      { line_id: '4', item_id: '55', quantity: '-4', kit_line_id: '3' },
+    vi.mocked(suiteqlQueryAll).mockClear().mockResolvedValue([
+      { line_id: '1', item_id: '55', quantity: '-2', kit_line_id: null, location_id: '1' },
+      { line_id: '3', item_id: '57', quantity: '-2', kit_line_id: null, location_id: '2' },
+      { line_id: '4', item_id: '55', quantity: '-4', kit_line_id: '3', location_id: '1' },
     ]);
     const fromOrder = fakeService(db);
     await saveOwnFulfillment(fromOrder.service, { netsuiteId: '7007', madeFrom: 'vehicle', salesOrderId: '700' }, AT);
+    expect(suiteqlQueryAll).toHaveBeenCalledTimes(1);
     expect(suiteqlQueryAll).toHaveBeenCalledWith(orderLinesQuery('700'), 1000, { retries: 1 });
-    expect(payloadOf(fromOrder.rpc).lines.map((l: Row) => [l.line_no, l.item_number, l.quantity, l.sales_order_line_id, l.kit_netsuite_id])).toEqual([
-      [1, 'SHELF-1', 2, '1', null],
-      [2, 'SHELF-1', 4, '3', '57'],
+    // A kit's parts are taken from where the order has the kit.
+    expect(payloadOf(fromOrder.rpc).lines.map((l: Row) => [l.line_no, l.item_number, l.quantity, l.sales_order_line_id, l.kit_netsuite_id, l.location_netsuite_id])).toEqual([
+      [1, 'SHELF-1', 2, '1', null, '1'],
+      [2, 'SHELF-1', 4, '3', '57', '2'],
     ]);
 
     // With no parts listed on NetSuite's order, the lists copy's would do, but the order names a shelf on a line of its own.
@@ -254,23 +306,70 @@ describe('saving the copy', () => {
     ]);
   });
 
-  it("takes stock from where the PO location rule books a sales order's installed quantities, without reading the locations", async () => {
-    const { service, rpc, queries } = fakeService(database());
+  it('takes every line from where FleetSuite told NetSuite to ship it from, reading NetSuite\'s order only for a kit', async () => {
+    vi.mocked(suiteqlQueryAll).mockClear();
+    const { service, rpc, queries } = fakeService(database({ netsuite_sales_order_lines: [soLine('1', '55', 2, 0), soLine('2', '56', 3, 0)] }));
     await saveOwnFulfillment(service, { netsuiteId: '7002', madeFrom: 'sales_order', madeFromId: 'po-1', salesOrderId: '700', locationId: 2 }, AT);
-    expect(payloadOf(rpc)).toMatchObject({ made_from: 'sales_order', location_netsuite_id: '2', location_from: 'po_rule', unknowns: [] });
+    expect(payloadOf(rpc)).toMatchObject({ made_from: 'sales_order', location_netsuite_id: '2', location_from: 'sent', unknowns: [] });
+    expect(payloadOf(rpc).lines.map((l: Row) => l.location_netsuite_id)).toEqual(['2']);
+    expect(suiteqlQueryAll).not.toHaveBeenCalled();
     expect(queries.some((q) => q.table === 'gl_netsuite_lists' && q.filters.some(([, , v]) => v === 'location'))).toBe(false);
+
+    // A kit's parts, as the order lists them, from there too, though the order has the kit somewhere else.
+    vi.mocked(suiteqlQueryAll).mockResolvedValue([
+      { line_id: '1', item_id: '55', quantity: '-2', kit_line_id: null, location_id: '1' },
+      { line_id: '3', item_id: '57', quantity: '-1', kit_line_id: null, location_id: '1' },
+      { line_id: '4', item_id: '55', quantity: '-3', kit_line_id: '3', location_id: '1' },
+    ]);
+    const kit = fakeService(database({ netsuite_sales_order_lines: [soLine('1', '55', 2, 0), soLine('3', '57', 1, 0), soLine('4', '55', 3, 0)] }));
+    await saveOwnFulfillment(kit.service, { netsuiteId: '7012', madeFrom: 'sales_order', salesOrderId: '700', locationId: '2' }, AT);
+    expect(payloadOf(kit.rpc)).toMatchObject({ location_netsuite_id: '2', location_from: 'sent', unknowns: [] });
+    expect(payloadOf(kit.rpc).lines.map((l: Row) => [l.item_number, l.quantity, l.kit_netsuite_id, l.location_netsuite_id])).toEqual([
+      ['SHELF-1', 2, null, '2'],
+      ['SHELF-1', 3, '57', '2'],
+    ]);
+    expect(suiteqlQueryAll).toHaveBeenCalledTimes(1);
   });
 
-  it("says it didn't know where a Masterack order took stock from when the rule isn't sure, nor the lines of an order it hasn't copied", async () => {
+  it("takes a Masterack order's stock from where NetSuite's order has it, not where its invoice would book", async () => {
     const db = database();
     (db.netsuite_sales_orders as Row[])[0].customer_name = 'Masterack LLC';
+    vi.mocked(suiteqlQueryAll).mockResolvedValue([
+      { line_id: '1', item_id: '55', quantity: '-2', kit_line_id: null, location_id: '1' },
+      { line_id: '3', item_id: '57', quantity: '-1', kit_line_id: null, location_id: '1' },
+    ]);
     const masterack = fakeService(db);
     await saveOwnFulfillment(masterack.service, { netsuiteId: '7003', madeFrom: 'vehicle', salesOrderId: '700' }, AT);
-    expect(payloadOf(masterack.rpc)).toMatchObject({ location_netsuite_id: null, location_from: null, unknowns: ['location'] });
+    expect(payloadOf(masterack.rpc)).toMatchObject({ location_netsuite_id: '1', location_from: 'order', unknowns: [] });
+  });
 
+  it("says it didn't know where it took stock from when NetSuite's order can't be read or doesn't say, nor the lines of an order it hasn't copied", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const shelfOnly = () => fakeService(database({ netsuite_sales_order_lines: [soLine('1', '55', 2, 0)] }));
+    const saved = async (rows: Record<string, unknown>[] | Error, id: string) => {
+      if (rows instanceof Error) vi.mocked(suiteqlQueryAll).mockRejectedValue(rows);
+      else vi.mocked(suiteqlQueryAll).mockResolvedValue(rows);
+      const { service, rpc } = shelfOnly();
+      expect(await saveOwnFulfillment(service, { netsuiteId: id, madeFrom: 'vehicle', salesOrderId: '700' }, AT)).toEqual({ saved: true });
+      expect(payloadOf(rpc)).toMatchObject({ location_netsuite_id: null, location_from: 'order', unknowns: ['location'] });
+      expect(payloadOf(rpc).lines.map((l: Row) => l.location_netsuite_id)).toEqual([null]);
+    };
+    await saved(new Error('NetSuite SuiteQL error (503): Service unavailable'), '7003');
+    expect(error).toHaveBeenCalledWith(
+      "[books] where NetSuite's sales order 700 has its lines couldn't be read, so where the copy took them from isn't known: NetSuite SuiteQL error (503): Service unavailable",
+    );
+    await saved([{ line_id: 'x', item_id: '55', quantity: '-2' }], '7004');
+    expect(error).toHaveBeenCalledWith("[books] NetSuite's sales order 700 couldn't be read whole, so where the copy took its lines from isn't known");
+    // A line the order doesn't place, or doesn't have.
+    await saved([{ line_id: '1', item_id: '55', quantity: '-2', kit_line_id: null, location_id: null }], '7005');
+    await saved([{ line_id: '9', item_id: '55', quantity: '-2', kit_line_id: null, location_id: '1' }], '7006');
+
+    vi.mocked(suiteqlQueryAll).mockClear();
     const uncopied = fakeService(database());
-    await saveOwnFulfillment(uncopied.service, { netsuiteId: '7004', madeFrom: 'vehicle', salesOrderId: '701' }, AT);
-    expect(payloadOf(uncopied.rpc)).toMatchObject({ customer_netsuite_id: null, lines: [], unknowns: ['lines', 'location'] });
+    await saveOwnFulfillment(uncopied.service, { netsuiteId: '7008', madeFrom: 'vehicle', salesOrderId: '701' }, AT);
+    expect(payloadOf(uncopied.rpc)).toMatchObject({ customer_netsuite_id: null, lines: [], location_from: 'order', unknowns: ['lines'] });
+    // Nothing to place, so NetSuite's order isn't read.
+    expect(suiteqlQueryAll).not.toHaveBeenCalled();
   });
 
   it('never throws: a fulfillment with no id or order, a failed read or a refused save is only logged', async () => {
@@ -407,22 +506,25 @@ describe("a kit's lines taken apart", () => {
 describe("the parts NetSuite's sales order lists for a kit", () => {
   it('asks NetSuite for every item line of the order, and refuses anything but an id', () => {
     const q = orderLinesQuery('700');
-    expect(q).toMatch(/SELECT tl\.id AS line_id, tl\.item AS item_id, tl\.quantity, tl\.kitmemberof AS kit_line_id\s+FROM transactionline tl/);
+    expect(q).toMatch(/SELECT tl\.id AS line_id, tl\.item AS item_id, tl\.quantity, tl\.kitmemberof AS kit_line_id, tl\.location AS location_id\s+FROM transactionline tl/);
     expect(q).toMatch(/WHERE tl\.transaction = 700\s+AND tl\.mainline = 'F'\s+AND tl\.taxline = 'F'\s+AND tl\.item IS NOT NULL\s+ORDER BY tl\.id\s*$/);
     expect(() => orderLinesQuery('700 OR 1=1')).toThrow('Not a NetSuite sales order id');
   });
 
   it("reads NetSuite's lines whole or not at all", () => {
     expect(mapOrderLines([
-      { line_id: 3, item_id: '70', quantity: '-2', kit_line_id: null },
-      { line_id: '4', item_id: 55, quantity: -4, kit_line_id: 3 },
+      { line_id: 3, item_id: '70', quantity: '-2', kit_line_id: null, location_id: '2' },
+      { line_id: '4', item_id: 55, quantity: -4, kit_line_id: 3, location_id: 1 },
       { line_id: '9', item_id: '90', quantity: null, kit_line_id: '' },
+      // A location it can't read is one it doesn't know, which doesn't spoil the rest.
+      { line_id: '10', item_id: '90', quantity: '-1', location_id: "O'Fallon" },
     ])).toEqual([
       // NetSuite keeps a sale's quantities below nothing.
-      { lineId: '3', itemId: '70', quantity: 2, kitLineId: null },
-      { lineId: '4', itemId: '55', quantity: 4, kitLineId: '3' },
+      { lineId: '3', itemId: '70', quantity: 2, kitLineId: null, locationId: '2' },
+      { lineId: '4', itemId: '55', quantity: 4, kitLineId: '3', locationId: '1' },
       // A subtotal's line is for nothing.
-      { lineId: '9', itemId: '90', quantity: 0, kitLineId: null },
+      { lineId: '9', itemId: '90', quantity: 0, kitLineId: null, locationId: null },
+      { lineId: '10', itemId: '90', quantity: 1, kitLineId: null, locationId: null },
     ]);
     for (const bad of [{ line_id: 'x', item_id: '55', quantity: 1 }, { line_id: '4', item_id: null, quantity: 1 }, { line_id: '4', item_id: '55', quantity: 'some' },
       { line_id: '4', item_id: '55', quantity: 1, kit_line_id: 'kit' }]) {
@@ -431,8 +533,8 @@ describe("the parts NetSuite's sales order lists for a kit", () => {
   });
 
   it('reads them with a SuiteQL query, writing nothing', async () => {
-    vi.mocked(suiteqlQueryAll).mockResolvedValueOnce([{ line_id: '4', item_id: '55', quantity: '-4', kit_line_id: '3' }]);
-    expect(await readOrderLines('700')).toEqual([{ lineId: '4', itemId: '55', quantity: 4, kitLineId: '3' }]);
+    vi.mocked(suiteqlQueryAll).mockResolvedValueOnce([{ line_id: '4', item_id: '55', quantity: '-4', kit_line_id: '3', location_id: '1' }]);
+    expect(await readOrderLines('700')).toEqual([{ lineId: '4', itemId: '55', quantity: 4, kitLineId: '3', locationId: '1' }]);
     expect(suiteqlQueryAll).toHaveBeenLastCalledWith(orderLinesQuery('700'), 1000, { retries: 1 });
   });
 
@@ -457,7 +559,7 @@ describe("the parts NetSuite's sales order lists for a kit", () => {
     }
   });
 
-  const ol = (lineId: string, itemId: string, quantity: number, kitLineId: string | null = null): OrderLine => ({ lineId, itemId, quantity, kitLineId });
+  const ol = (lineId: string, itemId: string, quantity: number, kitLineId: string | null = null): OrderLine => ({ lineId, itemId, quantity, kitLineId, locationId: null });
   const types = new Map<string, ListedItem | null>([
     ['70', listed('SHELF-KIT', 'Kit')],
     ['74', listed('INNER-KIT', 'Kit')],
@@ -589,7 +691,7 @@ describe('taking the kits on a fulfillment apart', () => {
   const shelf = (quantity: number, salesOrderLineId: string): FulfilledLine => ({
     itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity, salesOrderLineId,
   });
-  const ol = (lineId: string, itemId: string, quantity: number, kitLineId: string | null = null): OrderLine => ({ lineId, itemId, quantity, kitLineId });
+  const ol = (lineId: string, itemId: string, quantity: number, kitLineId: string | null = null): OrderLine => ({ lineId, itemId, quantity, kitLineId, locationId: null });
 
   it("takes a kit's parts as NetSuite's order lists them, its part lines on the copy going", async () => {
     const { service, queries } = fakeService({ gl_netsuite_lists: LISTS });
@@ -665,5 +767,61 @@ describe('taking the kits on a fulfillment apart', () => {
     expect(await takeKitsApart(service, '700', [shelf(1, '1')], [], readOrder)).toEqual([shelf(1, '1')]);
     expect(readOrder).not.toHaveBeenCalled();
     expect(queries).toEqual([]);
+  });
+});
+
+describe('where each line was taken from', () => {
+  const at = (lineId: string, locationId: string | null): OrderLine => ({ lineId, itemId: '55', quantity: 1, kitLineId: null, locationId });
+  const line = (salesOrderLineId: string | null, kitId: string | null = null): FulfilledLine => ({
+    itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 1, salesOrderLineId, kitId,
+  });
+
+  it("takes each line from where NetSuite's order has it, a kit's part from the kit's line, and knows nothing it isn't told", () => {
+    const order = [at('1', '1'), at('3', '2'), at('4', null)];
+    expect(withOrderLocations([line('1'), line('3', '70'), line('4'), line('9'), line(null)], order).map((l) => [l.salesOrderLineId, l.locationId])).toEqual([
+      ['1', '1'],
+      // The kit's part, on the kit's line.
+      ['3', '2'],
+      // The order doesn't say, doesn't have the line, or the line isn't on it.
+      ['4', null],
+      ['9', null],
+      [null, null],
+    ]);
+    // An order that couldn't be read says nothing, whatever the line said before.
+    expect(withOrderLocations([{ ...line('1'), locationId: '2' }], null)).toEqual([{ ...line('1'), locationId: null }]);
+  });
+
+  it("reads NetSuite's order once, however often it's asked for, an order at a time", async () => {
+    const read = vi.fn(async (id: string) => [at(id, '1')]);
+    const once = readOnce(read);
+    const [a, b] = await Promise.all([once('700'), once('700')]);
+    expect(a).toBe(b);
+    expect(await once('701')).toEqual([at('701', '1')]);
+    expect(read.mock.calls).toEqual([['700'], ['701']]);
+    // A failed read fails each time it's asked for, without reading again.
+    const failing = vi.fn(async () => { throw new Error('timed out'); });
+    const failingOnce = readOnce(failing);
+    await expect(failingOnce('700')).rejects.toThrow('timed out');
+    await expect(failingOnce('700')).rejects.toThrow('timed out');
+    expect(failing).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the ways FleetSuite invoices a sales order', () => {
+  const ROOT = path.resolve(__dirname, '../../..');
+  /** The saveOwnFulfillment call in a file, up to the end of its arguments. */
+  const saveCall = (file: string) => {
+    const text = readFileSync(path.join(ROOT, file), 'utf8');
+    const at = text.indexOf('await saveOwnFulfillment(');
+    expect(at).toBeGreaterThan(-1);
+    return text.slice(at, text.indexOf('});', at));
+  };
+
+  it('say where every line was taken from only when FleetSuite told NetSuite: fulfilling a whole order, the copy reads it', () => {
+    // fulfillSalesOrder: NetSuite takes each line from where its sales order has it, so the copy reads that.
+    expect(saveCall('src/app/api/netsuite/create-invoice/route.ts')).not.toMatch(/locationId/);
+    expect(saveCall('src/app/api/vehicle-tracking/invoice/route.ts')).not.toMatch(/locationId/);
+    // Fulfill & Invoice ships every line from O'Fallon.
+    expect(saveCall('src/lib/so-fulfill-invoice-run.ts')).toMatch(/locationId: OFALLON,/);
   });
 });
