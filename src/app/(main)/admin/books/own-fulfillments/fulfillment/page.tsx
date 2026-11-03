@@ -19,10 +19,11 @@ import { OwnBooksLine, OwnEntry } from '@/components/BooksOwnPosting';
  *
  * What's compared, each with FleetSuite's and NetSuite's side and why they
  * differ; each item FleetSuite took from stock paired with NetSuite's, with
- * the count and value FleetSuite costed it from (each item opens its moves
- * on Stock by item); what the books hold for it, and the entry this copy
- * makes next to NetSuite's, or when it isn't worked out what NetSuite's
- * fulfillment posted (migration 456, src/lib/books/own-posting-view.ts);
+ * where it was taken from and the count and value FleetSuite costed it from
+ * (each item opens its moves there on Stock by item); what the books hold
+ * for it, and the entry this copy makes next to NetSuite's, or when it isn't
+ * worked out what NetSuite's fulfillment posted (migration 456,
+ * src/lib/books/own-posting-view.ts);
  * what FleetSuite couldn't work out; and how it worked its copy out. Open
  * to whoever opens the books; opened from Own fulfillments or the daily
  * check's notification (?id=, NetSuite's id for the fulfillment).
@@ -110,6 +111,8 @@ function OwnSide({ side }: { side: FulfilItemPair['fleetsuite'] }) {
       {side.location && side.count !== null && side.valueCents !== null && (
         <div style={muted}>of {qty(side.count)} worth {fmt(side.valueCents)} at {side.location}</div>
       )}
+      {/* Taken from more than one place: each line was costed at its own. */}
+      {side.location && side.count === null && <div style={muted}>at {side.location}</div>}
     </div>
   );
 }
@@ -241,8 +244,8 @@ export default function BooksOwnFulfillmentPage() {
                         span={3}
                         label={(
                           <div>
-                            {/* Its moves at the location FleetSuite costed it at, on Stock by item. */}
-                            <Link href={deepLinks.booksStockItem(item.itemId, f.locationId)} className="rep-link" style={{ fontWeight: 700 }}>{item.item}</Link>
+                            {/* Its moves where FleetSuite took it from, on Stock by item: every location when it took it from more than one. */}
+                            <Link href={deepLinks.booksStockItem(item.itemId, item.fleetsuite ? item.fleetsuite.locationId : f.locationId)} className="rep-link" style={{ fontWeight: 700 }}>{item.item}</Link>
                             {item.description && item.description !== item.item && (
                               <div style={{ fontSize: '11px', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{item.description}</div>
                             )}

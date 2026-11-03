@@ -83,7 +83,7 @@ const worked = (doc: StockDocument) => workOutStockMonth({ documents: [doc] }, {
 /** An item of Books' own copy of a fulfillment: three of it, costing `cents` all told. */
 const shipped = (item: string, itemId: string, cents: number | null, kind: 'stock' | 'kit' | 'unknown' = 'stock'): FulfilItemPair => ({
   item, itemId, description: null, partOf: null,
-  fleetsuite: { quantity: 3, kind, location: '2', count: 14, valueCents: 212333, each: cents === null ? null : cents / 3, cents },
+  fleetsuite: { quantity: 3, kind, location: '2', locationId: '2', count: 14, valueCents: 212333, each: cents === null ? null : cents / 3, cents },
   netsuite: { quantity: 3, locations: ['2'], each: cents === null ? null : cents / 3, cents },
   same: true, why: null,
 });

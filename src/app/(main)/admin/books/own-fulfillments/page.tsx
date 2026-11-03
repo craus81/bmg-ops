@@ -201,8 +201,8 @@ export default function BooksOwnFulfillmentsPage() {
         <div style={{ fontSize: '20px', fontWeight: 800 }}>Own fulfillments</div>
         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
           FleetSuite&apos;s own copy of each fulfillment it makes before invoicing a sales order: what it took from stock, from
-          where and on what day, worked out from its copy of the order and its location rules. FleetSuite works out what that
-          cost itself, from Stock by item: each item at its average cost at that location just before. Each is put next to
+          where and on what day, worked out from its copy of the order, each line from where NetSuite is told to take it. FleetSuite
+          works out what that cost itself, from Stock by item: each item at its average cost where it was taken from, just before. Each is put next to
           NetSuite&apos;s fulfillment; tap one for its item by item check. The books post each one from this copy when it matches
           NetSuite&apos;s and its entry comes out the same, and from NetSuite&apos;s otherwise. Each morning the daily check tells
           super admins when one differs.{' '}

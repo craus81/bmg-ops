@@ -314,7 +314,8 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        // FleetSuite's own copy of the fulfillment, for the books (never fails the invoice).
+        // FleetSuite's own copy of the fulfillment, for the books (never fails the invoice). NetSuite fulfilled
+        // the whole order, each line from where the order has it, not where the invoice books.
         if (fulfil.fulfillmentId) {
           await saveOwnFulfillment(supabase, {
             netsuiteId: fulfil.fulfillmentId,
@@ -323,7 +324,6 @@ export async function POST(req: NextRequest) {
             madeFromId: po.id,
             madeBy: auth.user.id,
             salesOrderId: soId,
-            locationId: locationId ?? null,
           });
         }
 

@@ -116,7 +116,7 @@ describe("FleetSuite's own fulfillment next to NetSuite's", () => {
     ]);
     expect(c.items).toEqual([{
       item: 'LDR-24', itemId: LADDER, description: null, partOf: null, same: true, why: null,
-      fleetsuite: { quantity: 3, kind: 'stock', location: 'Wentzville', count: 14, valueCents: 212333, each: 212333 / 14, cents: 45500 },
+      fleetsuite: { quantity: 3, kind: 'stock', location: 'Wentzville', locationId: WENTZVILLE, count: 14, valueCents: 212333, each: 212333 / 14, cents: 45500 },
       netsuite: { quantity: 3, locations: ['Wentzville'], each: 45500 / 3, cents: 45500 },
     }]);
     expect(c.entry).toEqual([
@@ -459,6 +459,361 @@ describe("FleetSuite's own fulfillment next to NetSuite's", () => {
     expect(c).toMatchObject({ number: 'NetSuite 7001', salesOrder: 'NetSuite 6001', customer: null, invoice: { netsuiteId: '8001', number: 'NetSuite 8001' } });
     expect(c.items[0].item).toBe('NetSuite item 9600');
     expect(c.entry).toEqual([{ account: 'NetSuite account 999', debit: 0, credit: 1000 }]);
+  });
+});
+
+describe('where each line was taken from', () => {
+  /** A copy made since migration 514 from NetSuite's order: each line where the order has it. */
+  const fromOrder = (lines: OwnFulfilLineData[], over: Partial<FulfilPairData['own']> = {}) => ({
+    location_id: null, location_from: 'order' as const, lines, ...over,
+  });
+  const ns = (...lines: NetsuiteFulfilLineData[]) => ({ number: 'IF7001', type: 'ItemShip', date: '2026-10-19', gone: false, lines });
+  const FROM_ORDER = "Each line from where NetSuite's sales order has it, read from NetSuite as the copy was made: NetSuite fulfils a "
+    + 'whole order line by line, each line from its own location.';
+  const BEFORE = [
+    { item_id: LADDER, location_id: OFALLON, quantity: '10', value: '1000.00' },
+    { item_id: LADDER, location_id: WENTZVILLE, quantity: '14', value: '2123.33' },
+    { item_id: BINS, location_id: OFALLON, quantity: '4', value: '40.00' },
+    { item_id: BINS, location_id: WENTZVILLE, quantity: '4', value: '40.00' },
+  ];
+
+  it('matches a fulfillment NetSuite took from two locations, each item costed where it was taken from', () => {
+    const c = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 3, { location_id: WENTZVILLE }),
+        ownLine(BINS, 2, { line_no: 2, sales_order_line_id: '2', item_number: 'BIN-10', location_id: OFALLON }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -3, '-455.00'), nsLine('2', BINS, -2, '-20.00', true, OFALLON)),
+      netsuite_gl: entry(47500),
+      before: BEFORE,
+    }));
+    expect(c).toMatchObject({ status: 'matches', summary: "Matches NetSuite's fulfillment.", locationId: null, fleetsuiteCost: 47500, netsuiteCost: 47500 });
+    expect(field(c, 'location')).toEqual({
+      field: 'location', label: 'Location', fleetsuite: "O'Fallon and Wentzville", netsuite: "O'Fallon and Wentzville", same: true, why: null,
+    });
+    expect(c.items.map((i) => [i.item, i.same, i.fleetsuite])).toEqual([
+      ['LDR-24', true, { quantity: 3, kind: 'stock', location: 'Wentzville', locationId: WENTZVILLE, count: 14, valueCents: 212333, each: 212333 / 14, cents: 45500 }],
+      ['BIN-10', true, { quantity: 2, kind: 'stock', location: "O'Fallon", locationId: OFALLON, count: 4, valueCents: 4000, each: 1000, cents: 2000 }],
+    ]);
+    expect(c.workedOut[2]).toBe(`${FROM_ORDER} This one took stock from O'Fallon and Wentzville.`);
+    // One place: the copy's, and the order's.
+    const one = check(pair({ own: fromOrder([ownLine(LADDER, 3, { location_id: WENTZVILLE })], { location_id: WENTZVILLE }) }));
+    expect(one).toMatchObject({ status: 'matches', locationId: WENTZVILLE });
+    expect(one.workedOut[2]).toBe(`${FROM_ORDER} This one took stock from Wentzville.`);
+    // A cost that differs says where FleetSuite counted what it costed the item from.
+    const dearer = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 3, { location_id: WENTZVILLE }),
+        ownLine(BINS, 2, { line_no: 2, sales_order_line_id: '2', item_number: 'BIN-10', location_id: OFALLON }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -3, '-460.00'), nsLine('2', BINS, -2, '-20.00', true, OFALLON)),
+      netsuite_gl: entry(48000),
+      before: BEFORE,
+    }));
+    expect(dearer.items[0].why).toContain('(3 at $151.6664 each, from the 14 worth $2,123.33 FleetSuite counted at Wentzville just before)');
+  });
+
+  it("takes a kit's parts from the kit's line, and says so", () => {
+    const c = check(pair({
+      own: fromOrder([
+        ownLine(BINS, 4, { item_number: 'BIN-10', kit_id: RACK_KIT, location_id: WENTZVILLE }),
+        ownLine(HOOKS, 2, { line_no: 2, item_number: 'HOOK-1', kit_id: RACK_KIT, location_id: WENTZVILLE }),
+      ], { location_id: WENTZVILLE }),
+      netsuite: ns(nsLine('1', RACK_KIT, -1, null, false), nsLine('2', BINS, -4, '-40.00'), nsLine('3', HOOKS, -2, '-10.00')),
+      netsuite_gl: entry(5000),
+      before: [{ item_id: BINS, location_id: WENTZVILLE, quantity: '4', value: '40.00' }, { item_id: HOOKS, location_id: WENTZVILLE, quantity: '2', value: '10.00' }],
+    }));
+    expect(c).toMatchObject({ status: 'matches', fleetsuiteCost: 5000 });
+    expect(c.workedOut).toContain(
+      "Each line from where NetSuite's sales order has it, read from NetSuite as the copy was made: NetSuite fulfils a whole order line by "
+        + "line, each line from its own location, and a kit's parts from the kit's line. This one took stock from Wentzville.",
+    );
+  });
+
+  it("takes a line from where it says before the copy's location", () => {
+    const c = check(pair({
+      own: { location_id: OFALLON, lines: [ownLine(LADDER, 3, { location_id: WENTZVILLE })] },
+      before: BEFORE,
+    }));
+    expect(c).toMatchObject({ status: 'matches', fleetsuiteCost: 45500 });
+    expect(c.items[0].fleetsuite).toMatchObject({ location: 'Wentzville', locationId: WENTZVILLE, count: 14 });
+  });
+
+  it("differs when NetSuite took an item from elsewhere than its order's line, saying where each side took it from", () => {
+    const c = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 3, { location_id: WENTZVILLE }),
+        ownLine(BINS, 2, { line_no: 2, sales_order_line_id: '2', item_number: 'BIN-10', location_id: OFALLON }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -3, '-455.00'), nsLine('2', BINS, -2, '-20.00')),
+      netsuite_gl: entry(47500),
+      before: BEFORE,
+    }));
+    expect(c).toMatchObject({
+      status: 'differs', differing: 1, fleetsuiteCost: 47500, netsuiteCost: 47500,
+      summary: "Location: NetSuite's sales order has its lines at O'Fallon and Wentzville, and NetSuite took stock from Wentzville.",
+    });
+    expect(c.items.map((i) => [i.item, i.same, i.why])).toEqual([
+      ['LDR-24', true, null],
+      ['BIN-10', false, "FleetSuite took it from O'Fallon, and NetSuite from Wentzville."],
+    ]);
+    // Told where to take every line from.
+    const sent = check(pair({
+      own: { location_id: OFALLON, location_from: 'sent', made_from: 'sales_order', lines: [ownLine(LADDER, 3, { location_id: OFALLON })] },
+      before: BEFORE,
+    }));
+    expect(sent).toMatchObject({
+      status: 'differs', summary: "Location: FleetSuite told NetSuite to take every line from O'Fallon, and NetSuite took stock from Wentzville.",
+    });
+    expect(sent.workedOut[2]).toBe("From O'Fallon, where FleetSuite told NetSuite to take every line from.");
+  });
+
+  it('differs on where when NetSuite took an item from more places than FleetSuite did, whatever it took', () => {
+    // NetSuite took more, and from two places: how many and where both differ.
+    const c = check(pair({
+      own: fromOrder([ownLine(LADDER, 3, { location_id: WENTZVILLE })], { location_id: WENTZVILLE }),
+      netsuite: ns(nsLine('1', LADDER, -3, '-455.00'), nsLine('2', LADDER, -1, '-100.00', true, OFALLON)),
+      netsuite_gl: entry(55500),
+      before: BEFORE,
+    }));
+    expect(c.status).toBe('differs');
+    expect(c.items[0].why).toBe("FleetSuite took 3 of LDR-24 from stock, and NetSuite 4. FleetSuite took it from Wentzville, and NetSuite from O'Fallon and Wentzville.");
+    expect(field(c, 'location')).toMatchObject({ fleetsuite: 'Wentzville', netsuite: "O'Fallon and Wentzville", same: false });
+    // An item only NetSuite took, from a place FleetSuite took nothing from.
+    const extra = check(pair({
+      own: fromOrder([ownLine(LADDER, 3, { location_id: WENTZVILLE })], { location_id: WENTZVILLE }),
+      netsuite: ns(nsLine('1', LADDER, -3, '-455.00'), nsLine('2', BINS, -1, '-10.00', true, OFALLON)),
+      netsuite_gl: entry(46500),
+      before: BEFORE,
+    }));
+    expect(field(extra, 'location')).toMatchObject({
+      fleetsuite: 'Wentzville', netsuite: "O'Fallon and Wentzville", same: false,
+      why: "NetSuite's sales order has its lines at Wentzville, and NetSuite took stock from O'Fallon and Wentzville.",
+    });
+  });
+
+  it("compares where a copy made before took stock from, though it didn't know what it took", () => {
+    const c = check(pair({ own: { location_id: OFALLON, location_from: 'po_rule', made_from: 'sales_order', lines: [], unknowns: ['lines'] } }));
+    expect(field(c, 'location')).toMatchObject({
+      fleetsuite: "O'Fallon", netsuite: 'Wentzville', same: false,
+      why: "FleetSuite's PO location rule puts it in O'Fallon, and NetSuite took stock from Wentzville.",
+    });
+  });
+
+  it('differs when each side took the items from the same places but not the same item from each', () => {
+    const c = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 3, { location_id: OFALLON }),
+        ownLine(BINS, 2, { line_no: 2, sales_order_line_id: '2', item_number: 'BIN-10', location_id: WENTZVILLE }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -3, '-300.00'), nsLine('2', BINS, -2, '-20.00', true, OFALLON)),
+      netsuite_gl: entry(32000),
+      before: BEFORE,
+    }));
+    // FleetSuite's costs where it took them from: 3 at $100.00 and 2 at $10.00.
+    expect(c).toMatchObject({ status: 'differs', differing: 1, fleetsuiteCost: 32000, netsuiteCost: 32000 });
+    expect(c.summary).toBe("Location: FleetSuite took LDR-24 from O'Fallon, and NetSuite from Wentzville. 1 other item differs on where it was taken from too.");
+    expect(field(c, 'location')).toMatchObject({ fleetsuite: "O'Fallon and Wentzville", netsuite: "O'Fallon and Wentzville", same: false });
+    expect(c.items.map((i) => i.why)).toEqual([
+      "FleetSuite took it from O'Fallon, and NetSuite from Wentzville.",
+      "FleetSuite took it from Wentzville, and NetSuite from O'Fallon.",
+    ]);
+    // More than one other.
+    const three = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 3, { location_id: OFALLON }),
+        ownLine(BINS, 2, { line_no: 2, sales_order_line_id: '2', item_number: 'BIN-10', location_id: WENTZVILLE }),
+        ownLine(HOOKS, 1, { line_no: 3, sales_order_line_id: '3', item_number: 'HOOK-1', location_id: WENTZVILLE }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -3, '-300.00'), nsLine('2', BINS, -2, '-20.00', true, OFALLON), nsLine('3', HOOKS, -1, '-5.00', true, OFALLON)),
+      netsuite_gl: entry(32500),
+      before: [...BEFORE, { item_id: HOOKS, location_id: OFALLON, quantity: '2', value: '10.00' }, { item_id: HOOKS, location_id: WENTZVILLE, quantity: '2', value: '10.00' }],
+    }));
+    expect(field(three, 'location').why).toBe(
+      "FleetSuite took LDR-24 from O'Fallon, and NetSuite from Wentzville. 2 other items differ on where they were taken from too.",
+    );
+  });
+
+  it('costs an item taken from two places line by line, and says how many each side took from each when that differs', () => {
+    const c = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 2, { location_id: OFALLON }),
+        ownLine(LADDER, 1, { line_no: 2, sales_order_line_id: '2', location_id: WENTZVILLE }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -1, '-100.00', true, OFALLON), nsLine('2', LADDER, -2, '-303.33')),
+      netsuite_gl: entry(40333),
+      before: BEFORE,
+    }));
+    // 2 at $100.00 and 1 at $151.6664: $351.67.
+    expect(c).toMatchObject({ status: 'differs', fleetsuiteCost: 35167, netsuiteCost: 40333 });
+    expect(c.items[0].fleetsuite).toEqual({
+      quantity: 3, kind: 'stock', location: "O'Fallon and Wentzville", locationId: null, count: null, valueCents: null, each: null, cents: 35167,
+    });
+    expect(c.items[0].netsuite).toMatchObject({ quantity: 3, locations: ["O'Fallon", 'Wentzville'] });
+    expect(c.items[0].why).toBe(
+      "FleetSuite took 2 from O'Fallon and 1 from Wentzville, and NetSuite 1 from O'Fallon and 2 from Wentzville. "
+        + "FleetSuite's cost is $351.67, and NetSuite's $403.33 ($134.4433 each). NetSuite's is $51.66 more.",
+    );
+    // The cost follows from where it was taken from, so the summary doesn't say it too.
+    expect(c.summary).toBe("Location: FleetSuite took 2 of LDR-24 from O'Fallon and 1 from Wentzville, and NetSuite 1 from O'Fallon and 2 from Wentzville.");
+    // As many from each, it matches.
+    const same = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 2, { location_id: OFALLON }),
+        ownLine(LADDER, 1, { line_no: 2, sales_order_line_id: '2', location_id: WENTZVILLE }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -2, '-200.00', true, OFALLON), nsLine('2', LADDER, -1, '-151.67')),
+      netsuite_gl: entry(35167),
+      before: BEFORE,
+    }));
+    expect(same).toMatchObject({ status: 'matches', fleetsuiteCost: 35167 });
+    // Each side's places are named in the same order, whichever line comes first.
+    const flipped = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 1, { location_id: WENTZVILLE }),
+        ownLine(LADDER, 2, { line_no: 2, sales_order_line_id: '2', location_id: OFALLON }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -2, '-303.33'), nsLine('2', LADDER, -1, '-100.00', true, OFALLON)),
+      netsuite_gl: entry(40333),
+      before: BEFORE,
+    }));
+    expect(flipped.items[0].why).toBe(c.items[0].why);
+    expect(flipped.summary).toBe(c.summary);
+    // Two lines of an item taken from one place add up on both sides.
+    const twoLines = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 2, { location_id: OFALLON }),
+        ownLine(LADDER, 1, { line_no: 2, sales_order_line_id: '2', location_id: OFALLON }),
+      ], { location_id: OFALLON }),
+      netsuite: ns(nsLine('1', LADDER, -2, '-200.00', true, OFALLON), nsLine('2', LADDER, -1, '-100.00', true, OFALLON)),
+      netsuite_gl: entry(30000),
+      before: BEFORE,
+    }));
+    expect(twoLines).toMatchObject({ status: 'matches', fleetsuiteCost: 30000, netsuiteCost: 30000 });
+    // Another quantity is told about as such, not as where from.
+    const fewer = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 2, { location_id: OFALLON }),
+        ownLine(LADDER, 1, { line_no: 2, sales_order_line_id: '2', location_id: WENTZVILLE }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -1, '-100.00', true, OFALLON), nsLine('2', LADDER, -1, '-151.67')),
+      netsuite_gl: entry(25167),
+      before: BEFORE,
+    }));
+    expect(fewer.items[0].why).toBe('FleetSuite took 3 of LDR-24 from stock, and NetSuite 2.');
+    expect(field(fewer, 'location')).toMatchObject({ same: true, why: null });
+  });
+
+  it("says when it doesn't know where NetSuite's order has the lines, or some of them", () => {
+    const c = check(pair({ own: fromOrder([ownLine(LADDER, 3)], { unknowns: ['location'] }), before: [] }));
+    expect(c).toMatchObject({
+      status: 'incomplete', fleetsuiteCost: null, locationId: null,
+      summary: "Matches where it can be checked. FleetSuite didn't know where it took stock from, so what it cost.",
+    });
+    expect(field(c, 'location')).toMatchObject({
+      fleetsuite: null, netsuite: 'Wentzville', same: null,
+      why: "FleetSuite didn't know where it took stock from: NetSuite's sales order couldn't be read as the copy was made, or doesn't say where each line is.",
+    });
+    expect(c.items[0]).toMatchObject({ same: null, why: "FleetSuite didn't know where it took LDR-24 from, so not what it cost.", fleetsuite: { location: null, locationId: null } });
+    expect(c.workedOut[2]).toBe(`${FROM_ORDER} Where they were taken from isn't known: the order couldn't be read, or doesn't say.`);
+
+    const some = check(pair({
+      own: fromOrder([ownLine(LADDER, 2, { location_id: WENTZVILLE }), ownLine(LADDER, 1, { line_no: 2, sales_order_line_id: '2' })], { unknowns: ['location'] }),
+      before: BEFORE,
+    }));
+    expect(some).toMatchObject({ status: 'incomplete', fleetsuiteCost: null });
+    expect(some.items[0]).toMatchObject({ same: null, why: "FleetSuite didn't know where it took some of LDR-24 from, so not what it cost.", fleetsuite: { location: null } });
+    expect(some.workedOut[2]).toBe(`${FROM_ORDER} Where some were taken from isn't known: the order couldn't be read, or doesn't say.`);
+    // So nor is what it cost, whatever FleetSuite counted where the rest was taken from.
+    const someNone = check(pair({
+      own: fromOrder([ownLine(LADDER, 2, { location_id: OFALLON }), ownLine(LADDER, 1, { line_no: 2, sales_order_line_id: '2' })], { unknowns: ['location'] }),
+      before: [{ item_id: LADDER, location_id: OFALLON, quantity: '0', value: '0' }],
+    }));
+    expect(field(someNone, 'cost').why).toBe("FleetSuite didn't know where it took stock from, so not what it cost.");
+    expect(someNone.unknowns).toEqual(some.unknowns);
+  });
+
+  it('says which items it counted none of, at which locations', () => {
+    const empty = [
+      { item_id: LADDER, location_id: OFALLON, quantity: '0', value: '0' },
+      { item_id: BINS, location_id: WENTZVILLE, quantity: '0', value: '0' },
+      { item_id: BINS, location_id: OFALLON, quantity: '0', value: '0' },
+    ];
+    const c = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 3, { location_id: OFALLON }),
+        ownLine(BINS, 2, { line_no: 2, sales_order_line_id: '2', item_number: 'BIN-10', location_id: WENTZVILLE }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -3, '-300.00', true, OFALLON), nsLine('2', BINS, -2, '-20.00')),
+      netsuite_gl: entry(32000),
+      before: empty,
+    }));
+    expect(c).toMatchObject({ status: 'incomplete', fleetsuiteCost: null });
+    expect(field(c, 'cost').why).toBe("FleetSuite counted none of LDR-24 at O'Fallon and none of BIN-10 at Wentzville just before, so it can't work out what they cost.");
+    expect(c.unknowns).toEqual(["what LDR-24 and BIN-10 cost: it counted none of LDR-24 at O'Fallon and none of BIN-10 at Wentzville just before"]);
+    expect(c.items[1].why).toBe("FleetSuite counted none of BIN-10 at Wentzville just before, so it can't work out what it cost.");
+    // At one place, as before.
+    const one = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 3, { location_id: OFALLON }),
+        ownLine(BINS, 2, { line_no: 2, sales_order_line_id: '2', item_number: 'BIN-10', location_id: OFALLON }),
+      ], { location_id: OFALLON }),
+      netsuite: ns(nsLine('1', LADDER, -3, '-300.00', true, OFALLON), nsLine('2', BINS, -2, '-20.00', true, OFALLON)),
+      netsuite_gl: entry(32000),
+      before: empty,
+    }));
+    expect(field(one, 'cost').why).toBe("FleetSuite counted none of LDR-24 and BIN-10 at O'Fallon just before, so it can't work out what they cost.");
+    expect(one.unknowns).toEqual(["what LDR-24 and BIN-10 cost: it counted none at O'Fallon just before"]);
+    // An item counted at one place it was taken from and not the other.
+    const half = check(pair({
+      own: fromOrder([
+        ownLine(BINS, 1, { item_number: 'BIN-10', location_id: OFALLON }),
+        ownLine(BINS, 1, { line_no: 2, sales_order_line_id: '2', item_number: 'BIN-10', location_id: WENTZVILLE }),
+      ]),
+      netsuite: ns(nsLine('1', BINS, -1, '-10.00', true, OFALLON), nsLine('2', BINS, -1, '-10.00')),
+      netsuite_gl: entry(2000),
+      before: [BEFORE[2], empty[1]],
+    }));
+    expect(half.items[0].why).toBe("FleetSuite counted none of BIN-10 at Wentzville just before, so it can't work out what it cost.");
+    // An item on two lines taken from one place is named once.
+    const twice = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 2, { location_id: OFALLON }),
+        ownLine(LADDER, 1, { line_no: 2, sales_order_line_id: '2', location_id: OFALLON }),
+      ], { location_id: OFALLON }),
+      netsuite: ns(nsLine('1', LADDER, -2, '-200.00', true, OFALLON), nsLine('2', LADDER, -1, '-100.00', true, OFALLON)),
+      netsuite_gl: entry(30000),
+      before: empty,
+    }));
+    expect(field(twice, 'cost').why).toBe("FleetSuite counted none of LDR-24 at O'Fallon just before, so it can't work out what it cost.");
+    expect(twice.unknowns).toEqual(["what LDR-24 cost: it counted none at O'Fallon just before"]);
+  });
+
+  it("took from nowhere when it took nothing, and doesn't count where an item not known to be kept in stock was", () => {
+    const nothing = check(pair({ own: fromOrder([]), netsuite: null, netsuite_gl: null, before: [] }));
+    expect(nothing).toMatchObject({ status: 'matches', summary: "Took nothing from stock, and nor did NetSuite's fulfillment." });
+    expect(field(nothing, 'location')).toMatchObject({ fleetsuite: 'None', netsuite: 'None', same: null });
+    expect(nothing.workedOut[2]).toBe(FROM_ORDER);
+
+    const unlisted = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 3, { location_id: WENTZVILLE }),
+        ownLine('9500', 1, { line_no: 2, sales_order_line_id: '2', item_number: 'NEW-1', item_type: null, location_id: OFALLON }),
+      ]),
+    }));
+    expect(unlisted.status).toBe('incomplete');
+    expect(field(unlisted, 'location')).toMatchObject({ fleetsuite: 'Wentzville', same: true });
+    // Unless NetSuite took it from stock.
+    const taken = check(pair({
+      own: fromOrder([
+        ownLine(LADDER, 3, { location_id: WENTZVILLE }),
+        ownLine('9500', 1, { line_no: 2, sales_order_line_id: '2', item_number: 'NEW-1', item_type: null, location_id: OFALLON }),
+      ]),
+      netsuite: ns(nsLine('1', LADDER, -3, '-455.00'), nsLine('2', '9500', -1, '-5.00', true, OFALLON)),
+      netsuite_gl: entry(46000),
+      before: [...BEFORE, { item_id: '9500', location_id: OFALLON, quantity: '1', value: '5.00' }],
+    }));
+    expect(field(taken, 'location')).toMatchObject({ fleetsuite: "O'Fallon and Wentzville", same: true });
   });
 });
 

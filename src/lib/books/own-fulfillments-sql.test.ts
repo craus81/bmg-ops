@@ -1,7 +1,8 @@
 // migration 416 keeps FleetSuite's own copy of each fulfillment it makes and
 // puts it next to NetSuite's, with what FleetSuite counted of each item just
-// before, and migration 512 keeps the kit each part was taken for. This runs
-// migrations 314, 359–363, 401–405 and 407 with 416 and 512 in an in-memory
+// before, migration 512 keeps the kit each part was taken for, and migration
+// 514 where each line was taken from. This runs migrations 314, 359–363,
+// 401–405 and 407 with 416, 512 and 514 in an in-memory
 // Postgres (PGlite) as the app's server login, saves copies worked out by
 // src/lib/books/own-fulfillments.ts, copies made-up NetSuite stock documents
 // and their GL lines the way stock by item has them, and holds what
@@ -21,6 +22,7 @@ const OFALLON = '1';
 const WENTZVILLE = '2';
 const LADDER = '9001';
 const BINS = '9002';
+const HOOKS = '9003';
 const RACK_KIT = '9200';
 /** The items' inventory account, and the accounts the other sides of their documents post to. */
 const INVENTORY = '190';
@@ -37,7 +39,7 @@ async function freshDb(): Promise<PGlite> {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO anon, authenticated, service_role;
-    -- What migrations 314, 407, 416 and 512 point at in the app's own schema.
+    -- What migrations 314, 407, 416, 512 and 514 point at in the app's own schema.
     CREATE TABLE public.profiles (id UUID PRIMARY KEY);
     CREATE TABLE public.customers (id UUID PRIMARY KEY, company_name TEXT, netsuite_id TEXT, tax_exempt BOOLEAN);
     CREATE TABLE public.netsuite_sales_orders (
@@ -51,7 +53,7 @@ async function freshDb(): Promise<PGlite> {
     '362-books-netsuite-gl-store-totals-where.sql', '363-books-netsuite-lists.sql', '401-books-stock-by-item.sql',
     '402-books-stock-values.sql', '403-books-stock-item-setup.sql', '404-books-stock-ledger-parts.sql',
     '405-books-stock-account-items.sql', '407-books-own-invoices.sql', '416-books-own-fulfillments.sql',
-    '512-books-kit-parts.sql',
+    '512-books-kit-parts.sql', '514-books-fulfillment-locations.sql',
   ]) {
     const sql = readFileSync(path.resolve(__dirname, '../../../migrations', file), 'utf8');
     await pg.exec(sql);
@@ -61,6 +63,7 @@ async function freshDb(): Promise<PGlite> {
     INSERT INTO gl_netsuite_lists (kind, netsuite_id, name, active, details) VALUES
       ('item', '${LADDER}', 'LDR-24', true, '{"display_name": "Ladder rack 24 in", "item_type": "InvtPart", "asset_account": "${INVENTORY}"}'),
       ('item', '${BINS}', 'BIN-10', true, '{"item_type": "InvtPart", "asset_account": "${INVENTORY}"}'),
+      ('item', '${HOOKS}', 'HOOK-1', true, '{"item_type": "InvtPart", "asset_account": "${INVENTORY}"}'),
       ('item', '${RACK_KIT}', 'RACK-KIT', true, '{"item_type": "Kit"}'),
       ('location', '${OFALLON}', 'O''Fallon', true, '{"subsidiary_id": "2"}'),
       ('location', '${WENTZVILLE}', 'Wentzville', true, '{"subsidiary_id": "2"}');
@@ -321,7 +324,7 @@ describe("migration 416: FleetSuite's own fulfillments", () => {
     let data = await pairs(pg, null, null, '7007');
     expect(data.fulfillments[0].own.lines).toEqual([{
       line_no: 1, item_id: BINS, item_number: 'BIN-10', description: null, item_type: 'InvtPart', quantity: '4.0000',
-      sales_order_line_id: '1', kit_id: RACK_KIT,
+      sales_order_line_id: '1', kit_id: RACK_KIT, location_id: WENTZVILLE,
     }]);
     expect(data.items[RACK_KIT]).toEqual({ number: 'RACK-KIT', type: 'Kit', display_name: null });
     expect(data.fulfillments[0].before).toEqual([{ item_id: BINS, location_id: WENTZVILLE, quantity: '8', value: '80.00' }]);
@@ -351,6 +354,85 @@ describe("migration 416: FleetSuite's own fulfillments", () => {
     // No kit given, or an empty one, is an item taken for itself.
     expect(await save(pg, { ...p, lines: [{ ...line, kit_netsuite_id: '' }] })).toEqual({ saved: true, lines: 1 });
     expect(await one(pg, `SELECT kit_netsuite_id AS r FROM gl_own_fulfillment_lines WHERE fulfillment_id = '7011'`)).toBeNull();
+  });
+
+  it('keeps where each line was taken from, and counts each item where its line was taken from (migration 514)', async () => {
+    // In March six hooks came into O'Fallon at $5 each and four into Wentzville at $10, and six bins into O'Fallon at $12.
+    await call(pg, 'gl_netsuite_stock_apply', { documents: [
+      doc('5004', 'ItemRcpt', 'IR5004', '2026-03-02', [['1', HOOKS, OFALLON, '6', true], ['2', BINS, OFALLON, '6', true]]),
+      doc('5005', 'ItemRcpt', 'IR5005', '2026-03-03', [['1', HOOKS, WENTZVILLE, '4', true]]),
+    ] });
+    await gl(pg, '5004', 'ItemRcpt', '2026-03-02', [['0', RECEIVED, -10200], ['1', INVENTORY, 3000], ['2', INVENTORY, 7200]]);
+    await gl(pg, '5005', 'ItemRcpt', '2026-03-03', [['0', RECEIVED, -4000], ['1', INVENTORY, 4000]]);
+
+    // NetSuite fulfilled a whole order on October 20, each line from where the order has it: two hooks and the bins at
+    // O'Fallon, a hook at Wentzville. The copy has no one location.
+    const line = (itemId: string, itemNumber: string, quantity: number, salesOrderLineId: string, locationId: string) => ({
+      itemId, itemNumber, description: null, itemType: 'InvtPart' as const, quantity, salesOrderLineId, locationId,
+    });
+    const p = payload({
+      netsuiteId: '7008', netsuiteNumber: 'IF7008', fulfilDate: '2026-10-20', locationId: null, locationFrom: 'order',
+      lines: [line(HOOKS, 'HOOK-1', 2, '1', OFALLON), line(HOOKS, 'HOOK-1', 1, '2', WENTZVILLE), line(BINS, 'BIN-10', 2, '3', OFALLON)],
+    });
+    expect(p).toMatchObject({ location_netsuite_id: null, location_from: 'order', unknowns: [] });
+    expect(await save(pg, p)).toEqual({ saved: true, lines: 3 });
+    expect((await pg.query(`SELECT line_no, location_netsuite_id FROM gl_own_fulfillment_lines WHERE fulfillment_id = '7008' ORDER BY line_no`)).rows)
+      .toEqual([{ line_no: 1, location_netsuite_id: OFALLON }, { line_no: 2, location_netsuite_id: WENTZVILLE }, { line_no: 3, location_netsuite_id: OFALLON }]);
+
+    let data = await pairs(pg, null, null, '7008');
+    expect(data.fulfillments[0].own).toMatchObject({ location_id: null, location_from: 'order' });
+    expect(data.fulfillments[0].own.lines.map((l) => [l.item_id, l.location_id])).toEqual([[HOOKS, OFALLON], [HOOKS, WENTZVILLE], [BINS, OFALLON]]);
+    // What FleetSuite counted of each item where each of its lines was taken from.
+    expect(data.fulfillments[0].before).toEqual([
+      { item_id: BINS, location_id: OFALLON, quantity: '6', value: '72.00' },
+      { item_id: HOOKS, location_id: OFALLON, quantity: '6', value: '30.00' },
+      { item_id: HOOKS, location_id: WENTZVILLE, quantity: '4', value: '40.00' },
+    ]);
+
+    // NetSuite's fulfillment took the same from the same places: 2 × $5 + $10 for the hooks, 2 × $12 for the bins.
+    await call(pg, 'gl_netsuite_stock_apply', { documents: [doc('7008', 'ItemShip', 'IF7008', '2026-10-20', [
+      ['1', HOOKS, OFALLON, '-2', true], ['2', HOOKS, WENTZVILLE, '-1', true], ['3', BINS, OFALLON, '-2', true],
+    ])] });
+    await gl(pg, '7008', 'ItemShip', '2026-10-20', [['1', INVENTORY, -1000], ['2', INVENTORY, -1000], ['3', INVENTORY, -2400], ['4', COGS, 4400]]);
+    data = await pairs(pg, null, null, '7008');
+    const [check] = checkOwnFulfillments(data, { stock: null, ledger: null }).fulfillments;
+    expect(check).toMatchObject({ status: 'matches', fleetsuiteCost: 4400, netsuiteCost: 4400, locationId: null });
+    expect(check.fields.find((f) => f.field === 'location')).toMatchObject({ fleetsuite: "O'Fallon and Wentzville", netsuite: "O'Fallon and Wentzville", same: true });
+    expect(check.items.map((i) => [i.item, i.fleetsuite?.location, i.fleetsuite?.locationId, i.fleetsuite?.cents, i.same])).toEqual([
+      ['HOOK-1', "O'Fallon and Wentzville", null, 2000, true],
+      ['BIN-10', "O'Fallon", OFALLON, 2400, true],
+    ]);
+
+    // A copy made before took every line from its own location, which its lines don't say.
+    const before = payload({
+      netsuiteId: '7009', netsuiteNumber: 'IF7009', fulfilDate: '2026-10-21', locationId: OFALLON, locationFrom: 'po_rule', madeFrom: 'sales_order',
+      lines: [line(HOOKS, 'HOOK-1', 1, '1', OFALLON)],
+    });
+    const lines = (before.lines as Array<Record<string, unknown>>).map(({ location_netsuite_id: _gone, ...l }) => l);
+    expect(await save(pg, { ...before, lines })).toEqual({ saved: true, lines: 1 });
+    data = await pairs(pg, null, null, '7009');
+    expect(data.fulfillments[0].own.lines[0].location_id).toBeNull();
+    // Four hooks were left at O'Fallon, worth $20.00.
+    expect(data.fulfillments[0].before).toEqual([{ item_id: HOOKS, location_id: OFALLON, quantity: '4', value: '20.00' }]);
+    expect(checkOwnFulfillments(data, { stock: null, ledger: null }).fulfillments[0].items[0].fleetsuite)
+      .toMatchObject({ location: "O'Fallon", locationId: OFALLON, count: 4, valueCents: 2000, cents: 500 });
+
+    // Where a copy's lines were taken from: told, the order's, or a rule's, and only the order's can have no one place.
+    const q = payload({ netsuiteId: '7012', netsuiteNumber: 'IF7012', locationId: OFALLON, locationFrom: 'sent', lines: [line(HOOKS, 'HOOK-1', 1, '1', OFALLON)] });
+    const [ql] = q.lines as Array<Record<string, unknown>>;
+    await expect(save(pg, { ...q, location_netsuite_id: null })).rejects.toThrow(/check/i);
+    await expect(save(pg, { ...q, location_from: 'po_rule', location_netsuite_id: null })).rejects.toThrow(/check/i);
+    await expect(save(pg, { ...q, location_from: 'guessed' })).rejects.toThrow(/check/i);
+    await expect(save(pg, { ...q, location_from: null })).rejects.toThrow(/check/i);
+    await expect(save(pg, { ...q, lines: [{ ...ql, location_netsuite_id: "O'Fallon" }] })).rejects.toThrow(/check/i);
+    expect(await one(pg, `SELECT count(*)::int AS r FROM gl_own_fulfillments WHERE netsuite_id = '7012'`)).toBe(0);
+    expect(await save(pg, q)).toEqual({ saved: true, lines: 1 });
+    expect(await save(pg, { ...q, netsuite_id: '7013', location_from: 'order', location_netsuite_id: null })).toEqual({ saved: true, lines: 1 });
+    expect(await save(pg, { ...q, netsuite_id: '7014', location_from: null, location_netsuite_id: null })).toEqual({ saved: true, lines: 1 });
+    // An empty location is none.
+    expect(await save(pg, { ...q, netsuite_id: '7015', location_from: 'order', location_netsuite_id: '', lines: [{ ...ql, location_netsuite_id: '' }] }))
+      .toEqual({ saved: true, lines: 1 });
+    expect(await one(pg, `SELECT location_netsuite_id AS r FROM gl_own_fulfillment_lines WHERE fulfillment_id = '7015'`)).toBeNull();
   });
 
   it("is the service role's alone", async () => {
