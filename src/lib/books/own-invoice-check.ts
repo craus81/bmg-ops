@@ -1,3 +1,4 @@
+import { SHIP_ITEM_TYPE } from './invoice-charges';
 import { centsOf } from './invoice-check';
 import { isLayoutItem } from './invoice-rule';
 import { lineTax, OWN_TAX_RULE, TAKES_OFF, type MadeFrom, type TaxBasis, type Unknown } from './own-invoices';
@@ -11,8 +12,9 @@ import { parseRate, pct } from './sales-tax-rates';
  * Each copy FleetSuite kept of an invoice it made
  * (src/lib/books/own-invoices.ts) is put next to NetSuite's invoice as the
  * ledger mirror copied it: who it's for, its date, location and due date,
- * each line it billed, what it comes to before tax, its sales tax and its
- * total. Where they differ the check says how, and for sales tax why where
+ * each line it billed and the shipping NetSuite added, what it comes to
+ * before tax, its sales tax and its total. Where they differ the check says
+ * how, and for sales tax why where
  * it can tell: NetSuite's rate against FleetSuite's (the location's on Books
  * → Sales tax since part 66, else the one in Settings → Sales Tax), the
  * lines one taxed and the other didn't, or a customer NetSuite has as not
@@ -378,14 +380,17 @@ const SPREAD_TYPES = new Set(['Discount', 'Markup']);
  * discount or markup reading $0, its other lines are taken at quantity times
  * price and the discount at what that leaves, the total staying as it is.
  * With more than one, a line with no quantity or price, or one that's a
- * credit, or nothing taken off, the lines keep their net amounts. `spread`
- * is the discount's line when they were taken apart.
+ * credit, or nothing taken off, the lines keep their net amounts. Shipping
+ * and handling, which NetSuite adds to the invoice and spreads no discount
+ * over, keep theirs. `spread` is the discount's line when they were taken
+ * apart.
  */
 export function takeApartSpread<L extends { itemId: string | null; quantity: number | null; rate: number | null; cents: number | null }>(
   lines: L[],
   typeOf: (itemId: string | null) => string | null,
 ): { lines: L[]; spread: L | null } {
   const isSpreadType = (l: L) => SPREAD_TYPES.has(typeOf(l.itemId) ?? '');
+  const isCharge = (l: L) => typeOf(l.itemId) === SHIP_ITEM_TYPE;
   const spreads = lines.filter((l) => isSpreadType(l) && l.cents === 0);
   if (spreads.length !== 1) return { lines, spread: null };
   const [spread] = spreads;
@@ -393,8 +398,8 @@ export function takeApartSpread<L extends { itemId: string | null; quantity: num
   let own = 0;
   const out: L[] = [];
   for (const l of lines) {
-    if (l === spread || (isSpreadType(l) && l.cents !== null)) {
-      // A discount NetSuite didn't spread charges its own amount.
+    if (l === spread || ((isSpreadType(l) || isCharge(l)) && l.cents !== null)) {
+      // A discount NetSuite didn't spread charges its own amount, and so does shipping.
       net += l.cents ?? 0;
       own += l.cents ?? 0;
       out.push(l);
@@ -415,8 +420,16 @@ export function takeApartSpread<L extends { itemId: string | null; quantity: num
 type OwnSide = NonNullable<OwnLinePair['fleetsuite']> & { itemId: string | null; itemNumber: string | null };
 type NetSide = NonNullable<OwnLinePair['netsuite']> & { itemId: string | null; itemNumber: string | null };
 
-/** FleetSuite's lines paired with NetSuite's by item, a line at the same amount first, then in order. */
-export function pairLines(own: OwnSide[], netsuite: NetSide[], itemName: (id: string | null, number: string | null, description: string | null) => string): OwnLinePair[] {
+/**
+ * FleetSuite's lines paired with NetSuite's by item, a line at the same amount first, then in order. `isCharge` says
+ * which items are shipping or handling, which NetSuite adds and FleetSuite's copy has as NetSuite charged it.
+ */
+export function pairLines(
+  own: OwnSide[],
+  netsuite: NetSide[],
+  itemName: (id: string | null, number: string | null, description: string | null) => string,
+  isCharge: (itemId: string | null) => boolean = () => false,
+): OwnLinePair[] {
   const taken = new Set<number>();
   const match = new Map<number, number>();
   for (const exact of [true, false]) {
@@ -436,7 +449,10 @@ export function pairLines(own: OwnSide[], netsuite: NetSide[], itemName: (id: st
     const item = itemName(o.itemId, o.itemNumber, o.description);
     if (!n) {
       const amount = o.priced ? ` (${dollars(o.cents)})` : '';
-      return { item, itemId: o.itemId, fleetsuite, netsuite: null, same: false, why: `FleetSuite billed ${item}${amount}, and NetSuite's invoice doesn't have it.` };
+      const why = isCharge(o.itemId)
+        ? `FleetSuite's copy has ${item}${amount}, shipping NetSuite added to the invoice, and NetSuite's invoice doesn't have it now.`
+        : `FleetSuite billed ${item}${amount}, and NetSuite's invoice doesn't have it.`;
+      return { item, itemId: o.itemId, fleetsuite, netsuite: null, same: false, why };
     }
     const netsuiteSide = { lineId: n.lineId, description: n.description, quantity: n.quantity, rate: n.rate, cents: n.cents };
     const quantitySame = sameQuantity(o.quantity, n.quantity);
@@ -451,7 +467,9 @@ export function pairLines(own: OwnSide[], netsuite: NetSide[], itemName: (id: st
     } else if (!quantitySame) {
       why = `FleetSuite billed ${qty(o.quantity!)} of ${item}, and NetSuite ${qty(n.quantity!)}.`;
     } else if (!amountSame) {
-      why = `FleetSuite billed ${item} for ${dollars(o.cents)}, and NetSuite for ${dollars(n.cents)}.`;
+      why = isCharge(o.itemId)
+        ? `FleetSuite's copy has ${item} at ${dollars(o.cents)}, and NetSuite's invoice at ${dollars(n.cents)}.`
+        : `FleetSuite billed ${item} for ${dollars(o.cents)}, and NetSuite for ${dollars(n.cents)}.`;
     } else if (!o.priced) {
       why = `NetSuite priced ${item} at ${dollars(n.cents)}.`;
     }
@@ -461,13 +479,16 @@ export function pairLines(own: OwnSide[], netsuite: NetSide[], itemName: (id: st
   netsuite.forEach((n, k) => {
     if (taken.has(k)) return;
     const item = itemName(n.itemId, n.itemNumber, n.description);
+    const amount = n.cents === null ? '' : ` (${dollars(n.cents)})`;
     pairs.push({
       item,
       itemId: n.itemId,
       fleetsuite: null,
       netsuite: { lineId: n.lineId, description: n.description, quantity: n.quantity, rate: n.rate, cents: n.cents },
       same: false,
-      why: `NetSuite's invoice has ${item}${n.cents === null ? '' : ` (${dollars(n.cents)})`}, and FleetSuite didn't bill it.`,
+      why: isCharge(n.itemId)
+        ? `NetSuite added ${item}${amount} to the invoice as shipping or handling, and FleetSuite's copy doesn't have it.`
+        : `NetSuite's invoice has ${item}${amount}, and FleetSuite didn't bill it.`,
     });
   });
   return pairs;
@@ -485,6 +506,7 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
   const locationName = (id: string | null) => (id ? lists.locations.get(id) ?? `Location ${id}` : null);
   const itemName = (id: string | null, itemNumber: string | null, description: string | null) =>
     itemNumber || (id ? lists.items.get(id)?.number : null) || description || (id ? `NetSuite item ${id}` : 'A line with no item');
+  const isCharge = (id: string | null) => !!id && lists.items.get(id)?.type === SHIP_ITEM_TYPE;
 
   const ownLines: OwnSide[] = (own.lines ?? []).map((l) => ({
     lineNo: l.line_no, itemId: l.item_id, itemNumber: l.item_number, description: l.description,
@@ -607,7 +629,7 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
   }
 
   // What it billed.
-  const lines = linesThere && !unknowns.has('lines') ? pairLines(ownLines, nsLines, itemName) : [];
+  const lines = linesThere && !unknowns.has('lines') ? pairLines(ownLines, nsLines, itemName, isCharge) : [];
   {
     const same = linesThere && !unknowns.has('lines') ? lines.every((p) => p.same !== false) : null;
     const first = lines.find((p) => p.same === false);
@@ -731,6 +753,13 @@ export function checkOwnInvoice(pair: OwnPairData, lists: OwnLists): OwnInvoiceC
       ? "Its location is FleetSuite's invoice location rule's, from the customer: NetSuite took the sales order's."
       : own.location_from === 'sent' ? 'Its location is the one FleetSuite gave NetSuite.' : "Its location isn't known.",
   ];
+  const charges = ownLines.filter((l) => isCharge(l.itemId));
+  if (charges.length) {
+    const named = listed(charges.map((l) => `${itemName(l.itemId, l.itemNumber, l.description)} (${dollars(l.cents)})`));
+    workedOut.push(charges.length === 1
+      ? `${named} is shipping or handling NetSuite added to the invoice: FleetSuite's copy has it as NetSuite charged it, and doesn't tax it, as FleetSuite doesn't tax freight.`
+      : `${named} are shipping or handling NetSuite added to the invoice: FleetSuite's copy has them as NetSuite charged them, and doesn't tax them, as FleetSuite doesn't tax freight.`);
+  }
   if (spread.spread) {
     const discount = itemName(spread.spread.itemId, spread.spread.itemNumber, spread.spread.description);
     workedOut.push(`NetSuite spread ${discount} over the lines it applies to, so NetSuite's lines are taken at their quantities times their prices, `

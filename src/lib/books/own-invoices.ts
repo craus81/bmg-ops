@@ -5,6 +5,7 @@ import { roundCentsHalfEven } from '@/lib/estimate-totals';
 import { KNOWN_LOCATION_IDS, pickInvoiceLocation } from '@/lib/invoice-location';
 import { isPartTaxable } from '@/lib/line-taxability';
 import { getSalesTaxRate } from '@/lib/sales-tax';
+import { readInvoiceCharges, SHIP_ITEM_TYPE, withCharges, type ChargesRead } from './invoice-charges';
 import { isLayoutItem } from './invoice-rule';
 import type { BooksCompany } from './journal';
 import { rateOn, readRates, type SalesTaxRate, type SalesTaxRateRow } from './sales-tax-rates';
@@ -22,11 +23,16 @@ import { rateOn, readRates, type SalesTaxRate, type SalesTaxRateRow } from './sa
  *   - the lines are the ones FleetSuite sent, or for a sales order billed
  *     whole, what FleetSuite's copy of the sales order still had to bill
  *     (netsuite_sales_order_lines, copied every two hours);
+ *   - then the shipping and handling NetSuite added to the invoice, which
+ *     FleetSuite never bills, as NetSuite charged them: read from NetSuite's
+ *     invoice as soon as it's made (src/lib/books/invoice-charges.ts), in
+ *     place of any shipping line FleetSuite's copy of the sales order had;
  *   - each line's amount is its quantity times its price, to the cent;
  *   - sales tax is tax@2 (part 66), FleetSuite's quoting rule at each
  *     location's own rate: a line is taxed by src/lib/line-taxability.ts
  *     (Service items not, an admin's override either way, everything else
- *     taxed; a discount as the line above it), at the rate in force at the
+ *     taxed; a discount as the line above it; shipping and handling not, as
+ *     freight isn't on quotes), at the rate in force at the
  *     invoice's location on its day on Books -> Sales tax
  *     (sales-tax-rates.ts), worked out line by line and rounded half to even
  *     the way NetSuite does (src/lib/estimate-totals.ts). Where Books has no
@@ -234,9 +240,10 @@ export function workOutOwnInvoice(input: OwnInvoiceInput, facts: OwnInvoiceFacts
     if (priced && amount === 0) continue;
 
     // FleetSuite's own rule, not NetSuite's Taxable box; an item FleetSuite doesn't know is taxed. A discount's tax
-    // follows the line it takes money off, the one above it, as on an estimate (src/lib/estimate-totals.ts).
+    // follows the line it takes money off, the one above it, as on an estimate (src/lib/estimate-totals.ts). Shipping
+    // and handling aren't taxed, as freight isn't on quotes.
     const above = lines[lines.length - 1];
-    const taxable = priced && (item?.type && TAKES_OFF.has(item.type) && above
+    const taxable = priced && item?.type !== SHIP_ITEM_TYPE && (item?.type && TAKES_OFF.has(item.type) && above
       ? above.taxable
       : isPartTaxable({ item_type: item?.type ?? null, item_number: billed.itemNumber ?? item?.number ?? null, taxable_override: item?.taxableOverride ?? null }));
     lines.push({
@@ -538,11 +545,11 @@ export interface SavedOwnInvoice {
 
 /**
  * The next version of FleetSuite's own copy of an invoice it fixed (migration 471), as gl_own_invoice_fix takes it:
- * the invoice's date, PO number, memo, VIN and lines as fixed. Its sales tax is FleetSuite's own rule, as when the
- * copy was made, at the copy's own rate and on its own basis, so a fix that changes one line doesn't change the tax
- * of the others; its due date is the date plus the copy's terms. FleetSuite now knows every line and price, so only
- * what it didn't know of the customer, the terms and the location stays unknown. Lines that never post and lines of
- * nothing are left out, as when the copy was made.
+ * the invoice's date, PO number, memo, VIN and lines as fixed, with the shipping NetSuite has on it after the fix
+ * when it said. Its sales tax is FleetSuite's own rule, as when the copy was made, at the copy's own rate and on its
+ * own basis, so a fix that changes one line doesn't change the tax of the others; its due date is the date plus the
+ * copy's terms. FleetSuite now knows every line and price, so only what it didn't know of the customer, the terms and
+ * the location stays unknown. Lines that never post and lines of nothing are left out, as when the copy was made.
  */
 export function fixedOwnInvoicePayload(
   saved: SavedOwnInvoice,
@@ -556,9 +563,9 @@ export function fixedOwnInvoicePayload(
     const item = l.itemId ? items.get(l.itemId) : undefined;
     if ((l.itemId && isLayoutItem(l.itemId, item?.type)) || l.cents === 0) continue;
     const above = lines[lines.length - 1];
-    const taxable = item?.type && TAKES_OFF.has(item.type) && above
+    const taxable = item?.type !== SHIP_ITEM_TYPE && (item?.type && TAKES_OFF.has(item.type) && above
       ? above.taxable
-      : isPartTaxable({ item_type: item?.type ?? null, item_number: l.itemNumber ?? item?.number ?? null, taxable_override: item?.taxableOverride ?? null });
+      : isPartTaxable({ item_type: item?.type ?? null, item_number: l.itemNumber ?? item?.number ?? null, taxable_override: item?.taxableOverride ?? null }));
     lines.push({
       lineNo: lines.length + 1,
       itemId: l.itemId,
@@ -605,6 +612,21 @@ export function fixedOwnInvoicePayload(
   };
 }
 
+/** A read of the shipping that failed is only logged: the copy is saved without it, and the check says so. */
+function warnUnread(netsuiteId: string, charges: ChargesRead): void {
+  if (!charges.ok) console.warn(`[books] shipping on NetSuite invoice ${netsuiteId} not read: ${charges.reason}`);
+}
+
+/** NetSuite said these items are shipping: the copy takes them so where the lists copy doesn't have them yet. */
+function knowCharges(items: OwnInvoiceFacts['items'], charges: Array<{ itemId: string | null; itemNumber?: string | null }>): void {
+  for (const c of charges) {
+    const known = c.itemId ? items.get(c.itemId) : undefined;
+    if (c.itemId && known?.type !== SHIP_ITEM_TYPE) {
+      items.set(c.itemId, { number: known?.number ?? c.itemNumber ?? null, type: SHIP_ITEM_TYPE, taxableOverride: known?.taxableOverride ?? null });
+    }
+  }
+}
+
 export interface FixedSaveResult {
   saved: boolean;
   /** The copy's version now, when it was saved. */
@@ -632,8 +654,14 @@ export async function saveFixedOwnInvoice(
     if (error) throw new Error(error.message);
     const saved = data as SavedOwnInvoice | null;
     if (!saved) return { saved: false, none: true, reason: 'no copy' };
-    const facts = await readOwnInvoiceFacts(service, saved.customer_netsuite_id, p.fixed.lines.map((l) => l.itemId ?? '').filter(Boolean));
-    const payload = fixedOwnInvoicePayload(saved, p.fixed, facts.items, { fixId: p.fixId, by: p.by });
+    // The shipping NetSuite has on the invoice after the fix, which NetSuite's lines as the fix read them don't have.
+    const charges = await readInvoiceCharges(p.netsuiteId);
+    warnUnread(p.netsuiteId, charges);
+    const added: FixedBilledLine[] = charges.ok ? charges.lines.map((c) => ({ ...c, orderLine: null })) : [];
+    const facts = await readOwnInvoiceFacts(service, saved.customer_netsuite_id, [...p.fixed.lines, ...added].map((l) => l.itemId ?? '').filter(Boolean));
+    knowCharges(facts.items, added);
+    const lines = charges.ok ? withCharges(p.fixed.lines, added, (id) => facts.items.get(id)?.type) : p.fixed.lines;
+    const payload = fixedOwnInvoicePayload(saved, { ...p.fixed, lines }, facts.items, { fixId: p.fixId, by: p.by });
     const res = await service.rpc('gl_own_invoice_fix', { p: payload });
     if (res.error) throw new Error(res.error.message);
     const out = res.data as { saved?: boolean; version?: number; reason?: string } | null;
@@ -693,12 +721,21 @@ export async function saveOwnInvoice(service: SupabaseClient, made: MadeInvoice,
   try {
     const fromSalesOrder = !!made.salesOrderId && /^\d+$/.test(String(made.salesOrderId));
     const sentLines = made.billed ?? null;
-    // An invoice off a sales order is for the order's customer, whatever FleetSuite's record of the job says.
-    const so = fromSalesOrder ? await readSalesOrderCopy(service, String(made.salesOrderId)) : null;
+    // An invoice off a sales order is for the order's customer, whatever FleetSuite's record of the job says. The
+    // shipping NetSuite added to the invoice is read from NetSuite meanwhile.
+    const [so, charges] = await Promise.all([
+      fromSalesOrder ? readSalesOrderCopy(service, String(made.salesOrderId)) : null,
+      readInvoiceCharges(netsuiteId),
+    ]);
+    warnUnread(netsuiteId, charges);
 
     const customerNetsuiteId = so?.customerNetsuiteId ?? numericId(made.customerNetsuiteId) ?? null;
-    const lines = sentLines ?? so?.lines ?? null;
-    const facts = await readOwnInvoiceFacts(service, customerNetsuiteId, (lines ?? []).map((l) => l.itemId ?? '').filter(Boolean));
+    const billed = sentLines ?? so?.lines ?? null;
+    const added: BilledLine[] = charges.ok ? charges.lines : [];
+    const facts = await readOwnInvoiceFacts(service, customerNetsuiteId, [...(billed ?? []), ...added].map((l) => l.itemId ?? '').filter(Boolean));
+    knowCharges(facts.items, added);
+    // When FleetSuite couldn't say what it billed, the copy says so, shipping or not.
+    const lines = billed && charges.ok ? withCharges(billed, added, (id) => facts.items.get(id)?.type) : billed;
 
     let locationId = numericId(made.locationId);
     let locationFrom: OwnInvoiceInput['locationFrom'] = locationId ? 'sent' : null;

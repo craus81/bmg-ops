@@ -234,7 +234,7 @@ export interface WorkedOutRuleInfo {
 export const WORKED_OUT_RULES: readonly WorkedOutRuleInfo[] = [
   {
     id: 'tax@2', name: 'Sales tax on own invoices',
-    what: "Each line is taxed or not (Service items not, an admin's override either way, everything else taxed, a discount as the line above it) at the rate in force at the invoice's location on its day (Books → Sales tax), worked out line by line and rounded half to even, as NetSuite does. A tax-exempt customer pays none.",
+    what: "Each line is taxed or not (Service items not, an admin's override either way, everything else taxed, a discount as the line above it; shipping and handling NetSuite adds to the invoice not, as freight isn't taxed) at the rate in force at the invoice's location on its day (Books → Sales tax), worked out line by line and rounded half to even, as NetSuite does. A tax-exempt customer pays none.",
     code: 'src/lib/books/own-invoices.ts',
   },
   {
