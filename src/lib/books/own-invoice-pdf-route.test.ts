@@ -49,7 +49,10 @@ vi.mock('./own-invoice-check', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./own-invoice-check')>()),
   checkOwnInvoices: () => ({ invoices: h.invoice ? [h.invoice] : [] }),
 }));
-vi.mock('./own-invoice-posting', () => ({ ownBooks: () => new Map() }));
+vi.mock('./own-invoice-posting', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./own-invoice-posting')>()),
+  ownBooks: () => new Map(),
+}));
 
 import { GET, POST, maxDuration } from '../../app/api/admin/books/own-invoices/pdf/route';
 import { GET as GET_INVOICE } from '../../app/api/admin/books/own-invoices/route';

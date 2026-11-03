@@ -182,6 +182,23 @@ describe('an own invoice next to NetSuite\'s', () => {
     expect(c.lines.map((l) => l.netsuite?.lineId)).toEqual(['1', '2']);
   });
 
+  it("leaves out NetSuite's lines that book the cost of the stock the invoice took, and says so", () => {
+    const costLine = (lineId: string, netamount: string): NetsuiteLineData => ({ ...nsLine(lineId, 'item', '55', '120.00', netamount), cost: true });
+    const c = check({ netsuite: netsuite({ lines: [SHELF_NS, LABOR_NS, costLine('4', '120.00'), costLine('5', '-120.00'), taxNs('21.30')] }) });
+    expect(c).toMatchObject({ status: 'matches', differing: 0 });
+    expect(c.lines.map((l) => l.netsuite?.lineId)).toEqual(['1', '2']);
+    expect(c.workedOut[c.workedOut.length - 1]).toBe(
+      "NetSuite's invoice books the cost of the stock it took on 2 lines of its own, which aren't compared here: that cost posts under Stock and cost.",
+    );
+    expect(check().workedOut.some((w) => w.includes('cost of the stock'))).toBe(false);
+    const one = check({ netsuite: netsuite({ lines: [SHELF_NS, LABOR_NS, costLine('4', '120.00'), taxNs('21.30')] }) });
+    expect(one.workedOut[one.workedOut.length - 1]).toBe(
+      "NetSuite's invoice books the cost of the stock it took on 1 line of its own, which isn't compared here: that cost posts under Stock and cost.",
+    );
+    // Taken for what was billed, they'd make it differ.
+    expect(check({ netsuite: netsuite({ lines: [SHELF_NS, LABOR_NS, { ...costLine('4', '-120.00'), cost: false }, taxNs('21.30')] }) }).status).toBe('differs');
+  });
+
   it('waits for NetSuite\'s invoice, then its lines, then its posting', () => {
     const before = check({ netsuite: null, netsuite_gl: null });
     expect(before).toMatchObject({

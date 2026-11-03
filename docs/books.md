@@ -242,7 +242,7 @@ admins can open it while fixing invoices is switched off.
 | Stock and cost tests | `src/lib/books/stock-check.test.ts`, `src/lib/books/stock-posting-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` |
 | Reports from FleetSuite's own books | `migrations/396-books-reports.sql`, `src/lib/books/reports.ts`, `src/app/(main)/admin/books/reports/page.tsx`, `src/app/api/admin/books/reports/route.ts` |
 | Report tests | `src/lib/books/reports.test.ts`, `src/lib/books/reports-sql.test.ts` |
-| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs`, `books_balance_differs`, `books_own_invoice_differs`, `books_own_fulfillment_differs`, `books_own_bill_differs`, `books_own_receipt_differs`, `books_own_adjustment_differs`, `books_mistake_found` and `books_own_number` in `src/lib/notification-registry.ts` |
+| Daily check, and its notifications | `src/lib/books/daily-check.ts`, `src/app/api/cron/books-daily-check/route.ts`, `books_month_differs`, `books_stock_differs`, `books_balance_differs`, `books_own_invoice_differs`, `books_own_credit_memo_differs`, `books_own_fulfillment_differs`, `books_own_bill_differs`, `books_own_receipt_differs`, `books_own_adjustment_differs`, `books_mistake_found` and `books_own_number` in `src/lib/notification-registry.ts` |
 | Daily check tests | `src/lib/books/daily-check.test.ts`, `src/lib/books/daily-check-sql.test.ts` |
 | An account line's documents (report detail) | `migrations/400-books-report-detail.sql`, `src/lib/books/report-detail.ts`, `lineSpan` in `src/lib/books/reports.ts`, `src/lib/books/report-data.ts` (what Reports and the detail read), `src/lib/books/report-links.ts` (the months a line opens on), `src/app/(main)/admin/books/reports/detail/page.tsx`, `src/app/api/admin/books/reports/detail/route.ts` |
 | Report detail tests | `src/lib/books/report-detail.test.ts`, `src/lib/books/report-detail-sql.test.ts`, `src/lib/books/report-links.test.ts`; `lineSpan`'s are in `src/lib/books/reports.test.ts` |
@@ -265,6 +265,9 @@ admins can open it while fixing invoices is switched off.
 | Own invoice tests | `src/lib/books/own-invoices.test.ts`, `src/lib/books/own-invoice-check.test.ts`, `src/lib/books/own-invoices-sql.test.ts`; the customers list's are in the lists test files, the daily check's in its own |
 | FleetSuite's own invoices posted in place of NetSuite's when they match | `migrations/409-books-own-invoice-posting.sql`, `src/lib/books/own-invoice-posting.ts`, `src/lib/books/invoice-posting.ts` |
 | Own invoice posting tests | `src/lib/books/own-invoice-posting.test.ts`; the posting decisions are in `invoice-posting.test.ts`, end to end in `invoice-posting-sql.test.ts` |
+| Books' own credit memos, checked against NetSuite's and posted in place of them when they match | `migrations/518-books-own-credit-memo-posting.sql`, `src/lib/books/own-credit-memo-check.ts`, `src/lib/books/own-credit-memo-posting.ts`, `src/lib/books/invoice-posting.ts`; the copies themselves are saved by Credit memos made in FleetSuite (`migrations/466-books-credit-memos.sql`, `src/lib/books/own-credit-memos.ts`) |
+| Own credit memos and one credit memo's check, and their API | `src/app/(main)/admin/books/own-credit-memos/page.tsx`, `src/app/(main)/admin/books/own-credit-memos/credit-memo/page.tsx`, `src/app/api/admin/books/own-credit-memos/route.ts` |
+| Own credit memo tests | `src/lib/books/own-credit-memo-check.test.ts`, `src/lib/books/own-credit-memo-posting.test.ts`, and end to end `src/lib/books/own-credit-memo-pairs-sql.test.ts`; the posting decisions are in `invoice-posting.test.ts` and `invoice-posting-sql.test.ts`, the daily check's in its test files |
 | FleetSuite's own fulfillments, saved as each is made, costed from stock by item and checked against NetSuite's | `migrations/416-books-own-fulfillments.sql`, `migrations/512-books-kit-parts.sql` (a kit's parts), `migrations/514-books-fulfillment-locations.sql` (where each line was taken from), `src/lib/books/own-fulfillments.ts`, `src/lib/books/own-fulfillment-check.ts`; saved by `src/app/api/vehicle-tracking/invoice/route.ts` and `src/app/api/netsuite/create-invoice/route.ts` right after `fulfillSalesOrder` in `src/lib/netsuite.ts`, and by Fulfill & Invoice (`src/lib/so-fulfill-invoice-run.ts`) right after `fulfillSalesOrderLines` |
 | Own fulfillments and one fulfillment's check, and their API | `src/app/(main)/admin/books/own-fulfillments/page.tsx`, `src/app/(main)/admin/books/own-fulfillments/fulfillment/page.tsx`, `src/app/api/admin/books/own-fulfillments/route.ts` |
 | Own fulfillment tests | `src/lib/books/own-fulfillments.test.ts`, `src/lib/books/own-fulfillment-check.test.ts`, `src/lib/books/own-fulfillments-sql.test.ts`; the daily check's are in its test files |
@@ -1947,6 +1950,20 @@ linking to Own invoices open on the newest one's month with those that
 differ. The record holds the invoices that differ, by NetSuite's id for
 each, with how many things differ, never an amount.
 
+So are Books' own credit memos, the same way as its own invoices (NetSuite
+Exit Checklist, "Gaps in what's built", 2026-11-03): one that differs from
+NetSuite's credit memo, on who it's for, its date or location, what it
+credits, the sales tax it gives back or its total, is noted at the first
+look and told about at the second if it still differs, and so is one where
+more differs than before. Each gets its own notification
+(`books_own_credit_memo_differs`, in the app and by push, naming the credit
+memo and its customer) saying what differs first, linking to its check;
+more than three at once get one, linking to Own credit memos open on the
+newest one's month with those that differ. It's a new alert, so a super
+admin with "Copy me on new alerts" ticked is emailed it too, right away;
+nobody else is. The record (`creditMemos`) holds them by NetSuite's id for
+each, with how many things differ, never an amount.
+
 So are FleetSuite's own fulfillments, the same way as its own invoices
 (owner decision 2026-10-19, "Fulfillments"): one that differs from
 NetSuite's fulfillment, on what it took from stock, where from, on what day
@@ -2930,6 +2947,17 @@ and the discount at what that leaves, the total staying as it is
 or price, a credit, or nothing taken off, NetSuite's lines keep their net
 amounts. The copy's "How FleetSuite worked it out" says when this was done.
 
+An invoice that took its stock itself (one made without a sales order)
+books the cost of what it took on lines of its own, which the ledger mirror
+copies with the invoice's lines. Since migration 518 each of NetSuite's
+lines says whether it's one (`cost`, as `gl_netsuite_cost_lines` knows
+them: a line booked to a cost of goods sold account or an item's inventory
+asset account in the copy of NetSuite's general ledger, and not to the
+item's income account), and the check leaves those out, since that cost
+posts under Stock and cost ("Posting FleetSuite's own invoices' cost").
+Before it did, every such invoice differed on its lines, and the copy's
+"How FleetSuite worked it out" now says how many cost lines it left out.
+
 A sales tax that differs is explained where it can be: work at Social Circle
 or a tax-exempt customer NetSuite charged, a customer NetSuite has as not
 taxable, NetSuite's rate against the one in Settings, and the fewest lines
@@ -2986,11 +3014,12 @@ since FleetSuite works its tax out at one rate, with no tax code to look an
 account up by. The entry is dated as NetSuite's is, in the month NetSuite
 booked the invoice into, keyed as NetSuite's is (`invoice:<NetSuite
 id>:<n>`) with the same memo, and its lines name FleetSuite's own
-(`own:<line>`, `own:tax`). Only BMG's invoices have copies; credit memos
-and 1084's invoices post as before. The cost lines of an invoice made
-without a sales order post apart from the sale, from the copy too when what
-it took from stock matches NetSuite's ("Posting FleetSuite's own invoices'
-cost").
+(`own:<line>`, `own:tax`). Only BMG's invoices have copies, and 1084's
+post as before; a credit memo FleetSuite made posts from Books' own copy of
+it the same way ("Posting FleetSuite's own credit memos"). The cost lines
+of an invoice made without a sales order post apart from the sale, from the
+copy too when what it took from stock matches NetSuite's ("Posting
+FleetSuite's own invoices' cost").
 
 The posting run reads the copies of each BMG month's invoices, from the
 first month FleetSuite made any (`readOwnCopies`), and checks each as Own
@@ -3009,11 +3038,12 @@ posts when it does, and links to FleetSuite's copy.
 
 ### What isn't done yet
 
-- Credit memos, and the documents Books has no copies of, post from
-  NetSuite's. Fulfillments, receipts and bills post from Books' own copies
-  from part 30 ("Posting FleetSuite's own fulfillments, receipts and
-  bills"), and an invoice's cost lines from 2026-11-03 ("Posting
-  FleetSuite's own invoices' cost").
+- The documents Books has no copies of post from NetSuite's. Fulfillments,
+  receipts and bills post from Books' own copies from part 30 ("Posting
+  FleetSuite's own fulfillments, receipts and bills"), and an invoice's cost
+  lines and the credit memos FleetSuite made from 2026-11-03 ("Posting
+  FleetSuite's own invoices' cost", "Posting FleetSuite's own credit
+  memos").
 - There's no history: copies start the day part 23 shipped.
 - FleetSuite's sales tax is one rate for everything but Social Circle, while
   NetSuite picks a tax code for each invoice. Where that differs, the check
@@ -3695,12 +3725,103 @@ opening it links to the invoice's own page.
 
 - The daily check doesn't look at what invoices took from stock: the
   invoice's own check (Own invoices) and Differences do.
-- Credit memos' cost lines post from NetSuite's: Books' copies of credit
-  memos don't post yet.
+- What a credit memo puts back on the shelf, and its cost, posts from
+  NetSuite's credit memo: Books' own copy of a credit memo posts only what
+  it credits ("Posting FleetSuite's own credit memos").
 - An item's cost account is learned from NetSuite's fulfillments and
   invoices, so after NetSuite moves an item to another account, its next
   invoice's cost posts from NetSuite's, and the one after takes the new
   account.
+
+## Posting FleetSuite's own credit memos
+
+Books keeps its own copy of each credit memo FleetSuite makes against an
+invoice ("Credit memos made in FleetSuite", migration 466). From 2026-11-03
+(NetSuite Exit Checklist, "Gaps in what's built", migration 518) each copy
+is put next to NetSuite's credit memo on Books → Own credit memos, and the
+books post the copy in place of NetSuite's credit memo when:
+
+- the copy **matches** NetSuite's credit memo, as the check below says; and
+- the entry the copy makes is the one NetSuite's makes with the credit memo
+  rule: the same amount to each account and division, the receivable for
+  the same customer, on the same date.
+
+Otherwise NetSuite's credit memo posts, as it always has, since that's what
+the customer was credited, and switching copies never moves anything in the
+books, as for invoices ("Posting FleetSuite's own invoices").
+
+### The check
+
+`checkOwnCreditMemo` (`src/lib/books/own-credit-memo-check.ts`) puts each
+copy next to NetSuite's credit memo as the ledger mirror copied it, from
+`gl_own_credit_memo_pairs`:
+
+- **Customer**: the invoice's customer, as NetSuite has it.
+- **Date**: the day FleetSuite made it, the day NetSuite dates it too.
+- **Location**: the invoice's, since NetSuite makes the credit memo from
+  the invoice, against the location NetSuite's credit memo books to, from
+  its receivable line in the copy of NetSuite's general ledger.
+- **Lines**: each line it credits, paired with NetSuite's by item, a line
+  at the same amount first, at what each credits, a discount credited back
+  taking money off. NetSuite's spread of a discount over the lines it
+  applies to is taken apart as for invoices.
+- **Before tax**, **Sales tax** and **Total**. A sales tax that differs is
+  explained where it can be: NetSuite's rate against the invoice's, or the
+  lines one taxed and the other didn't.
+
+NetSuite's lines that book the cost of the stock coming back aren't
+compared: that cost posts under Stock and cost. A copy **waits** until
+NetSuite's credit memo, its lines and its posting are copied, is **voided**
+when NetSuite voided or deleted its credit memo, **differs** when anything
+compared differs, and **matches** otherwise. FleetSuite works every part of
+a credit memo out itself, so a copy is never incomplete.
+
+### The entry
+
+The copy's entry, `own_credit_memo@1` (`ownCreditEntry` in
+`src/lib/books/own-credit-memo-posting.ts`), is the credit memo rule's
+working on the copy's own lines: each line out of its item's income account
+and division, as NetSuite's line would come out, the sales tax it gives back
+out of the account FleetSuite's own invoices post theirs to
+(`salesTaxAccount`), and the receivable credited the copy's total for its
+FleetSuite customer. It's dated as NetSuite's is, in the month NetSuite
+booked the credit memo into, keyed as NetSuite's is (`credit_memo:<NetSuite
+id>:<n>`) with the same memo, and its lines name the copy's own
+(`own:<line>`, `own:tax`). Only BMG's credit memos have copies.
+
+The posting run reads the copies of a BMG month's credit memos when the
+month has any, from the first month FleetSuite made one
+(`gl_own_credit_memo_months`), and checks each as Own credit memos does. A
+credit memo whose entry was made by the other copy's rule has it replaced,
+reversed and posted again in one transaction, as for an invoice
+(`gl_invoice_postings` says which rule made the entry that stands). A read
+of the copies that fails stops the run, saying what it was reading.
+
+What a credit memo puts back on the shelf, and its cost, posts from
+NetSuite's credit memo under Stock and cost, as before (`invoice_cost`).
+
+### The pages
+
+Books → Own credit memos (`/admin/books/own-credit-memos`,
+`deepLinks.booksOwnCreditMemos`) lists the copies a month at a time, the
+ones that differ first, each with the invoice it credits, why, what the
+books hold for it and the sentence saying how it compares. Tapping one
+opens its check (`/admin/books/own-credit-memos/credit-memo?id=<NetSuite
+id>`, `deepLinks.booksOwnCreditMemo`): what's compared with FleetSuite's and
+NetSuite's side, each line, which copy the books posted it from with a link
+to it on Invoices vs NetSuite, and how FleetSuite worked it out. On
+Invoices vs NetSuite a credit memo posted from its copy reads "Entry 903 ·
+own copy", and opening one links to its copy. The daily check tells the
+super admins when one differs ("Daily check"). Open to whoever opens the
+books.
+
+### What isn't done yet
+
+- Credit memos are made in FleetSuite only once Credit memos is on under
+  Books → Switches, so the page has none until then.
+- What a credit memo puts back on the shelf posts from NetSuite's credit
+  memo; Books' own copy posts only what it credits.
+- A credit memo made in NetSuite has no copy, and posts from NetSuite's.
 
 ## Snap a bill
 
@@ -4137,9 +4258,10 @@ puts the unit back on the shelf at O'Fallon.
 
 ### What isn't done yet
 
-- Books' own copies aren't checked against NetSuite's credit memos, listed
-  or posted yet. Until they are, NetSuite's credit memo posts from the copy
-  of NetSuite's ledger as any credit memo does ("Credit memos").
+- Books' own copies are checked against NetSuite's credit memos on Books →
+  Own credit memos, and post in their place when they match, from
+  2026-11-03 ("Posting FleetSuite's own credit memos"); what a credit memo
+  puts back on the shelf still posts from NetSuite's, under Stock and cost.
 - Before switching on, check the first few in NetSuite: a credit memo with
   a discount line, one with a part coming back to O'Fallon from an invoice
   booked elsewhere, and how NetSuite applied it to the invoice.

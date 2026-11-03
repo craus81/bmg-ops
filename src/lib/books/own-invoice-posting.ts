@@ -4,7 +4,9 @@ import {
   type ChartAccount, type CheckContext, type ReasonNames, type TaxAccountCount, type WorkedInvoice,
 } from './invoice-check';
 import { invoiceEntry, MAIN_LINE, type InvoiceLine, type RuleLine, type RuleProblem, type RuleResult } from './invoice-rule';
-import { checkOwnInvoice, dayText, ownLists, type OwnInvoiceCheck, type OwnInvoiceData, type OwnPairsData } from './own-invoice-check';
+import {
+  checkOwnInvoice, dayText, ownLists, type OwnCheckStatus, type OwnInvoiceCheck, type OwnInvoiceData, type OwnPairsData,
+} from './own-invoice-check';
 import { OWN_COMPANY } from './own-invoices';
 
 /**
@@ -139,6 +141,55 @@ function problemText(p: RuleProblem, names: ReasonNames): string {
   return problemReason(p, names).text;
 }
 
+/** What the document is, in the pick's sentences. */
+export interface OwnWords {
+  /** "NetSuite's invoice" */
+  theirs: string;
+  /** What NetSuite's did for the customer: "since that's what the customer was billed". */
+  done: string;
+}
+
+export const INVOICE_WORDS: OwnWords = { theirs: "NetSuite's invoice", done: 'billed' };
+
+/**
+ * What the books post for an invoice or credit memo FleetSuite has its own copy of, given how the copy compares with
+ * NetSuite's document (`check`), the entry NetSuite's makes with its rule (`netsuite`, entryLines in
+ * src/lib/books/invoice-posting.ts) and the copy's own entry (`build`, worked out only once the copy matches), its
+ * date and the receivable's customer.
+ */
+export function pickChecked(
+  worked: WorkedInvoice,
+  netsuite: RuleLine[],
+  check: { status: OwnCheckStatus; unknowns?: string[] },
+  build: () => { result: RuleResult; date: string; customerId: string | null },
+  names: ReasonNames,
+  words: OwnWords,
+): OwnPick {
+  const not = (why: string | null): OwnPick => ({ entry: null, why });
+  if (check.status === 'voided') return not(null);
+  if (check.status === 'waiting') return not(`FleetSuite's own copy is waiting for ${words.theirs} to be copied, so the books post NetSuite's for now.`);
+  if (check.status === 'differs') {
+    return not(`FleetSuite's own copy differs from ${words.theirs}, so the books post NetSuite's, since that's what the customer was ${words.done}.`);
+  }
+  if (check.status === 'incomplete') {
+    return not(`FleetSuite's own copy matches where it can be checked but is incomplete, so the books post ${words.theirs}: `
+      + `FleetSuite didn't know ${listed(check.unknowns ?? [])}.`);
+  }
+  // NetSuite's own entry can't be worked out yet, or its copy is mid-refresh: whatever stands stays, whichever copy made it.
+  if (worked.checked.status === 'waiting' || worked.checked.status === 'unworkable') return not(null);
+
+  const built = build();
+  if (built.result.problems.length) {
+    return not(`FleetSuite's own copy matches ${words.theirs}, but its entry can't be worked out, so the books post NetSuite's. `
+      + problemText(built.result.problems[0], names));
+  }
+  const entry = { lines: built.result.lines, date: built.date, customerId: built.customerId };
+  const inv = worked.invoice;
+  const differs = entryDifference(entry, { lines: netsuite, date: entryDate(inv), customerId: inv.customer_id ?? null }, names);
+  if (differs) return not(`FleetSuite's own copy matches ${words.theirs}, but its entry doesn't match NetSuite's, so the books post NetSuite's: ${differs}.`);
+  return { entry, why: null };
+}
+
 /**
  * What the books post for an invoice, given FleetSuite's own copy of it and the entry NetSuite's makes with the
  * invoice rule (`netsuite`, entryLines in src/lib/books/invoice-posting.ts). Null when the copy has no say: there's
@@ -149,28 +200,11 @@ export function ownPick(worked: WorkedInvoice, netsuite: RuleLine[], copy: OwnCo
   if (!copy || month.company !== OWN_COMPANY || inv.doc_type === 'credit_memo') return null;
   if (inv.companies.length !== 1 || inv.companies[0] !== month.company) return null;
   const { own, check } = copy;
-  const not = (why: string | null): OwnPick => ({ entry: null, why });
-
-  if (check.status === 'voided') return not(null);
-  if (check.status === 'waiting') return not("FleetSuite's own copy is waiting for NetSuite's invoice to be copied, so the books post NetSuite's for now.");
-  if (check.status === 'differs') {
-    return not("FleetSuite's own copy differs from NetSuite's invoice, so the books post NetSuite's, since that's what the customer was billed.");
-  }
-  if (check.status === 'incomplete') {
-    return not("FleetSuite's own copy matches where it can be checked but is incomplete, so the books post NetSuite's invoice: "
-      + `FleetSuite didn't know ${listed(check.unknowns)}.`);
-  }
-  // NetSuite's own entry can't be worked out yet, or its copy is mid-refresh: whatever stands stays, whichever copy made it.
-  if (worked.checked.status === 'waiting' || worked.checked.status === 'unworkable') return not(null);
-
-  const built = ownEntry(own, month.accounts, month.salesTax);
-  if (built.problems.length) {
-    return not(`FleetSuite's own copy matches NetSuite's invoice, but its entry can't be worked out, so the books post NetSuite's. ${problemText(built.problems[0], month.names)}`);
-  }
-  const entry = { lines: built.lines, date: entryDate({ date: own.date, posting_month: inv.posting_month }), customerId: own.customer_id };
-  const differs = entryDifference(entry, { lines: netsuite, date: entryDate(inv), customerId: inv.customer_id ?? null }, month.names);
-  if (differs) return not(`FleetSuite's own copy matches NetSuite's invoice, but its entry doesn't match NetSuite's, so the books post NetSuite's: ${differs}.`);
-  return { entry, why: null };
+  return pickChecked(worked, netsuite, check, () => ({
+    result: ownEntry(own, month.accounts, month.salesTax),
+    date: entryDate({ date: own.date, posting_month: inv.posting_month }),
+    customerId: own.customer_id,
+  }), month.names, INVOICE_WORDS);
 }
 
 /** What the books hold for an invoice: the entry that stands, its date, and which copy of the invoice it was made from. */

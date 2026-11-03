@@ -166,7 +166,7 @@ describe('loadHowItWorks', () => {
     const view = await loadHowItWorks(service, { roles: ['cpa'] }, NOW);
     const step = (key: string) => view.steps.find((s) => s.key === key)!;
     expect(step('invoice')).toMatchObject({ who: 'Anyone with Invoicing', people: ['Pat Owner', 'Sam Sales'], switchOn: null, switchName: null });
-    expect(step('credit_memo')).toMatchObject({ switchName: 'Credit memos', switchOn: true, posts: ['credit_memo@1'] });
+    expect(step('credit_memo')).toMatchObject({ switchName: 'Credit memos', switchOn: true, posts: ['credit_memo@1', 'own_credit_memo@1', 'stock@1'] });
     expect(step('payment')).toMatchObject({ switchName: 'Receiving payments', switchOn: false });
     expect(step('rent_mortgage').people).toEqual(['Kim Books', 'Pat Owner']);
     expect(step('read').people).toEqual(['Kim Books', 'Lee CPA', 'Pat Owner']);

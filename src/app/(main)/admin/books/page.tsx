@@ -234,6 +234,8 @@ export default function BooksAccountsPage() {
             {' · '}
             <Link href="/admin/books/own-invoices" style={{ color: 'var(--text-secondary)' }}>Own invoices</Link>
             {' · '}
+            <Link href="/admin/books/own-credit-memos" style={{ color: 'var(--text-secondary)' }}>Own credit memos</Link>
+            {' · '}
             <Link href="/admin/books/own-fulfillments" style={{ color: 'var(--text-secondary)' }}>Own fulfillments</Link>
             {' · '}
             <Link href="/admin/books/own-bills" style={{ color: 'var(--text-secondary)' }}>Own bills</Link>

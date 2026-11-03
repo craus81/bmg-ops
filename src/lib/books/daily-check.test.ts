@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  adjustmentAlertsFor, alertsFor, backupAlertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, drillAlertsFor, fulfillmentAlertsFor,
-  invoicePdfAlertsFor, lookOf,
+  adjustmentAlertsFor, alertsFor, backupAlertsFor, balanceAlertsFor, balanceKey, billAlertsFor, changeAlertsFor, creditMemoAlertsFor, drillAlertsFor,
+  fulfillmentAlertsFor, invoicePdfAlertsFor, lookOf,
   mistakeAlertsFor, nextCheck, numberAlertsFor, outsideAlertsFor, ownAlertsFor, parseCheckState, receiptAlertsFor, sendAlertsFor, stockAlertsFor,
   type BalanceNews, type ChangeAlertItem, type CompanyCheck, type DifferingMonths, type MistakeAlertItem, type MonthFacts, type MonthNews,
   type SendAlertItem, type StockNews,
@@ -11,6 +11,7 @@ import type { NumberAlertItem } from './own-numbers';
 import type { PdfAlertItem } from './invoice-pdfs';
 import type { OwnAdjustmentCheck } from './own-adjustment-check';
 import type { OwnBillCheck } from './own-bill-check';
+import type { OwnCreditMemoCheck } from './own-credit-memo-check';
 import type { OwnFulfillmentCheck } from './own-fulfillment-check';
 import type { OwnInvoiceCheck } from './own-invoice-check';
 import type { OwnReceiptCheck } from './own-receipt-check';
@@ -82,6 +83,16 @@ describe('parseCheckState', () => {
     expect(parseCheckState({ companies: {}, own })).toEqual({ companies: {}, own });
     for (const bad of [null, 'x', { known: { 'INV5001': 1 }, noted: {} }, { known: { 5001: 0.5 }, noted: {} }, { known: {} }]) {
       expect(parseCheckState({ companies: {}, own: bad })).toEqual({ companies: {} });
+    }
+  });
+
+  it("reads what it holds for Books' own credit memos apart from its own invoices, and drops it when it doesn't read", () => {
+    const creditMemos = { known: { 8001: 3 }, noted: { 8002: 1 } };
+    expect(parseCheckState({ companies: {}, creditMemos })).toEqual({ companies: {}, creditMemos });
+    expect(parseCheckState({ companies: {}, own: { known: { 5001: 1 }, noted: {} }, creditMemos }))
+      .toEqual({ companies: {}, own: { known: { 5001: 1 }, noted: {} }, creditMemos });
+    for (const bad of [null, 'x', { known: { CM8001: 1 }, noted: {} }, { known: { 8001: 1.5 }, noted: {} }, { known: {} }]) {
+      expect(parseCheckState({ companies: {}, creditMemos: bad })).toEqual({ companies: {} });
     }
   });
 
@@ -479,6 +490,43 @@ describe('ownAlertsFor', () => {
   });
 });
 
+describe('creditMemoAlertsFor', () => {
+  const checked = (id: string, over: Partial<OwnCreditMemoCheck> = {}): OwnCreditMemoCheck => ({
+    netsuiteId: id, number: `CM${id}`, date: '2026-10-22', invoiceId: '5001', invoiceNumber: 'INV5001', reason: 'Returned', customer: 'Acme Fleet',
+    status: 'differs', summary: "Date: FleetSuite made it Oct 22, 2026, and NetSuite's credit memo is dated 1 day later.",
+    differing: 1, fleetsuiteTotal: 23115, netsuiteTotal: 23115, fields: [], lines: [], backToStock: 1, workedOut: [], ...over,
+  });
+  const news = (id: string, before: number | null = null): MonthNews => ({ month: id, documents: 1, before });
+
+  it('names the credit memo and its customer, says what differs, and links to its check', () => {
+    expect(creditMemoAlertsFor([news('8001')], new Map([['8001', checked('8001')]]))).toEqual([{
+      title: "Own credit memos: CM8001 (Acme Fleet) differs from NetSuite's",
+      body: "Date: FleetSuite made it Oct 22, 2026, and NetSuite's credit memo is dated 1 day later. Own credit memos shows why.",
+      url: '/admin/books/own-credit-memos/credit-memo?id=8001',
+      about: 'credit_memo',
+    }]);
+    const [more] = creditMemoAlertsFor([news('8001', 1)], new Map([['8001', checked('8001', { customer: null })]]));
+    expect(more.title).toBe("Own credit memos: more of CM8001 differs from NetSuite's");
+  });
+
+  it("tells about up to three one by one, and more in one notification linking to the newest month's that differ", () => {
+    const ids = ['8001', '8002', '8003', '8004'];
+    const checks = new Map(ids.map((id, i) => [id, checked(id, { date: i === 1 ? '2026-11-03' : '2026-10-22', customer: i === 3 ? null : 'Acme Fleet' })]));
+    expect(creditMemoAlertsFor(ids.slice(0, 3).map((id) => news(id)), checks)).toHaveLength(3);
+    expect(creditMemoAlertsFor(ids.map((id) => news(id)), checks)).toEqual([{
+      title: "Own credit memos: 4 differ from NetSuite's now",
+      body: 'CM8001 (Acme Fleet), CM8002 (Acme Fleet), CM8003 (Acme Fleet) and 1 more. Own credit memos shows why.',
+      url: '/admin/books/own-credit-memos?month=2026-11&only=differs',
+      about: 'credit_memo',
+    }]);
+  });
+
+  it('tells nothing of a credit memo it has no check for, nor when nothing changed', () => {
+    expect(creditMemoAlertsFor([news('8009')], new Map())).toEqual([]);
+    expect(creditMemoAlertsFor([], new Map())).toEqual([]);
+  });
+});
+
 describe('fulfillmentAlertsFor', () => {
   const checked = (id: string, over: Partial<OwnFulfillmentCheck> = {}): OwnFulfillmentCheck => ({
     netsuiteId: id, number: `IF${id}`, date: '2026-10-20', madeFrom: 'vehicle', madeFromText: 'a finished vehicle', customer: 'Acme Fleet',
@@ -842,6 +890,16 @@ describe('deepLinks.booksOwnInvoices and booksOwnInvoice', () => {
     expect(deepLinks.booksOwnInvoices('2026-10-20', true)).toBe('/admin/books/own-invoices?month=2026-10&only=differs');
     expect(deepLinks.booksOwnInvoices(null, true)).toBe('/admin/books/own-invoices?only=differs');
     expect(deepLinks.booksOwnInvoice('5001')).toBe('/admin/books/own-invoices/invoice?id=5001');
+  });
+});
+
+describe('deepLinks.booksOwnCreditMemos and booksOwnCreditMemo', () => {
+  it('open Own credit memos on a month, on the ones that differ when asked, and one credit memo', () => {
+    expect(deepLinks.booksOwnCreditMemos()).toBe('/admin/books/own-credit-memos');
+    expect(deepLinks.booksOwnCreditMemos('2026-10-01')).toBe('/admin/books/own-credit-memos?month=2026-10');
+    expect(deepLinks.booksOwnCreditMemos('2026-10-22', true)).toBe('/admin/books/own-credit-memos?month=2026-10&only=differs');
+    expect(deepLinks.booksOwnCreditMemos(null, true)).toBe('/admin/books/own-credit-memos?only=differs');
+    expect(deepLinks.booksOwnCreditMemo('8001')).toBe('/admin/books/own-credit-memos/credit-memo?id=8001');
   });
 });
 
