@@ -16,7 +16,8 @@ import type { MistakeKind, MistakeView } from '@/lib/books/mistake-checks';
  * checks").
  *
  * Each night Books looks through the bills, checks and card charges it copies
- * from NetSuite for likely mistakes. Each company's open ones show the
+ * from NetSuite, their bill credits and card refunds, and NetSuite's journal
+ * entries (migration 516) for likely mistakes. Each company's open ones show the
  * likeliest first, each with why in a sentence and links to its documents in
  * NetSuite. The bookkeeper or a super admin clears one as fixed in NetSuite
  * or fine as it is, with a note; as fine it can also teach the check. Cleared
@@ -35,6 +36,7 @@ interface Payload {
   lastLook: SyncState | null;
   lastBills: SyncState | null;
   lastSpending: SyncState | null;
+  lastLedger: SyncState | null;
 }
 
 type How = 'fixed' | 'fine';
@@ -333,6 +335,7 @@ export default function BooksMistakeChecksPage() {
   const copyFailed = [
     data?.lastBills?.error ? `The last copy of NetSuite's bills failed ${whenText(data.lastBills.at)}: ${data.lastBills.error}` : '',
     data?.lastSpending?.error ? `The last copy of NetSuite's checks and card charges failed ${whenText(data.lastSpending.at)}: ${data.lastSpending.error}` : '',
+    data?.lastLedger?.error ? `The last copy of NetSuite's ledger, where the journal entries come from, failed ${whenText(data.lastLedger.at)}: ${data.lastLedger.error}` : '',
   ].filter(Boolean);
 
   return (
@@ -341,9 +344,9 @@ export default function BooksMistakeChecksPage() {
         <div style={{ flex: '1 1 280px' }}>
           <div style={{ fontSize: '20px', fontWeight: 800 }}>Mistake checks</div>
           <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Each night Books looks through what it copies from NetSuite for likely mistakes: a bill entered twice, a bill or charge
-            far off the vendor&apos;s usual, a monthly charge that didn&apos;t come, and a charge coded to an account that vendor
-            doesn&apos;t use. Each one says why. {canKeep ? 'Clear it' : 'The bookkeeper or a super admin clears it'} once it&apos;s fixed in
+            Each night Books looks through what it copies from NetSuite for likely mistakes: a bill, credit or journal entry entered
+            twice, an amount far off the usual, a monthly charge that didn&apos;t come, and a charge or credit coded to an account
+            that vendor doesn&apos;t use. Each one says why. {canKeep ? 'Clear it' : 'The bookkeeper or a super admin clears it'} once it&apos;s fixed in
             NetSuite, or if it&apos;s fine as it is. Nothing here changes NetSuite.{' '}
             <Link href="/admin/books/differences" style={{ color: 'var(--text-secondary)' }}>Differences vs NetSuite</Link>
             {' · '}
@@ -379,7 +382,8 @@ export default function BooksMistakeChecksPage() {
           )}
           {data.lastLook && (
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>
-              Last looked {whenText(data.lastLook.at)}, at the bills, checks and card charges dated from {longDay(data.lookFrom)}.
+              Last looked {whenText(data.lastLook.at)}, at the bills, checks, card charges, credits, refunds and journal entries
+              dated from {longDay(data.lookFrom)}.
               What&apos;s usual for a vendor comes from everything since {monthText(data.usualFrom)}. A fix made in NetSuite
               clears its item on its own once the copies pick it up.
             </div>

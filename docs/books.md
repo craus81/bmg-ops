@@ -48,7 +48,8 @@ match them, part 25, FleetSuite's own copy of each fulfillment it
 makes, with what it cost worked out from stock by item, checked against
 NetSuite's fulfillment each morning, part 26, a look each night through
 the copies of NetSuite's bills, checks and card charges for likely mistakes,
-listed for a super admin to clear, and part 27, Books' own copy of each bill
+listed for a super admin to clear (their credits, refunds and journal
+entries too since migration 516), and part 27, Books' own copy of each bill
 and PO receipt FleetSuite puts into NetSuite, checked against NetSuite's
 each morning, with one bill per approved vendor invoice or installer payout,
 part 28, Snap a bill, which enters a vendor's bill in NetSuite from a
@@ -281,9 +282,9 @@ admins can open it while fixing invoices is switched off.
 | PO bills: the PO a snapped bill names, its checks, the extra line, and billing it | `migrations/444-books-po-bills.sql`, `src/lib/books/snap-po.ts`, `src/lib/books/snap-a-bill.ts`, `canBillPoStatus` and `loadPoMatchFacts` in `src/lib/three-way-match.ts`, `createBillFromPo` in `src/lib/netsuite.ts`; on Snap a bill's page and its API |
 | PO bill tests | `src/lib/books/snap-po.test.ts`, `src/lib/books/snap-a-bill.test.ts`, `src/lib/three-way-match.test.ts`, `src/lib/books/snap-a-bill-sql.test.ts`, `src/lib/books/own-bills.test.ts`, `src/lib/netsuite.test.ts` |
 | A PO's other lines (its Expenses tab: freight, say) on FleetSuite's copy of it, with the bills that have each, and on the bills FleetSuite makes from it | `migrations/515-po-expense-lines.sql`, `syncPoExpenseLines` in `src/lib/vendor-po-sync.ts`, `poBillExpenseLines` and `readPoCopyExpenses` in `src/lib/books/own-bills.ts`, `poLinesBilled` and `poLeftCents` in `src/lib/books/snap-po.ts`, Purchasing → Vendor POs (`src/components/VendorPosTab.tsx`, `src/app/api/purchase-requests/vendor-pos/route.ts`); tests `src/lib/vendor-po-sync-expenses.test.ts`, `src/lib/vendor-po-expense-lines-sql.test.ts`, `src/lib/books/own-bills.test.ts`, `src/lib/books/own-bill-check.test.ts`, `src/lib/books/snap-po.test.ts` |
-| Mistake checks: the night's look for likely mistakes in the copies of NetSuite's bills, checks and card charges, each kept for a super admin to clear | `migrations/431-books-mistake-checks.sql`, `src/lib/books/mistake-checks.ts`, `src/app/api/cron/books-mistake-checks/route.ts` |
+| Mistake checks: the night's look for likely mistakes in the copies of NetSuite's bills, checks, card charges, bill credits, card refunds and journal entries, each kept for a super admin to clear | `migrations/431-books-mistake-checks.sql`, `migrations/516-books-mistake-checks-credits-journals.sql`, `src/lib/books/mistake-checks.ts`, `src/app/api/cron/books-mistake-checks/route.ts` |
 | Mistake checks page and its API | `src/app/(main)/admin/books/mistake-checks/page.tsx`, `src/app/api/admin/books/mistake-checks/route.ts` |
-| Mistake check tests | `src/lib/books/mistake-checks.test.ts`, `src/lib/books/mistake-checks-sql.test.ts`; the daily check's are in its test files |
+| Mistake check tests | `src/lib/books/mistake-checks.test.ts`, `src/lib/books/mistake-checks-sql.test.ts`, `src/lib/books/mistake-checks-journals-sql.test.ts`; the daily check's are in its test files |
 | Credit memos made in FleetSuite against an invoice, sent on to NetSuite, and Books' own copy of each | `migrations/466-credit-memos-in-fleetsuite.sql`, `src/lib/credit-memo.ts`, `src/lib/credit-item.ts`, `src/lib/books/own-credit-memos.ts`, `getInvoiceRecord`, `createCreditMemoFromInvoice` and `getInvoiceCreditMemos` in `src/lib/netsuite.ts`, `src/app/api/invoices/credit-memo/route.ts`, `src/app/api/admin/credit-item/route.ts` |
 | The credit memo screen, Invoiced's Credit, and Settings' NetSuite Credit Item | `src/app/(main)/invoices/credit-memo/page.tsx`, `src/app/(main)/invoices/page.tsx`, `src/app/(main)/settings/page.tsx` |
 | Credit memo tests | `src/lib/credit-memo.test.ts`, `src/lib/credit-item.test.ts`, `src/lib/credit-memo-route.test.ts`, `src/lib/netsuite-credit-memo.test.ts`, `src/lib/books/own-credit-memos.test.ts`, and the tables and the copy's writer `src/lib/books/own-credit-memos-sql.test.ts` |
@@ -1991,11 +1992,12 @@ So are the likely mistakes the night's mistake checks keep (owner decision
 look and told about at the second if it's still open, so one a super admin
 clears in between says nothing, and one that comes back is told about
 again. Each gets its own notification (`books_mistake_found`, in the app
-and by push) naming the vendor and what looks wrong, with why, opening it
-on Mistake checks; more than three at once get one naming the first three,
-opening the list. The record (`mistakes`) holds the open ones by their id
-on Mistake checks, never a vendor or an amount. They start the day the
-check began to look at them, so none is taken as known at its first look.
+and by push) naming the vendor, or the journal entry, and what looks
+wrong, with why, opening it on Mistake checks; more than three at once get
+one naming the first three, opening the list. The record (`mistakes`)
+holds the open ones by their id on Mistake checks, never a vendor or an
+amount. They start the day the check began to look at them, so none is
+taken as known at its first look.
 
 And so are the sends to NetSuite FleetSuite isn't sure about (part 45,
 "NetSuite feed"), but sooner: one NetSuite's answer didn't settle, or that
@@ -3835,30 +3837,42 @@ on it, for Parts Mail's Create bill too.
 ## Mistake checks
 
 Each night FleetSuite looks through the bills, checks and card charges it
-copies from NetSuite for likely mistakes, and lists each one, with why, on
+copies from NetSuite, their bill credits and card refunds, and NetSuite's
+journal entries, for likely mistakes, and lists each one, with why, on
 Books → Mistake checks for the bookkeeper or a super admin to clear (owner
 decision 2026-10-24, "Mistake checks": an idea borrowed from bookkeeping
-software, built next to the crossover, for the owner alone). Nothing is
-written to NetSuite or to the books: a mistake is fixed in NetSuite, and the
-copies bring the fix back.
+software, built next to the crossover, for the owner alone; the credits,
+refunds and journal entries since 2026-11-03, a gap the NetSuite Exit
+Checklist listed). Nothing is written to NetSuite or to the books: a
+mistake is fixed in NetSuite, and the copies bring the fix back.
 
 `/api/cron/books-mistake-checks` runs at 09:46 UTC (4:46 AM Central, 3:46
-in winter), after the night's copies of NetSuite's checks and card charges
-(:33 on odd hours) and bills (:39), and before the daily check (:58), which
-tells the super admins about new ones ("Daily check"). Look now on the page
-runs the same look straight away. The look (`runMistakeChecks` in
-`src/lib/books/mistake-checks.ts`) reads the copies a quarter at a time
-(`gl_mistake_docs`, migration 431) and keeps what it finds at once
+in winter), after the night's copies of NetSuite's ledger (:26 on odd
+hours), checks and card charges (:33) and bills (:39), and before the daily
+check (:58), which tells the super admins about new ones ("Daily check").
+Look now on the page runs the same look straight away. The look
+(`runMistakeChecks` in `src/lib/books/mistake-checks.ts`) reads the copies
+a quarter at a time: the bills, checks and card charges with their credits
+and refunds (`gl_mistake_docs`, migration 431), and the journal entries
+from the copy of NetSuite's ledger, each line with its company, account,
+name, debit and credit (`gl_mistake_journal_entries`, migration 516, an
+entry the copy holds no line of left out). It keeps what it finds at once
 (`gl_mistake_checks_save`); the record in `sync_state`,
 `books_mistake_checks`, holds how it went.
 
 It flags documents dated from September 1, 2026 (`LOOK_FROM`), and works
-out what's usual for a vendor from everything the copies hold, since
-January 2025 (`USUAL_FROM`). It looks at the bills, checks and card charges
-NetSuite still has, not voided, with a vendor or payee; bill credits and
-card refunds aren't flagged. A document's company is the one its GL lines
-post to; one the copy of NetSuite's ledger hasn't reached yet goes with the
-company the vendor's others post to most, or BMG.
+out what's usual for a vendor, or for journal entries to some accounts,
+from everything the copies hold, since January 2025 (`USUAL_FROM`). It
+looks at the bills, checks, card charges, bill credits and card refunds
+NetSuite still has, not voided, with a vendor or payee, and at the journal
+entries with lines that move money. A journal entry another undoes, with
+the same lines but every debit a credit, as a reversing entry or a void by
+reversing entry has them, isn't looked at, nor is the one undoing it; each
+undoes the latest earlier one with those lines no other has undone
+(`journalReversals`). A document's company is the one its GL lines post to
+(for a journal entry, BMG when any of its lines are BMG's); one the copy of
+NetSuite's ledger hasn't reached yet goes with the company the vendor's
+others post to most, or BMG.
 
 ### The four checks
 
@@ -3867,14 +3881,26 @@ company the vendor's others post to most, or BMG.
   likeliest; a bill and a check or card charge to the same vendor for the
   same amount within 7 days, which may be one bill entered both ways; and
   two checks or card charges to the same payee for the same amount on the
-  same day, from $25, when there are just the two. Each pair is one item
-  (`twice:<id>+<id>`), flagged when the later of the two is dated from
-  September 1.
+  same day, from $25, when there are just the two. Bill credits and card
+  refunds the same ways among themselves (two credits with the same number,
+  a credit and a refund within 7 days, two refunds on a day), never against
+  a charge, since a credit for a bill's amount is a return. Two journal
+  entries with the same lines (each line's company, account, name, debit
+  and credit, in any order) within 6 days of each other, when there are
+  just the two: three or more that close are a routine, and weekly ones are
+  7 days apart. Each pair is one item (`twice:<id>+<id>`), flagged when the
+  later of the two is dated from September 1.
 - **Far off usual.** A document from a vendor with at least six earlier
   ones: when their last six to twelve were all within 5% of each other and
   this one is ten times that or a tenth of it, the larger $100 or more,
   which can be a slipped decimal point; otherwise when it's $500 or more
-  and over twice the most they've billed or charged (`far_off:<id>`).
+  and over twice the most they've billed or charged. A bill credit of $100
+  or more for more than the vendor's bills, checks and card charges came to
+  in the year up to it, or from a vendor with none: a credit for the wrong
+  vendor, or a slipped decimal point. A journal entry ten times, or a tenth
+  of, what at least six earlier entries to the same accounts on the same
+  sides steadily came to, as a month's depreciation does, the larger $100
+  or more (`far_off:<id>`).
 - **Monthly charge missing.** A vendor that billed or charged a company
   every month for at least six months in a row, with nothing for the month
   a week after the day it usually comes (the middle of the days each
@@ -3885,8 +3911,10 @@ company the vendor's others post to most, or BMG.
 - **Odd account.** A document coded to an expense account none of the
   vendor's earlier documents used, when there are at least five with
   accounts and they used no more than three between them
-  (`odd_account:<id>`). Tax lines and item lines aren't looked at: an
-  item's account comes with the item.
+  (`odd_account:<id>`). Bill credits and card refunds count among a
+  vendor's documents, so a credit goes back where their bills went. Tax
+  lines and item lines aren't looked at: an item's account comes with the
+  item.
 
 ### Clearing
 
@@ -3894,16 +3922,18 @@ Each item (`gl_mistake_checks`) is open until it's cleared:
 
 - **Fixed in NetSuite**, by the bookkeeper or a super admin, with a note if
   they like. If the look still finds it once the copies made after the clear
-  have it (the older of the bills' and the checks and card charges' last
-  runs), it comes back, marked "Back" with the day.
+  have it (the oldest of the bills', the checks and card charges' and the
+  ledger's last runs), it comes back, marked "Back" with the day.
 - **Fine as it is**, by the bookkeeper or a super admin, with a note. For an
   odd account or a monthly charge a box, unticked to start, also teaches the
   check: those accounts are fine for that vendor from now on, or that
-  monthly charge isn't watched. Opening the item again unlearns it.
+  monthly charge isn't watched. Opening the item again unlearns it. One
+  about journal entries teaches nothing: there's no vendor to learn for.
 - **On its own**, when the copies no longer show it: a document gone from
-  NetSuite, voided, or changed so the two no longer match, the missing
-  charge come in, or an account now fine for the vendor. It says what
-  changed, and comes back if the look finds it again.
+  NetSuite, voided, undone by another journal entry, now for another
+  vendor, or changed so the two no longer match, the missing charge come
+  in, or an account now fine for the vendor. It says what changed, and
+  comes back if the look finds it again.
 
 The bookkeeper or a super admin can open any cleared item again
 (`gl_mistake_check_reopen`). Who cleared each one, when, how and with what
@@ -3914,17 +3944,23 @@ note is kept.
 `/admin/books/mistake-checks` (`deepLinks.booksMistakeChecks`,
 `?company=`, `&item=` to pick one out) shows a company's open items, the
 likeliest first, or its cleared ones, newest first, each with why, its
-documents linked to NetSuite and the buttons to clear it; when the look
-and the copies it looked through last ran, and anything that failed, in
-red; and Look now. Books links to it, and the daily check's notifications
-open it.
+documents linked to NetSuite and the buttons to clear it, and one about
+journal entries named by the last of them ("Journal entry JE-1042"); when
+the look and the copies it looked through last ran, and anything that
+failed, in red; and Look now. Books links to it, and the daily check's
+notifications open it.
 
 ### What isn't done yet
 
-- Bill credits, card refunds and journal entries aren't looked at.
 - Amounts are compared to the cent, so a bill entered twice with a typo in
   its amount isn't caught.
-- Only expense lines' accounts are looked at, not items'.
+- Only expense lines' accounts are looked at, not items'; a journal
+  entry's accounts aren't looked at for an odd one.
+- A card refund isn't checked against what the vendor charged: what it
+  takes back can be on a journal entry for the card's statement.
+- Journal entries aren't watched for a month that didn't come (a month's
+  depreciation, say), and are far off usual only by a slipped decimal
+  point.
 
 ## Credit memos made in FleetSuite
 

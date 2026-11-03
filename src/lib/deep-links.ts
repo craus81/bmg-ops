@@ -655,8 +655,9 @@ export const deepLinks = {
   /** Books → Mistake checks on a company's list ('BMG', '1084'), with one
    *  item on it picked out by its id: the landing for the daily books
    *  check's notification about new likely mistakes in the copies of
-   *  NetSuite's bills, checks and card charges
-   *  (src/lib/books/daily-check.ts). Open to whoever opens the books. */
+   *  NetSuite's bills, checks, card charges, credits, refunds and journal
+   *  entries (src/lib/books/daily-check.ts). Open to whoever opens the
+   *  books. */
   booksMistakeChecks: (company?: string | null, item?: string | null) => {
     const query = new URLSearchParams({ ...(company ? { company } : {}), ...(item ? { item } : {}) }).toString();
     return `/admin/books/mistake-checks${query ? `?${query}` : ''}`;

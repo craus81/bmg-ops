@@ -727,7 +727,7 @@ export const CONTROLS: readonly Control[] = [
   },
   {
     name: 'Mistake checks',
-    text: "Each night the copies of NetSuite's bills, checks and card charges are looked through for likely mistakes, such as a bill entered twice, for the bookkeeper to clear or fix.",
+    text: "Each night the copies of NetSuite's bills, checks, card charges, credits, refunds and journal entries are looked through for likely mistakes, such as a bill entered twice, for the bookkeeper to clear or fix.",
     where: 'Books → Mistake checks',
   },
   {
@@ -764,7 +764,7 @@ export const BOOKS_JOBS: readonly BooksJob[] = [
   { path: '/api/cron/books-invoice-pdfs', schedule: '56 1,3,5,7,9,11,13,15,17,19,21,23 * * *', name: 'Invoice PDFs', what: "Attaches FleetSuite's own PDF to each invoice in NetSuite, once switched on." },
   { path: '/api/cron/books-backup', schedule: '11 8 * * *', name: 'Backup', what: "Copies every table of the books into a zip in BMG's own file storage, checks it reads back to the same trial balance, and keeps it. Every backup is kept." },
   { path: '/api/cron/books-restore-drill', schedule: '51 8 * * *', name: 'Restore drill', what: "Restores the newest good backup into an empty scratch copy of the books and checks it: every row back, the journal balancing, the trial balance the same." },
-  { path: '/api/cron/books-mistake-checks', schedule: '46 9 * * *', name: 'Mistake checks', what: "Looks through the copies of NetSuite's bills, checks and card charges for likely mistakes." },
+  { path: '/api/cron/books-mistake-checks', schedule: '46 9 * * *', name: 'Mistake checks', what: "Looks through the copies of NetSuite's bills, checks, card charges, credits, refunds and journal entries for likely mistakes." },
   { path: '/api/cron/books-daily-check', schedule: '58 9,13 * * *', name: 'Daily check', what: "Puts the books next to NetSuite's, and the backup's and drill's last runs, and tells the super admins what's wrong." },
 ];
 

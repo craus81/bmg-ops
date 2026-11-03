@@ -5,6 +5,7 @@ import { fetchAllRows } from '@/lib/fetch-all';
 import { transactionUrl } from '@/lib/netsuite';
 import { BOOKS_COMPANIES, type BooksCompany } from '@/lib/books/journal';
 import { BOOKS_BILLS_SYNC } from '@/lib/books/netsuite-bills';
+import { BOOKS_GL_SYNC } from '@/lib/books/netsuite-gl';
 import { BOOKS_SPENDING_SYNC } from '@/lib/books/netsuite-spending';
 import {
   accountNamer, BOOKS_MISTAKE_CHECKS, LOOK_FROM, mistakeView, runMistakeChecks, USUAL_FROM,
@@ -20,7 +21,7 @@ const NOTE_MAX = 2000;
 
 /** NetSuite's page for each kind of document. */
 const PAGES: Record<MistakeDocType, Parameters<typeof transactionUrl>[0]> = {
-  VendBill: 'vendbill', VendCred: 'vendcred', Check: 'check', CardChrg: 'cardchrg', CardRfnd: 'cardrfnd',
+  VendBill: 'vendbill', VendCred: 'vendcred', Check: 'check', CardChrg: 'cardchrg', CardRfnd: 'cardrfnd', Journal: 'journal',
 };
 
 /** A refusal from the database, as the page shows it: "gl: it's already cleared" → "It's already cleared." */
@@ -41,7 +42,9 @@ const syncStateOf = (row: { last_result: unknown; updated_at: string | null } | 
  * GET /api/admin/books/mistake-checks — every likely mistake the nightly
  * look has kept (migration 431, src/lib/books/mistake-checks.ts), open and
  * cleared, each company's open count, and when the look and the copies it
- * looked through last ran, for Books → Mistake checks.
+ * looked through last ran (NetSuite's bills, its checks and card charges, and
+ * its ledger, where the journal entries come from), for Books → Mistake
+ * checks.
  *
  * POST — { action: 'clear', id, how: 'fixed' | 'fine', note?, learn? },
  * { action: 'reopen', id } or { action: 'look' }: the bookkeeper or a super
@@ -57,7 +60,7 @@ export async function GET(req: NextRequest) {
 
   const service = createServiceClient();
   const read = (syncType: string) => service.from('sync_state').select('last_result, updated_at').eq('sync_type', syncType).maybeSingle();
-  const [companies, rows, accounts, look, bills, spending] = await Promise.all([
+  const [companies, rows, accounts, look, bills, spending, ledger] = await Promise.all([
     service.from('gl_companies').select('id, code, name').order('code'),
     fetchAllRows<Record<string, any>>((from, to) => service
       .from('gl_mistake_checks')
@@ -73,8 +76,9 @@ export async function GET(req: NextRequest) {
     read(BOOKS_MISTAKE_CHECKS),
     read(BOOKS_BILLS_SYNC),
     read(BOOKS_SPENDING_SYNC),
+    read(BOOKS_GL_SYNC),
   ]);
-  const error = companies.error || rows.error || accounts.error || look.error || bills.error || spending.error;
+  const error = companies.error || rows.error || accounts.error || look.error || bills.error || spending.error || ledger.error;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const known = (companies.data ?? []).filter((c: { code: string }) => (BOOKS_COMPANIES as readonly string[]).includes(c.code));
@@ -106,6 +110,7 @@ export async function GET(req: NextRequest) {
     lastLook: syncStateOf(look.data),
     lastBills: syncStateOf(bills.data),
     lastSpending: syncStateOf(spending.data),
+    lastLedger: syncStateOf(ledger.data),
   });
 }
 

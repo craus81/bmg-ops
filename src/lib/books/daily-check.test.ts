@@ -661,6 +661,14 @@ describe('mistakeAlertsFor', () => {
     ]);
   });
 
+  it('names the journal entry one about journal entries is about, and a slipped decimal point for one far off', () => {
+    const journal = (kind: 'twice' | 'far_off') => item(ids[0], { kind, party: 'Journal entry JE-1046', journal: true, why: 'Why.' });
+    expect(mistakeAlertsFor([news(ids[0])], new Map([[ids[0], journal('twice')]]))[0].title)
+      .toBe('Mistake checks: Journal entry JE-1046 may be entered twice');
+    expect(mistakeAlertsFor([news(ids[0])], new Map([[ids[0], journal('far_off')]]))[0].title)
+      .toBe('Mistake checks: Journal entry JE-1046 may have a slipped decimal point');
+  });
+
   it("tells about up to three one by one, entered twice first, and more in one notification opening the company's list", () => {
     const kinds = ['missing', 'twice', 'odd_account', 'far_off'] as const;
     const items = new Map(ids.map((id, i) => [id, item(id, { kind: kinds[i], party: `Vendor ${i + 1}` })]));
