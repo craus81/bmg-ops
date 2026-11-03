@@ -3104,7 +3104,9 @@ NetSuite makes the bill (`saveOwnBill` in `src/lib/books/own-bills.ts`):
   prices, so the copy's lines are what FleetSuite's copy of the PO
   (`netsuite_vendor_po_lines`) still had to bill, each line's quantity less
   what's billed, at the line's price, to the cent. The vendor's invoice
-  total is kept beside them, as the vendor's invoice says it.
+  total is kept beside them, as the vendor's invoice says it. Its Reference
+  No. is the vendor's invoice number, or `PM-` and the start of the
+  invoice's id when the scan read no number.
 - **Send to NetSuite on Snap a bill** (`/api/admin/books/snap-a-bill`):
   each line to the account and for the amount FleetSuite sent, with the
   bill's total beside them ("Snap a bill"). A snapped bill that billed a
@@ -3139,16 +3141,28 @@ copy of the PO didn't have them yet) and a line's price.
 ### One bill each
 
 Create Bill in NetSuite on a vendor invoice or a payout claims the row first
-(`bill_claimed_at`, `makeBillOnce` in `src/lib/bill-once.ts`), as Parts
-Mail's bills already did (migration 251), so only one try at a time gets
-past it: a double tap, or two people at once, can't make two bills. Then it
-asks NetSuite for a bill from that vendor with the same Reference No.
-(`findVendorBill` in `src/lib/netsuite.ts`), so a try whose bill NetSuite
-made but FleetSuite never heard back about finds that bill rather than
-making another; when NetSuite can't be asked, it makes none. A bill NetSuite
-refuses lets the claim go, the stamp that the row is billed clears it, and a
-claim over 15 minutes old is taken over. Send to NetSuite on Snap a bill
-claims the snapped bill the same way, while it's a draft.
+(`bill_claimed_at`, `makeBillOnce` in `src/lib/bill-once.ts`), in the shape
+Parts Mail's bills took first (migration 251), so only one try at a time
+gets past it: a double tap, or two people at once, can't make two bills.
+Then it asks NetSuite for a bill from that vendor with the same Reference
+No. (`findVendorBill` in `src/lib/netsuite.ts`), so a try whose bill
+NetSuite made but FleetSuite never heard back about finds that bill rather
+than making another; when NetSuite can't be asked, it makes none. A bill
+NetSuite refuses lets the claim go (only the try that holds it can), the
+stamp that the row is billed clears it, and a claim over 15 minutes old is
+taken over. Send to NetSuite on Snap a bill claims the snapped bill the same
+way, while it's a draft.
+
+Create NetSuite Bill on Parts Mail does the same from November 2026, while
+the invoice is captured: before then its claim didn't ask NetSuite, so a
+bill whose billed stamp failed, or one entered in NetSuite by hand, could be
+made again once the claim went stale. When NetSuite already has the
+vendor's bill under the invoice's Reference No., none is made and the page
+offers Mark billed, which asks NetSuite again and marks the invoice billed
+with that bill, unless a try is billing it right then (audit
+`record_bill`). A bill NetSuite kept without answering is found right after
+(`madeOrFound`), as Snap a bill's is. A PO whose copy has no vendor can't be
+asked about, so it isn't billed until Sync POs fills it in.
 
 ### The checks
 
@@ -3214,8 +3228,6 @@ bills"). The daily check tells the super admins when one stops matching
 - There's no history: copies start the day part 27 shipped.
 - FleetSuite's copy of a PO doesn't say the company, so a Parts Mail bill
   and a receipt are kept for BMG, and one for 1084 differs on its company.
-- Parts Mail's own claim on its bills doesn't ask NetSuite for the bill
-  before making one, and isn't taken over when it's left behind.
 
 ## FleetSuite's own adjustments
 

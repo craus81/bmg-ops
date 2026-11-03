@@ -134,6 +134,10 @@ the same shelf stock.
   vendor bill — vendor, items, and amounts carry over from the PO, and
   the vendor's invoice number becomes the bill's Reference No. It always
   asks before posting; nothing financial is ever automatic.
+- If NetSuite already has the vendor's bill under that invoice number (one
+  made earlier, or entered in NetSuite by hand), FleetSuite doesn't make
+  another. It says which bill, and **Mark billed** marks the invoice
+  billed with it.
 
 ## Checking stock from an estimate
 
