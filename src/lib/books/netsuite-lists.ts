@@ -14,7 +14,10 @@ import { COPY_FROM } from './netsuite-gl';
  * too, with their terms and how NetSuite taxes them, for FleetSuite's own
  * invoices (src/lib/books/own-invoices.ts). Since migration 481 whether
  * each vendor gets a 1099, and its legal name, for the 1099s page
- * (src/lib/books/1099s.ts).
+ * (src/lib/books/1099s.ts). Since 2026-11-03 each kit's parts too, on the
+ * kit's item row, for FleetSuite's own fulfillments
+ * (src/lib/books/own-fulfillments.ts): NetSuite takes a kit's parts from
+ * stock, not the kit.
  *
  * It runs right after the chart of accounts in the ledger mirror cron
  * (/api/cron/ledger-netsuite-mirror, :35 on even hours), and from "Sync now"
@@ -43,7 +46,16 @@ export type ListKind = 'location' | 'department' | 'class' | 'term' | 'tax_code'
 const APPLY_PAGE = 1000;
 
 type Row = Record<string, unknown>;
-export type ListDetails = Record<string, string | number>;
+
+/** One part of a NetSuite kit: an item, and how many of it one kit holds. */
+export interface KitPart {
+  /** NetSuite's id for the part. */
+  item: string;
+  quantity: number;
+}
+
+/** A kit's item row keeps its parts as a list (`parts`); every other detail is a string or a number. */
+export type ListDetails = Record<string, string | number | KitPart[]>;
 
 export interface ListRow {
   netsuite_id: string;
@@ -427,6 +439,70 @@ export function mapItemAccounts(rows: Row[]): ItemAccount[] {
   return out.sort((a, b) => b.lines - a.lines || a.item_id.localeCompare(b.item_id) || a.account_id.localeCompare(b.account_id));
 }
 
+// ── What each kit holds ────────────────────────────────────────────────────
+
+/**
+ * Each kit's parts. NetSuite keeps what a kit item holds as its members
+ * (kititemmember: parentitem the kit, item the part, quantity how many one
+ * kit holds) and fulfils a kit by taking those from stock, so FleetSuite's own
+ * copy of a fulfillment takes them in the kit's place when the sales order
+ * doesn't list them (src/lib/books/own-fulfillments.ts). Assemblies' members
+ * aren't kits' (NetSuite takes an assembly from stock whole), and neither are
+ * item groups' (an order lists a group's members as lines of their own).
+ */
+export const KIT_PARTS_QUERY = `
+    SELECT km.parentitem AS kit_id, km.item AS item_id, km.quantity
+    FROM kititemmember km
+    JOIN item k ON k.id = km.parentitem
+    WHERE k.itemtype = 'Kit'
+    ORDER BY km.parentitem, km.item
+  `;
+
+/** A quantity to the four places FleetSuite's copies keep. */
+const fourPlaces = (n: number) => Math.round(n * 10_000) / 10_000;
+
+/**
+ * Each kit's parts from NetSuite's answer, by the kit's id, in item order: an
+ * item listed twice in a kit is one part, its quantities added, and a part of
+ * none is left out. A kit with a row that can't be read (no item, or a
+ * quantity that isn't a number or is less than none) gets no parts: the copy
+ * keeps a kit's parts only when it has all of them.
+ */
+export function mapKitParts(rows: Row[]): Map<string, KitPart[]> {
+  const kits = new Map<string, Map<string, number>>();
+  const unreadable = new Set<string>();
+  for (const row of rows) {
+    const kit = numericId(row.kit_id);
+    if (!kit) continue;
+    const item = numericId(row.item_id);
+    const quantity = text(row.quantity) ? Number(text(row.quantity)) : Number.NaN;
+    if (!item || !(quantity >= 0)) {
+      unreadable.add(kit);
+      continue;
+    }
+    const parts = kits.get(kit) ?? new Map<string, number>();
+    parts.set(item, (parts.get(item) ?? 0) + quantity);
+    kits.set(kit, parts);
+  }
+  const out = new Map<string, KitPart[]>();
+  for (const [kit, parts] of kits) {
+    if (unreadable.has(kit)) continue;
+    out.set(kit, [...parts]
+      .map(([item, quantity]) => ({ item, quantity: fourPlaces(quantity) }))
+      .filter((p) => p.quantity > 0)
+      .sort((a, b) => Number(a.item) - Number(b.item)));
+  }
+  return out;
+}
+
+/** The items, each kit with its parts as NetSuite lists them (`details.parts`); a kit NetSuite lists none for has none. */
+export function itemsWithParts(rows: ListRow[], parts: ReadonlyMap<string, KitPart[]>): ListRow[] {
+  return rows.map((r) => {
+    const kitParts = r.details.item_type === 'Kit' ? parts.get(r.netsuite_id) : undefined;
+    return kitParts?.length ? { ...r, details: { ...r.details, parts: kitParts } } : r;
+  });
+}
+
 // ── The run ────────────────────────────────────────────────────────────────
 
 export interface ListResult {
@@ -563,9 +639,22 @@ export async function syncBooksLists(
     }
     try {
       const { rows, dropped } = await readList(query, def);
-      const mapped = mapList(def, rows);
-      const applied = await applyList(service, def.kind, mapped);
+      let mapped = mapList(def, rows);
       const missing = dropped.flatMap((o) => (o.key ? [o.key] : []));
+      // Each kit's parts go on its item row, read with the items, so whatever copies the items copies them too. Parts
+      // NetSuite won't give are left out, as a field it won't give is.
+      let partsNote: string | null = null;
+      if (def.kind === 'item') {
+        try {
+          mapped = itemsWithParts(mapped, mapKitParts(await query(KIT_PARTS_QUERY)));
+        } catch (err) {
+          missing.push('parts');
+          partsNote = recordNotFound(err)
+            ? "NetSuite's integration role can't see what each kit holds, so the kits' parts aren't copied. The role needs permission to view them."
+            : `NetSuite wouldn't say what each kit holds (${reason(err)}), so the kits' parts are left out.`;
+        }
+      }
+      const applied = await applyList(service, def.kind, mapped);
       result.lists[def.kind] = {
         received: mapped.length, added: applied.added, changed: applied.changed, gone: applied.gone,
         ...(missing.length ? { missing } : {}),
@@ -573,6 +662,7 @@ export async function syncBooksLists(
       if (dropped.length) {
         notes.push(`NetSuite wouldn't give the ${def.label}' ${joinWords(dropped.map((o) => o.label))}, so they're left out.`);
       }
+      if (partsNote) notes.push(partsNote);
       if (applied.cutShort) {
         notes.push(`NetSuite listed ${mapped.length.toLocaleString('en-US')} ${def.label} and FleetSuite has ${applied.here.toLocaleString('en-US')}, so none were marked gone.`);
       }

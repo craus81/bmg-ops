@@ -246,6 +246,8 @@ export default function BooksOwnFulfillmentPage() {
                             {item.description && item.description !== item.item && (
                               <div style={{ fontSize: '11px', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{item.description}</div>
                             )}
+                            {/* A kit's part: NetSuite takes a kit's parts from stock, not the kit. */}
+                            {item.partOf && <div style={{ fontSize: '11px', color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{item.partOf}</div>}
                             <Why text={item.why} differs={item.same === false} />
                           </div>
                         )}

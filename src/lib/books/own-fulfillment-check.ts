@@ -47,6 +47,8 @@ export interface OwnFulfilLineData {
   item_type: KeptType | null;
   quantity: string;
   sales_order_line_id: string | null;
+  /** The kit its item was taken as a part of, NetSuite's id (migration 512); null, or absent, for an item taken for itself. */
+  kit_id?: string | null;
 }
 
 export interface OwnFulfillmentData {
@@ -138,9 +140,11 @@ export interface FulfilItemPair {
   item: string;
   itemId: string;
   description: string | null;
+  /** The kits FleetSuite took it as a part of, in words ("A part of RACK-KIT"); null when it took it only for itself. */
+  partOf: string | null;
   fleetsuite: {
     quantity: number;
-    /** Kept in stock, a kit of parts FleetSuite doesn't know, or an item the lists copy doesn't have. */
+    /** Kept in stock, a kit FleetSuite couldn't take apart into its parts, or an item the lists copy doesn't have. */
     kind: 'stock' | 'kit' | 'unknown';
     location: string | null;
     /** What FleetSuite counted of it there just before; null with no location. */
@@ -282,6 +286,10 @@ interface OwnItem {
   quantity: number;
   /** Each line costed on its own, then added up; null once one can't be. */
   cents: number | null;
+  /** The kits it was taken as a part of, NetSuite's ids in the copy's order. */
+  kitIds: string[];
+  /** Whether some of it was taken for itself, on a line of its own. */
+  alone: boolean;
 }
 
 interface NetItem {
@@ -321,13 +329,17 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     const kind: OwnItem['kind'] = l.item_type === 'Kit' ? 'kit' : l.item_type ? 'stock' : 'unknown';
     const place = ownPlace(l.item_id);
     const lineCents = kind === 'stock' && place ? costAt(quantity, place.count, place.valueCents) : null;
+    const kitId = l.kit_id || null;
     const item = ownItems.get(l.item_id);
     if (item) {
       item.quantity += quantity;
       item.cents = item.cents === null || lineCents === null ? null : item.cents + lineCents;
+      if (kitId && !item.kitIds.includes(kitId)) item.kitIds.push(kitId);
+      if (!kitId) item.alone = true;
     } else {
       ownItems.set(l.item_id, {
         itemId: l.item_id, itemNumber: l.item_number, description: l.description, kind, quantity, cents: lineCents,
+        kitIds: kitId ? [kitId] : [], alone: !kitId,
       });
     }
   }
@@ -350,6 +362,12 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
   const netLocations = (item: NetItem) => [...item.locations].map(locationName).sort();
 
   const kits = [...ownItems.values()].filter((i) => i.kind === 'kit');
+  const kitNames = listed(kits.map((k) => itemName(k.itemId, k.itemNumber)));
+  const partOf = (o: OwnItem) => {
+    if (!o.kitIds.length) return null;
+    const of = listed(o.kitIds.map((id) => itemName(id, null)));
+    return o.alone ? `On a line of its own, and a part of ${of}` : `A part of ${of}`;
+  };
   const unlisted = [...ownItems.values()].filter((i) => i.kind === 'unknown');
   const linesKnown = !unknowns.has('lines');
   const nsKnown = !!ns || tookNothing;
@@ -385,7 +403,7 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     let why: string | null = null;
     if (o.kind === 'kit') {
       same = null;
-      why = `${name} is a kit: FleetSuite doesn't know its parts, so what NetSuite took for it isn't compared.`;
+      why = `${name} is a kit FleetSuite couldn't take apart into its parts, so what NetSuite took for it isn't compared.`;
       takenUnknown = true;
     } else if (!nsKnown) {
       same = null;
@@ -429,7 +447,7 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
       }
       why = reasons.length ? reasons.join(' ') : null;
     }
-    items.push({ item: name, itemId: o.itemId, description: o.description, fleetsuite, netsuite, same, why });
+    items.push({ item: name, itemId: o.itemId, description: o.description, partOf: partOf(o), fleetsuite, netsuite, same, why });
   }
   for (const n of netItems.values()) {
     if (ownItems.has(n.itemId) && ownItems.get(n.itemId)!.kind !== 'kit') continue;
@@ -439,10 +457,11 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     const took = `NetSuite's fulfillment took ${qty(n.quantity)} of ${name}${cents !== null ? ` (${dollars(cents)})` : ''}`;
     // With a kit in FleetSuite's copy this may be one of its parts, and the kit already leaves what was taken not known.
     if (!kits.length && linesKnown) takenDiffers.push(`${took}, and FleetSuite's copy of the sales order didn't have it still to bill.`);
+    const description = lists.items.get(n.itemId)?.displayName ?? null;
     items.push(kits.length
-      ? { item: name, itemId: n.itemId, description: lists.items.get(n.itemId)?.displayName ?? null, fleetsuite: null, netsuite, same: null,
-        why: `${took}, which FleetSuite's copy doesn't have: it may be a part of ${listed(kits.map((k) => itemName(k.itemId, k.itemNumber)))}, a kit FleetSuite doesn't know the parts of.` }
-      : { item: name, itemId: n.itemId, description: lists.items.get(n.itemId)?.displayName ?? null, fleetsuite: null, netsuite, same: linesKnown ? false : null,
+      ? { item: name, itemId: n.itemId, description, partOf: null, fleetsuite: null, netsuite, same: null,
+        why: `${took}, which FleetSuite's copy doesn't have: it may be a part of ${kitNames}, ${kits.length > 1 ? 'kits' : 'a kit'} FleetSuite couldn't take apart.` }
+      : { item: name, itemId: n.itemId, description, partOf: null, fleetsuite: null, netsuite, same: linesKnown ? false : null,
         why: linesKnown ? `${took}, and FleetSuite's copy of the sales order didn't have it still to bill.` : null });
   }
 
@@ -519,7 +538,7 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     let why: string | null = null;
     if (!linesKnown) why = `FleetSuite didn't know ${UNKNOWN_TEXT.lines}.`;
     else if (locationUnknown) why = "FleetSuite didn't know where it took stock from, so not what it cost.";
-    else if (kits.length) why = `FleetSuite doesn't know the parts of ${listed(kits.map((k) => itemName(k.itemId, k.itemNumber)))}, so not what they cost.`;
+    else if (kits.length) why = `FleetSuite didn't know the parts of ${kitNames}, so not what they cost.`;
     else if (unlisted.length) why = `FleetSuite didn't know whether ${listed(unlisted.map((i) => itemName(i.itemId, i.itemNumber)))} ${unlisted.length > 1 ? 'are' : 'is'} kept in stock, so not what ${unlisted.length > 1 ? 'they' : 'it'} cost.`;
     else if (uncosted.length) why = `FleetSuite counted none of ${listed(uncosted)} at ${locationName(ownLocation)} just before, so it can't work out what ${uncosted.length > 1 ? 'they' : 'it'} cost.`;
     else if (bookedNothing) why = "NetSuite's fulfillment booked no cost: the copy of its general ledger, made since, has no entry for it.";
@@ -538,7 +557,7 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
   const unknownWords: string[] = [];
   if (!linesKnown) unknownWords.push(UNKNOWN_TEXT.lines);
   if (locationUnknown) unknownWords.push(UNKNOWN_TEXT.location);
-  if (kits.length) unknownWords.push(`the parts of ${listed(kits.map((k) => itemName(k.itemId, k.itemNumber)))}, ${kits.length > 1 ? 'kits' : 'a kit'}`);
+  if (kits.length) unknownWords.push(`the parts of ${kitNames}, ${kits.length > 1 ? 'kits' : 'a kit'}`);
   if (unlisted.length) {
     unknownWords.push(`whether ${listed(unlisted.map((i) => itemName(i.itemId, i.itemNumber)))} ${unlisted.length > 1 ? 'are' : 'is'} kept in stock (the copy of NetSuite's items doesn't have ${unlisted.length > 1 ? 'them' : 'it'} yet)`);
   }
@@ -592,9 +611,14 @@ export function checkOwnFulfillment(pair: FulfilPairData, lists: FulfilLists, co
     : own.location_from === 'customer_rule'
       ? `From ${locationName(ownLocation)}, where FleetSuite's invoice location rule books ${customer ?? 'the customer'}'s invoices.`
       : "Where it took stock from isn't known: FleetSuite's invoice location rule couldn't tell from the customer.";
+  const tookApart = [...ownItems.values()].some((o) => o.kitIds.length);
   const workedOut = [
     `Made when FleetSuite invoiced ${MADE_FROM_TEXT[own.made_from] ?? own.made_from} on ${dayText(own.date)}: it fulfils a sales order before it bills it.`,
     `Its items are what FleetSuite's copy of ${salesOrder} still had to bill, of the items NetSuite keeps in stock.`,
+    ...(tookApart
+      ? ["A kit is taken apart into its parts, each the kit's quantity times what one kit holds: the parts NetSuite's sales order lists for it, "
+        + "or, when it lists none, the parts the copy of NetSuite's items has. NetSuite takes a kit's parts from stock, not the kit."]
+      : []),
     where,
     "Each item costs its average at that location just before the fulfillment: the value FleetSuite counted of it there over the count, "
       + "from its count and value on December 31, 2024 and every NetSuite document since that comes before it, as Stock by item counts them. "

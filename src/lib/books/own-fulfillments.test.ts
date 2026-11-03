@@ -1,14 +1,30 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 vi.mock('@/lib/netsuite', () => ({ isSuiteqlError: () => false, suiteqlQuery: vi.fn(), suiteqlQueryAll: vi.fn() }));
 
+import { suiteqlQueryAll } from '@/lib/netsuite';
 import {
   fulfillmentPayload,
+  KIT_DEPTH,
   keptType,
+  kitPartsOf,
+  kitStockParts,
+  mapOrderLines,
+  orderKitParts,
+  orderLinesQuery,
+  ORDER_READ_TIMEOUT_MS,
+  readKitParts,
+  readOrderLines,
   readSalesOrderStock,
   saveOwnFulfillment,
+  takeKitsApart,
+  withKitParts,
   workOutOwnFulfillment,
+  type FulfilledLine,
+  type KitPartLine,
+  type ListedItem,
+  type OrderLine,
   type OwnFulfillmentInput,
 } from './own-fulfillments';
 
@@ -54,8 +70,19 @@ describe("working out FleetSuite's own fulfillment", () => {
       netsuite_id: '7001', netsuite_number: 'IF7001', company: 'BMG', made_from: 'vehicle', made_from_id: 'checkin-1',
       sales_order_id: '700', customer_netsuite_id: '9001', fulfil_date: '2026-10-19', location_netsuite_id: '1',
       location_from: 'customer_rule', unknowns: [], made_by: 'u-1',
-      lines: [{ line_no: 1, item_netsuite_id: '55', item_number: 'SHELF-1', description: 'Shelf', item_type: 'InvtPart', quantity: 2, sales_order_line_id: '1' }],
+      lines: [{
+        line_no: 1, item_netsuite_id: '55', item_number: 'SHELF-1', description: 'Shelf', item_type: 'InvtPart', quantity: 2,
+        sales_order_line_id: '1', kit_netsuite_id: null,
+      }],
     });
+    // A kit's part says which kit it was taken for.
+    const part = fulfillmentPayload(workOutOwnFulfillment(input({
+      lines: [{ itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 4, salesOrderLineId: '3', kitId: '70' }],
+    })));
+    expect(part.lines).toEqual([{
+      line_no: 1, item_netsuite_id: '55', item_number: 'SHELF-1', description: null, item_type: 'InvtPart', quantity: 4,
+      sales_order_line_id: '3', kit_netsuite_id: '70',
+    }]);
   });
 
   it('keeps the items that can move stock: kept in stock, a kit, or one the lists copy has no type for', () => {
@@ -153,12 +180,17 @@ describe('reading what a sales order still had to bill, of the items that can mo
       { itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 0.3334, salesOrderLineId: '8' },
       { itemId: '61', itemNumber: 'RACK-ASM', description: null, itemType: 'Assembly', quantity: 1, salesOrderLineId: '10' },
     ]);
+    // Every item the order names, billed or not and whatever its type, for telling whether it names a kit's part.
+    expect(so.items).toEqual([
+      { lineId: '1', itemId: '55' }, { lineId: '2', itemId: '56' }, { lineId: '3', itemId: '59' }, { lineId: '4', itemId: '57' },
+      { lineId: '5', itemId: '60' }, { lineId: '7', itemId: '55' }, { lineId: '8', itemId: '55' }, { lineId: '10', itemId: '61' },
+    ]);
   });
 
   it("has no lines for an order FleetSuite hasn't copied yet, and doesn't look up items for an order without any", async () => {
     const { service, queries } = fakeService(database({ netsuite_sales_order_lines: [] }));
-    expect(await readSalesOrderStock(service, '701')).toEqual({ customerNetsuiteId: null, customerName: null, lines: null });
-    expect(await readSalesOrderStock(service, '700')).toEqual({ customerNetsuiteId: '9001', customerName: 'Sample Fleet Co', lines: [] });
+    expect(await readSalesOrderStock(service, '701')).toEqual({ customerNetsuiteId: null, customerName: null, lines: null, items: [] });
+    expect(await readSalesOrderStock(service, '700')).toEqual({ customerNetsuiteId: '9001', customerName: 'Sample Fleet Co', lines: [], items: [] });
     expect(queries.filter((q) => q.table === 'gl_netsuite_lists')).toEqual([]);
   });
 
@@ -173,6 +205,8 @@ describe('reading what a sales order still had to bill, of the items that can mo
 describe('saving the copy', () => {
   const AT = new Date('2026-10-20T03:30:00Z');
   const payloadOf = (rpc: ReturnType<typeof fakeService>['rpc']) => (rpc.mock.calls[0][1] as { p: Record<string, any> }).p;
+  // NetSuite's order lists no kit's parts unless a test says so.
+  beforeEach(() => { vi.mocked(suiteqlQueryAll).mockResolvedValue([]); });
   afterEach(() => { vi.restoreAllMocks(); });
 
   it("copies a finished vehicle's fulfillment from FleetSuite's copy of the order, where the invoice location rule books it", async () => {
@@ -189,6 +223,35 @@ describe('saving the copy', () => {
       fulfil_date: '2026-10-19', unknowns: [],
     });
     expect(payloadOf(rpc).lines.map((l: Row) => [l.line_no, l.item_number, l.item_type, l.quantity])).toEqual([[1, 'SHELF-1', 'InvtPart', 2], [2, 'RACK-KIT', 'Kit', 1]]);
+  });
+
+  it("takes a kit apart before saving: as NetSuite's order lists its parts, else as the lists copy has them unless the order names one", async () => {
+    // Two rack kits, which NetSuite's order lists four shelves under; FleetSuite's copy of the order has that line too.
+    const db = database({
+      netsuite_sales_order_lines: [soLine('1', '55', 2, 0), soLine('3', '57', 2, 0), soLine('4', '55', 4, 0)],
+    });
+    (db.gl_netsuite_lists as Row[])[2].details = { item_type: 'Kit', parts: [{ item: '55', quantity: 1 }] };
+    vi.mocked(suiteqlQueryAll).mockResolvedValue([
+      { line_id: '1', item_id: '55', quantity: '-2', kit_line_id: null },
+      { line_id: '3', item_id: '57', quantity: '-2', kit_line_id: null },
+      { line_id: '4', item_id: '55', quantity: '-4', kit_line_id: '3' },
+    ]);
+    const fromOrder = fakeService(db);
+    await saveOwnFulfillment(fromOrder.service, { netsuiteId: '7007', madeFrom: 'vehicle', salesOrderId: '700' }, AT);
+    expect(suiteqlQueryAll).toHaveBeenCalledWith(orderLinesQuery('700'), 1000, { retries: 1 });
+    expect(payloadOf(fromOrder.rpc).lines.map((l: Row) => [l.line_no, l.item_number, l.quantity, l.sales_order_line_id, l.kit_netsuite_id])).toEqual([
+      [1, 'SHELF-1', 2, '1', null],
+      [2, 'SHELF-1', 4, '3', '57'],
+    ]);
+
+    // With no parts listed on NetSuite's order, the lists copy's would do, but the order names a shelf on a line of its own.
+    vi.mocked(suiteqlQueryAll).mockResolvedValue([]);
+    const fromList = fakeService({ ...db, netsuite_sales_order_lines: [soLine('1', '55', 2, 0), soLine('3', '57', 2, 0)] });
+    await saveOwnFulfillment(fromList.service, { netsuiteId: '7008', madeFrom: 'vehicle', salesOrderId: '700' }, AT);
+    expect(payloadOf(fromList.rpc).lines.map((l: Row) => [l.item_number, l.item_type, l.quantity, l.kit_netsuite_id])).toEqual([
+      ['SHELF-1', 'InvtPart', 2, null],
+      ['RACK-KIT', 'Kit', 2, null],
+    ]);
   });
 
   it("takes stock from where the PO location rule books a sales order's installed quantities, without reading the locations", async () => {
@@ -235,5 +298,372 @@ describe('saving the copy', () => {
   it('says so when the fulfillment was already saved', async () => {
     const { service } = fakeService(database(), { data: { saved: false, lines: 0 } });
     expect(await saveOwnFulfillment(service, { netsuiteId: '7001', madeFrom: 'vehicle', salesOrderId: '700' }, AT)).toEqual({ saved: false, reason: 'already saved' });
+  });
+});
+
+// ── Taking a kit apart ─────────────────────────────────────────────────────
+
+const listed = (number: string, type: string | null, parts: { item: string; quantity: number }[] | null = null, displayName: string | null = null): ListedItem => ({
+  number, type, displayName, parts,
+});
+const kitLine = (itemId: string, quantity: number, salesOrderLineId: string | null = '3'): FulfilledLine => ({
+  itemId, itemNumber: null, description: null, itemType: 'Kit', quantity, salesOrderLineId,
+});
+const part = (itemId: string, quantity: number, itemType: KitPartLine['itemType'] = 'InvtPart', itemNumber: string | null = null): KitPartLine => ({
+  itemId, itemNumber, description: null, itemType, quantity,
+});
+
+describe("a kit's parts as the lists copy keeps them", () => {
+  it('reads them whole, or not at all', () => {
+    expect(kitPartsOf({ item_type: 'Kit', parts: [{ item: '55', quantity: 2 }, { item: 61, quantity: '0.5' }] }))
+      .toEqual([{ item: '55', quantity: 2 }, { item: '61', quantity: 0.5 }]);
+    for (const details of [null, undefined, {}, { parts: [] }, { parts: 'all of them' }]) expect(kitPartsOf(details as any)).toBeNull();
+    // One part it can't read leaves the kit's parts not known: a kit taken apart short would be wrong.
+    for (const bad of [{ item: 'SHELF-1', quantity: 1 }, { item: '55', quantity: 0 }, { item: '55', quantity: -1 }, { item: '55' }, null]) {
+      expect(kitPartsOf({ parts: [{ item: '61', quantity: 1 }, bad] })).toBeNull();
+    }
+  });
+
+  it('takes a kit apart into what moves stock, a kit inside it taken apart too, an item held twice one part', () => {
+    const items = new Map<string, ListedItem | null>([
+      ['70', listed('SHELF-KIT', 'Kit', [{ item: '55', quantity: 2 }, { item: '56', quantity: 1 }, { item: '60', quantity: 1 }])],
+      ['72', listed('BOX-KIT', 'Kit', [{ item: '70', quantity: 3 }, { item: '55', quantity: 1 }, { item: '61', quantity: 0.5 }])],
+      ['55', listed('SHELF-1', 'InvtPart', null, 'Shelf')],
+      ['56', listed('LABOR', 'Service')],
+      ['61', listed('RACK-ASM', 'Assembly')],
+      ['60', null],
+    ]);
+    // The service moves no stock; the item the lists copy doesn't have may, so it's kept, its type unknown.
+    expect(kitStockParts('70', items)).toEqual([part('55', 2, 'InvtPart', 'SHELF-1'), part('60', 1, null)].map((p, i) => (i === 0 ? { ...p, description: 'Shelf' } : p)));
+    expect(kitStockParts('72', items)).toEqual([
+      { itemId: '55', itemNumber: 'SHELF-1', description: 'Shelf', itemType: 'InvtPart', quantity: 7 },
+      part('60', 3, null),
+      part('61', 0.5, 'Assembly', 'RACK-ASM'),
+    ]);
+    // A kit of services only takes nothing from stock.
+    expect(kitStockParts('73', new Map([['73', listed('LABOR-KIT', 'Kit', [{ item: '56', quantity: 2 }])], ['56', listed('LABOR', 'Service')]]))).toEqual([]);
+  });
+
+  it("doesn't take apart what it can't take apart whole", () => {
+    const items = new Map<string, ListedItem | null>([
+      ['70', listed('SHELF-KIT', 'Kit', [{ item: '55', quantity: 2 }, { item: '74', quantity: 1 }])],
+      ['74', listed('INNER-KIT', 'Kit')],
+      ['75', listed('LOOP-KIT', 'Kit', [{ item: '76', quantity: 1 }])],
+      ['76', listed('LOOP-KIT-2', 'Kit', [{ item: '75', quantity: 1 }])],
+      ['77', listed('UNREAD-KIT', 'Kit', [{ item: '78', quantity: 1 }])],
+      ['55', listed('SHELF-1', 'InvtPart')],
+      ['61', listed('RACK-ASM', 'Assembly', [{ item: '55', quantity: 4 }])],
+    ]);
+    expect(kitStockParts('70', items)).toBeNull(); // a kit inside it whose parts aren't known
+    expect(kitStockParts('74', items)).toBeNull(); // no parts
+    expect(kitStockParts('75', items)).toBeNull(); // a kit inside itself
+    expect(kitStockParts('77', items)).toBeNull(); // a part that wasn't read
+    expect(kitStockParts('61', items)).toBeNull(); // an assembly is taken whole
+    expect(kitStockParts('99', items)).toBeNull(); // not read at all
+    expect(kitStockParts('55', new Map([['55', null]]))).toBeNull();
+  });
+
+  it(`takes kits inside kits apart ${KIT_DEPTH} deep, no deeper`, () => {
+    const chain = (depth: number) => {
+      const items = new Map<string, ListedItem | null>([['55', listed('SHELF-1', 'InvtPart')]]);
+      for (let i = 0; i < depth; i++) items.set(String(80 + i), listed(`KIT-${i}`, 'Kit', [{ item: i === depth - 1 ? '55' : String(81 + i), quantity: 2 }]));
+      return items;
+    };
+    expect(kitStockParts('80', chain(KIT_DEPTH))).toEqual([part('55', 2 ** KIT_DEPTH, 'InvtPart', 'SHELF-1')]);
+    expect(kitStockParts('80', chain(KIT_DEPTH + 1))).toBeNull();
+  });
+});
+
+describe("a kit's lines taken apart", () => {
+  it("makes each part the kit's quantity times what one kit holds, on the kit's line, saying which kit", () => {
+    const lines: FulfilledLine[] = [
+      { itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 1, salesOrderLineId: '1' },
+      kitLine('70', 1.5),
+      kitLine('57', 1, '4'),
+      kitLine('73', 2, '5'),
+      kitLine('58', 1, '6'),
+    ];
+    const parts = new Map<string, KitPartLine[] | null | undefined>([
+      ['70', [part('55', 2, 'InvtPart', 'SHELF-1'), part('60', 0.33335, null)]],
+      ['57', null],
+      ['73', []],
+    ]);
+    expect(withKitParts(lines, (k) => parts.get(k.itemId))).toEqual([
+      lines[0],
+      { itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 3, salesOrderLineId: '3', kitId: '70' },
+      // To the four places the copy keeps.
+      { itemId: '60', itemNumber: null, description: null, itemType: null, quantity: 0.5, salesOrderLineId: '3', kitId: '70' },
+      // A kit whose parts aren't known stays as it is; one of services only takes nothing.
+      lines[2],
+      lines[4],
+    ]);
+    // A line that isn't a kit is never asked about.
+    const asked = vi.fn(() => [part('61', 1)]);
+    expect(withKitParts([lines[0]], asked)).toEqual([lines[0]]);
+    expect(asked).not.toHaveBeenCalled();
+  });
+});
+
+describe("the parts NetSuite's sales order lists for a kit", () => {
+  it('asks NetSuite for every item line of the order, and refuses anything but an id', () => {
+    const q = orderLinesQuery('700');
+    expect(q).toMatch(/SELECT tl\.id AS line_id, tl\.item AS item_id, tl\.quantity, tl\.kitmemberof AS kit_line_id\s+FROM transactionline tl/);
+    expect(q).toMatch(/WHERE tl\.transaction = 700\s+AND tl\.mainline = 'F'\s+AND tl\.taxline = 'F'\s+AND tl\.item IS NOT NULL\s+ORDER BY tl\.id\s*$/);
+    expect(() => orderLinesQuery('700 OR 1=1')).toThrow('Not a NetSuite sales order id');
+  });
+
+  it("reads NetSuite's lines whole or not at all", () => {
+    expect(mapOrderLines([
+      { line_id: 3, item_id: '70', quantity: '-2', kit_line_id: null },
+      { line_id: '4', item_id: 55, quantity: -4, kit_line_id: 3 },
+      { line_id: '9', item_id: '90', quantity: null, kit_line_id: '' },
+    ])).toEqual([
+      // NetSuite keeps a sale's quantities below nothing.
+      { lineId: '3', itemId: '70', quantity: 2, kitLineId: null },
+      { lineId: '4', itemId: '55', quantity: 4, kitLineId: '3' },
+      // A subtotal's line is for nothing.
+      { lineId: '9', itemId: '90', quantity: 0, kitLineId: null },
+    ]);
+    for (const bad of [{ line_id: 'x', item_id: '55', quantity: 1 }, { line_id: '4', item_id: null, quantity: 1 }, { line_id: '4', item_id: '55', quantity: 'some' },
+      { line_id: '4', item_id: '55', quantity: 1, kit_line_id: 'kit' }]) {
+      expect(mapOrderLines([{ line_id: '3', item_id: '70', quantity: 1 }, bad])).toBeNull();
+    }
+  });
+
+  it('reads them with a SuiteQL query, writing nothing', async () => {
+    vi.mocked(suiteqlQueryAll).mockResolvedValueOnce([{ line_id: '4', item_id: '55', quantity: '-4', kit_line_id: '3' }]);
+    expect(await readOrderLines('700')).toEqual([{ lineId: '4', itemId: '55', quantity: 4, kitLineId: '3' }]);
+    expect(suiteqlQueryAll).toHaveBeenLastCalledWith(orderLinesQuery('700'), 1000, { retries: 1 });
+  });
+
+  it('gives up on NetSuite after a while, leaving no timer behind: the billing screen is waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(suiteqlQueryAll).mockReturnValueOnce(new Promise(() => {}));
+      const read = readOrderLines('700');
+      const failed = read.catch((err: Error) => err.message);
+      let done = false;
+      void failed.then(() => { done = true; });
+      await vi.advanceTimersByTimeAsync(ORDER_READ_TIMEOUT_MS - 1);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await failed).toBe("NetSuite didn't answer within 6 seconds");
+      expect(ORDER_READ_TIMEOUT_MS).toBe(6000);
+      vi.mocked(suiteqlQueryAll).mockResolvedValueOnce([]);
+      expect(await readOrderLines('700')).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  const ol = (lineId: string, itemId: string, quantity: number, kitLineId: string | null = null): OrderLine => ({ lineId, itemId, quantity, kitLineId });
+  const types = new Map<string, ListedItem | null>([
+    ['70', listed('SHELF-KIT', 'Kit')],
+    ['74', listed('INNER-KIT', 'Kit')],
+    ['55', listed('SHELF-1', 'InvtPart', null, 'Shelf')],
+    ['56', listed('LABOR', 'Service')],
+    ['61', listed('RACK-ASM', 'Assembly')],
+    ['60', null],
+  ]);
+
+  it("takes each kit line's parts from the lines under it, a kit inside it too, each its quantity over the kit's", () => {
+    const order = [
+      ol('1', '55', 1),
+      ol('3', '70', 2),
+      ol('4', '55', 4, '3'),
+      ol('5', '56', 2, '3'),
+      ol('6', '60', 1, '3'),
+      ol('7', '74', 2, '3'),
+      ol('8', '61', 6, '7'),
+      ol('9', '55', 2, '7'),
+    ];
+    const kits = orderKitParts(order, types)!;
+    expect(kits.get('3')).toEqual({
+      parts: [
+        // An item held twice is one part; a service moves no stock; one the lists copy doesn't have may.
+        { itemId: '55', itemNumber: 'SHELF-1', description: 'Shelf', itemType: 'InvtPart', quantity: 3 },
+        part('60', 0.5, null),
+        part('61', 3, 'Assembly', 'RACK-ASM'),
+      ],
+      lines: ['4', '5', '6', '7', '8', '9'],
+    });
+    expect(kits.has('1')).toBe(false);
+  });
+
+  it("leaves a kit whole when its parts can't be used whole, and trusts nothing that doesn't hang together", () => {
+    // A kit inside it with no lines under it; a kit of nothing.
+    expect(orderKitParts([ol('3', '70', 1), ol('4', '74', 1, '3')], types)!.get('3')).toEqual({ parts: null, lines: ['4'] });
+    expect(orderKitParts([ol('3', '70', 0), ol('4', '55', 1, '3')], types)!.get('3')).toEqual({ parts: null, lines: [] });
+    // A part of a line the order doesn't have, of a line that isn't a kit, or of itself.
+    expect(orderKitParts([ol('3', '70', 1), ol('4', '55', 1, '2')], types)).toBeNull();
+    expect(orderKitParts([ol('1', '55', 1), ol('4', '55', 1, '1')], types)).toBeNull();
+    expect(orderKitParts([ol('3', '70', 1, '3')], types)).toBeNull();
+    expect(orderKitParts([ol('3', '70', 1), ol('4', '55', 1, '3')], new Map([['55', types.get('55')!]]))).toBeNull();
+    // An order with no kit's parts lists none.
+    expect(orderKitParts([ol('1', '55', 1), ol('3', '70', 1)], types)).toEqual(new Map());
+  });
+
+  it(`takes kits inside kits apart ${KIT_DEPTH} deep, no deeper`, () => {
+    const chain = (depth: number) => {
+      const order = [ol('100', '80', 1)];
+      const items = new Map<string, ListedItem | null>([['55', listed('SHELF-1', 'InvtPart')]]);
+      for (let i = 0; i < depth; i++) {
+        items.set(String(80 + i), listed(`KIT-${i}`, 'Kit'));
+        if (i > 0) order.push(ol(String(100 + i), String(80 + i), 2 ** i, String(100 + i - 1)));
+      }
+      order.push(ol('199', '55', 2 ** depth, String(100 + depth - 1)));
+      return orderKitParts(order, items)!.get('100')!.parts;
+    };
+    expect(chain(KIT_DEPTH)).toEqual([part('55', 2 ** KIT_DEPTH, 'InvtPart', 'SHELF-1')]);
+    expect(chain(KIT_DEPTH + 1)).toBeNull();
+  });
+});
+
+describe('reading the lists copy for kits', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('reads the kits, then what they hold, a level at a time', async () => {
+    const { service, queries } = fakeService({
+      gl_netsuite_lists: [
+        { kind: 'item', netsuite_id: '72', name: 'BOX-KIT', details: { item_type: 'Kit', parts: [{ item: '70', quantity: 1 }, { item: '71', quantity: 2 }] } },
+        { kind: 'item', netsuite_id: '70', name: 'SHELF-KIT', details: { item_type: 'Kit', display_name: ' Shelf kit ', parts: [{ item: '55', quantity: 2 }] } },
+        { kind: 'item', netsuite_id: '71', name: 'LADDER', details: { item_type: 'InvtPart', display_name: 'Ladder' } },
+        { kind: 'item', netsuite_id: '55', name: 'SHELF-1', details: { item_type: 'InvtPart' } },
+        { kind: 'item', netsuite_id: '57', name: 'RACK-KIT', details: { item_type: 'Kit' } },
+      ],
+    });
+    const parts = await readKitParts(service, ['72', '57', '58', '72']);
+    expect(parts).toEqual(new Map<string, KitPartLine[] | null>([
+      ['72', [part('55', 2, 'InvtPart', 'SHELF-1'), { itemId: '71', itemNumber: 'LADDER', description: 'Ladder', itemType: 'InvtPart', quantity: 2 }]],
+      ['57', null],
+      ['58', null],
+    ]));
+    expect(queries.map((q) => q.filters)).toEqual([
+      [['eq', 'kind', 'item'], ['in', 'netsuite_id', ['72', '57', '58']]],
+      [['eq', 'kind', 'item'], ['in', 'netsuite_id', ['70', '71']]],
+      [['eq', 'kind', 'item'], ['in', 'netsuite_id', ['55']]],
+    ]);
+  });
+
+  it(`keeps a part the copy doesn't have, its type not known, and reads kits inside kits ${KIT_DEPTH} deep`, async () => {
+    // 80 holds 81, which holds 82, and so on to 84, which holds a shelf: five kits deep. 85 holds 80: six.
+    const chain = ['80', '81', '82', '83', '84'].map((id, i, all) => ({
+      kind: 'item', netsuite_id: id, name: `KIT-${id}`, details: { item_type: 'Kit', parts: [{ item: all[i + 1] ?? '55', quantity: 1 }] },
+    }));
+    const { service, queries } = fakeService({
+      gl_netsuite_lists: [
+        ...chain,
+        { kind: 'item', netsuite_id: '85', name: 'KIT-85', details: { item_type: 'Kit', parts: [{ item: '80', quantity: 1 }] } },
+        { kind: 'item', netsuite_id: '73', name: 'NEW-KIT', details: { item_type: 'Kit', parts: [{ item: '55', quantity: 1 }, { item: '99', quantity: 3 }] } },
+        { kind: 'item', netsuite_id: '55', name: 'SHELF-1', details: { item_type: 'InvtPart' } },
+      ],
+    });
+    expect(await readKitParts(service, ['73'])).toEqual(new Map([['73', [
+      part('55', 1, 'InvtPart', 'SHELF-1'),
+      { itemId: '99', itemNumber: null, description: null, itemType: null, quantity: 3 },
+    ]]]));
+    // The part it doesn't have isn't asked for again.
+    expect(queries.map((q) => q.filters[1][2])).toEqual([['73'], ['55', '99']]);
+    expect(await readKitParts(service, ['80'])).toEqual(new Map([['80', [part('55', 1, 'InvtPart', 'SHELF-1')]]]));
+    expect(await readKitParts(service, ['85'])).toEqual(new Map([['85', null]]));
+  });
+
+  it("keeps every kit whole when the copy can't be read, and says so", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { service } = fakeService({ gl_netsuite_lists: { error: 'statement timeout' } });
+    expect(await readKitParts(service, ['70', '57'])).toEqual(new Map([['70', null], ['57', null]]));
+    expect(error).toHaveBeenCalledWith("[books] the parts of 70, 57 couldn't be read, so the kits are kept whole: statement timeout");
+  });
+});
+
+describe('taking the kits on a fulfillment apart', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  const LISTS = [
+    { kind: 'item', netsuite_id: '70', name: 'SHELF-KIT', details: { item_type: 'Kit', parts: [{ item: '55', quantity: 2 }, { item: '71', quantity: 1 }] } },
+    { kind: 'item', netsuite_id: '55', name: 'SHELF-1', details: { item_type: 'InvtPart' } },
+    { kind: 'item', netsuite_id: '71', name: 'LADDER', details: { item_type: 'InvtPart' } },
+    { kind: 'item', netsuite_id: '56', name: 'LABOR', details: { item_type: 'Service' } },
+  ];
+  const shelf = (quantity: number, salesOrderLineId: string): FulfilledLine => ({
+    itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity, salesOrderLineId,
+  });
+  const ol = (lineId: string, itemId: string, quantity: number, kitLineId: string | null = null): OrderLine => ({ lineId, itemId, quantity, kitLineId });
+
+  it("takes a kit's parts as NetSuite's order lists them, its part lines on the copy going", async () => {
+    const { service, queries } = fakeService({ gl_netsuite_lists: LISTS });
+    // NetSuite's order has the kit's parts as it was when the order was entered: here one ladder fewer than the kit holds now.
+    const readOrder = vi.fn(async () => [ol('1', '55', 1), ol('3', '70', 2), ol('4', '55', 4, '3'), ol('5', '56', 2, '3')]);
+    const lines = [shelf(1, '1'), kitLine('70', 2), shelf(4, '4')];
+    expect(await takeKitsApart(service, '700', lines, [], readOrder)).toEqual([
+      shelf(1, '1'),
+      { itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 4, salesOrderLineId: '3', kitId: '70' },
+    ]);
+    expect(readOrder).toHaveBeenCalledWith('700');
+    // Only the order's parts and kits are looked up: not the kit's parts as the lists copy has them.
+    expect(queries.map((q) => q.filters)).toEqual([[['eq', 'kind', 'item'], ['in', 'netsuite_id', ['55', '70', '56']]]]);
+  });
+
+  it("takes another kit apart as the lists copy has it, though one of its parts is a part of a kit the order lists", async () => {
+    const { service } = fakeService({
+      gl_netsuite_lists: [...LISTS, { kind: 'item', netsuite_id: '57', name: 'RACK-KIT', details: { item_type: 'Kit', parts: [{ item: '55', quantity: 1 }] } }],
+    });
+    const readOrder = vi.fn(async () => [ol('3', '70', 1), ol('4', '55', 2, '3'), ol('6', '57', 1)]);
+    const named = [{ lineId: '3', itemId: '70' }, { lineId: '4', itemId: '55' }, { lineId: '6', itemId: '57' }];
+    expect(await takeKitsApart(service, '700', [kitLine('70', 1), shelf(2, '4'), kitLine('57', 1, '6')], named, readOrder)).toEqual([
+      { itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 2, salesOrderLineId: '3', kitId: '70' },
+      { itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 1, salesOrderLineId: '6', kitId: '57' },
+    ]);
+  });
+
+  it('takes a kit the order lists no parts for apart as the lists copy has it, unless the order also names one of them', async () => {
+    const { service } = fakeService({ gl_netsuite_lists: LISTS });
+    const readOrder = vi.fn(async () => [ol('3', '70', 1)]);
+    expect(await takeKitsApart(service, '700', [kitLine('70', 1)], [{ lineId: '3', itemId: '70' }], readOrder)).toEqual([
+      { itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 2, salesOrderLineId: '3', kitId: '70' },
+      { itemId: '71', itemNumber: 'LADDER', description: null, itemType: 'InvtPart', quantity: 1, salesOrderLineId: '3', kitId: '70' },
+    ]);
+    // A ladder on a line of its own may be the kit's, as the order lists it: the kit stays whole.
+    const named = [{ lineId: '3', itemId: '70' }, { lineId: '9', itemId: '71' }];
+    expect(await takeKitsApart(service, '700', [kitLine('70', 1)], named, readOrder)).toEqual([kitLine('70', 1)]);
+  });
+
+  it("falls back on the lists copy when NetSuite's order can't be read or doesn't hang together, and says so", async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { service } = fakeService({ gl_netsuite_lists: LISTS });
+    const taken = [
+      { itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 2, salesOrderLineId: '3', kitId: '70' },
+      { itemId: '71', itemNumber: 'LADDER', description: null, itemType: 'InvtPart', quantity: 1, salesOrderLineId: '3', kitId: '70' },
+    ];
+    const failing = vi.fn(async () => { throw new Error('NetSuite SuiteQL error (400): Unknown identifier kitmemberof'); });
+    expect(await takeKitsApart(service, '700', [kitLine('70', 1)], [], failing)).toEqual(taken);
+    expect(error).toHaveBeenCalledWith("[books] the kit parts NetSuite's sales order 700 lists couldn't be read: NetSuite SuiteQL error (400): Unknown identifier kitmemberof");
+    expect(await takeKitsApart(service, '700', [kitLine('70', 1)], [], vi.fn(async () => null))).toEqual(taken);
+    const tangled = vi.fn(async () => [ol('3', '70', 1), ol('4', '55', 2, '8')]);
+    expect(await takeKitsApart(service, '700', [kitLine('70', 1)], [], tangled)).toEqual(taken);
+    expect(error).toHaveBeenCalledWith("[books] the kit parts NetSuite's sales order 700 lists don't hang together, so the copy of NetSuite's items is used");
+  });
+
+  it("keeps a kit whole, and its lines, when the parts the order lists can't be used whole", async () => {
+    const { service } = fakeService({ gl_netsuite_lists: [...LISTS, { kind: 'item', netsuite_id: '74', name: 'INNER-KIT', details: { item_type: 'Kit' } }] });
+    const readOrder = vi.fn(async () => [ol('3', '70', 1), ol('4', '55', 2, '3'), ol('5', '74', 1, '3')]);
+    const lines = [kitLine('70', 1), shelf(2, '4')];
+    expect(await takeKitsApart(service, '700', lines, [], readOrder)).toEqual(lines);
+    // Not taken apart as the lists copy has it either, though another line of the same kit is: its part lines would count twice.
+    const another = vi.fn(async () => [ol('3', '70', 1), ol('4', '55', 2, '3'), ol('5', '74', 1, '3'), ol('6', '70', 1)]);
+    expect(await takeKitsApart(service, '700', [...lines, kitLine('70', 1, '6')], [], another)).toEqual([
+      ...lines,
+      { itemId: '55', itemNumber: 'SHELF-1', description: null, itemType: 'InvtPart', quantity: 2, salesOrderLineId: '6', kitId: '70' },
+      { itemId: '71', itemNumber: 'LADDER', description: null, itemType: 'InvtPart', quantity: 1, salesOrderLineId: '6', kitId: '70' },
+    ]);
+  });
+
+  it('reads nothing for a fulfillment without a kit', async () => {
+    const { service, queries } = fakeService({ gl_netsuite_lists: LISTS });
+    const readOrder = vi.fn(async () => []);
+    expect(await takeKitsApart(service, '700', [shelf(1, '1')], [], readOrder)).toEqual([shelf(1, '1')]);
+    expect(readOrder).not.toHaveBeenCalled();
+    expect(queries).toEqual([]);
   });
 });

@@ -427,7 +427,7 @@ cron, and from **Sync now** on the lists page:
 | Terms | `term` | days until due, early payment discount and its days |
 | Tax codes | `salestaxitem` | description, rate, tax type, tax agency |
 | Vendors | `vendor` | default expense account, payables account, terms, whether it gets a 1099, its legal name when that isn't its name |
-| Items | `item` | type, display name, income, asset and expense accounts |
+| Items | `item` | type, display name, income, asset and expense accounts, and a kit's parts |
 | Customers | `customer` | terms, whether NetSuite taxes them and with which tax code, the entity id when the name is the company's |
 
 Vendors' 1099 flags and legal names came with migration 481, for the 1099s
@@ -439,6 +439,21 @@ terms give each invoice FleetSuite makes its due date, and whether NetSuite
 taxes them explains a sales tax that differs ("FleetSuite's own invoices").
 Each is named by its company name, else its entity id. The lists page looks
 them up by name, as it does vendors and items.
+
+A kit's parts came on 2026-11-03, for FleetSuite's own fulfillments:
+NetSuite takes a kit's parts from stock, not the kit ("FleetSuite's own
+fulfillments"). They're read with the items (`KIT_PARTS_QUERY` in
+`src/lib/books/netsuite-lists.ts`, from NetSuite's `kititemmember`: the kit,
+each part, and how many of it one kit holds) and kept on the kit's row as
+`details.parts`, a list of `{ item, quantity }` (`mapKitParts`,
+`itemsWithParts`). A part listed twice is one part, its quantities added, and
+a part of none is left out. A kit with a member row that can't be read keeps
+no parts, so the copy keeps a kit's parts only when it has all of them.
+Assemblies' and item groups' members aren't copied: NetSuite takes an
+assembly from stock whole, and an order lists a group's members as lines of
+their own. When NetSuite won't say what the kits hold, the items are copied
+without parts, the run's record lists `parts` as missing, and the page says
+why.
 
 Every row also keeps its NetSuite id, name, parent and inactive flag. They
 all live in `gl_netsuite_lists` (migration 363), one row per list and
@@ -3031,10 +3046,33 @@ in NetSuite by hand have no copy.
   (`netsuite_sales_order_lines`, copied every two hours) still had to bill,
   each line's quantity less what's billed, since FleetSuite fulfils an order
   just before it bills it, of the items that can move stock: inventory items
-  and assemblies, by their types in the lists copy. A kit is kept, though
-  FleetSuite doesn't know its parts, and so is an item the lists copy
-  doesn't have yet, so the check can say so. Services, non-inventory items,
-  discounts and the like are left out.
+  and assemblies, by their types in the lists copy. An item the lists copy
+  doesn't have yet is kept, so the check can say so. Services, non-inventory
+  items, discounts and the like are left out.
+- **Kits.** NetSuite takes a kit's parts from stock, not the kit, so the
+  copy takes each part in the kit's place (`takeKitsApart`, from 2026-11-03,
+  migration 512): the kit's quantity times what one kit holds, on the kit's
+  sales order line, saying which kit it was taken for (`kit_netsuite_id`).
+  The parts come from NetSuite's sales order itself, which keeps a kit's
+  parts as lines of their own under the kit's line (`kitmemberof`), read
+  from NetSuite as the copy is made (`orderLinesQuery`, a SuiteQL read;
+  nothing is written to NetSuite, and the NetSuite feed doesn't list reads).
+  Those lines on FleetSuite's copy of the order then go, so a part isn't
+  counted twice. A kit inside a kit is taken apart too, up to five deep. For
+  a kit the order lists no parts for, or when the order can't be read or its
+  lines don't hang together (a part under a line that isn't a kit, say),
+  the parts are the copy of NetSuite's items' (`details.parts`, "NetSuite's
+  lists"), unless FleetSuite's copy of the order also names one of them on a
+  line of its own, which may be that part as the order lists it. A kit
+  whose parts can't be known that way stays whole, with its lines, and the
+  check says so. Parts that don't move stock are left out, as on any order.
+  Taking kits apart never stops an invoice: the read of the order waits at
+  most six seconds (`ORDER_READ_TIMEOUT_MS`), since the invoice is made
+  after it while the billing screen waits; an order that can't be read in
+  that time is logged (`[books] the kit parts NetSuite's sales order …
+  lists …`) and the items' copy is used, and parts that copy can't give are
+  logged too (`[books] the parts of … couldn't be read`), keeping those kits
+  whole.
 - **Location.** Where FleetSuite books the invoice: for a sales order's
   installed quantities, where its PO location rule puts the PO's invoice
   (`resolveLocationWithOverride` in `src/lib/invoice-location.ts`); for a
@@ -3084,16 +3122,20 @@ how many, and what it cost. A copy:
   fulfillment;
 - **differs** when anything compared differs;
 - is **incomplete** when nothing compared differs but FleetSuite didn't know
-  something, which then isn't compared: a kit's parts (what NetSuite took
-  that FleetSuite's copy doesn't have may be them), whether an item the
-  lists copy doesn't have is kept in stock, where it took stock from, or
-  the cost of an item it counted none of;
+  something, which then isn't compared: the parts of a kit it couldn't take
+  apart (what NetSuite took that FleetSuite's copy doesn't have may be
+  them), whether an item the lists copy doesn't have is kept in stock, where
+  it took stock from, or the cost of an item it counted none of;
 - **matches** otherwise.
 
 What was taken, each item and how many, is compared apart from where it was
 taken from and what it cost. So a fulfillment taken from another location
 says so once, and the list's sentence doesn't name the cost too, which
 follows from what was taken and from where.
+
+A kit's parts are compared as any item is, with what NetSuite's fulfillment
+took of them. NetSuite's own line for the kit moves nothing and posts
+nothing, so it isn't compared.
 
 ### The pages
 
@@ -3106,7 +3148,8 @@ ledger and lists and the daily check went, and a search. Each opens
 (`deepLinks.booksOwnFulfillment`, by NetSuite's id for the fulfillment):
 what's compared, side by side with why it differs; each item with its
 quantity, cost each and cost on both sides and the count and value
-FleetSuite costed it from, linking to its moves on Stock by item; the
+FleetSuite costed it from, and which kit it was a part of, linking to its
+moves on Stock by item; the
 copy's entry next to NetSuite's, or what NetSuite's fulfillment posted,
 account by account, when the copy's isn't worked out; what FleetSuite
 didn't know; how it worked the copy out; and FleetSuite's own invoice off
@@ -3117,8 +3160,9 @@ when one stops matching ("Daily check").
 ### What isn't done yet
 
 - There's no history: copies start the day part 25 shipped.
-- FleetSuite doesn't know a kit's parts, so a fulfillment of a kit is
-  incomplete.
+- A kit whose parts neither NetSuite's sales order nor the copy of
+  NetSuite's items has stays whole, so a fulfillment of it is incomplete.
+  Copies made before 2026-11-03 kept every kit whole.
 - A fulfillment NetSuite took from more than one location differs on
   location: FleetSuite takes each one from one.
 

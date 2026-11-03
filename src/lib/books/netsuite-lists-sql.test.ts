@@ -206,8 +206,9 @@ type NsRow = Record<string, unknown>;
 /**
  * Answers the job's SuiteQL the way NetSuite would: only the fields asked
  * for, a refusal for a field it won't give or a record the role can't see,
- * the sales tax lines counted by tax code and account, and the invoice lines
- * of items with no income account counted by item and account.
+ * the sales tax lines counted by tax code and account, the invoice lines of
+ * items with no income account counted by item and account, and each kit's
+ * parts.
  */
 class FakeNetSuite {
   records: Record<string, NsRow[]> = {};
@@ -217,12 +218,19 @@ class FakeNetSuite {
   hidden = new Set<string>();
   taxLines: NsRow[] = [];
   itemLines: NsRow[] = [];
+  kitParts: NsRow[] = [];
+  /** What NetSuite answers the kits' parts with instead, when it won't give them. */
+  kitPartsError: Error | null = null;
   down = false;
 
   query = async (q: string): Promise<NsRow[]> => {
     if (this.down) throw Object.assign(new Error('NetSuite SuiteQL error (503): unavailable'), { status: 503 });
     if (q.includes("tl.taxline = 'T'")) return this.taxLines;
     if (q.includes('i.incomeaccount IS NULL')) return this.itemLines;
+    if (q.includes('FROM kititemmember km')) {
+      if (this.kitPartsError) throw this.kitPartsError;
+      return this.kitParts;
+    }
     const record = /FROM (\w+) r\b/.exec(q)?.[1] ?? '';
     const fail = (detail: string) => Object.assign(
       new Error(`NetSuite SuiteQL error (400): {"o:errorDetails":[{"detail":"Invalid search query. Detailed unprocessed description follows. ${detail}"}]}`),
@@ -445,5 +453,57 @@ describe('the copy job against the real functions', () => {
     expect(r.notes).toContain("NetSuite wouldn't say where items with no income account post (NetSuite SuiteQL error (503): unavailable).");
     // Nothing was marked gone by a run that read nothing.
     expect((await rows('location')).every((l) => !l.gone)).toBe(true);
+  });
+
+  it("keeps each kit's parts on its item row, and leaves them out with a note when NetSuite won't say what a kit holds", async () => {
+    const ns = netsuite();
+    ns.records.item = [...ns.records.item, { id: 904, itemid: 'RACK-KIT', itemtype: 'Kit', isinactive: 'F', displayname: 'Rack kit', incomeaccount: 43 }];
+    ns.kitParts = [
+      { kit_id: 904, item_id: 902, quantity: 1 },
+      { kit_id: 904, item_id: 900, quantity: '2' },
+    ];
+    const kit = async () => (await rows('item')).find((i) => i.id === '904')!;
+
+    const r = await run(ns);
+    expect(r.lists.item).toMatchObject({ received: 4 });
+    expect(r.lists.item).not.toHaveProperty('missing');
+    expect(r.notes ?? []).not.toContainEqual(expect.stringMatching(/kit/));
+    expect((await kit()).details).toEqual({
+      item_type: 'Kit', display_name: 'Rack kit', income_account: '43',
+      parts: [{ item: '900', quantity: 2 }, { item: '902', quantity: 1 }],
+    });
+    // The same parts again change nothing; a part changed in NetSuite changes the kit.
+    expect((await run(ns)).lists.item).toMatchObject({ changed: 0 });
+    ns.kitParts = [{ kit_id: 904, item_id: 900, quantity: 3 }];
+    expect((await run(ns)).lists.item).toMatchObject({ changed: 1 });
+    expect((await kit()).details.parts).toEqual([{ item: '900', quantity: 3 }]);
+
+    ns.kitPartsError = Object.assign(new Error(
+      'NetSuite SuiteQL error (400): {"o:errorDetails":[{"detail":"Invalid search query.","o:errorCode":"INVALID_SEARCH"}]}',
+    ), { status: 400 });
+    const refused = await run(ns);
+    expect(refused.lists.item).toMatchObject({ received: 4, changed: 1, missing: ['parts'] });
+    expect(refused.notes).toContain(
+      "NetSuite wouldn't say what each kit holds (NetSuite SuiteQL error (400): INVALID_SEARCH — Invalid search query.), so the kits' parts are left out.",
+    );
+    expect((await kit()).details).not.toHaveProperty('parts');
+
+    ns.kitPartsError = Object.assign(new Error(
+      'NetSuite SuiteQL error (400): {"o:errorDetails":[{"detail":"Invalid search query. Search error occurred: Record \'kititemmember\' was not found."}]}',
+    ), { status: 400 });
+    const hidden = await run(ns);
+    expect(hidden.lists.item).toMatchObject({ missing: ['parts'] });
+    expect(hidden.notes).toContain(
+      "NetSuite's integration role can't see what each kit holds, so the kits' parts aren't copied. The role needs permission to view them.",
+    );
+
+    // A field NetSuite won't give is said first, then the parts.
+    ns.refuse.item = ['assetaccount'];
+    const both = await run(ns);
+    expect(both.lists.item).toMatchObject({ missing: ['asset_account', 'parts'] });
+    expect(both.notes!.filter((n) => /items'|kit/.test(n))).toEqual([
+      "NetSuite wouldn't give the items' asset accounts, so they're left out.",
+      "NetSuite's integration role can't see what each kit holds, so the kits' parts aren't copied. The role needs permission to view them.",
+    ]);
   });
 });

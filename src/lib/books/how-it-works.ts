@@ -183,6 +183,7 @@ export const POSTING_RULES: readonly PostingRuleInfo[] = [
     posts: [
       "Credit each item's inventory asset account and debit its cost of goods sold account, at the item's average cost at its location just before.",
     ],
+    note: "A kit's items are its parts, as NetSuite takes them from stock: each the kit's quantity times what one kit holds.",
     code: 'src/lib/books/own-stock-posting.ts', docs: "Posting FleetSuite's own fulfillments, receipts and bills",
   },
   {
