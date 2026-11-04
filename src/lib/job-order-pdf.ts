@@ -50,9 +50,27 @@ export function jobOrderFilename(data: Pick<JobOrderData, 'soNumber'>): string {
 }
 
 export function buildJobOrderPdf(data: JobOrderData, opts?: { logo?: string | null; printedAt?: Date }): jsPDF {
+  return buildJobOrdersPdf([data], opts);
+}
+
+/**
+ * Several Job Orders in ONE PDF (the To Print list's "Print selected",
+ * Craig 2026-11-04), each starting on its own page with its own page
+ * numbers, so the shop sends one print job.
+ */
+export function buildJobOrdersPdf(list: JobOrderData[], opts?: { logo?: string | null; printedAt?: Date }): jsPDF {
   const logo = opts?.logo === undefined ? logoDataUrl : opts.logo;
   const printedAt = opts?.printedAt || new Date();
   const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  list.forEach((data, i) => {
+    if (i > 0) doc.addPage();
+    drawJobOrder(doc, data, logo, printedAt);
+  });
+  return doc;
+}
+
+function drawJobOrder(doc: jsPDF, data: JobOrderData, logo: string | null, printedAt: Date): void {
+  const startPage = doc.getNumberOfPages();
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
   const margin = 40;
@@ -226,18 +244,18 @@ export function buildJobOrderPdf(data: JobOrderData, opts?: { logo?: string | nu
   doc.text('Checked by / Date', margin + colW + 30, signY + 12);
   doc.setTextColor(0);
 
-  // ─── Footer on every page ──────────────────────────────────
-  const pages = doc.getNumberOfPages();
-  for (let p = 1; p <= pages; p++) {
+  // ─── Footer on every page of this order ────────────────────
+  const endPage = doc.getNumberOfPages();
+  const pages = endPage - startPage + 1;
+  for (let p = startPage; p <= endPage; p++) {
     doc.setPage(p);
     doc.setFontSize(8);
     doc.setTextColor(140);
     doc.text(`BMG Fleet · Job Order ${data.soNumber} · printed ${printedAt.toLocaleString('en-US')}`, margin, pageH - 20);
-    if (pages > 1) doc.text(`Page ${p} of ${pages}`, pageW - margin, pageH - 20, { align: 'right' });
+    if (pages > 1) doc.text(`Page ${p - startPage + 1} of ${pages}`, pageW - margin, pageH - 20, { align: 'right' });
     doc.setTextColor(0);
   }
-
-  return doc;
+  doc.setPage(endPage);
 }
 
 /**
@@ -260,5 +278,43 @@ export async function openJobOrder(soId: string): Promise<{ ok: boolean; error?:
   } catch (e: any) {
     w?.close();
     return { ok: false, error: e?.message || 'Could not open the Job Order' };
+  }
+}
+
+/**
+ * Click handler for "Print selected": one tab opened synchronously (popup
+ * blockers), every order fetched live, one PDF with the print dialog.
+ * Orders that couldn't be read are left out and named in `failed`; if none
+ * could be read nothing opens.
+ */
+export async function openJobOrders(soIds: string[]): Promise<{ ok: boolean; printed: string[]; failed: { soId: string; error: string }[]; error?: string }> {
+  ensureLogoLoaded();
+  const w = window.open('about:blank', '_blank');
+  const results = await Promise.all(soIds.map(async (soId) => {
+    try {
+      const res = await fetch(`/api/netsuite/job-order/${encodeURIComponent(soId)}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.soNumber) throw new Error(data?.error || `Could not load the sales order (${res.status})`);
+      return { soId, data: data as JobOrderData };
+    } catch (e: any) {
+      return { soId, error: e?.message || 'Could not load the sales order' };
+    }
+  }));
+  const good = results.filter((r): r is { soId: string; data: JobOrderData } => 'data' in r);
+  const failed = results.filter((r): r is { soId: string; error: string } => 'error' in r);
+  if (good.length === 0) {
+    w?.close();
+    return { ok: false, printed: [], failed, error: failed[0]?.error || 'Could not open the sales orders' };
+  }
+  try {
+    const doc = buildJobOrdersPdf(good.map(g => g.data));
+    doc.autoPrint();
+    const url = String(doc.output('bloburl'));
+    if (w) w.location.href = url;
+    else if (!window.open(url, '_blank')) doc.save('job-orders.pdf');
+    return { ok: true, printed: good.map(g => g.soId), failed };
+  } catch (e: any) {
+    w?.close();
+    return { ok: false, printed: [], failed, error: e?.message || 'Could not build the PDF' };
   }
 }

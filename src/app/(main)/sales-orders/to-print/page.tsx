@@ -13,7 +13,7 @@ import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/api-client';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
-import { openJobOrder } from '@/lib/job-order-pdf';
+import { openJobOrder, openJobOrders } from '@/lib/job-order-pdf';
 
 interface Row {
   id: string;
@@ -45,6 +45,10 @@ export default function ToPrintPage() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  /** Ticked rows (To print tab), by list entry id. */
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** Rows just sent to the printer together, waiting on "Did they all print?". */
+  const [justPrinted, setJustPrinted] = useState<Row[] | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,8 +57,11 @@ export default function ToPrintPage() {
       const res = await apiFetch(`/api/sales-orders/print-queue?status=${tab}`);
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `Couldn't load the list (${res.status}).`);
-      setRows(body.rows || []);
+      const list: Row[] = body.rows || [];
+      setRows(list);
       setToPrint(body.toPrint || 0);
+      // Keep only ticks for rows still on the list.
+      setSelected(prev => new Set(list.filter(r => prev.has(r.id)).map(r => r.id)));
     } catch (e: any) {
       setError(e?.message || "Couldn't load the list.");
     } finally {
@@ -69,6 +76,57 @@ export default function ToPrintPage() {
     const out = await openJobOrder(r.soId);
     if (!out.ok) setError(out.error || "Couldn't open the sales order to print.");
   };
+
+  const printSelected = async () => {
+    const chosen = rows.filter(r => selected.has(r.id));
+    if (chosen.length === 0) return;
+    setError(null);
+    setNote(null);
+    setJustPrinted(null);
+    const out = await openJobOrders(chosen.map(r => r.soId));
+    const failedIds = new Set(out.failed.map(f => f.soId));
+    const failedNames = chosen.filter(r => failedIds.has(r.soId)).map(r => r.soNumber || `SO ${r.soId}`);
+    if (!out.ok) {
+      setError(out.error || "Couldn't open the sales orders to print.");
+      return;
+    }
+    if (failedNames.length > 0) {
+      setError(`Left out because they couldn't be read from NetSuite: ${failedNames.join(', ')}. Try those again.`);
+    }
+    setJustPrinted(chosen.filter(r => !failedIds.has(r.soId)));
+  };
+
+  const markAllPrinted = async () => {
+    if (!justPrinted || justPrinted.length === 0) return;
+    setBusy('batch');
+    setError(null);
+    const results = await Promise.all(justPrinted.map(async r => {
+      try {
+        const res = await apiFetch(`/api/sales-orders/print-queue/${r.id}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'printed' }),
+        });
+        return res.ok ? null : (r.soNumber || `SO ${r.soId}`);
+      } catch {
+        return r.soNumber || `SO ${r.soId}`;
+      }
+    }));
+    const missed = results.filter((x): x is string => !!x);
+    const done = justPrinted.length - missed.length;
+    if (missed.length > 0) setError(`Couldn't mark ${missed.join(', ')} printed. Try again.`);
+    setNote(done > 0 ? `Marked ${done} printed.` : null);
+    setJustPrinted(null);
+    setBusy(null);
+    await load();
+  };
+
+  const toggle = (id: string) => setSelected(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const allTicked = rows.length > 0 && rows.every(r => selected.has(r.id));
 
   const setStatus = async (r: Row, status: Row['status']) => {
     setBusy(r.id);
@@ -95,12 +153,12 @@ export default function ToPrintPage() {
     <div style={{ maxWidth: '960px', margin: '0 auto', padding: '16px', display: 'grid', gap: '12px' }}>
       <div style={{ minWidth: 0 }}>
         <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: theme.textPrimary }}>To print{toPrint > 0 ? ` (${toPrint})` : ''}</h1>
-        <div style={{ fontSize: '13px', color: theme.textMuted }}>New sales orders for the board. Print, hang it up, then tap Mark printed.</div>
+        <div style={{ fontSize: '13px', color: theme.textMuted }}>New sales orders for the board. Tick the ones to print, print them, hang them up, then mark them printed.</div>
       </div>
 
       <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
         {(['to_print', 'printed'] as const).map(v => (
-          <button key={v} onClick={() => { setTab(v); setNote(null); }} style={{
+          <button key={v} onClick={() => { setTab(v); setNote(null); setSelected(new Set()); setJustPrinted(null); }} style={{
             padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer',
             background: tab === v ? 'var(--tab-active-bg)' : 'transparent',
             border: tab === v ? '1px solid var(--tab-active-border)' : `1px solid ${theme.border}`,
@@ -108,6 +166,39 @@ export default function ToPrintPage() {
           }}>{v === 'to_print' ? 'To print' : 'Printed'}</button>
         ))}
       </div>
+
+      {tab === 'to_print' && rows.length > 0 && (
+        <div style={{
+          display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', background: theme.card,
+          border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '10px 12px', color: theme.textPrimary,
+        }}>
+          <label style={{ display: 'flex', gap: '8px', alignItems: 'center', fontWeight: 700, fontSize: '14px', cursor: 'pointer' }}>
+            <input id="to-print-all" type="checkbox" checked={allTicked}
+              onChange={e => setSelected(e.target.checked ? new Set(rows.map(r => r.id)) : new Set())}
+              style={{ width: '20px', height: '20px' }} />
+            Select all
+          </label>
+          <span style={{ fontSize: '13px', color: theme.textMuted }}>{selected.size} selected</span>
+          <span style={{ flex: 1 }} />
+          <button onClick={printSelected} disabled={selected.size === 0 || busy !== null} style={{
+            ...btn, background: selected.size ? '#2563eb' : theme.card, color: selected.size ? '#fff' : theme.textMuted,
+            border: selected.size ? 'none' : `1px solid ${theme.border}`, cursor: selected.size ? 'pointer' : 'default',
+          }}>{selected.size ? `Print ${selected.size} selected` : 'Print selected'}</button>
+        </div>
+      )}
+
+      {justPrinted && justPrinted.length > 0 && (
+        <div style={{ background: theme.card, border: '2px solid #16a34a', borderRadius: '10px', padding: '12px', display: 'grid', gap: '8px', color: theme.textPrimary }}>
+          <div style={{ fontWeight: 800 }}>Did all {justPrinted.length} print?</div>
+          <div style={{ fontSize: '13px', color: theme.textMuted }}>Check the printer. If one jammed, tap Not yet and print it again.</div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button onClick={markAllPrinted} disabled={busy !== null} style={{ ...btn, background: '#16a34a', border: 'none', color: '#fff' }}>
+              {busy === 'batch' ? 'Marking…' : `Mark ${justPrinted.length} printed`}
+            </button>
+            <button onClick={() => { setJustPrinted(null); setNote('Nothing marked. They stay on the list.'); }} disabled={busy !== null} style={btn}>Not yet</button>
+          </div>
+        </div>
+      )}
 
       {error && <div style={{ color: theme.error, fontWeight: 700, fontSize: '14px' }}>{error}</div>}
       {note && !error && <div style={{ color: theme.success, fontWeight: 700, fontSize: '14px' }}>{note}</div>}
@@ -127,6 +218,10 @@ export default function ToPrintPage() {
               padding: '10px 12px', color: theme.textPrimary, display: 'grid', gap: '6px',
             }}>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                {r.status === 'to_print' && (
+                  <input type="checkbox" id={`to-print-${r.id}`} aria-label={`Select ${r.soNumber || r.soId}`}
+                    checked={selected.has(r.id)} onChange={() => toggle(r.id)} style={{ width: '20px', height: '20px' }} />
+                )}
                 <button onClick={() => router.push(deepLinks.salesOrder(r.soId))} style={{
                   border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: theme.textPrimary, fontWeight: 800, fontSize: '15px',
                 }}>{r.soNumber || `SO ${r.soId}`}</button>
