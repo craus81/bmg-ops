@@ -94,6 +94,7 @@ export const NOT_BOOKS: Readonly<Record<string, string>> = {
   part_price_mismatches: "Parts whose FleetSuite and NetSuite prices differ, found again each night.",
   netsuite_vendor_po_expense_lines: "A copy of NetSuite's purchase orders' other lines, such as freight, read again from NetSuite.",
   customer_holds: "Sales: a hold on a customer's orders.",
+  so_print_queue: 'Sales: which sales orders are waiting to be printed for the board.',
   customer_hold_overrides: 'Sales: an order let through a hold.',
   photo_shares: 'Photo links sent to customers.',
   netsuite_estimates: "A copy of NetSuite's estimates, read again from NetSuite.",

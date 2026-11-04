@@ -11,7 +11,7 @@
 
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { JobOrderData } from './job-order';
+import { vendorPoText, type JobOrderData } from './job-order';
 
 // Preloaded at module load: an await before window.open() would invite the
 // popup blocker (same reasoning as packing-list-pdf.ts). Until it arrives
@@ -83,7 +83,6 @@ export function buildJobOrderPdf(data: JobOrderData, opts?: { logo?: string | nu
   // ─── Reference block (right) ───────────────────────────────
   const refs: [string, string][] = [['Job Order #', data.soNumber]];
   if (data.orderDate) refs.push(['Order Date', fmtDate(data.orderDate)]);
-  if (data.poNumber) refs.push(['PO #', data.poNumber]);
   if (data.shipDate) refs.push(['Ship Date', fmtDate(data.shipDate)]);
   if (data.shipMethod) refs.push(['Ship Via', data.shipMethod]);
   if (data.salesRep) refs.push(['Sales Rep', data.salesRep]);
@@ -136,6 +135,34 @@ export function buildJobOrderPdf(data: JobOrderData, opts?: { logo?: string | nu
   }
 
   y = Math.max(y, refY) + 10;
+
+  // ─── End user / vendor POs (the board copy, Craig 2026-11-04) ─
+  if (data.endUser) {
+    const boxW = pageW - margin * 2;
+    doc.setDrawColor(0);
+    doc.setLineWidth(1.5);
+    doc.rect(margin, y - 4, boxW, 34);
+    doc.setLineWidth(0.2);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(110);
+    doc.text('END USER', margin + 8, y + 7);
+    doc.setTextColor(0);
+    doc.setFontSize(14);
+    doc.text(doc.splitTextToSize(data.endUser, boxW - 16)[0], margin + 8, y + 23);
+    y += 42;
+  }
+  {
+    const pos = vendorPoText(data.vendorPos);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    const label = 'Vendor POs: ';
+    doc.text(label, margin, y);
+    doc.setFont('helvetica', 'normal');
+    const poLines = doc.splitTextToSize(pos || 'none yet', pageW - margin * 2 - doc.getTextWidth(label));
+    doc.text(poLines, margin + doc.getTextWidth(label), y);
+    y += poLines.length * 13 + 4;
+  }
 
   // ─── VIN / memo ────────────────────────────────────────────
   if (data.vin) {

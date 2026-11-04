@@ -20,6 +20,7 @@
  *   the request re-matching to that same PO.
  */
 
+import { requeueForNewPo } from '@/lib/so-print-queue';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { fetchAllRows } from '@/lib/fetch-all';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
@@ -357,10 +358,13 @@ export async function autoMatchPurchaseRequests(service: SupabaseClient): Promis
  *  first-PO scalar stamp that Parts Mail matches ETA emails against. */
 async function linkProjectToPo(service: SupabaseClient, projectId: string, po: MatchPo): Promise<void> {
   try {
-    await service.from('upfit_project_pos').upsert(
+    const { data: linked } = await service.from('upfit_project_pos').upsert(
       { project_id: projectId, po_id: po.id, po_number: po.tranid, source: 'request_queue' },
       { onConflict: 'project_id,po_id', ignoreDuplicates: true },
-    );
+    ).select('id');
+    // A NEW link: the printed sales order for this job goes back on the
+    // board's To print list. Never throws.
+    if (linked && linked.length > 0) await requeueForNewPo(service, [projectId], po.tranid || null);
     if (po.netsuite_id) {
       await service.from('upfit_projects').update({
         netsuite_vendor_po_id: po.netsuite_id,

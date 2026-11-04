@@ -22,6 +22,8 @@
  * (src/app/api/sales-orders/[id]/route.ts) does the I/O.
  */
 
+import { END_USER_FIELD, END_USER_MAX, normalizeEndUser } from './end-user';
+
 export interface SoLine {
   /** NetSuite's line key on the item sublist (what a PATCH addresses). */
   line: number;
@@ -49,6 +51,8 @@ export interface SoHeader {
   poNumber: string;
   memo: string;
   vin: string;
+  /** The company the work is for when someone else is billed (src/lib/end-user.ts). */
+  endUser: string;
   shipDate: string | null;
   salesRep: string | null;
   subtotal: number;
@@ -144,6 +148,7 @@ export function parseSalesOrderRecord(rec: any): SalesOrderView {
     poNumber: String(rec?.otherRefNum ?? ''),
     memo: String(rec?.memo ?? ''),
     vin: String(rec?.custbody_vin_number_ ?? ''),
+    endUser: normalizeEndUser(rec?.[END_USER_FIELD]),
     shipDate: dateOnly(rec?.shipDate),
     salesRep: ref(rec?.salesRep),
     subtotal: num(rec?.subtotal),
@@ -190,6 +195,7 @@ export interface SoHeaderEdit {
   poNumber?: string;
   memo?: string;
   vin?: string;
+  endUser?: string;
   shipDate?: string | null;
 }
 
@@ -242,6 +248,14 @@ export function planSalesOrderEdit(view: SalesOrderView, edit: SoEdit): SoEditPl
     else if (v !== header.vin.trim().toUpperCase()) {
       body.custbody_vin_number_ = v || null;
       changes.push(`VIN ${header.vin || '(blank)'} → ${v || '(blank)'}`);
+    }
+  }
+  if (h.endUser !== undefined) {
+    const v = normalizeEndUser(h.endUser);
+    if (v.length > END_USER_MAX) errors.push(`End user can be at most ${END_USER_MAX} characters.`);
+    else if (v !== header.endUser) {
+      body[END_USER_FIELD] = v || null;
+      changes.push(`End user ${header.endUser || '(blank)'} → ${v || '(blank)'}`);
     }
   }
   if (h.shipDate !== undefined) {

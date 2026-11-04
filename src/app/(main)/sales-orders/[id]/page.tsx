@@ -115,7 +115,7 @@ export default function SalesOrderPage() {
   const [emailingSo, setEmailingSo] = useState(false);
   const [sentBump, setSentBump] = useState(0);
 
-  const [hdr, setHdr] = useState({ poNumber: '', memo: '', vin: '', shipDate: '' });
+  const [hdr, setHdr] = useState({ poNumber: '', memo: '', vin: '', endUser: '', shipDate: '' });
   const [drafts, setDrafts] = useState<Record<number, LineDraft>>({});
   const [added, setAdded] = useState<NewDraft[]>([]);
   const [search, setSearch] = useState('');
@@ -156,7 +156,7 @@ export default function SalesOrderPage() {
   const startEdit = () => {
     if (!data) return;
     const h = data.header;
-    setHdr({ poNumber: h.poNumber, memo: h.memo, vin: h.vin, shipDate: h.shipDate || '' });
+    setHdr({ poNumber: h.poNumber, memo: h.memo, vin: h.vin, endUser: h.endUser || '', shipDate: h.shipDate || '' });
     setDrafts(Object.fromEntries(data.lines.map(l => [l.line, {
       quantity: qtyText(l.quantity), rate: l.rate == null ? '' : String(l.rate), close: false, reopen: false, remove: false,
     }])));
@@ -210,6 +210,7 @@ export default function SalesOrderPage() {
     if (hdr.poNumber.trim() !== h.poNumber.trim()) header.poNumber = hdr.poNumber;
     if (hdr.memo.trim() !== h.memo.trim()) header.memo = hdr.memo;
     if (hdr.vin.trim().toUpperCase() !== h.vin.trim().toUpperCase()) header.vin = hdr.vin;
+    if (hdr.endUser.replace(/\s+/g, ' ').trim() !== (h.endUser || '')) header.endUser = hdr.endUser;
     if ((hdr.shipDate || null) !== h.shipDate) header.shipDate = hdr.shipDate || null;
     const count = lines.length + add.length + Object.keys(header).length;
     return { lines, add, header, errors, count };
@@ -402,6 +403,12 @@ export default function SalesOrderPage() {
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '12px 20px', marginTop: '16px' }}>
           <div><span style={label}>Customer</span><div style={{ fontWeight: 600 }}>{h.customerName || '—'}</div></div>
+          <div>
+            <label style={label} htmlFor="so-end-user">End user</label>
+            {editing
+              ? <input id="so-end-user" style={input} value={hdr.endUser} maxLength={120} placeholder="Company the work is for" onChange={e => setHdr({ ...hdr, endUser: e.target.value })} />
+              : <div style={{ fontWeight: 600 }}>{h.endUser || '—'}</div>}
+          </div>
           <div><span style={label}>Order date</span><div style={{ fontWeight: 600 }}>{fmtDate(h.tranDate) || '—'}</div></div>
           <div>
             <label style={label} htmlFor="so-po">Customer PO #</label>

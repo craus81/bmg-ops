@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { END_USER_FIELD } from '@/lib/end-user';
+import { requeuePrintedSalesOrder } from '@/lib/so-print-queue';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff, requireAdmin, profileCanSeeMoney, getProfileRoles, isAdminRole } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -139,6 +141,7 @@ const Schema = z.object({
     poNumber: z.string().max(100).optional(),
     memo: z.string().max(2000).optional(),
     vin: z.string().max(30).optional(),
+    endUser: z.string().max(200).optional(),
     shipDate: z.string().max(10).nullable().optional(),
   }).optional(),
   lines: z.array(LineEdit).max(500).optional(),
@@ -203,6 +206,19 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   // rather than at the next 2-hour sync. Best effort.
   const mirror = await refreshSalesOrderMirror(supabase, params.id).catch((e: any) => ({ ok: false, error: e?.message || String(e) }));
   if (!mirror.ok) console.warn(`sales order ${params.id}: mirror refresh failed: ${'error' in mirror ? mirror.error : ''}`);
+
+  // The End user lives in the mirror too (the To print list and search read it).
+  const endUserChanged = Object.prototype.hasOwnProperty.call(plan.body, END_USER_FIELD);
+  if (endUserChanged) {
+    await supabase.from('netsuite_sales_orders')
+      .update({ end_user: (plan.body[END_USER_FIELD] as string | null) || null })
+      .eq('netsuite_id', params.id);
+  }
+  // A printed order goes back on the board's To print list. Never throws.
+  if (plan.changes.length > 0) {
+    await requeuePrintedSalesOrder(supabase, params.id, 'changed',
+      endUserChanged ? { endUser: (plan.body[END_USER_FIELD] as string | null) || null } : undefined);
+  }
 
   return NextResponse.json({ success: true, changes: plan.changes });
 }

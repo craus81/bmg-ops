@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requeueForNewPo } from '@/lib/so-print-queue';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -82,6 +83,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: linkErr.message }, { status: 500 });
   }
   const alreadyLinked = !inserted || inserted.length === 0;
+  // Printed sales order for this job goes back on the board's To print list. Never throws.
+  if (!alreadyLinked) await requeueForNewPo(supabase, [project.id], po.tranid || null);
 
   if (!alreadyLinked) {
     // First PO still wins the legacy scalar columns — a manual link on a

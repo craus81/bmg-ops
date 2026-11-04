@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { suiteqlQuery } from '@/lib/netsuite';
 import { requireStaff } from '@/lib/api-auth';
 import { jobOrderLinesFromRows, stripStatusPrefix, type JobOrderData } from '@/lib/job-order';
+import { createServiceClient } from '@/lib/supabase-service';
+import { END_USER_FIELD, normalizeEndUser } from '@/lib/end-user';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -41,7 +43,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     // Nice-to-have header fields go in their own queries, so a field this
     // account doesn't expose costs that field, not the whole printout.
-    const [extraRes, shipToRes, linesRes] = await Promise.all([
+    const [extraRes, shipToRes, linesRes, endUserRes, vendorPos] = await Promise.all([
       suiteqlQuery(`
         SELECT t.shipdate, BUILTIN.DF(t.shipmethod) AS ship_method, BUILTIN.DF(t.employee) AS sales_rep
         FROM transaction t WHERE t.id = ${soId}
@@ -66,6 +68,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
           AND tl.taxline = 'F'
         ORDER BY tl.linesequencenumber
       `),
+      suiteqlQuery(`SELECT t.${END_USER_FIELD} AS end_user FROM transaction t WHERE t.id = ${soId}`).catch(() => null),
+      vendorPosForSo(soId).catch(() => []),
     ]);
     const extra = extraRes?.items?.[0] || {};
     const shipTo = String(shipToRes?.items?.[0]?.addrtext || '').trim() || null;
@@ -76,6 +80,8 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       orderDate: h.trandate || null,
       customer: h.customer_name || null,
       poNumber: h.otherrefnum || null,
+      endUser: normalizeEndUser(endUserRes?.items?.[0]?.end_user) || null,
+      vendorPos,
       vin: h.vin || null,
       memo: h.memo || null,
       status: stripStatusPrefix(h.status_label),
@@ -89,4 +95,25 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   } catch (err: any) {
     return NextResponse.json({ error: err?.message || 'NetSuite query failed' }, { status: 500 });
   }
+}
+
+/** The vendor POs linked to this order's job (upfit_project_pos), oldest first. */
+async function vendorPosForSo(soId: string): Promise<{ number: string; vendor: string | null }[]> {
+  const supabase = createServiceClient();
+  const { data: projects } = await supabase.from('upfit_projects').select('id').eq('netsuite_so_id', soId);
+  const ids = ((projects || []) as any[]).map(p => p.id);
+  if (ids.length === 0) return [];
+  const { data: links } = await supabase.from('upfit_project_pos')
+    .select('po_number, created_at, po:netsuite_vendor_pos(tranid, vendor_name)')
+    .in('project_id', ids)
+    .order('created_at', { ascending: true });
+  const seen = new Set<string>();
+  const out: { number: string; vendor: string | null }[] = [];
+  for (const l of (links || []) as any[]) {
+    const number = String(l.po?.tranid || l.po_number || '').trim();
+    if (!number || seen.has(number)) continue;
+    seen.add(number);
+    out.push({ number, vendor: l.po?.vendor_name || null });
+  }
+  return out;
 }

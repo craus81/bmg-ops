@@ -23,6 +23,11 @@ export interface JobOrderData {
   orderDate: string | null;
   customer: string | null;
   poNumber: string | null;
+  /** The company the work is for when someone else is billed (src/lib/end-user.ts). */
+  endUser?: string | null;
+  /** Vendor POs FleetSuite cut for this order's vehicle (Craig, 2026-11-04:
+   *  the board copy shows these, not the customer's PO). */
+  vendorPos?: { number: string; vendor: string | null }[];
   vin: string | null;
   memo: string | null;
   status: string | null;
@@ -58,4 +63,9 @@ export function jobOrderLinesFromRows(rows: any[]): JobOrderLine[] {
 export function stripStatusPrefix(label: string | null | undefined): string | null {
   const s = String(label || '').replace(/^[^:]+:\s*/, '').trim();
   return s || null;
+}
+
+/** "35052221 (Masterack), 35052240 (Whelen)". Pure. */
+export function vendorPoText(pos: { number: string; vendor: string | null }[] | null | undefined): string {
+  return (pos || []).filter(p => p.number).map(p => p.vendor ? `${p.number} (${p.vendor})` : p.number).join(', ');
 }

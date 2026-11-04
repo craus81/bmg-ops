@@ -553,6 +553,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   // prices), only an admin edits it.
   'src/app/api/sales-orders/[id]/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin(', 'profileCanSeeMoney('] },
   'src/app/api/sales-orders/route.ts': staff(),
+  'src/app/api/sales-orders/print-queue/route.ts': staff(),
+  'src/app/api/sales-orders/print-queue/[id]/route.ts': staff(),
   'src/app/api/sales-orders/items/route.ts': admin(),
   'src/app/api/sales-orders/[id]/fulfill-invoice/route.ts': admin(),
   'src/app/api/sales-orders/[id]/email/route.ts': admin(),

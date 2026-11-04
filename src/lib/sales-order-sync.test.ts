@@ -442,17 +442,18 @@ describe('syncSalesOrders', () => {
 
     expect(result.error).toBeUndefined();
     const queries = suiteql.mock.calls.map(c => c[0] as string);
-    // Rung 1 (all) and rung 2 (status_label + vin) rejected; rung 3
-    // (createdfrom alone) serves page 1 and every page after it.
-    expect(queries).toHaveLength(4);
+    // Rungs 1-3 (all carry status_label) rejected; rung 4 (createdfrom
+    // alone) serves page 1 and every page after it.
+    expect(queries).toHaveLength(5);
     expect(queries[0]).toContain('BUILTIN.DF');
     expect(queries[1]).toContain('BUILTIN.DF');
-    expect(queries.slice(2).every(q => !q.includes('BUILTIN.DF') && q.includes('t.createdfrom'))).toBe(true);
+    expect(queries[2]).toContain('BUILTIN.DF');
+    expect(queries.slice(3).every(q => !q.includes('BUILTIN.DF') && q.includes('t.createdfrom'))).toBe(true);
     expect(writes.headers).toHaveLength(250);
     expect(writes.headers[0].status_label).toBeNull();
-    expect(result.droppedColumns).toEqual(['status_label', 'vin']);
+    expect(result.droppedColumns).toEqual(['status_label', 'vin', 'end_user']);
     const [, , payload] = heartbeat.mock.calls[0];
-    expect(payload).toMatchObject({ droppedColumns: ['status_label', 'vin'] });
+    expect(payload).toMatchObject({ droppedColumns: ['status_label', 'vin', 'end_user'] });
   });
 
   it('runs without createdfrom when NetSuite rejects it on the header — the case that kept this mirror empty — and still links estimates by Reference No', async () => {
@@ -467,9 +468,9 @@ describe('syncSalesOrders', () => {
     const result = await syncSalesOrders(service, { deadline: far() });
 
     expect(result.error).toBeUndefined();
-    expect(result.droppedColumns).toEqual(['createdfrom']);
-    // Rung 1 rejected, rung 2 (status_label + vin) accepted.
-    expect(suiteql).toHaveBeenCalledTimes(2);
+    expect(result.droppedColumns).toEqual(['createdfrom', 'end_user']);
+    // Rungs 1-2 (both carry createdfrom) rejected, rung 3 (status_label + vin) accepted.
+    expect(suiteql).toHaveBeenCalledTimes(3);
     expect(writes.headers).toHaveLength(2);
     const byId = new Map(writes.headers.map(h => [h.netsuite_id, h]));
     expect(byId.get('1')).toMatchObject({ createdfrom_netsuite_id: null, status_label: 'Pending Fulfillment', estimate_id: 'e41', match_source: 'otherrefnum' });
@@ -625,6 +626,7 @@ describe('diagnoseSoQueries', () => {
       ['optional column status_label (BUILTIN.DF(t.status) AS status_label)', true],
       ['optional column vin (t.custbody_vin_number_ AS vin)', true],
       ['optional column createdfrom (t.createdfrom)', true],
+      ['optional column end_user (t.custbody_vehicle_info_ AS end_user)', true],
       ['line query', true],
     ]);
     expect(verdict).toMatch(/transient/);

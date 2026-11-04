@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { normalizeEndUser, END_USER_MAX } from '@/lib/end-user';
 import { soContentHash } from '@/lib/so-sync';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature } from '@/lib/api-auth';
@@ -77,6 +78,7 @@ const UpsertEstimateSchema = z.object({
   vin: z.string().max(32).optional().nullable(),
   unit_number: z.string().max(60).optional().nullable(),
   stock_number: z.string().max(60).optional().nullable(),
+  end_user: z.string().max(200).optional().nullable(),
   // Customer's PO number (→ NetSuite otherRefNum) and the quote's
   // expiration date (YYYY-MM-DD → NetSuite estimate dueDate/"Expires").
   po_number: z.string().max(60).optional().nullable(),
@@ -187,7 +189,7 @@ export async function POST(req: NextRequest) {
     // T1.6 install context
     install_instructions, on_site_contact_name, on_site_contact_phone,
     delivery_preferences, internal_notes,
-    vin, unit_number, stock_number, po_number, expiration_date, fleet_checkin_id,
+    vin, unit_number, stock_number, end_user, po_number, expiration_date, fleet_checkin_id,
     vehicle_platform_id, vehicle_other, vehicle_year, vehicle_wheelbase,
     vehicle_roof, vehicle_cab, vehicle_bed,
     vehicle_template_id, vehicle_make, vehicle_model,
@@ -204,6 +206,8 @@ export async function POST(req: NextRequest) {
     // A client from before the field existed sends no stock_number; leave
     // the saved one alone rather than blanking it.
     const stockField = stock_number === undefined ? {} : { stock_number: normalizedStock };
+    // Same for end_user (the company the work is for; src/lib/end-user.ts).
+    const endUserField = end_user === undefined ? {} : { end_user: normalizeEndUser(end_user).slice(0, END_USER_MAX) || null };
 
     const requestLines = line_items || [];
     // Sales tax rate is NEVER taken from the request body: it is one company
@@ -360,6 +364,7 @@ export async function POST(req: NextRequest) {
           vin: normalizedVin,
           unit_number: normalizedUnit,
           ...stockField,
+          ...endUserField,
           po_number: po_number?.trim() || null,
           expiration_date: expiration_date || null,
           fleet_checkin_id: fleet_checkin_id || null,
@@ -486,6 +491,7 @@ export async function POST(req: NextRequest) {
           vin: normalizedVin,
           unit_number: normalizedUnit,
           ...stockField,
+          ...endUserField,
           po_number: po_number?.trim() || null,
           expiration_date: expiration_date || null,
           fleet_checkin_id: fleet_checkin_id || null,

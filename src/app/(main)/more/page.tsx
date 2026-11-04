@@ -165,6 +165,7 @@ export default function MorePage() {
     { group: 'sales', title: 'Customers', sub: 'Customers & sales pipeline', path: '/admin/prospects', show: F('prospects'), list: true, newPath: '/admin/prospects?tab=customers&new=1' },
     { group: 'sales', title: 'Estimates', sub: 'Every estimate · build, chase follow-ups, mark won or lost', path: '/estimates', show: F('estimates'), list: true, newPath: deepLinks.newEstimate() },
     { group: 'sales', title: 'Sales Orders', sub: 'Every NetSuite sales order · + New makes one from nothing · open one to edit or invoice it', path: '/sales-orders', show: F('estimates') || F('invoicing'), list: true, newPath: canSeeMoney ? '/sales-orders/new' : undefined },
+    { group: 'sales', title: 'To Print', sub: 'New sales orders to print and hang on the board · tap Mark printed once it is up', path: '/sales-orders/to-print', show: F('estimates') || F('invoicing'), badge: badgeFor('so_to_print'), list: true },
     { group: 'sales', title: 'Invoices', sub: 'Every invoice · + New makes one from nothing · search, PDF, email, past due', path: '/invoices?tab=sent', show: F('invoicing'), list: true, newPath: '/invoices/new' },
     { group: 'sales', title: 'Ready to Invoice', sub: 'Finished graphics jobs and scanned vehicles waiting for an invoice', path: '/invoices', show: F('invoicing'), list: true },
     { group: 'sales', title: 'Customer POs', sub: 'POs customers send us (Masterack and others) · import, match, invoice', path: '/admin/pos', show: F('purchase_orders'), list: true, newPath: '/admin/pos?new=1' },
