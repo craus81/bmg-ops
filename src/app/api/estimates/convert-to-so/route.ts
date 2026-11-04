@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { queueNewSalesOrder } from '@/lib/so-print-queue';
 import { PRICING_REQUEST_PUSH_BLOCKED } from '@/lib/pricing-request';
 import { createSalesOrder, findLocation, closeNetSuiteEstimate } from '@/lib/netsuite';
 import { buildSoLineItems, soContentHash, zeroPriceLinesError } from '@/lib/so-sync';
@@ -267,6 +268,7 @@ export async function POST(req: NextRequest) {
         locationId: nsLocation?.id,
         memo,
         vin: estimate.vin,
+        endUser: estimate.end_user,
         lineItems: soLineItems,
       });
     } catch (err: any) {
@@ -284,6 +286,16 @@ export async function POST(req: NextRequest) {
         error: result.error || 'Failed to create Sales Order in NetSuite',
         step: 'create_so',
       }, { status: 500 });
+    }
+
+    // On Jessie's "To print" list for the board (src/lib/so-print-queue.ts). Never throws.
+    if (result.salesOrderId) {
+      await queueNewSalesOrder(supabase, {
+        soNetsuiteId: result.salesOrderId,
+        soNumber: result.salesOrderNumber || null,
+        customerName: estimate.customer_name || null,
+        endUser: estimate.end_user || null,
+      });
     }
 
     // Write the SO onto the estimate — CONDITIONALLY, and checked. This write

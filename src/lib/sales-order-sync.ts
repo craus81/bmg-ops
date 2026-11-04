@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { normalizeEndUser } from '@/lib/end-user';
+import { queueSyncedSalesOrders } from '@/lib/so-print-queue';
 import { suiteqlQuery, suiteqlQueryAll, isSuiteqlError } from '@/lib/netsuite';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
@@ -175,12 +177,15 @@ export const OPTIONAL_HEADER_COLUMNS = {
   status_label: 'BUILTIN.DF(t.status) AS status_label',
   vin: 't.custbody_vin_number_ AS vin',
   createdfrom: 't.createdfrom',
+  // End user (src/lib/end-user.ts). Same field id as END_USER_FIELD.
+  end_user: 't.custbody_vehicle_info_ AS end_user',
 } as const;
 export type OptionalHeaderColumn = keyof typeof OPTIONAL_HEADER_COLUMNS;
-export const ALL_OPTIONAL_HEADER_COLUMNS: readonly OptionalHeaderColumn[] = ['status_label', 'vin', 'createdfrom'];
+export const ALL_OPTIONAL_HEADER_COLUMNS: readonly OptionalHeaderColumn[] = ['status_label', 'vin', 'createdfrom', 'end_user'];
 /** Column sets a run tries on its first page, richest first; the first
  *  one NetSuite accepts is used for the rest of the run. */
 export const HEADER_COLUMN_LADDER: readonly (readonly OptionalHeaderColumn[])[] = [
+  ['status_label', 'vin', 'createdfrom', 'end_user'],
   ['status_label', 'vin', 'createdfrom'],
   ['status_label', 'vin'],
   ['createdfrom'],
@@ -540,6 +545,8 @@ export async function syncSalesOrders(
           otherrefnum: so.otherrefnum || null,
           createdfrom_netsuite_id: so.createdfrom ? String(so.createdfrom) : null,
           vin: so.vin || null,
+          // Only when the column was read, so a run without it never blanks it.
+          ...(columns?.includes('end_user') ? { end_user: normalizeEndUser(so.end_user) || null } : {}),
           total: so.total != null ? Math.abs(parseFloat(so.total)) || null : null,
           estimate_id: estimate?.id || null,
           match_source: estimate && match ? match.source : null,
@@ -574,6 +581,10 @@ export async function syncSalesOrders(
           idByNsId.set(String(h.netsuite_id), h.id);
         }
       }
+
+      // Orders keyed in NetSuite join the board "To print" list (ones
+      // FleetSuite made are already on it). Never throws.
+      await queueSyncedSalesOrders(service, sos.filter(so => idByNsId.has(String(so.id))));
 
       // Backfill the estimate's SO link — strong matches only, never
       // overwriting a link that already exists. Rare (FleetSuite-pushed

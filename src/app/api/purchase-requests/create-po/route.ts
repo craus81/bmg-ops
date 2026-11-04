@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requeueForNewPo } from '@/lib/so-print-queue';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireFeature, requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -459,6 +460,8 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       console.error('create-po: project PO link failed:', err);
     }
+    // Printed sales orders for these jobs go back on the board's To print list. Never throws.
+    await requeueForNewPo(supabase, projects.map(p => p.id), po.purchaseOrderNumber || null);
   }
 
   // Requesters hear their ask landed on a real PO. A requester with ONE

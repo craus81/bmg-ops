@@ -384,6 +384,7 @@ interface Estimate {
   vehicle_other: string | null;
   unit_number: string | null;
   stock_number?: string | null;
+  end_user?: string | null;
   vehicle_platform_id: string | null;
   // Migration 410: the template-library pick.
   vehicle_template_id?: string | null;
@@ -990,6 +991,7 @@ export default function EstimatesPage() {
   }, [vin]);
   const [unitNumber, setUnitNumber] = useState('');
   const [stockNumber, setStockNumber] = useState('');
+  const [endUser, setEndUser] = useState('');
   // N4-A: the visual faceted catalog browser (Ranger-style pick-from-list).
   const [showCatalogBrowser, setShowCatalogBrowser] = useState(false);
   const [showRackKits, setShowRackKits] = useState(false);
@@ -1496,7 +1498,7 @@ export default function EstimatesPage() {
   const draftFields = {
     editingId, title, notes, customerId, prospectId, customerName, customerNsId,
     taxRate, taxExempt, vehicleCount, laborRate, laborOverride, discountType, discountInput, discountDescription, lines,
-    vin, unitNumber, stockNumber, vehiclePlatformId, vehicleOther, vehicleOtherMode,
+    vin, unitNumber, stockNumber, endUser, vehiclePlatformId, vehicleOther, vehicleOtherMode,
     vehicleYear, vehicleWheelbase, vehicleRoof, vehicleCab, vehicleBed,
     vehicleTemplateId: vehicleTemplate?.id || null, vehicleMake, vehicleModel,
     installInstructions, onSiteContactName, onSiteContactPhone,
@@ -1585,6 +1587,7 @@ export default function EstimatesPage() {
     setVin(f.vin || '');
     setUnitNumber(f.unitNumber || '');
     setStockNumber(f.stockNumber || '');
+    setEndUser(typeof (f as any).endUser === 'string' ? (f as any).endUser : '');
     setVehiclePlatformId(f.vehiclePlatformId ?? null);
     setVehicleOther(f.vehicleOther || '');
     setVehicleOtherMode(!!f.vehicleOtherMode);
@@ -2382,6 +2385,7 @@ export default function EstimatesPage() {
         vin,
         unit_number: unitNumber,
         stock_number: stockNumber,
+        end_user: endUser,
         po_number: poNumber,
         expiration_date: expirationDate || null,
         fleet_checkin_id: fleetCheckinId,
@@ -3728,6 +3732,7 @@ export default function EstimatesPage() {
     setVin(est.vin || '');
     setUnitNumber(est.unit_number || '');
     setStockNumber(est.stock_number || '');
+    setEndUser(est.end_user || '');
     setVehiclePlatformId(est.vehicle_platform_id || null);
     setVehicleOther(est.vehicle_other || '');
     setVehicleOtherMode(!est.vehicle_platform_id && !!est.vehicle_other);
@@ -4127,6 +4132,7 @@ export default function EstimatesPage() {
     setVin('');
     setUnitNumber('');
     setStockNumber('');
+    setEndUser('');
     setVehiclePlatformId(null);
     setVehicleOther('');
     setVehicleOtherMode(false);
@@ -5273,6 +5279,16 @@ export default function EstimatesPage() {
             placeholder="Stock #"
           />
         </div>
+      </div>
+      <div style={{ marginBottom: '12px', minWidth: 0 }}>
+        <div style={labelStyle}>End user</div>
+        <input
+          style={inputStyle}
+          value={endUser}
+          maxLength={120}
+          onChange={e => setEndUser(e.target.value)}
+          placeholder="Company the work is for, when someone else is billed"
+        />
       </div>
 
       {/* Checked-in vehicle link — ties this estimate to the fleet_checkins

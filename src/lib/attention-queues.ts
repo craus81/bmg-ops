@@ -81,6 +81,13 @@ export const ATTENTION_QUEUES: AttentionQueue[] = [
     count: (s) => countRows(s, 'po_receipts', q => q.eq('ns_status', 'manual_needed')),
   },
   {
+    key: 'so_to_print',
+    label: 'Sales orders to print for the board',
+    feature: 'estimates',
+    path: '/sales-orders/to-print',
+    count: (s) => countRows(s, 'so_print_queue', q => q.eq('status', 'to_print')),
+  },
+  {
     key: 'credit_applications',
     label: 'Credit applications to review',
     feature: 'credit_applications',

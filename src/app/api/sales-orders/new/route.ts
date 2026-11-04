@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { queueNewSalesOrder } from '@/lib/so-print-queue';
 import { createServiceClient } from '@/lib/supabase-service';
 import { profileHasFeature, requireAuth } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
@@ -186,6 +187,13 @@ export async function POST(req: NextRequest) {
     error: null,
     updated_at: new Date().toISOString(),
   }).eq('id', body.requestId);
+
+  // On Jessie's "To print" list for the board (src/lib/so-print-queue.ts). Never throws.
+  await queueNewSalesOrder(service, {
+    soNetsuiteId: result.salesOrderId,
+    soNumber: result.salesOrderNumber || null,
+    customerName: customerName || null,
+  });
 
   // On the Sales orders list now rather than after the next sync (which overwrites it with NetSuite's own row).
   await service.from('netsuite_sales_orders').upsert(mirrorRow({

@@ -6,6 +6,7 @@
  * fetch, so each write is kept on Books → NetSuite feed with NetSuite's answer.
  */
 
+import { endUserBody } from './end-user';
 import OAuth from 'oauth-1.0a';
 import CryptoJS from 'crypto-js';
 import { safeStringLiteral } from './sql-safe';
@@ -1979,6 +1980,8 @@ export async function createSalesOrder(payload: {
   /** Written to custbody_vin_number_ — the same custom field the SuiteQL
    *  reads select as `vin`, so the SO shows the VIN wherever we display it. */
   vin?: string | null;
+  /** The company the work is for (src/lib/end-user.ts), on END_USER_FIELD. */
+  endUser?: string | null;
   lineItems: NsPushLine[];
 }): Promise<{
   success: boolean;
@@ -2003,6 +2006,7 @@ export async function createSalesOrder(payload: {
     item: { items },
     ...(payload.locationId ? { location: { id: payload.locationId } } : {}),
     ...(payload.vin ? { custbody_vin_number_: payload.vin } : {}),
+    ...endUserBody(payload.endUser),
   };
 
   if (payload.orderDate) {

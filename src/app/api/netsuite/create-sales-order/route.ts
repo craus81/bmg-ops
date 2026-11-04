@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { queueNewSalesOrder } from '@/lib/so-print-queue';
 import { createSalesOrder, findCustomer, findItems, findLocation } from '@/lib/netsuite';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
@@ -158,6 +159,12 @@ export async function POST(req: NextRequest) {
     // Non-fatal, and runs even when the PO stamp failed — the SO exists.
     let upfitProject: { id: string; created: boolean } | null = null;
     if (result.salesOrderId) {
+      // On Jessie's "To print" list for the board (src/lib/so-print-queue.ts). Never throws.
+      await queueNewSalesOrder(supabase, {
+        soNetsuiteId: result.salesOrderId,
+        soNumber: result.salesOrderNumber || null,
+        customerName: po.customer || nsCustomer.name || null,
+      });
       const soTotal = Math.round(soLineItems.reduce((s, li) => s + (li.quantity * li.rate || 0), 0) * 100) / 100;
       upfitProject = await ensureUpfitProjectForSo(supabase, {
         netsuiteSoId: result.salesOrderId,
