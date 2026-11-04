@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { jobOrderLinesFromRows, stripStatusPrefix, type JobOrderData } from './job-order';
-import { buildJobOrderPdf, jobOrderFilename } from './job-order-pdf';
+import { buildJobOrderPdf, buildJobOrdersPdf, jobOrderFilename } from './job-order-pdf';
 
 describe('jobOrderLinesFromRows', () => {
   it('flips sales quantities positive and keeps description-only lines', () => {
@@ -50,6 +50,18 @@ describe('buildJobOrderPdf', () => {
     expect(raw).toContain('06U357');
     expect(raw).not.toContain('$');
     expect(raw).not.toMatch(/Rate|Amount|Total/);
+  });
+
+  it('puts several orders in one PDF, each on its own page', () => {
+    const second = { ...data, id: '124', soNumber: 'SO1061', endUser: 'Jerry Kelly', vendorPos: [{ number: '35052221', vendor: 'Masterack' }] };
+    const doc = buildJobOrdersPdf([data, second], { logo: null, printedAt: new Date('2026-11-04T12:00:00Z') });
+    expect(doc.getNumberOfPages()).toBe(2);
+    const raw = doc.output();
+    expect(raw).toContain('SO1060');
+    expect(raw).toContain('SO1061');
+    expect(raw).toContain('Jerry Kelly');
+    expect(raw).toContain('35052221 \\(Masterack\\)');
+    expect(raw).not.toContain('Page 1 of 2');
   });
 
   it('names the file after the SO', () => {
