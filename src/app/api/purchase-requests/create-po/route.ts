@@ -12,6 +12,7 @@ import { locationIdForName } from '@/lib/invoice-location';
 import { normalizeItemNumber } from '@/lib/vendor-po-sync';
 import { loadGenericItems } from '@/lib/generic-lines-server';
 import { centralDate } from '@/lib/central-day';
+import { checkPoItemIds, itemIdFixNote, itemIdProblem } from '@/lib/stale-item-ids';
 
 const supabase = createServiceClient();
 
@@ -103,6 +104,38 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       error: `No NetSuite item id for: ${noItemId.map(r => r.item_number).join(', ')}. Match them in the parts catalog (or cancel those rows) first — a PO line needs the item's internal id.`,
     }, { status: 422 });
+  }
+
+  // A request keeps the item id its part had when it was asked for. If that
+  // item was since deleted and re-created in NetSuite, the dead id fails the
+  // whole PO (stale-item-ids.ts). Check first: a part whose number now
+  // points at exactly one active item uses that id, and is fixed on every
+  // pending request and in the catalog; anything else is refused in plain
+  // words. A failed check doesn't block the PO; NetSuite still has the say.
+  const itemIdFixes: string[] = [];
+  try {
+    const checks = await checkPoItemIds((requests as any[]).map(r => ({ itemId: String(r.netsuite_item_id), itemNumber: r.item_number })));
+    const problems = [...checks.values()].map(itemIdProblem).filter(Boolean) as string[];
+    if (problems.length > 0) {
+      return NextResponse.json({ error: problems.join(' ') }, { status: 422 });
+    }
+    for (const c of checks.values()) {
+      if (c.kind !== 'moved') continue;
+      for (const r of requests as any[]) {
+        if (String(r.netsuite_item_id) === c.oldId) r.netsuite_item_id = c.newId;
+      }
+      const stamp = new Date().toISOString();
+      await supabase.from('purchase_requests')
+        .update({ netsuite_item_id: c.newId, updated_at: stamp })
+        .eq('netsuite_item_id', c.oldId)
+        .eq('status', 'pending');
+      await supabase.from('netsuite_parts')
+        .update({ is_active: false, updated_at: stamp })
+        .eq('netsuite_id', c.oldId);
+      itemIdFixes.push(itemIdFixNote(c));
+    }
+  } catch (err) {
+    console.error('create-po: item id check failed:', err);
   }
 
   // Claim before the NetSuite write: two admins racing the same rows would
@@ -506,5 +539,6 @@ export async function POST(req: NextRequest) {
     suffixError,
     addedToExisting: !!existing,
     raised: existing ? existing.plan.raised.size : 0,
+    itemIdFixes,
   });
 }

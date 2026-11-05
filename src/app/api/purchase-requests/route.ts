@@ -211,9 +211,17 @@ export async function POST(req: NextRequest) {
   // migration-052 note). Exact-normalized match.
   const { data: catalogRows } = await supabase
     .from('netsuite_parts')
-    .select('item_number, netsuite_id, description, display_name, vendor')
+    .select('item_number, netsuite_id, description, display_name, vendor, is_active')
     .in('item_number', itemNumbers);
-  const catalog = new Map((catalogRows || []).map((c: any) => [normalizeItemNumber(c.item_number), c]));
+  // One part number can have two rows when its NetSuite item was deleted and
+  // re-created (the catalog is keyed by NetSuite id): the active one wins,
+  // so a new request never picks up the dead id.
+  const catalog = new Map<string, any>();
+  for (const c of (catalogRows || []) as any[]) {
+    const key = normalizeItemNumber(c.item_number);
+    const had = catalog.get(key);
+    if (!had || (had.is_active === false && c.is_active !== false)) catalog.set(key, c);
+  }
 
   // Vendor fallback: who we LAST bought each item from (the PO mirror) —
   // the catalog's vendor field is blank for most parts. POs first, newest

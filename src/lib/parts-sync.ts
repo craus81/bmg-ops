@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { suiteqlQueryAll } from '@/lib/netsuite';
 import { recordHeartbeat, type HeartbeatResult } from '@/lib/system-health';
 import { runCategorySweep } from '@/lib/part-category-sweep';
+import { findRemovedItemIds } from '@/lib/stale-item-ids';
 import { itemToWrite, netsuiteItemFacts, noteDifferences, readItemRecords, recordsWinForSync, type Seen } from '@/lib/fleetsuite-records';
 
 /**
@@ -536,4 +537,53 @@ export async function syncPartsIncremental(service: SupabaseClient): Promise<Par
     ...(fleetsuite ? { changedInNetsuite: changed.opened } : {}),
   };
   return { ...result, syncStateWrite: await recordHeartbeat(service, 'netsuite_parts', result) };
+}
+
+/**
+ * Retire catalog parts whose NetSuite item was deleted.
+ *
+ * The hourly sync reads only items whose lastmodifieddate moved, and a
+ * deleted item never moves, so its row stayed active forever — and when the
+ * part was re-created under a new id, the catalog held two rows for one
+ * part number, and a request could pick up the dead id (BAK448146, 29866 →
+ * 30068, 2026-11-05). Only the manual full rebuild cleared these. This does
+ * the same for NetSuite-sourced rows, once a day from the hourly cron
+ * (shouldRetireRemovedParts). Manual graphics rows have no netsuite_id and
+ * are never touched.
+ */
+export async function retireRemovedParts(
+  service: SupabaseClient,
+  findRemoved: (ids: string[]) => Promise<string[]> = findRemovedItemIds,
+): Promise<number> {
+  const ids: string[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await service
+      .from('netsuite_parts')
+      .select('netsuite_id')
+      .eq('source', 'netsuite')
+      .eq('is_active', true)
+      .not('netsuite_id', 'is', null)
+      .order('netsuite_id')
+      .range(from, from + 999);
+    if (error) throw new Error(`Couldn’t read the catalog: ${error.message}`);
+    ids.push(...(data || []).map((r: any) => String(r.netsuite_id)));
+    if (!data || data.length < 1000) break;
+  }
+  const removed = await findRemoved(ids);
+  const now = new Date().toISOString();
+  for (const batch of chunk(removed, 200)) {
+    const { error } = await service
+      .from('netsuite_parts')
+      .update({ is_active: false, updated_at: now })
+      .in('netsuite_id', batch);
+    if (error) throw new Error(`Couldn’t retire removed parts: ${error.message}`);
+  }
+  return removed.length;
+}
+
+const CENTRAL_HOUR = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', hourCycle: 'h23' });
+
+/** The hourly cron's 3 AM Central run is the one that also retires deleted parts. */
+export function shouldRetireRemovedParts(at: Date = new Date()): boolean {
+  return Number(CENTRAL_HOUR.format(at)) === 3;
 }

@@ -60,7 +60,7 @@ export function sameVendor(a: string | null | undefined, b: string | null | unde
   return !x || !y || x === y || x.startsWith(y) || y.startsWith(x);
 }
 
-interface Done { number: string; url: string | null; netsuiteId: string | null; suffixError: string | null }
+interface Done { number: string; url: string | null; netsuiteId: string | null; suffixError: string | null; itemIdFixes: string[] }
 
 export default function NewVendorPoModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const supabase = createClient();
@@ -214,6 +214,7 @@ export default function NewVendorPoModal({ onClose, onCreated }: { onClose: () =
         url: po.netsuiteUrl || null,
         netsuiteId: po.poId ? String(po.poId) : null,
         suffixError: po.suffixError || null,
+        itemIdFixes: Array.isArray(po.itemIdFixes) ? po.itemIdFixes : [],
       });
       onCreated();
     } catch (e: any) {
@@ -256,6 +257,7 @@ export default function NewVendorPoModal({ onClose, onCreated }: { onClose: () =
               </a>
             )}
             {done.suffixError && <div style={{ marginTop: '8px', color: '#f59e0b', fontWeight: 700 }}>{done.suffixError}</div>}
+            {done.itemIdFixes.map(note => <div key={note} style={{ marginTop: '8px', color: '#f59e0b', fontWeight: 700 }}>{note}</div>)}
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '14px' }}>
               <button type="button" onClick={onClose}
                 style={{ padding: '8px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 700, background: 'var(--card)', color: theme.textPrimary, border: `1px solid ${theme.border}`, cursor: 'pointer' }}>
