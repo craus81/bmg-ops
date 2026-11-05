@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
-import { syncPartsIncremental } from '@/lib/parts-sync';
+import { retireRemovedParts, shouldRetireRemovedParts, syncPartsIncremental } from '@/lib/parts-sync';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -42,6 +42,19 @@ export async function GET(req: NextRequest) {
   try {
     const result = await syncPartsIncremental(supabase);
 
+    // Once a day: parts whose NetSuite item was deleted. A deleted item never
+    // shows up as modified, so the step above can't see it. Non-fatal.
+    let retired: number | undefined;
+    let retireError: string | undefined;
+    if (shouldRetireRemovedParts() || req.nextUrl.searchParams.get('retire') === '1') {
+      try {
+        retired = await retireRemovedParts(supabase);
+      } catch (err: any) {
+        retireError = err?.message || String(err);
+        console.error('[cron] Retiring removed parts failed:', retireError);
+      }
+    }
+
     if (logId) {
       await supabase.from('parts_sync_log').update({
         status: 'completed',
@@ -50,7 +63,7 @@ export async function GET(req: NextRequest) {
       }).eq('id', logId);
     }
 
-    return NextResponse.json({ status: 'ok', ...result });
+    return NextResponse.json({ status: 'ok', ...result, retired, retireError });
   } catch (err: any) {
     console.error('[cron] Parts sync error:', err.message);
     if (logId) {

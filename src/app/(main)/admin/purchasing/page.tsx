@@ -619,6 +619,7 @@ export default function PurchasingQueuePage() {
               : 'The 2-hourly sync will mirror it into FleetSuite shortly.'}
             {!lastPo.stamped && ' Heads up: the queue rows could not be marked ordered — refresh, and cancel them by hand so they aren’t ordered twice.'}
             {lastPo.suffixError && <span style={{ display: 'block', marginTop: '4px', color: '#f59e0b', fontWeight: 700 }}>{lastPo.suffixError}</span>}
+            {lastPo.itemIdFixes?.map(note => <span key={note} style={{ display: 'block', marginTop: '4px', color: '#f59e0b', fontWeight: 700 }}>{note}</span>)}
             {lastPo.url && (
               <>
                 {' '}

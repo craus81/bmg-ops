@@ -52,6 +52,8 @@ export interface CreatePoResult {
   suffixError?: string | null;
   /** The parts went on an open PO instead of a new one. */
   addedToExisting?: boolean;
+  /** Parts whose old NetSuite item id was switched to the current one. */
+  itemIdFixes?: string[];
 }
 
 /** An open PO with this vendor that can still take parts (vendor-pos GET). */
@@ -160,6 +162,7 @@ export default function CreatePoReviewModal({ vendor, rows, initiallySelected, o
         stamped: !!body.stamped,
         suffixError: body.suffixError || null,
         addedToExisting: !!body.addedToExisting,
+        itemIdFixes: Array.isArray(body.itemIdFixes) ? body.itemIdFixes : [],
       });
     } catch (e: any) {
       setError(`${targetPo ? `Adding to PO ${poLabel(targetPo)}` : 'PO creation'} failed: ${e?.message || 'unknown error'}. Nothing was ordered, and the requests are still in the queue.`);
