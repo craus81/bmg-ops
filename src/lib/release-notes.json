@@ -1,0 +1,1141 @@
+[
+  {
+    "date": "2026-11-06",
+    "kind": "new",
+    "text": "Tap the parts steps on the job progress bar to see which parts are in and which are still coming.",
+    "where": "Job progress bar → Parts ordered / Parts in",
+    "areas": [
+      "everyone"
+    ],
+    "pr": 1454
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
+    "text": "Scan extra parts for each vehicle, like its kit and unit-number decal.",
+    "where": "Scan",
+    "areas": [
+      "shop"
+    ],
+    "pr": 1453
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
+    "text": "Change quantities and prices, or add lines, when you finish a job, then invoice it in one step.",
+    "where": "In-Shop → completion window → Adjust & invoice",
+    "areas": [
+      "admin"
+    ],
+    "pr": 1452
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
+    "text": "Job orders, packing lists and every printed form share the red BMG headings.",
+    "where": "Every printed form",
+    "areas": [
+      "everyone"
+    ],
+    "pr": 1451
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
+    "text": "Emails for POs, sales orders and invoices now attach FleetSuite's own PDF.",
+    "where": "✉ Email on any PO, sales order or invoice",
+    "areas": [
+      "sales",
+      "purchasing"
+    ],
+    "pr": 1449
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
+    "text": "Create a sales order right from the In-Shop vehicle card, or copy one from an old sales order, invoice or estimate.",
+    "where": "In-Shop → vehicle card → + Create Sales Order",
+    "areas": [
+      "sales",
+      "shop"
+    ],
+    "pr": 1447
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
+    "text": "Sales orders turn green when every part is on a vendor PO or in stock.",
+    "where": "Sales → Sales orders",
+    "areas": [
+      "sales",
+      "purchasing"
+    ],
+    "pr": 1446
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
+    "text": "Change a vendor PO in FleetSuite: quantities, prices, dates, ship-to, or move parts to another vendor.",
+    "where": "More → Purchase Orders → ✎ Edit PO",
+    "areas": [
+      "purchasing"
+    ],
+    "pr": 1445
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
+    "text": "FleetSuite AI can now explain 19 newer features step by step.",
+    "where": "Ask FleetSuite AI \"how do I…\"",
+    "areas": [
+      "everyone"
+    ],
+    "pr": 1444
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
+    "text": "When FleetSuite AI can't help, it sends your question to Craig as a request.",
+    "where": "FleetSuite AI chat, on every page",
+    "areas": [
+      "everyone"
+    ],
+    "pr": 1443
+  },
+  {
+    "date": "2026-11-05",
+    "kind": "new",
+    "text": "A progress bar shows where every job is, from Submitted to Complete.",
+    "where": "Estimates, sales orders, graphics jobs and the In-Shop card",
+    "areas": [
+      "everyone"
+    ],
+    "pr": 1442
+  },
+  {
+    "date": "2026-11-05",
+    "kind": "new",
+    "text": "Job Stages board: every open job by step.",
+    "where": "More → Job Stages",
+    "areas": [
+      "sales",
+      "shop",
+      "graphics"
+    ],
+    "pr": 1442
+  },
+  {
+    "date": "2026-11-05",
+    "kind": "fix",
+    "text": "POs no longer fail when NetSuite has deleted a part's old item number.",
+    "where": "Parts ordering → Create PO",
+    "areas": [
+      "purchasing"
+    ],
+    "pr": 1441
+  },
+  {
+    "date": "2026-11-04",
+    "kind": "new",
+    "text": "Tick several sales orders and print them as one PDF.",
+    "where": "More → To Print → Print N selected",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1440
+  },
+  {
+    "date": "2026-11-04",
+    "kind": "new",
+    "text": "Every new sales order lands in To Print so the board copy gets printed.",
+    "where": "More → To Print",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1439
+  },
+  {
+    "date": "2026-11-04",
+    "kind": "new",
+    "text": "New End user box on estimates and sales orders.",
+    "where": "Estimate and sales order pages",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1439
+  },
+  {
+    "date": "2026-11-03",
+    "kind": "new",
+    "text": "The stock a credit memo puts back posts from Books' own copy.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1437
+  },
+  {
+    "date": "2026-11-03",
+    "kind": "new",
+    "text": "A credit memo FleetSuite made posts from Books' own copy.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1436
+  },
+  {
+    "date": "2026-11-03",
+    "kind": "new",
+    "text": "An invoice's cost posts from FleetSuite's own copy.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1435
+  },
+  {
+    "date": "2026-11-03",
+    "kind": "new",
+    "text": "Mistake checks look at bill credits, card refunds and journal entries.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1434
+  },
+  {
+    "date": "2026-11-03",
+    "kind": "new",
+    "text": "A PO's other lines, like freight, on FleetSuite's copy and its bills.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1433
+  },
+  {
+    "date": "2026-11-03",
+    "kind": "new",
+    "text": "Each line of an own fulfillment from where NetSuite takes it.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1432
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Update prices from an Excel or CSV file, and see a nightly list of prices that don't match NetSuite.",
+    "where": "More → Part setup → Update Prices",
+    "areas": [
+      "admin"
+    ],
+    "pr": 1431
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "A kit's parts on FleetSuite's own fulfillments.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1430
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Shipping and handling NetSuite adds to an invoice.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1429
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Which company a PO is for.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1428
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Parts Mail asks NetSuite before making a bill.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1427
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Dates on O'Fallon's day, not UTC's.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1426
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "How the books work, written down.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1425
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Two-step sign-in for money roles.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1424
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Change history on the money tables.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1423
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "The nightly restore drill.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1422
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Nightly backups of FleetSuite's books.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1421
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "FleetSuite AI on FleetSuite's books, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1420
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "The portal's billing on FleetSuite's books, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1419
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Financial History on FleetSuite's books, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1418
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Home → Financials on FleetSuite's books, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1417
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "The CPA's yearly entries on Year end and in the year-end package.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1416
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Each bank account's reconciliation at December 31 in the year-end package.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1415
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Each customer's and vendor's balance at December 31 in the year-end package.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1414
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "The general ledger in the year-end package.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1413
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "The year-end package, a company's year for the CPA in one Excel file.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1412
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Year end, each company's year closed into retained earnings.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1411
+  },
+  {
+    "date": "2026-11-02",
+    "kind": "new",
+    "text": "Report builder lines by customer and vendor, moving months and saved reports.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1410
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Report builder, FleetSuite's P&L by division, location, month, quarter or year.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1409
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Cash flow statement on Reports, laid out as NetSuite's Statement of Cash Flows.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1408
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "File the 1099s, who gets a 1099-NEC or MISC and the IRS's IRIS file made on the device.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1407
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Counts, count sheets by location, a variance review and one approved adjustment, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1406
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "FleetSuite's own invoice PDF, attached to NetSuite's invoice, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1405
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "FleetSuite's own numbers on sales orders, POs, invoices and credit memos, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1404
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Own invoices taxed at each location's dated rate, and a warning at billing when an exempt customer's certificate has expired.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1403
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Missouri sales tax worksheet, dated rates per location, and each return held against it.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1402
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Inventory value at a month's end, tied to the inventory accounts.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1401
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Inventory adjustments approved before they're posted, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1400
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "1084's bank reconciliation, statement by statement.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1399
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "1084's rent and mortgage, month by month.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1398
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "The First Bank ACH file.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1397
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Keep vendor bank numbers encrypted, confirmed on a call-back.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1396
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Print a payment run's checks on BMG's check stock.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1395
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Pay vendors in payment runs with a second approver, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1394
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Make bank deposits from Undeposited Funds, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1393
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Take check and ACH deposits on sales orders, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1392
+  },
+  {
+    "date": "2026-11-01",
+    "kind": "new",
+    "text": "Receive check and ACH payments in FleetSuite, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1391
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "The CPA's own adjustments journal.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1390
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "A bookkeeper and a CPA login for the books.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1389
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "NetSuite's 1099 report next to FleetSuite's totals.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1388
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "The 1099 dry run, each vendor's 1099 totals from the NetSuite copy.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1387
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "FleetSuite's record wins for items too, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1386
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "FleetSuite's record wins for customers and vendors, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1385
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Estimates stay in FleetSuite, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1384
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "An item's accounts changed in FleetSuite, switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1383
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "The NetSuite feed, every send to NetSuite kept with its answer.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1382
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Close a month in FleetSuite's books, reopen it for a reason.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1381
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Go live on the tap, opening entry posted once live.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1380
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "fix",
+    "text": "The button that drops your edits now reads \"Leave without saving\" instead of \"Cancel\".",
+    "where": "Top Save bar",
+    "areas": [
+      "everyone"
+    ],
+    "pr": 1379
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "fix",
+    "text": "The vendor list copy refreshes again, and System Health watches it.",
+    "where": "More → System Health",
+    "areas": [
+      "admin"
+    ],
+    "pr": 1378
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "The Sent box shows the approval send for fleet and batch estimates.",
+    "where": "Sent Emails",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1377
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Going live page with the opening entry and a rehearsal.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1376
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Make a new sales order from nothing.",
+    "where": "Sales orders → + New",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1375
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "fix",
+    "text": "Items starting with 06 are treated as untaxed services.",
+    "where": "Estimates, sales orders and invoices",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1374
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Customer and vendor details changed in FleetSuite and sent on to NetSuite, built switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1373
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "See if, when and to whom every document was sent.",
+    "where": "Estimates, sales orders and invoices",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1372
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Bills fixed in FleetSuite and sent on to NetSuite, built switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1371
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Invoices fixed in FleetSuite and sent on to NetSuite, built switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1370
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Inventory transfers made in FleetSuite and sent on to NetSuite, built switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1369
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Journal entries typed in FleetSuite, approved, and sent on to NetSuite, built switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1368
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Chase card charges coded in FleetSuite and sent to NetSuite as a journal entry a month, built switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1367
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Vendor credits entered in FleetSuite and applied to the vendor's open bills, built switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1366
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Credit memos made in FleetSuite against an invoice, built switched off.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1365
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "On hand, available and on order show wherever parts are requested.",
+    "where": "Part requests",
+    "areas": [
+      "sales",
+      "shop",
+      "purchasing"
+    ],
+    "pr": 1364
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Fulfill & Invoice from the sales order page, with Print and Email on each invoice.",
+    "where": "Sales order page → Fulfill & Invoice",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1363
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Estimates get Approved, Parts ordered and Parts in stock tags, with a green banner.",
+    "where": "Estimates list and estimate page",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1362
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "New Sales and Purchasing groups in More, each with List and + New, plus a Sales orders list.",
+    "where": "More",
+    "areas": [
+      "sales",
+      "purchasing"
+    ],
+    "pr": 1361
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "fix",
+    "text": "Misc lines become one row, one request, one PO line and one receipt each.",
+    "where": "Parts ordering and Receiving",
+    "areas": [
+      "purchasing"
+    ],
+    "pr": 1360
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Set Miscellaneous labor on one estimate line.",
+    "where": "Estimate → line → Misc labor",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1359
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Invoices show their linked sales order on the estimate and its vehicles.",
+    "where": "Estimate page",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1358
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Excel downloads of each report and an account line's documents.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1357
+  },
+  {
+    "date": "2026-10-31",
+    "kind": "new",
+    "text": "Type your own vinyl, laminate and premask on graphics jobs.",
+    "where": "Graphics job → Materials",
+    "areas": [
+      "graphics"
+    ],
+    "pr": 1356
+  },
+  {
+    "date": "2026-10-30",
+    "kind": "new",
+    "text": "After you create a graphics job from an estimate, you land back on the estimate.",
+    "where": "Estimate → + Graphics job",
+    "areas": [
+      "sales",
+      "graphics"
+    ],
+    "pr": 1355
+  },
+  {
+    "date": "2026-10-30",
+    "kind": "new",
+    "text": "One Save bar pinned at the top of long forms and transactions.",
+    "where": "Estimates, sales orders, POs and long forms",
+    "areas": [
+      "everyone"
+    ],
+    "pr": 1354
+  },
+  {
+    "date": "2026-10-30",
+    "kind": "new",
+    "text": "AR and AP agings next to NetSuite's.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1353
+  },
+  {
+    "date": "2026-10-30",
+    "kind": "new",
+    "text": "Own adjustments, Inventory Adjusts checked against NetSuite's and posted from FleetSuite's copy.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1352
+  },
+  {
+    "date": "2026-10-30",
+    "kind": "new",
+    "text": "Post FleetSuite's own fulfillments, receipts and bills.",
+    "where": "More → Books",
+    "areas": [
+      "books"
+    ],
+    "pr": 1351
+  },
+  {
+    "date": "2026-10-30",
+    "kind": "new",
+    "text": "Match to a real part shows the best matches first, with Show more.",
+    "where": "Estimate → Match to a real part",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1350
+  },
+  {
+    "date": "2026-10-30",
+    "kind": "fix",
+    "text": "The graphics check on Convert to SO now counts fleet-order graphics jobs.",
+    "where": "Estimate → Convert to SO",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1349
+  },
+  {
+    "date": "2026-10-30",
+    "kind": "new",
+    "text": "Add parts to a vendor PO that's still open, right from the purchasing queue.",
+    "where": "More → Purchase Requests",
+    "areas": [
+      "purchasing"
+    ],
+    "pr": 1348
+  },
+  {
+    "date": "2026-10-30",
+    "kind": "new",
+    "text": "Tracking numbers on POs: shown on the PO page, searchable, and jobs link to their PO.",
+    "where": "Purchase Orders → open a PO",
+    "areas": [
+      "purchasing"
+    ],
+    "pr": 1347
+  },
+  {
+    "date": "2026-10-29",
+    "kind": "new",
+    "text": "Inventory Adjust button, and stock now comes from NetSuite every 15 minutes.",
+    "where": "More → Inventory → Adjust",
+    "areas": [
+      "purchasing"
+    ],
+    "pr": 1346
+  },
+  {
+    "date": "2026-10-29",
+    "kind": "new",
+    "text": "Requests: report a problem, ask for a feature or ask a question. FleetSuite AI answers there.",
+    "where": "More → Requests, or the card at the bottom of Home",
+    "areas": [
+      "everyone"
+    ],
+    "pr": 1345
+  },
+  {
+    "date": "2026-10-29",
+    "kind": "new",
+    "text": "👀 alerts open the estimate and say who opened it.",
+    "where": "Bell → 👀 estimate opened",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1344
+  },
+  {
+    "date": "2026-10-29",
+    "kind": "new",
+    "text": "Estimates check labor and freight before they're sent.",
+    "where": "Estimate → Send",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1343
+  },
+  {
+    "date": "2026-10-29",
+    "kind": "new",
+    "text": "Make several email PDFs at once. If one fails, the real reason shows in red.",
+    "where": "✉ Email on estimates, sales orders and invoices",
+    "areas": [
+      "sales"
+    ],
+    "pr": 1342
+  },
+  {
+    "date": "2026-10-29",
+    "kind": "fix",
+    "text": "Two part numbers typed into one scan box now split into one line per part.",
+    "where": "Scan",
+    "areas": [
+      "shop"
+    ],
+    "pr": 1341
+  }
+]

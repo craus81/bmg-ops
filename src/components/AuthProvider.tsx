@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase-browser';
 import type { User } from '@supabase/supabase-js';
 import type { Profile } from '@/lib/types';
+import type { WhatsNewSeen } from '@/lib/release-notes';
 import { resolveFeatures, isAdminRole, type FeatureKey, type RoleFeatureSetting } from '@/lib/features';
 import { forgetSiriKey } from '@/lib/siri-bridge';
 import { apiFetch } from '@/lib/api-client';
@@ -43,6 +44,8 @@ interface AuthContextType {
   saveNavTabs: (ids: string[] | null, which?: 'bar' | 'open') => Promise<void>;
   /** Fold a page section shut (or open) for this user, saved on their profile. */
   setSectionCollapsed: (key: string, collapsed: boolean) => void;
+  /** Mark a What's new release seen on the page, popup or banner (migration 522). */
+  markWhatsNewSeen: (patch: WhatsNewSeen) => void;
   /** What this sign-in still owes for two-step sign-in (src/lib/two-step.ts),
    *  or null. AppShell shows its screen before anything else. */
   twoStep: TwoStepNeed | null;
@@ -57,7 +60,7 @@ function sameJson(a: unknown, b: unknown) {
 const AuthContext = createContext<AuthContextType>({
   user: null, profile: null, isAdmin: false, isProduction: false, isGraphicsProduction: false, isSales: false, isCustomer: false, isInstaller: false, isFieldTech: false, isShopTech: false, canSeeMoney: false, hasRole: () => false, hasFeature: () => false, loading: true, signOut: async () => {},
   viewAsRole: null, setViewAsRole: () => {}, isActualAdmin: false,
-  profileError: false, retryProfile: async () => {}, saveNavTabs: async () => {}, setSectionCollapsed: () => {},
+  profileError: false, retryProfile: async () => {}, saveNavTabs: async () => {}, setSectionCollapsed: () => {}, markWhatsNewSeen: () => {},
   twoStep: null, recheckTwoStep: async () => {},
 });
 
@@ -225,6 +228,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  // What's new (migration 522): which release this person has seen on the
+  // page, the popup and the banner. Same ref + one-at-a-time writes as the
+  // collapsed sections, so closing the popup and opening the page together
+  // can't drop one of the two.
+  const seenRef = useRef<WhatsNewSeen | null>(null);
+  seenRef.current = profile?.whats_new_seen ?? null;
+  const seenWrite = useRef<Promise<unknown>>(Promise.resolve());
+  const markWhatsNewSeen = (patch: WhatsNewSeen) => {
+    if (!user) return;
+    const cur = seenRef.current || {};
+    const next: WhatsNewSeen = { ...cur };
+    let changed = false;
+    for (const k of ['page', 'popup', 'banner'] as const) {
+      const v = patch[k];
+      if (v && (!cur[k] || v > (cur[k] as string))) { next[k] = v; changed = true; }
+    }
+    if (!changed) return;
+    seenRef.current = next;
+    setProfile(p => (p ? { ...p, whats_new_seen: next } : p));
+    seenWrite.current = seenWrite.current.then(async () => {
+      const { error } = await supabase.from('profiles').update({ whats_new_seen: next }).eq('id', user.id);
+      if (error) console.warn("Could not save What's new:", error.message);
+    });
+  };
+
   // Self-healing. A shop tablet whose wifi drops usually gets it back in
   // under a minute, and nobody on the floor should have to know to press
   // Retry. While the profile read is failing: retry on a backoff (2s, 4s …
@@ -380,7 +408,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authResolving = loading || profileError;
 
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile, saveNavTabs, setSectionCollapsed, twoStep, recheckTwoStep }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isProduction, isGraphicsProduction, isSales, isCustomer, isInstaller, isFieldTech, isShopTech, canSeeMoney, hasRole, hasFeature, loading: authResolving, signOut, viewAsRole, setViewAsRole, isActualAdmin, profileError, retryProfile, saveNavTabs, setSectionCollapsed, markWhatsNewSeen, twoStep, recheckTwoStep }}>
       {profileError && (
         <div role="alert" style={{
           position: 'sticky', top: 0, zIndex: 60, padding: '9px 14px',

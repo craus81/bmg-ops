@@ -10,6 +10,7 @@ import { DialogProvider } from '@/components/DialogProvider';
 import Header from '@/components/Header';
 import BottomNav from '@/components/BottomNav';
 import AiChat from '@/components/AiChat';
+import { WhatsNewPopup } from '@/components/WhatsNew';
 import NativeLinkHandler from '@/components/NativeLinkHandler';
 import NativePushHandler from '@/components/NativePushHandler';
 import NativeSiriKey from '@/components/NativeSiriKey';
@@ -142,6 +143,7 @@ function AppShell({ children, pane }: { children: React.ReactNode; pane: boolean
       )}
       <BottomNav />
       <AiChat />
+      <WhatsNewPopup />
     </div>
   );
 }

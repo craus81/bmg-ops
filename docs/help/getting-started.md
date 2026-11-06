@@ -144,6 +144,18 @@ Someone already asked for the same thing? Tap **Me too** on their request instea
 
 ---
 
+## See what's new in FleetSuite
+
+Every day that something new goes live is a **release**, numbered by the date. For example, release **2026.11.06** went live November 6, 2026.
+
+- The first time you open FleetSuite after a new release, a **What's new** box shows the main changes. Tap **Got it** to close it, or **See all changes** to read the whole list.
+- A navy banner at the top of **Home** says how many new things there are. Tap **See what's new**, or tap **✕** to hide it until the next release.
+- A red dot on **More** means there's a release you haven't opened yet. Tap **More → What's new** (at the top, next to Requests) to see every release, newest first. **New** means a new feature and **Fixed** means a bug fix. Each line says where to find it.
+
+You only see the changes for the parts of the app you use. Books changes are folded into one line; tap it to open the list. Ask FleetSuite AI "what's new this week?" for the same list in words.
+
+---
+
 ## Ask FleetSuite AI
 
 Tap the round mascot button in the corner of any page. Ask in plain words, for example "What vehicles are in the shop right now?" or "How do I send an estimate for approval?". It reads FleetSuite's own data and these help guides.

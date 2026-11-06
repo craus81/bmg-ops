@@ -14,6 +14,7 @@ import { MORE_GROUPS, orderMoreGroups, searchMorePages, type MoreGroupId } from 
 import { deepLinks } from '@/lib/deep-links';
 import { booksAccess } from '@/lib/books/access';
 import { ASSISTANT_NAME } from '@/lib/assistant-name';
+import { useWhatsNew, WHATS_NEW_PATH } from '@/components/WhatsNew';
 
 export default function MorePage() {
   const router = useRouter();
@@ -245,13 +246,16 @@ export default function MorePage() {
   // Requests (Craig, 2026-10-30): top of More, for everyone, outside the
   // folding groups so it's never hidden. Search finds it too.
   const requestsItem: Item = { title: 'Requests', sub: `Report a problem, ask for a feature or ask a question · ${ASSISTANT_NAME} answers there`, path: '/requests', show: true };
+  // What's new (Craig, 2026-11-06): next to Requests, with "New" until opened.
+  const whatsNew = useWhatsNew();
+  const whatsNewItem: Item = { title: "What's new", sub: 'New features and fixes, one release a day · only what touches your work', path: WHATS_NEW_PATH, show: !customerOnly, pill: whatsNew.unseenPage ? 'New' : undefined };
 
   // The person's own area first: the same focus that shapes their Dashboard.
   const focus = resolveDashboardFocus(profile?.dashboard_focus, {
     isAdmin, sales: hasRole('sales'), finance: hasRole('finance'), executive: hasRole('executive'),
   });
   const groupOrder = orderMoreGroups(focus);
-  const results = searchMorePages([...visible, { ...requestsItem, group: 'you' as MoreGroupId }], query);
+  const results = searchMorePages([...visible, { ...requestsItem, group: 'you' as MoreGroupId }, ...(whatsNewItem.show ? [{ ...whatsNewItem, group: 'you' as MoreGroupId }] : [])], query);
   const searching = query.trim().length > 0;
   const headerOf = (id: MoreGroupId) => MORE_GROUPS.find(g => g.id === id)?.header ?? '';
 
@@ -304,7 +308,8 @@ export default function MorePage() {
               {unknownQueues.length} queue{unknownQueues.length === 1 ? '' : 's'} could not be counted just now — those rows show no badge, which is not the same as empty.
             </div>
           )}
-          <div style={{ marginBottom: '20px' }}>
+          <div style={{ marginBottom: '20px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {whatsNewItem.show && <MenuRow item={whatsNewItem} onOpen={() => router.push(whatsNewItem.path)} />}
             <MenuRow item={requestsItem} onOpen={() => router.push(requestsItem.path)} />
           </div>
           {groupOrder.map(id => {
@@ -401,7 +406,7 @@ export default function MorePage() {
  * gets a List button, and a New button when `newPath` says where a new one
  * starts (Craig, 2026-10-31).
  */
-interface Item { title: string; sub: string; path: string; show: boolean; badge?: number; list?: boolean; newPath?: string }
+interface Item { title: string; sub: string; path: string; show: boolean; badge?: number; list?: boolean; newPath?: string; pill?: string }
 
 /**
  * One More category. Its header folds it, saved per user like the other
@@ -453,6 +458,7 @@ function MenuRow({ item, groupLabel, onOpen }: { item: Item; groupLabel?: string
         <button type="button" onClick={() => onOpen(item.path)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: '8px', padding: '13px 0 13px 16px', background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer' }}>
           <span style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)', letterSpacing: '-0.2px' }}>{item.title}</span>
           {groupLabel && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{groupLabel}</span>}
+          {item.pill && <span style={{ fontSize: '11px', fontWeight: 800, background: '#ef4444', color: '#fff', borderRadius: '999px', padding: '2px 8px' }}>{item.pill}</span>}
         </button>
         {item.badge ? <Badge n={item.badge} /> : null}
         {item.list && (

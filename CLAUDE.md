@@ -51,6 +51,25 @@ everyone. Write steps with the exact button and menu names. The build
 loads the guides on every production deploy (`scripts/sync-help-docs.mjs
 --deploy`), so nothing else is needed. (Craig, 2026-11-06.)
 
+## Release notes ship with every change
+
+Staff read what's new on **More → What's new**, a dashboard banner and a
+one-time popup (Craig, 2026-11-06). Every PR that changes something staff
+see adds its line(s) to `src/lib/release-notes.json` in the same PR:
+
+- `date`: the O'Fallon (America/Chicago) day it goes live, `YYYY-MM-DD`.
+  All lines with the same date are one release, numbered `2026.11.06`.
+- `kind`: `new` or `fix`. `text`: one plain-English sentence ending in a
+  period, from the user's side of the screen (no code names, never
+  "Claude"). `where`: the menu path or button to find it.
+- `areas`: who sees it: `everyone`, `sales`, `purchasing`, `shop`,
+  `graphics`, `admin`, `books` (see `canSeeArea` in
+  src/lib/release-notes.ts). `pr`: the PR number when known.
+
+Then regenerate the AI's copy, `docs/help/whats-new.md`:
+`UPDATE_WHATS_NEW=1 npx vitest run src/lib/release-notes.test.ts` (the
+test fails until it matches). Test-only and internal changes get no line.
+
 ## Git workflow
 
 Pushes to `main` are currently broken (the local git proxy returns
