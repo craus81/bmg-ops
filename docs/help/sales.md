@@ -274,6 +274,17 @@ On **Estimates**, use the **Not sent** or **Bounced** filter. On **Invoices**, u
 2. Pick the customer, type the lines (any item), and add a ship-to if needed.
 3. Save. FleetSuite makes the sales order in NetSuite and opens its page.
 
+To start from an old job, tap **⧉ Copy from…** above the lines. It lists the customer's sales orders, invoices and estimates (or type a number or another customer). Tap one and its items and labor hours come in at **today's** prices. Discounts, and parts no longer in the catalog, are left off and named so you can pick a replacement. Change anything before you save.
+
+## Make a sales order for a checked-in vehicle
+
+1. On **In-Shop**, open the vehicle card.
+2. Under the sales order box, tap **+ Create Sales Order** (below **+ Link Sales Order**).
+3. The customer, VIN and van are filled in. Add lines, or use **⧉ Copy from…**.
+4. Tap **Create sales order**. It's linked to the vehicle and you're back on the card, ready for **Job Order** and invoicing.
+
+Use **+ Link Sales Order** instead when the order already exists in NetSuite.
+
 ---
 
 ## Use Outreach
