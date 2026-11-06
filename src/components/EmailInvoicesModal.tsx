@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Email NetSuite invoice PDFs to a customer — the same flow as the Scans
+ * Email invoice PDFs (FleetSuite's own, src/lib/sales-pdf.ts) to a customer — the same flow as the Scans
  * admin page: recipients prefill from the customer's saved billing emails,
  * the message body is editable, PDFs can be verified before sending, and a
  * test send goes to the signed-in user. Recipients that work are merged back
@@ -364,7 +364,7 @@ export default function EmailInvoicesModal({ customerName, customerNetsuiteId, i
               <button
                 onClick={verifyInvoices}
                 disabled={verifying || includedCount === 0}
-                title="Checks that each invoice's PDF can be generated in NetSuite — click a row's 'view' to open one"
+                title="Checks that each invoice's PDF can be made — click a row's 'view' to open one"
                 style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '9px', fontWeight: 700, background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.25)', color: '#fbbf24', cursor: verifying || includedCount === 0 ? 'not-allowed' : 'pointer', opacity: verifying || includedCount === 0 ? 0.5 : 1 }}
               >
                 {verifying ? 'Verifying...' : 'Verify PDFs'}

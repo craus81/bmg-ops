@@ -32,6 +32,8 @@ const netsuite = vi.hoisted(() => ({
   transactionUrl: vi.fn((page: string, id: string | number) => `https://ns.example/${page}/${id}`),
 }));
 vi.mock('@/lib/netsuite', () => ({ ...netsuite, isSuiteqlError: () => false, suiteqlQuery: vi.fn() }));
+// The portal's invoice PDFs are FleetSuite's own now (sales-pdf-server.ts); routed through the same mock so the calls read as before.
+vi.mock('@/lib/sales-pdf-server', () => ({ getFleetSuiteInvoicePdf: (_svc: unknown, id: string) => netsuite.getNetSuitePdf('invoice', id) }));
 const statement = vi.hoisted(() => ({ fetchStatementInvoices: vi.fn() }));
 vi.mock('@/lib/financials-data', async (actual) => ({ ...(await actual<object>()), ...statement }));
 const pdfs = vi.hoisted(() => ({ generateStatementPdf: vi.fn() }));

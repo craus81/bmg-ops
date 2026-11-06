@@ -27,6 +27,8 @@ export interface TransactionPdfLine {
   rate: number | null;
   /** What the line comes to, a discount negative. */
   cents: number;
+  /** A description-only line: no amount shown. */
+  textOnly?: boolean;
 }
 
 export interface TransactionPdfData {
@@ -45,6 +47,8 @@ export interface TransactionPdfData {
   taxLabel?: string;
   /** Freight / shipping, when the transaction has some. */
   shippingCents?: number | null;
+  /** An order-level discount, negative. */
+  discountCents?: number | null;
   totalCents: number;
   memo: string | null;
   /** NetSuite voided, closed or cancelled it. */
@@ -260,8 +264,9 @@ export function buildFormPdf(data: FormPdfData, into?: jsPDF): jsPDF {
 export function buildTransactionPdf(data: TransactionPdfData): jsPDF {
   const companyName = pageText(data.letterhead?.company?.name || 'BMG Fleet Installations');
   const foot: { label: string; value: string; bold?: boolean }[] = [];
-  const hasExtras = data.taxCents !== null || !!data.shippingCents;
+  const hasExtras = data.taxCents !== null || !!data.shippingCents || !!data.discountCents;
   if (hasExtras) foot.push({ label: 'Subtotal', value: usd(data.subtotalCents) });
+  if (data.discountCents) foot.push({ label: 'Discount', value: usd(data.discountCents) });
   if (data.shippingCents) foot.push({ label: 'Shipping', value: usd(data.shippingCents) });
   if (data.taxCents !== null) foot.push({ label: data.taxLabel || 'Sales tax', value: usd(data.taxCents) });
   foot.push({ label: 'Total', value: usd(data.totalCents), bold: true });
@@ -281,7 +286,7 @@ export function buildTransactionPdf(data: TransactionPdfData): jsPDF {
         l.description ?? '',
         l.quantity === null ? '' : qtyText(l.quantity),
         l.rate === null ? '' : rateText(l.rate),
-        usd(l.cents),
+        l.textOnly ? '' : usd(l.cents),
       ]),
       right: [2, 3, 4],
       widths: { 0: 90, 2: 48, 3: 70, 4: 80 },

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getFleetSuiteInvoicePdf } from '@/lib/sales-pdf-server';
 import { createServiceClient } from '@/lib/supabase-service';
-import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
+import { suiteqlQuery } from '@/lib/netsuite';
 import { sendEmailDetailed, buildInvoiceEmail } from '@/lib/resend';
 import { getEmailSignature } from '@/lib/email-signature';
 import { deepLinks } from '@/lib/deep-links';
@@ -147,7 +148,7 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      const result = await getNetSuitePdf('invoice', invoiceId);
+      const result = await getFleetSuiteInvoicePdf(createServiceClient(), invoiceId);
       if (result.success && result.pdfBase64) {
         attachments.push({
           filename: result.filename || `Invoice_${inv.invoiceNumber}.pdf`,

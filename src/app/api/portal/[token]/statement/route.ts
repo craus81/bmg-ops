@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getFleetSuiteInvoicePdf } from '@/lib/sales-pdf-server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { checkRateLimit, getRequestIp } from '@/lib/magic-link-approval';
 import { resolvePortalCustomer } from '@/lib/portal-token';
 import { loadPortalBilling } from '@/lib/portal-billing';
 import { generateStatementPdf } from '@/lib/statement-pdf-server';
 import { statementPdfFilename } from '@/lib/statement-pdf-doc';
-import { getNetSuitePdf } from '@/lib/netsuite';
 import { sendEmail } from '@/lib/resend';
 
 export const dynamic = 'force-dynamic';
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest, { params }: { params: { token: stri
       .sort((a, b) => b.daysPastDue - a.daysPastDue || (a.date || '').localeCompare(b.date || ''))
       .slice(0, MAX_ATTACH);
     for (const inv of toAttach) {
-      const invPdf = await getNetSuitePdf('invoice', String(inv.id));
+      const invPdf = await getFleetSuiteInvoicePdf(service, String(inv.id));
       if (invPdf.success && invPdf.pdfBase64) {
         attachments.push({
           filename: invPdf.filename || `Invoice_${inv.tranid}.pdf`,
