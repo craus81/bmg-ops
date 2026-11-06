@@ -17,6 +17,7 @@ import { apiFetch } from '@/lib/api-client';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { deepLinks } from '@/lib/deep-links';
 import { flashNote } from '@/lib/focus-note';
+import { ASSISTANT_NAME } from '@/lib/assistant-name';
 
 interface Target {
   id: string;
@@ -410,7 +411,7 @@ export default function OutreachPage() {
       </div>
       <div style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: '14px', lineHeight: 1.5, maxWidth: '72ch' }}>
         Every Monday each sales rep gets {view?.batchSize || 25} companies BMG has never worked with, within 100 miles of O&apos;Fallon:
-        fleets from the federal DOT carrier list and trade contractors from Google business listings. Claude writes a short first
+        fleets from the federal DOT carrier list and trade contractors from Google business listings. {ASSISTANT_NAME} writes a short first
         email for each from their record and website. You read it, fix anything, and send it under your name. Nothing sends by itself.
       </div>
 
@@ -522,8 +523,8 @@ export default function OutreachPage() {
               </label>
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
                 {followUpMode
-                  ? <>Claude wrote this follow-up from your first email, since they haven&apos;t answered. Read it and fix anything that isn&apos;t right before you send. It goes out from you with the same Pick a time / Call me buttons, your signature, BMG&apos;s address and an unsubscribe link.</>
-                  : <>Claude wrote this from {composing.source === 'dot' ? 'their DOT record' : 'their Google listing'}{composing.website ? ' and website' : ''}. Read it and fix anything that isn&apos;t right before you send.
+                  ? <>{ASSISTANT_NAME} wrote this follow-up from your first email, since they haven&apos;t answered. Read it and fix anything that isn&apos;t right before you send. It goes out from you with the same Pick a time / Call me buttons, your signature, BMG&apos;s address and an unsubscribe link.</>
+                  : <>{ASSISTANT_NAME} wrote this from {composing.source === 'dot' ? 'their DOT record' : 'their Google listing'}{composing.website ? ' and website' : ''}. Read it and fix anything that isn&apos;t right before you send.
                     It goes out from you, with your signature, BMG&apos;s address and an unsubscribe link. Sending adds {composing.company_name} to Prospects.</>}
               </div>
             </div>

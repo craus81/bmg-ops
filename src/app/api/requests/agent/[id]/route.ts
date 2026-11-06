@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase-service';
 import { validateBody, z } from '@/lib/validate';
 import { AGENT_STATUSES } from '@/lib/app-requests';
 import { REQUEST_SELECT, alertRequestUpdate, authenticateRequestsAgent, isUuid, type RequestRow } from '@/lib/app-requests-server';
+import { ASSISTANT_NAME } from '@/lib/assistant-name';
 
 export const dynamic = 'force-dynamic';
 
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (tell) {
     await alertRequestUpdate(service, {
       request: (updated as RequestRow) || request,
-      authorName: 'Claude',
+      authorName: ASSISTANT_NAME,
       actorId: null,
       message: body.reply || null,
       status,

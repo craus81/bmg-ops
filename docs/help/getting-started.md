@@ -120,8 +120,11 @@ The icon appears on your home screen and runs full-screen.
 
 ## Get help
 
-- Tap the **AI** button (floating mascot, bottom-right). It can answer
-  most questions and pulls from this help library.
+- Tap the **AI** button (floating mascot, bottom-right) to ask
+  FleetSuite AI. It can answer most questions and pulls from this help
+  library. Tell it about a problem or an idea, or ask something it can't
+  answer, and it sends it to Craig as a request for you (More →
+  Requests) and tells you the request number.
 - Tap **Admin → Knowledge** if you're an admin to browse the full
   library.
 - Or ping your shop's admin.

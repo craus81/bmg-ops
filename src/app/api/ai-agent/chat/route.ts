@@ -18,6 +18,7 @@ import { getSalesTaxRate } from '@/lib/sales-tax';
 import { getDefaultLaborRate } from '@/lib/labor-rate';
 import { describePage, pageContextBlock } from '@/lib/page-context';
 import { rankDocs } from '@/lib/text-search';
+import { ANY_ROLE_ACTIONS, addToRequestFromChat, fileRequestFromChat, notifyFromChat, type ChatCaller, type FiledRequest } from '@/lib/ai-agent-requests';
 
 export const dynamic = 'force-dynamic';
 
@@ -362,7 +363,16 @@ Actions let you modify data in the app. Use them when the user asks you to DO so
    /graphics/<job_id>, /admin/pos/<po_id>, /estimates?id=<estimate_id>,
    /tracking?vehicle=<checkin_id>, /admin/ap?invoice=<vendor_invoice_id>
 
-5. create_estimate — Create a draft estimate with line items
+5. file_request — Send something to Craig as an in-app Request (More → Requests). He is alerted at once.
+   params: { kind: "problem" | "idea" | "question", summary: string, findings?: string }
+   summary: what the person said, in their words (who, what, which record).
+   findings: what you checked and found, short (record numbers, dates).
+   The chat is attached for you; don't paste it.
+
+6. add_to_request — Add more detail to a request this person already sent.
+   params: { number: integer (the request #), body: string }
+
+7. create_estimate — Create a draft estimate with line items
    params: {
      customer_name: string (will auto-lookup in customers table),
      customer_netsuite_id?: string (NetSuite internal ID, optional if name provided),
@@ -393,6 +403,15 @@ WHEN TO USE ACTIONS:
 - "Create an estimate for..." → search netsuite_parts first for matching parts, then use create_estimate with resolved item_numbers
 - "Quote X for customer Y" → same as create an estimate
 - "Build an estimate with parts A, B, C" → search parts catalog, then create_estimate
+
+HANDING THINGS TO CRAIG (file_request) — do this on your own, without asking first:
+- The person reports something broken or wrong in FleetSuite (a bug, an error, a number or status that looks wrong) → look into it first if you can, then file_request kind "problem" with your findings.
+- The person suggests a feature or a change ("it would be nice if…", "can the app…") → file_request kind "idea".
+- The person asks something you couldn't answer from the data, the knowledge base or the help guides → give what you can, then file_request kind "question".
+- The person says "tell Craig", "let Craig know" or similar about the app → file_request.
+- Never file more than one request for the same topic in a chat. If you already filed one in this conversation (you said "request #N") and they add more on that topic, use add_to_request with that number.
+- After filing, tell them in one line: it went to Craig as request #N, and replies will show on the request under More → Requests.
+- Don't file requests for ordinary data questions you answered, or for things they asked you to do and you did.
 
 ═══════════════════════════════════════════
 NETSUITE TABLES (SuiteQL)
@@ -569,7 +588,7 @@ function extractQueries(text: string): { queries: QuerySpec[] } | null {
   return null;
 }
 
-async function executeQuery(q: QuerySpec): Promise<any> {
+async function executeQuery(q: QuerySpec, caller: ChatCaller): Promise<any> {
   const source = q.source || 'netsuite';
 
   if (source === 'netsuite') {
@@ -805,7 +824,7 @@ async function executeQuery(q: QuerySpec): Promise<any> {
   }
 
   if (source === 'action') {
-    return await executeAction(q.action!, q.params || {});
+    return await executeAction(q.action!, q.params || {}, caller);
   }
 
   if (source === 'books') {
@@ -816,8 +835,14 @@ async function executeQuery(q: QuerySpec): Promise<any> {
   throw new Error(`Unknown source: ${source}`);
 }
 
-async function executeAction(action: string, params: Record<string, any>): Promise<any> {
+async function executeAction(action: string, params: Record<string, any>, caller: ChatCaller): Promise<any> {
   switch (action) {
+    case 'file_request':
+      return fileRequestFromChat(supabase, caller, params);
+
+    case 'add_to_request':
+      return addToRequestFromChat(supabase, caller, params);
+
     case 'create_graphics_job': {
       const jobNumber = await nextJobNumber(supabase, 'GFX', () => legacyJobNumber.gfx());
       const { data, error } = await supabase
@@ -927,10 +952,9 @@ async function executeAction(action: string, params: Record<string, any>): Promi
       // '//host' is protocol-relative (off-app navigation), so block it too.
       const safeUrl = typeof url === 'string' && url.startsWith('/') && !url.startsWith('//') ? url : null;
       if (!safeUrl) console.warn(`[ai-agent] create_notification without a usable url (got ${JSON.stringify(url ?? null)}) — clicks will go nowhere; pass an app-relative deep link`);
-      const { error } = await supabase.from('notifications').insert({
-        user_id, type: type || 'ai_agent', title, body, url: safeUrl,
-      });
-      if (error) throw new Error(`Failed to create notification: ${error.message}`);
+      // A real alert (bell, push, email per their settings), with Craig
+      // copied while "Copy me on new alerts" is on (standing rule 2026-10-28).
+      await notifyFromChat(supabase, caller, { user_id, type, title, body, url: safeUrl });
       return { success: true, message: `Notification sent` };
     }
 
@@ -1175,7 +1199,7 @@ export async function POST(req: NextRequest) {
     } else if (roles.includes('shop_tech')) {
       systemPrompt += '\n\nIMPORTANT: This user has a "shop_tech" role. They work at the O\'Fallon shop. They can view the fleet dashboard, vehicle tracking, and shop status. Focus on helping them with vehicle statuses, production pipeline, and shop operations.';
     } else if (roles.includes('installer')) {
-      systemPrompt += '\n\nIMPORTANT: This user has an "installer" role. They are a vehicle graphics installer.\n\nACCESS RESTRICTIONS:\n- You MUST NOT query NetSuite at all — no sales orders, invoices, customer financials, or pricing data. If they ask about financials, politely say you cannot access that data with their role.\n- You CAN query the BMG Fleet app database (supabase) for: fleet_checkins (vehicle tracking), vehicle_notes, vehicle_photos, job_assignments, graphics_jobs, vehicle_templates (wrap dimensions and panel data), profiles, and schedule_entries.\n- You CAN search the knowledge base for: installation SOPs, vehicle specs, wrap dimensions, techniques, and product information.\n- You CANNOT create estimates, view customer financial data, or access admin settings.\n\nFOCUS AREAS — help installers with:\n- Vehicle wrap dimensions and panel sizes (search vehicle_templates)\n- Installation techniques and best practices (search knowledge base)\n- Their assigned vehicles and current status\n- Vehicles currently in the shop (fleet_checkins)\n- Installation notes and photos for vehicles\n- Graphics job details (what graphics are needed for a vehicle)\n- Product specs from the knowledge base (SOPs, specs, pricing guides for materials)';
+      systemPrompt += '\n\nIMPORTANT: This user has an "installer" role. They are a vehicle graphics installer.\n\nACCESS RESTRICTIONS:\n- You MUST NOT query NetSuite at all — no sales orders, invoices, customer financials, or pricing data. If they ask about financials, politely say you cannot access that data with their role.\n- You CAN query the BMG Fleet app database (supabase) for: fleet_checkins (vehicle tracking), vehicle_notes, vehicle_photos, job_assignments, graphics_jobs, vehicle_templates (wrap dimensions and panel data), profiles, and schedule_entries.\n- You CAN search the knowledge base for: installation SOPs, vehicle specs, wrap dimensions, techniques, and product information.\n- You CANNOT create estimates, view customer financial data, or access admin settings.\n- You CAN send things to Craig with the file_request and add_to_request actions (problems, ideas, questions you cannot answer).\n\nFOCUS AREAS — help installers with:\n- Vehicle wrap dimensions and panel sizes (search vehicle_templates)\n- Installation techniques and best practices (search knowledge base)\n- Their assigned vehicles and current status\n- Vehicles currently in the shop (fleet_checkins)\n- Installation notes and photos for vehicles\n- Graphics job details (what graphics are needed for a vehicle)\n- Product specs from the knowledge base (SOPs, specs, pricing guides for materials)';
     }
 
     // Estimates in FleetSuite only (Books → Switches): the prompt above sends
@@ -1268,6 +1292,15 @@ export async function POST(req: NextRequest) {
       console.warn('[ai-agent] failed to load operator instructions:', err);
     }
 
+    const caller: ChatCaller = {
+      id: auth.user!.id,
+      name: auth.profile?.full_name || null,
+      pagePath: parsed.data.page?.path || null,
+      messages,
+    };
+    // Requests this turn filed or added to, for the chat's "Sent to Craig" box.
+    let filedRequest: FiledRequest | null = null;
+
     let totalQueriesExecuted = 0;
     const MAX_ROUNDS = 4; // Increased from 3 since we have more data sources
 
@@ -1284,6 +1317,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           reply: cleanReply,
           queriesExecuted: totalQueriesExecuted,
+          ...(filedRequest ? { filedRequest } : {}),
         });
       }
 
@@ -1298,7 +1332,7 @@ export async function POST(req: NextRequest) {
           blocked = 'That query touches credentials or approval tokens, which are off limits to everyone. Ask about the record itself instead.';
         } else if (src === 'netsuite' && !canQueryNetSuite) {
           blocked = 'NetSuite access is not available for your role. Use the knowledge base or app database instead.';
-        } else if (src === 'action' && !canQueryNetSuite) {
+        } else if (src === 'action' && !canQueryNetSuite && !ANY_ROLE_ACTIONS.has(String(q.action))) {
           blocked = 'Actions (creating jobs or estimates, sending messages) aren\'t available for your role.';
         } else if (src === 'books' && !canSeeFinancials) {
           blocked = 'FleetSuite\'s books are restricted to leadership. Ask about jobs, parts, customers, vehicles, or schedules instead.';
@@ -1329,7 +1363,8 @@ export async function POST(req: NextRequest) {
           continue;
         }
         try {
-          results[q.id] = await executeQuery(q);
+          results[q.id] = await executeQuery(q, caller);
+          if (results[q.id]?.request) filedRequest = results[q.id].request;
           totalQueriesExecuted++;
         } catch (err: any) {
           results[q.id] = { error: err.message };
@@ -1367,6 +1402,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       reply: cleanFinal,
       queriesExecuted: totalQueriesExecuted,
+      ...(filedRequest ? { filedRequest } : {}),
     });
 
   } catch (err: any) {
