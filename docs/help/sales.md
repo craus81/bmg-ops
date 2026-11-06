@@ -238,6 +238,8 @@ Each step moves by itself from what happens in FleetSuite (POs, receipts, proof 
 
 To see every open order by step, go to **More → Job Stages**.
 
+To see which parts are in and which aren't, tap **Parts ordered** or **Parts in** on the bar, the **Parts & materials** tile (**See parts ›**), or the **Parts:** line in the customer card under it. A full-screen list opens with every part grouped as **Not ordered**, **Ordered, not in yet** and **In**, each with its PO number, vendor and ETA or how it came in. Filter with **All**, **Not in yet** or **In**. **Open the sales order's Parts card →** at the bottom jumps to the Parts card on the sales order page. Tap **Close** to go back.
+
 ---
 
 ## See which sales orders have all their parts

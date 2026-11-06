@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { useDialog } from '@/components/DialogProvider';
+import { JobPartsLine } from '@/components/JobProgressBar';
 import type { OrderStageView } from '@/lib/order-status';
 
 interface StaffOrderStatus {
@@ -155,7 +156,7 @@ export default function EstimateOrderStatusCard({ estimateId, customerId, prospe
         <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
           {data.partsAllIn
             ? `All parts in, marked ${fmt(data.partsAllIn.at)}${data.partsAllIn.by ? ` by ${data.partsAllIn.by}` : ''}`
-            : `Parts: ${partsStage?.state === 'todo' ? (partsStage.detail || 'not ordered yet') : (partsStage?.detail || 'ordered')}`}
+            : <JobPartsLine estimateId={estimateId} fallback={`Parts: ${partsStage?.state === 'todo' ? (partsStage.detail || 'not ordered yet') : (partsStage?.detail || 'ordered')}`} />}
         </div>
         {data.partsAllIn ? (
           <button type="button" disabled={busy} style={btn(false)} onClick={() => markParts(false)}>Undo all parts in</button>
