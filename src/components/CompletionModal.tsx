@@ -12,6 +12,7 @@ import PhotoSession from '@/components/PhotoSession';
 import { estimateHeadlineNumber } from '@/lib/estimate-number';
 import { openNetSuitePdf, openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-pdf-client';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
+import AdjustInvoiceModal from '@/components/AdjustInvoiceModal';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import { deepLinks } from '@/lib/deep-links';
 import { closeOnEscape } from '@/lib/modal-escape';
@@ -126,6 +127,10 @@ export default function CompletionModal({
   const [invPdfBusy, setInvPdfBusy] = useState(false);
   const [invWorking, setInvWorking] = useState<string | null>(null); // SO id in flight
   const [invError, setInvError] = useState<string | null>(null);
+  // Adjust & invoice: the SO whose lines are open for changes before billing,
+  // and what was changed on it (shown above its billed row).
+  const [adjustFor, setAdjustFor] = useState<{ id: string; label: string } | null>(null);
+  const [adjustedChanges, setAdjustedChanges] = useState<Record<string, string[]>>({});
   // Per-SO invoice ledger (migration 261): each linked sales order carries
   // its OWN invoice state, so a multi-SO vehicle can bill every order —
   // the old single invNumber hid the remaining buttons after the first.
@@ -741,6 +746,11 @@ export default function CompletionModal({
                             <div style={{ fontSize: '12px', fontWeight: 700, color: '#22c55e' }}>
                               ✓ SO {soLabel} billed as invoice #{inv.invoice_number}{inv.fulfillment_number ? ` (fulfilled ${inv.fulfillment_number})` : ''}
                             </div>
+                            {adjustedChanges[soId] && adjustedChanges[soId].length > 0 && (
+                              <div style={{ flexBasis: '100%', fontSize: '11px', color: 'var(--text-muted)' }}>
+                                Adjusted first: {adjustedChanges[soId].join('; ')}
+                              </div>
+                            )}
                             <button
                               type="button"
                               disabled={invPdfBusy}
@@ -776,6 +786,18 @@ export default function CompletionModal({
                               style={{ padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', opacity: invWorking || !ledgerLoaded ? 0.6 : 1 }}>
                               {invWorking === soId ? 'Invoicing…' : `Invoice SO ${soLabel}`}
                             </button>
+                            <button
+                              onClick={() => { setInvError(null); setAdjustFor({ id: soId, label: soLabel }); }}
+                              disabled={!!invWorking || !ledgerLoaded}
+                              title="Change quantities or prices, or add lines (a longer removal, more vinyl), save them to the sales order, then invoice it"
+                              style={{ marginLeft: '6px', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 700, cursor: 'pointer', background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text-primary)', opacity: invWorking || !ledgerLoaded ? 0.6 : 1 }}>
+                              ✎ Adjust &amp; invoice
+                            </button>
+                            {adjustedChanges[soId] && adjustedChanges[soId].length > 0 && (
+                              <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
+                                Saved to SO {soLabel}: {adjustedChanges[soId].join('; ')}
+                              </div>
+                            )}
                             {legacyPromptFor === soId && (
                               <div style={{ marginTop: '6px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
                                 <button onClick={() => invoiceSalesOrder(soId, true)}
@@ -910,6 +932,19 @@ export default function CompletionModal({
           the billed rows above. Rendered INSIDE this overlay: its z-index
           (1100) is local to our z-1500 stacking context, so it stacks on
           top here — as a sibling it would land behind the completion modal. */}
+      {adjustFor && (
+        <AdjustInvoiceModal
+          salesOrderId={adjustFor.id}
+          soLabel={adjustFor.label}
+          onClose={() => setAdjustFor(null)}
+          onSaved={changes => {
+            const soId = adjustFor.id;
+            setAdjustFor(null);
+            if (changes.length > 0) setAdjustedChanges(prev => ({ ...prev, [soId]: changes }));
+            void invoiceSalesOrder(soId);
+          }}
+        />
+      )}
       {emailFor && (
         <EmailInvoicesModal
           customerName={customerName || ''}
