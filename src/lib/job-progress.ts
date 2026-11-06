@@ -200,7 +200,7 @@ export function deriveJobProgress(input: JobProgressInput): JobProgressView {
       case 'parts_ordered':
         if (p.total === 0) return state === 'done' ? 'Nothing needed ordering' : 'Nothing requested yet';
         if (p.ordered >= p.total) return [p.total === 1 ? 'The part is ordered' : `All ${p.total} parts ordered`, fmtDay(p.orderedAt)].filter(Boolean).join(' · ');
-        return `${p.ordered} of ${p.total} parts on a PO`;
+        return `${p.ordered} of ${p.total} parts on a PO or in stock`;
       case 'graphics': {
         if (!hasGraphics) return 'No graphics on this job';
         if (state === 'done') return reachedAt.graphics ? `Proof approved ${fmtDay(reachedAt.graphics)}` : 'Proof approved';

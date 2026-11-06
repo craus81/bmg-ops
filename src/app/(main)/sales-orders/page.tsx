@@ -17,6 +17,8 @@ import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { SO_VIEWS, SO_VIEW_LABELS, type SoView } from '@/lib/sales-order-list';
 import { NEW_SALES_ORDER_FEATURES } from '@/lib/new-sales-order';
+import type { SoPartsCover } from '@/lib/so-parts-cover';
+import { PartsBadge, PartsRowDetail } from '@/components/SoPartsCover';
 
 interface Row {
   netsuiteId: string;
@@ -30,6 +32,8 @@ interface Row {
   vin: string | null;
   total: number | null;
   estimate: { id: string; number: string | null } | null;
+  /** Parts ordered / "5 of 7 ready"; null = no part lines or closed. */
+  parts: SoPartsCover | null;
 }
 
 const money = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
@@ -56,6 +60,7 @@ export default function SalesOrdersPage() {
   const [count, setCount] = useState(0);
   const [pageSize, setPageSize] = useState(50);
   const [loading, setLoading] = useState(true);
+  const [openParts, setOpenParts] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -93,7 +98,7 @@ export default function SalesOrdersPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px', flexWrap: 'wrap' }}>
         <div style={{ minWidth: 0 }}>
           <h1 style={{ margin: 0, fontSize: '22px', fontWeight: 800, color: theme.textPrimary }}>Sales orders</h1>
-          <div style={{ fontSize: '13px', color: theme.textMuted }}>Every NetSuite sales order. Tap one to open, edit or invoice it.</div>
+          <div style={{ fontSize: '13px', color: theme.textMuted }}>Every NetSuite sales order. Tap one to open, edit or invoice it. Green means every part is on a PO or in stock.</div>
         </div>
         {canMake && (
           <button onClick={() => router.push('/sales-orders/new')} style={{
@@ -134,9 +139,10 @@ export default function SalesOrdersPage() {
       <div style={{ display: 'grid', gap: '8px', opacity: loading ? 0.6 : 1 }}>
         {rows.map(r => {
           const t = tone(r.view);
+          const green = !!r.parts?.allReady;
           return (
             <button key={r.netsuiteId} onClick={() => router.push(deepLinks.salesOrder(r.netsuiteId))} style={{
-              textAlign: 'left', background: theme.card, border: `1px solid ${theme.border}`, borderRadius: '10px',
+              textAlign: 'left', background: green ? theme.successBg : theme.card, border: `1px solid ${green ? theme.successBorder : theme.border}`, borderRadius: '10px',
               padding: '10px 12px', cursor: 'pointer', color: theme.textPrimary, display: 'grid', gap: '4px',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', alignItems: 'baseline' }}>
@@ -149,7 +155,12 @@ export default function SalesOrdersPage() {
                 {r.date && <span>{fmtDate(r.date)}</span>}
                 {r.poNumber && <span>PO {r.poNumber}</span>}
                 {r.estimate?.number && <span>{r.estimate.number}</span>}
+                {r.parts && (
+                  <PartsBadge cover={r.parts} open={openParts === r.netsuiteId}
+                    onToggle={() => setOpenParts(o => (o === r.netsuiteId ? null : r.netsuiteId))} />
+                )}
               </div>
+              {r.parts && !r.parts.allReady && openParts === r.netsuiteId && <PartsRowDetail cover={r.parts} />}
             </button>
           );
         })}

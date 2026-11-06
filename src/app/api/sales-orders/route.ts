@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireStaff, profileCanSeeMoney } from '@/lib/api-auth';
 import { parseSoView, soViewOf, statusText, statusValuesFor } from '@/lib/sales-order-list';
+import { loadSoPartsCover } from '@/lib/so-parts-cover-server';
+import type { SoPartsCover } from '@/lib/so-parts-cover';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,6 +47,13 @@ export async function GET(req: NextRequest) {
     for (const e of ests || []) estimates.set(e.id, e.estimate_number);
   }
   const seeMoney = await profileCanSeeMoney(auth.user.id, auth.profile);
+  // Parts ordered / "5 of 7 ready" — a failure only hides the badges.
+  let covers = new Map<string, SoPartsCover>();
+  try {
+    covers = await loadSoPartsCover(service, rows.map(r => String(r.netsuite_id)));
+  } catch (e) {
+    console.error('sales orders list: parts check failed', e);
+  }
 
   return NextResponse.json({
     view,
@@ -64,6 +73,7 @@ export async function GET(req: NextRequest) {
       vin: r.vin,
       total: seeMoney && r.total != null ? Number(r.total) : null,
       estimate: r.estimate_id ? { id: r.estimate_id, number: estimates.get(r.estimate_id) ?? null } : null,
+      parts: covers.get(String(r.netsuite_id)) || null,
     })),
   });
 }

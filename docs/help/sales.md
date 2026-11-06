@@ -240,6 +240,14 @@ To see every open order by step, go to **More → Job Stages**.
 
 ---
 
+## See which sales orders have all their parts
+
+On **Sales → Sales orders**, an open order turns **green** with **✓ Parts ordered** once every part is on a PO for that job or in stock that no other order is holding. Otherwise it shows a gray **5 of 7 ready**; tap it to see what's missing. Labor and 06 service lines don't count.
+
+The sales order page has a **Parts** card with the same list. If the stock numbers are off, an admin can tap **✓ Mark parts ordered** (and **Undo mark**). The bar's Parts ordered step uses the same check. More detail: `workflows/estimate-to-invoice.md`.
+
+---
+
 ## Send the customer an order status link
 
 After a customer approves, open the estimate and send the **"We got your approval"** email. It has a **Track your order** link to a page that shows where the job is. Nothing sends by itself; you see the email on the compose screen first.
