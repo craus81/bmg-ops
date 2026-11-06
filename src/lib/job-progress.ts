@@ -9,7 +9,9 @@
  *   Parts ordered    every part asked for is on a PO
  *   Graphics         one step whose word changes: Graphic design → Design in
  *                    revision → Design approved (the proof approval). Skipped
- *                    when the job has no graphics.
+ *                    when the job has no graphics. "Needs graphics job"
+ *                    (orange, tap to create) when the order has graphics
+ *                    lines but nobody made the job (Craig 2026-11-06).
  *   Parts in         every PO line received, or Mark all parts in
  *   Scheduled        a drop-off or install date is set
  *   Vehicle arrived  the vehicle is checked in. On-site jobs read "Tech on
@@ -62,6 +64,9 @@ export interface JobProgressInput {
   partsAllInAt: string | null;
   /** Live graphics jobs (not cancelled / flagged). */
   graphics: { status: string; approved: boolean; approvedAt: string | null }[];
+  /** The order has graphics lines (src/lib/graphics-lines.ts). With no live
+   *  job, the step reads "Needs graphics job" instead of being skipped. */
+  graphicsLines?: boolean;
   schedule: { date: string; time: string | null; place: 'shop' | 'onsite' } | null;
   /** Graphics installed at the customer and no vehicle comes to the shop. */
   onsite: boolean;
@@ -82,6 +87,8 @@ export interface JobStageView {
   label: string;
   state: JobStageState;
   detail: string;
+  /** Graphics step only: the order has graphics lines and no job yet. */
+  needsJob?: boolean;
 }
 
 export interface JobProgressView {
@@ -134,6 +141,7 @@ function designApproved(g: JobProgressInput['graphics'][number]): boolean {
 export function deriveJobProgress(input: JobProgressInput): JobProgressView {
   const p = input.parts;
   const hasGraphics = input.graphics.length > 0;
+  const needsJob = !hasGraphics && !!input.graphicsLines;
   const allDesignsApproved = hasGraphics && input.graphics.every(designApproved);
   const inRevision = input.graphics.some(g => g.status === 'revision' && !designApproved(g));
   const installDay = !!(input.onsite && input.schedule && input.schedule.date <= input.today);
@@ -163,14 +171,14 @@ export function deriveJobProgress(input: JobProgressInput): JobProgressView {
   const stillOpen: Record<JobStageKey, boolean> = {
     submitted: false,
     parts_ordered: p.total > 0 && p.ordered < p.total,
-    graphics: hasGraphics && !allDesignsApproved,
+    graphics: (hasGraphics && !allDesignsApproved) || needsJob,
     parts_in: p.total > 0 && !partsIn,
     scheduled: false,
     arrived: false,
     install: false,
     complete: false,
   };
-  const skip = (k: JobStageKey) => k === 'graphics' && !hasGraphics;
+  const skip = (k: JobStageKey) => k === 'graphics' && !hasGraphics && !needsJob;
 
   let furthest = -1;
   JOB_STAGES.forEach((s, i) => { if (!skip(s.key) && reached[s.key]) furthest = i; });
@@ -184,6 +192,7 @@ export function deriveJobProgress(input: JobProgressInput): JobProgressView {
 
   const label = (k: JobStageKey, state: JobStageState): string => {
     if (k === 'graphics') {
+      if (needsJob) return 'Needs graphics job';
       if (!hasGraphics) return 'No graphics';
       if (state === 'done') return 'Design approved';
       if ((state === 'now' || state === 'held') && inRevision) return 'Design in revision';
@@ -202,6 +211,7 @@ export function deriveJobProgress(input: JobProgressInput): JobProgressView {
         if (p.ordered >= p.total) return [p.total === 1 ? 'The part is ordered' : `All ${p.total} parts ordered`, fmtDay(p.orderedAt)].filter(Boolean).join(' · ');
         return `${p.ordered} of ${p.total} parts on a PO or in stock`;
       case 'graphics': {
+        if (needsJob) return 'The order has graphics lines but no graphics job yet';
         if (!hasGraphics) return 'No graphics on this job';
         if (state === 'done') return reachedAt.graphics ? `Proof approved ${fmtDay(reachedAt.graphics)}` : 'Proof approved';
         if (inRevision) return 'Changes requested. Waiting on a new proof or the customer.';
@@ -242,7 +252,10 @@ export function deriveJobProgress(input: JobProgressInput): JobProgressView {
     else if (i === nowIdx) state = 'now';
     else if (i > nowIdx) state = 'todo';
     else state = stillOpen[s.key] ? 'held' : 'done';
-    return { key: s.key, label: label(s.key, state), state, detail: detail(s.key, state) };
+    return {
+      key: s.key, label: label(s.key, state), state, detail: detail(s.key, state),
+      ...(s.key === 'graphics' && needsJob ? { needsJob: true } : {}),
+    };
   });
 
   const cur = done ? stages[stages.length - 1] : stages[nowIdx];
@@ -255,7 +268,7 @@ export function deriveJobProgress(input: JobProgressInput): JobProgressView {
     const NEXT: Record<JobStageKey, string> = {
       submitted: 'Customer approval',
       parts_ordered: 'Order the parts',
-      graphics: inRevision ? 'Send the revised proof' : 'Send the proof for approval',
+      graphics: needsJob ? 'Create the graphics job' : inRevision ? 'Send the revised proof' : 'Send the proof for approval',
       parts_in: 'Receive the parts',
       scheduled: input.onsite ? 'Schedule the install' : 'Schedule the drop-off',
       arrived: input.onsite ? 'Install day' : 'Vehicle drop-off',

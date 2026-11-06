@@ -277,6 +277,13 @@ export default function GraphicsPage() {
       existingJob: { id: string; jobNumber: string | null } | null;
     } | null;
   } | null>(null);
+  // Set when a sales order page opens the create modal (?new=1&fromSo=<NetSuite
+  // id>, plus &fromEstimate when the order came from one). The submit writes
+  // netsuite_so_id (migration 523) so the order's Graphics card and progress
+  // bar see the job, and Create / Leave go back to the order.
+  const [prefillSoLink, setPrefillSoLink] = useState<{
+    soId: string; soNumber: string | null; customerNetsuiteId: string | null;
+  } | null>(null);
   // One job for the whole fleet order (one kit per vehicle), or just this
   // vehicle. Defaults to the whole order (Craig, 2026-10-19).
   const [fleetChoice, setFleetChoice] = useState<'one' | 'single'>('one');
@@ -511,6 +518,41 @@ export default function GraphicsPage() {
         // Same smart prefill the Awaiting Graphics queue's "+ Create" runs.
         loadAwaitingPrefill(checkinId, searchParams.get('vin'));
       }
+      // From a sales order page. An order from an estimate is filled in from
+      // the estimate below (richer: wrap quote, fleet order, delivery); an
+      // order typed into NetSuite is filled in from its own lines.
+      const fromSo = searchParams.get('fromSo');
+      if (fromSo && /^\d{1,15}$/.test(fromSo)) {
+        setPrefillSoLink({ soId: fromSo, soNumber: null, customerNetsuiteId: null });
+        if (!searchParams.get('fromEstimate')) {
+          (async () => {
+            setPrefillNote('Reading the sales order…');
+            try {
+              const res = await fetch(`/api/sales-orders/${encodeURIComponent(fromSo)}/graphics?prefill=1`);
+              const body = await res.json().catch(() => ({}));
+              if (!res.ok || !body.success) throw new Error(body?.error || `HTTP ${res.status}`);
+              const p = body.prefill;
+              setCreateForm(f => ({
+                ...f,
+                title: p.title || f.title,
+                customer: p.customer || f.customer,
+                part_numbers: p.partNumbers || [],
+                part_number: p.partNumbers?.[0] || f.part_number,
+                quantity: p.quantity || 1,
+                content: p.content || f.content,
+                notes: p.notes || f.notes,
+                po_number: p.poNumber || f.po_number,
+              }));
+              if (p.customer) setCustomerSearch(p.customer);
+              if (p.defaultAssigneeId) setCreateAssignees([p.defaultAssigneeId]);
+              setPrefillSoLink({ soId: fromSo, soNumber: p.soNumber || null, customerNetsuiteId: p.customerNetsuiteId || null });
+              setPrefillNote(p.note || null);
+            } catch (e: any) {
+              setPrefillNote(`Could not read the sales order (${e?.message || 'unknown error'}). Fill the job in by hand.`);
+            }
+          })();
+        }
+      }
       // From an estimate / sales order: same wizard as a job from scratch
       // (starts on the job-type step), with the estimate's values filled in.
       const fromEstimate = searchParams.get('fromEstimate');
@@ -558,6 +600,7 @@ export default function GraphicsPage() {
               delivery: p.delivery || null,
               fleet,
             });
+            if (searchParams.get('fromSo')) setPrefillSoLink(l => (l ? { ...l, soNumber: p.soNumber || null } : l));
             setPrefillNote(`Filled in from ${p.soNumber ? `SO #${p.soNumber} (estimate ${p.estimateNumber})` : `estimate ${p.estimateNumber}`}${p.wrapQuoteNumber ? ` and wrap quote ${p.wrapQuoteNumber}` : ''}. Check it over, then create.`);
           } catch (e: any) {
             setPrefillNote(`Could not read the estimate (${e?.message || 'unknown error'}) — fill the job in by hand.`);
@@ -982,6 +1025,11 @@ export default function GraphicsPage() {
           ...(prefillEstimateLink.wrapQuoteId ? { wrap_quote_id: prefillEstimateLink.wrapQuoteId } : {}),
           ...(prefillEstimateLink.customerNetsuiteId ? { customer_netsuite_id: prefillEstimateLink.customerNetsuiteId } : {}),
         } : {}),
+        // …and to the sales order when opened from its page.
+        ...(prefillSoLink ? {
+          netsuite_so_id: prefillSoLink.soId,
+          ...(!prefillEstimateLink && prefillSoLink.customerNetsuiteId ? { customer_netsuite_id: prefillSoLink.customerNetsuiteId } : {}),
+        } : {}),
         // A copy keeps the original's NetSuite customer while the customer
         // name is left as it was.
         ...(prefillCopy?.customerNetsuiteId && (createForm.customer || null) === prefillCopy.customer
@@ -1025,7 +1073,7 @@ export default function GraphicsPage() {
         from_status: null,
         to_status: initialStatus,
         changed_by: user?.id,
-        note: `${GRAPHICS_CATEGORY_LABELS[cat]} job created${prefillPoLink && createForm.po_number ? ` from PO #${createForm.po_number}` : ''}${prefillEstimateLink ? ` from estimate ${prefillEstimateLink.estimateNumber || ''}`.trimEnd() : ''}${prefillCopy ? ` as a copy of ${prefillCopy.jobNumber || 'another job'}` : ''}`,
+        note: `${GRAPHICS_CATEGORY_LABELS[cat]} job created${prefillPoLink && createForm.po_number ? ` from PO #${createForm.po_number}` : ''}${prefillEstimateLink ? ` from estimate ${prefillEstimateLink.estimateNumber || ''}`.trimEnd() : ''}${prefillSoLink ? (prefillSoLink.soNumber ? ` from SO #${prefillSoLink.soNumber}` : ' from a sales order') : ''}${prefillCopy ? ` as a copy of ${prefillCopy.jobNumber || 'another job'}` : ''}`,
       });
 
       // A job from an estimate marks a customer-approved estimate won, same
@@ -1198,10 +1246,13 @@ export default function GraphicsPage() {
       // Made from an estimate: go back to it so it can be converted to a
       // sales order right away (Craig, 2026-10-30). The estimate names the
       // new job and scrolls to Convert to Sales Order.
-      const backToEstimate = prefillEstimateLink?.estimateId || null;
+      // Made from a sales order page: back to the order, where the Graphics
+      // card now lists the job.
+      const backToSo = prefillSoLink?.soId || null;
+      const backToEstimate = backToSo ? null : prefillEstimateLink?.estimateId || null;
 
       setJobs(prev => [data as GraphicsJob, ...prev]);
-      if (!backToEstimate) setCreatedToast(data.job_number || jobNumber);
+      if (!backToEstimate && !backToSo) setCreatedToast(data.job_number || jobNumber);
       setShowCreate(false);
       setCreateStep('category');
       setCreateForm({
@@ -1219,8 +1270,10 @@ export default function GraphicsPage() {
       setCreateClientFiles([]);
       setPrefillPoLink(null);
       setPrefillEstimateLink(null);
+      setPrefillSoLink(null);
       setPrefillCopy(null);
-      if (backToEstimate) router.push(deepLinks.estimate(backToEstimate, { graphicsJobCreated: data.id }));
+      if (backToSo) router.push(`${deepLinks.salesOrder(backToSo)}#so-graphics`);
+      else if (backToEstimate) router.push(deepLinks.estimate(backToEstimate, { graphicsJobCreated: data.id }));
     }
     setCreating(false);
   };
@@ -1229,8 +1282,10 @@ export default function GraphicsPage() {
   // to that estimate (Craig, 2026-10-30) so nobody is left on the board.
   const closeCreate = () => {
     const backTo = prefillEstimateLink?.estimateId;
-    setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillCopy(null); setPrefillNote(null);
-    if (backTo) router.push(deepLinks.estimate(backTo));
+    const backToSo = prefillSoLink?.soId;
+    setShowCreate(false); setCreateStep('category'); setPrefillPoLink(null); setPrefillEstimateLink(null); setPrefillSoLink(null); setPrefillCopy(null); setPrefillNote(null);
+    if (backToSo) router.push(deepLinks.salesOrder(backToSo));
+    else if (backTo) router.push(deepLinks.estimate(backTo));
   };
 
   // Print a packing list for the job. `overrides` lets us merge in fresh

@@ -18,11 +18,12 @@ import { isOpenSalesOrderStatus } from './parts-demand';
 import { VEHICLE_ROW_LABELS, vehicleRowKey } from './types';
 import { loadSoPartsCover } from './so-parts-cover-server';
 import type { SoPartsCover } from './so-parts-cover';
+import { isGraphicsLine } from './graphics-lines';
 
 type Db = SupabaseClient;
 
 export const JOB_PROGRESS_ESTIMATE_COLUMNS =
-  'id, estimate_number, title, customer_name, customer_approved, customer_approved_at, status, netsuite_so_id, fleet_checkin_id, parts_all_in_at, created_by, updated_at';
+  'id, estimate_number, title, customer_name, customer_approved, customer_approved_at, status, netsuite_so_id, fleet_checkin_id, fleet_group_id, parts_all_in_at, created_by, updated_at';
 
 export function isApprovedEstimate(est: { customer_approved?: boolean | null; status?: string | null }): boolean {
   return !!(est.customer_approved || est.status === 'accepted');
@@ -81,11 +82,21 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
 
   // ── Things hung directly on the estimate ──
   const soIds = ests.map(e => e.netsuite_so_id).filter(Boolean).map(String);
-  const [projects, jobs, dropShips, appts, sosById, sosByEst] = await Promise.all([
+  const fleetIds = [...new Set(ests.map(e => e.fleet_group_id).filter(Boolean).map(String))];
+  // A job counts for the order when it was made from the estimate, from the
+  // sales order's page (netsuite_so_id, migration 523), or is the fleet
+  // order's one job (fleet_group_id, migration 411).
+  const GJ = 'id, estimate_id, netsuite_so_id, fleet_group_id, status, customer_approved, customer_approved_at, delivery_method, scheduled_install_date, install_arrival_time, updated_at';
+  const [projects, jobs, jobsBySo, jobsByFleet, gfxLineRows, dropShips, appts, sosById, sosByEst] = await Promise.all([
     inChunks(ids, part => service.from('upfit_projects').select('id, estimate_id').in('estimate_id', part)),
-    inChunks(ids, part => service.from('graphics_jobs')
-      .select('id, estimate_id, status, customer_approved, customer_approved_at, delivery_method, scheduled_install_date, install_arrival_time, updated_at')
-      .in('estimate_id', part)),
+    inChunks(ids, part => service.from('graphics_jobs').select(GJ).in('estimate_id', part)),
+    inChunks(soIds, part => service.from('graphics_jobs').select(GJ).in('netsuite_so_id', part)),
+    inChunks(fleetIds, part => service.from('graphics_jobs').select(GJ).in('fleet_group_id', part)),
+    // Graphics lines on the estimate: with no job, the step asks for one.
+    // Filtered in the query (reads cap at 1000 rows); isGraphicsLine decides.
+    inChunks(ids, part => service.from('estimate_line_items').select('estimate_id, item_number, description, wrap_quote_id')
+      .in('estimate_id', part)
+      .or('wrap_quote_id.not.is.null,item_number.in.("3M Vinyl","Graphics Install Labor"),description.ilike.*sqft @*,description.ilike.Graphics install labor*')),
     inChunks(ids, part => service.from('drop_ship_orders').select('estimate_id, lines, created_at, purchase_order_number, vendor_name').in('estimate_id', part)),
     inChunks(ids, part => service.from('shop_appointments').select('estimate_id, slot_date, slot_time, status')
       .in('estimate_id', part).eq('kind', 'dropoff').neq('status', 'cancelled')),
@@ -97,11 +108,28 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
   for (const p of projects) if (p.estimate_id) projectToEst.set(p.id, p.estimate_id);
   const jobsByEst = new Map<string, any[]>();
   const jobToEst = new Map<string, string>();
-  for (const j of jobs) {
-    if (j.status === 'cancelled' || j.status === 'flagged') continue;
-    push(jobsByEst, j.estimate_id, j);
-    jobToEst.set(j.id, j.estimate_id);
+  const estsBySoId = new Map<string, string[]>();
+  const estsByFleet = new Map<string, string[]>();
+  for (const e of ests) {
+    if (e.netsuite_so_id) push(estsBySoId, String(e.netsuite_so_id), e.id);
+    if (e.fleet_group_id) push(estsByFleet, String(e.fleet_group_id), e.id);
   }
+  const idSet = new Set(ids);
+  const jobSeen = new Set<string>();
+  const addJob = (estId: string | null | undefined, j: any) => {
+    if (!estId || jobSeen.has(`${estId}:${j.id}`)) return;
+    jobSeen.add(`${estId}:${j.id}`);
+    push(jobsByEst, estId, j);
+    if (!jobToEst.has(j.id)) jobToEst.set(j.id, estId);
+  };
+  for (const j of [...jobs, ...jobsBySo, ...jobsByFleet]) {
+    if (j.status === 'cancelled' || j.status === 'flagged') continue;
+    if (idSet.has(j.estimate_id)) addJob(j.estimate_id, j);
+    for (const estId of estsBySoId.get(String(j.netsuite_so_id || '')) || []) addJob(estId, j);
+    for (const estId of estsByFleet.get(String(j.fleet_group_id || '')) || []) addJob(estId, j);
+  }
+  const estHasGfxLines = new Set<string>();
+  for (const l of gfxLineRows) if (isGraphicsLine(l)) estHasGfxLines.add(l.estimate_id);
   const dropByEst = new Map<string, any[]>();
   for (const d of dropShips) push(dropByEst, d.estimate_id, d);
   const apptsByEst = new Map<string, any[]>();
@@ -377,6 +405,7 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
       },
       partsAllInAt: est.parts_all_in_at || null,
       graphics: liveJobs.map(j => ({ status: j.status, approved: !!j.customer_approved, approvedAt: j.customer_approved_at || null })),
+      graphicsLines: estHasGfxLines.has(estId),
       schedule,
       onsite,
       arrivedAt,

@@ -28,6 +28,8 @@ import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailCo
 import SentBox from '@/components/SentBox';
 import JobProgressBar from '@/components/JobProgressBar';
 import { SoPartsCard } from '@/components/SoPartsCover';
+import SoGraphicsCard, { newGraphicsJobFromSoUrl } from '@/components/SoGraphicsCard';
+import type { SoGraphicsJob } from '@/lib/so-graphics-server';
 import { docRef } from '@/lib/document-sends';
 import { isBadDelivery } from '@/lib/invoice-emails';
 import { lineAllows, isFullyBilled, type SoLine, type SoHeader, type SoLineEdit, type SoNewLine } from '@/lib/sales-order-edit';
@@ -39,6 +41,8 @@ interface SoPage {
   seeMoney: boolean;
   estimate: { id: string; number: string } | null;
   job: { id: string; title: string | null } | null;
+  /** Graphics card: the graphics lines (by line key) and the order's jobs (null = lookup failed). */
+  graphics?: { lines: number[]; jobs: SoGraphicsJob[] | null };
   invoices: {
     id: string; tranid: string; trandate: string | null; total: number | null;
     /** Latest customer email of this invoice; null = never emailed from FleetSuite. */
@@ -139,8 +143,10 @@ export default function SalesOrderPage() {
   // "Open the sales order's Parts card" on the job progress parts list
   // links here with #so-parts; the card renders after the order loads.
   useEffect(() => {
-    if (!data || typeof window === 'undefined' || window.location.hash !== '#so-parts') return;
-    const t = setTimeout(() => document.getElementById('so-parts')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+    // …and a job made from this order's Graphics card comes back with #so-graphics.
+    const hash = typeof window === 'undefined' ? '' : window.location.hash;
+    if (!data || (hash !== '#so-parts' && hash !== '#so-graphics')) return;
+    const t = setTimeout(() => document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
     return () => clearTimeout(t);
   }, [data]);
 
@@ -464,7 +470,7 @@ export default function SalesOrderPage() {
       )}
 
       {/* ── Job progress (Valarie's bar, 2026-11-06): only once the order has an approved estimate ── */}
-      {data.estimate && <JobProgressBar refTo={{ estimate: data.estimate.id }} />}
+      {data.estimate && <JobProgressBar key={(data.graphics?.jobs || []).map(j => j.id).join(',')} refTo={{ estimate: data.estimate.id }} createGraphicsHref={newGraphicsJobFromSoUrl(id, data.estimate.id)} />}
 
       {/* ── Parts ordered: every part on a PO or in stock (2026-11-06) ── */}
       {!editing && <div id="so-parts" style={{ scrollMarginTop: '72px' }}><SoPartsCard netsuiteId={id} /></div>}
@@ -633,6 +639,17 @@ export default function SalesOrderPage() {
           </div>
         )}
       </div>
+
+      {/* ── Graphics (Craig 2026-11-06): the order's graphics jobs, or + Create graphics job ── */}
+      {!editing && data.graphics && (data.graphics.lines.length > 0 || data.graphics.jobs === null || data.graphics.jobs.length > 0) && (
+        <SoGraphicsCard
+          soId={id}
+          estimateId={data.estimate?.id || null}
+          graphicsLineNames={[...new Set(data.lines.filter(l => data.graphics!.lines.includes(l.line)).map(l => l.itemNumber))]}
+          jobs={data.graphics.jobs}
+          onLinked={load}
+        />
+      )}
 
       {/* ── Linked documents + history ── */}
       {!editing && (

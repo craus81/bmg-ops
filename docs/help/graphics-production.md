@@ -27,8 +27,12 @@ Each section is one task. Read the one you need.
    won't ship).
 6. Tap **Create**.
 
-Most jobs auto-create from estimates — only build manually for
-one-off work.
+Most jobs start from an estimate (**+ New graphics production job**
+on its Graphics panel) or a sales order (**+ Create graphics job** on
+the order's **Graphics** card, or the orange **Needs graphics job** step
+on its progress bar). Both open this same form filled in from the order;
+only build from scratch for one-off work. A job made from a sales order
+shows on that order's Graphics card.
 
 ---
 

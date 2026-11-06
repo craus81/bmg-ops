@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
@@ -36,6 +37,7 @@ type PartsFilter = 'all' | 'notin' | 'in';
 const GREEN = '#16a34a';
 const BLUE = '#2563eb';
 const AMBER = '#d97706';
+const ORANGE = '#ea580c';
 
 const CSS = `
 .jp-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
@@ -49,6 +51,9 @@ const CSS = `
 .jp-done{background:${GREEN};color:#fff;box-shadow:none}
 .jp-now{background:${BLUE};color:#fff;box-shadow:none}
 .jp-held{background:${AMBER};color:#fff;box-shadow:none}
+.jp-need{background:rgba(234,88,12,.14);color:${ORANGE};box-shadow:none}
+.jp-need .jp-ic{border:2px solid currentColor}
+.jp-need .jp-tag{background:rgba(234,88,12,.16)}
 .jp-skip{background:repeating-linear-gradient(135deg,rgba(127,127,127,.10) 0 6px,rgba(127,127,127,.22) 6px 12px);box-shadow:none;color:var(--text-muted)}
 .jp-ic{width:21px;height:21px;border-radius:50%;display:grid;place-items:center;font-weight:800;font-size:11px;flex:none}
 .jp-done .jp-ic{background:#fff;color:${GREEN}}
@@ -88,7 +93,7 @@ function queryOf(ref: JobProgressRef): string {
 
 const PARTS_KEYS = new Set(['parts_ordered', 'parts_in']);
 
-function Segments({ stages, onParts }: { stages: JobStageView[]; onParts?: (f: PartsFilter) => void }) {
+function Segments({ stages, onParts, onCreateGraphics }: { stages: JobStageView[]; onParts?: (f: PartsFilter) => void; onCreateGraphics?: () => void }) {
   let n = 0;
   return (
     <div className="jp-bar" role="list" aria-label="Job progress">
@@ -99,10 +104,32 @@ function Segments({ stages, onParts }: { stages: JobStageView[]; onParts?: (f: P
           <>
             <span className="jp-ic">{s.state === 'done' ? CHECK : s.state === 'skip' ? '–' : s.state === 'held' ? '!' : n}</span>
             <span className="jp-nm">{s.label}</span>
-            {s.state === 'now' && <span className="jp-tag">In progress</span>}
-            {s.state === 'held' && <span className="jp-tag">Held up</span>}
+            {s.needsJob
+              ? <span className="jp-tag">{onCreateGraphics ? 'Tap to create' : 'No job yet'}</span>
+              : <>
+                {s.state === 'now' && <span className="jp-tag">In progress</span>}
+                {s.state === 'held' && <span className="jp-tag">Held up</span>}
+              </>}
           </>
         );
+        // The order has graphics lines but no graphics job (Craig 2026-11-06):
+        // orange, and tapping it opens the New Job form filled in.
+        if (s.needsJob) {
+          const cls = `jp-seg jp-need${onCreateGraphics ? ' jp-tap' : ''}`;
+          return onCreateGraphics ? (
+            <div key={s.key} role="listitem" style={{ display: 'contents' }}>
+              <button type="button" className={cls} title={`${s.label}: ${s.detail}. Tap to create it.`}
+                aria-label={`${s.label}: ${s.detail}. Create the graphics job.`} data-now={s.state === 'now' ? '1' : undefined}
+                onClick={(e) => { e.stopPropagation(); onCreateGraphics(); }}>
+                {inner}
+              </button>
+            </div>
+          ) : (
+            <div key={s.key} role="listitem" className={cls} title={`${s.label}: ${s.detail}`} aria-label={`${s.label}: ${s.detail}`} data-now={s.state === 'now' ? '1' : undefined}>
+              {inner}
+            </div>
+          );
+        }
         if (onParts && PARTS_KEYS.has(s.key)) {
           return (
             <div key={s.key} role="listitem" style={{ display: 'contents' }}>
@@ -151,8 +178,13 @@ export function useJobProgress(ref: JobProgressRef | null) {
 
 /** The full bar with the current-stage card. Renders nothing for an order
  *  that isn't approved yet. */
-export default function JobProgressBar({ refTo }: { refTo: JobProgressRef }) {
+export default function JobProgressBar({ refTo, createGraphicsHref }: {
+  refTo: JobProgressRef;
+  /** Where "Needs graphics job" goes; defaults to the New Job form from the estimate. */
+  createGraphicsHref?: string;
+}) {
   const { hasFeature } = useAuth();
+  const router = useRouter();
   const { data, error, reload } = useJobProgress(refTo);
   const [partsSheet, setPartsSheet] = useState<PartsFilter | null>(null);
   const [busy, setBusy] = useState(false);
@@ -190,7 +222,7 @@ export default function JobProgressBar({ refTo }: { refTo: JobProgressRef }) {
     }
   };
 
-  const stageColor = cur.state === 'done' ? GREEN : cur.state === 'held' ? AMBER : BLUE;
+  const stageColor = cur.needsJob ? ORANGE : cur.state === 'done' ? GREEN : cur.state === 'held' ? AMBER : BLUE;
   const tile: React.CSSProperties = {
     display: 'flex', flexDirection: 'column', gap: '2px', border: `1px solid ${theme.border}`, borderRadius: '10px', padding: '10px 12px', minWidth: 0,
   };
@@ -205,7 +237,8 @@ export default function JobProgressBar({ refTo }: { refTo: JobProgressRef }) {
         </Link>
       </div>
       <div style={{ display: 'grid', gap: '4px' }}>
-        <div className="jp-scroll" ref={scrollRef}><Segments stages={p.stages} onParts={setPartsSheet} /></div>
+        <div className="jp-scroll" ref={scrollRef}><Segments stages={p.stages} onParts={setPartsSheet}
+          onCreateGraphics={() => router.push(createGraphicsHref || `/graphics?new=1&fromEstimate=${encodeURIComponent(data.estimateId)}`)} /></div>
         <span className="jp-swipe">Swipe for all 8 steps →</span>
       </div>
 

@@ -31,6 +31,29 @@ describe('deriveJobProgress', () => {
     expect(v.nextStep).toBe('Order the parts');
   });
 
+  it('graphics lines with no job: the step asks for one instead of being skipped', () => {
+    const v = deriveJobProgress(base({ graphicsLines: true }));
+    const g = v.stages.find(s => s.key === 'graphics')!;
+    expect(g.label).toBe('Needs graphics job');
+    expect(g.needsJob).toBe(true);
+    expect(g.state).toBe('todo');
+    expect(v.nextStep).toBe('Order the parts');
+    // Once the parts are ordered it becomes the blue step and says what to do.
+    const w = deriveJobProgress(base({ graphicsLines: true, parts: { total: 1, ordered: 1, received: 0, orderedAt: '2026-11-02T10:00:00Z', receivedAt: null } }));
+    expect(w.current).toBe('graphics');
+    expect(w.nextStep).toBe('Create the graphics job');
+    // Parts arriving first leave it held up, not green.
+    const x = deriveJobProgress(base({ graphicsLines: true, parts: { total: 1, ordered: 1, received: 1, orderedAt: '2026-11-02T10:00:00Z', receivedAt: '2026-11-03T10:00:00Z' } }));
+    expect(x.stages.find(s => s.key === 'graphics')!.state).toBe('held');
+  });
+
+  it('graphics lines with a live job read as the normal design step', () => {
+    const v = deriveJobProgress(base({ graphicsLines: true, graphics: [{ status: 'designing', approved: false, approvedAt: null }] }));
+    const g = v.stages.find(s => s.key === 'graphics')!;
+    expect(g.label).toBe('Graphic design');
+    expect(g.needsJob).toBeUndefined();
+  });
+
   it('all parts on a PO moves to graphics design', () => {
     const v = deriveJobProgress(base({
       parts: { total: 3, ordered: 3, received: 1, orderedAt: '2026-11-02T10:00:00Z', receivedAt: null },

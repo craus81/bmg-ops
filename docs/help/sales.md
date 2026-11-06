@@ -238,7 +238,23 @@ Each step moves by itself from what happens in FleetSuite (POs, receipts, proof 
 
 To see every open order by step, go to **More → Job Stages**.
 
+When the order has graphics lines (3M Vinyl, Graphics Install Labor, decals, a wrap quote) but nobody has made the graphics job yet, the Graphics step turns **orange** and reads **Needs graphics job**. Tap it to open the New Job form already filled in. Once the job exists, the step reads **Graphic design** and moves with the proof.
+
 To see which parts are in and which aren't, tap **Parts ordered** or **Parts in** on the bar, the **Parts & materials** tile (**See parts ›**), or the **Parts:** line in the customer card under it. A full-screen list opens with every part grouped as **Not ordered**, **Ordered, not in yet** and **In**, each with its PO number, vendor and ETA or how it came in. Filter with **All**, **Not in yet** or **In**. **Open the sales order's Parts card →** at the bottom jumps to the Parts card on the sales order page. Tap **Close** to go back.
+
+---
+
+## Create a graphics job from a sales order
+
+Open the sales order (**Sales → Sales orders**, search, or **Open sales order** on the estimate). When the order has graphics lines, a **Graphics** card sits under **Lines**.
+
+1. Tap **+ Create graphics job** on the Graphics card (or the orange **Needs graphics job** step on the progress bar).
+2. The New Job form opens on the Graphics board, filled in: customer, title from the memo, the graphics part numbers, quantity, what to make, install notes and the customer PO (or the SO #). An order from an estimate fills in from the estimate, including its wrap quote and fleet order.
+3. Pick the job type, check the details, and tap **Create**. You land back on the sales order, and the Graphics card lists the new job with its status.
+
+It works for orders typed straight into NetSuite too: those fill in from the order's own lines.
+
+Someone already made the job? Tap **Link an existing job…** on the Graphics card, search by job #, title or customer, and tap the job. A job already linked to a different order can't be picked. **+ Another graphics job** adds a second job to the same order.
 
 ---
 
