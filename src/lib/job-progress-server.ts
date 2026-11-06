@@ -23,7 +23,34 @@ import { isGraphicsLine } from './graphics-lines';
 type Db = SupabaseClient;
 
 export const JOB_PROGRESS_ESTIMATE_COLUMNS =
-  'id, estimate_number, title, customer_name, customer_approved, customer_approved_at, status, netsuite_so_id, fleet_checkin_id, fleet_group_id, parts_all_in_at, created_by, updated_at';
+  'id, estimate_number, title, customer_name, customer_approved, customer_approved_at, status, netsuite_so_id, fleet_checkin_id, fleet_group_id, parts_all_in_at, created_by, updated_at, created_at, vin';
+
+export interface JobVehicle { id: string; label: string; vin: string | null }
+
+export function normVin(raw: unknown): string | null {
+  const v = String(raw || '').trim().toUpperCase();
+  return v.length === 17 ? v : null;
+}
+
+/** A check-in made for, or naming, a different order is not this order's van. */
+export function vehicleBelongsElsewhere(v: { source_estimate_id?: string | null; netsuite_sales_order_id?: string | null }, estId: string, sos: { netsuite_id?: string | number | null }[]): boolean {
+  if (v.source_estimate_id && v.source_estimate_id !== estId) return true;
+  if (v.netsuite_sales_order_id && !sos.some(so => String(so.netsuite_id) === String(v.netsuite_sales_order_id))) return true;
+  return false;
+}
+
+/** A VIN match counts only for a check-in no more than 30 days before the order was written. */
+export function checkinNearOrder(checkinAt: string | null | undefined, orderAt: string | null | undefined): boolean {
+  if (!checkinAt) return false;
+  if (!orderAt) return true;
+  return Date.parse(checkinAt) >= Date.parse(orderAt) - 30 * 86400_000;
+}
+
+export function vehicleLabel(v: { vehicle_year?: string | number | null; vehicle_make?: string | null; vehicle_model?: string | null; vin?: string | null }): string {
+  const name = [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ').trim();
+  const tail = v.vin ? `VIN …${String(v.vin).slice(-6)}` : '';
+  return [name || 'Vehicle', tail].filter(Boolean).join(' · ');
+}
 
 export function isApprovedEstimate(est: { customer_approved?: boolean | null; status?: string | null }): boolean {
   return !!(est.customer_approved || est.status === 'accepted');
@@ -66,6 +93,8 @@ export interface JobProgressResult {
   soClosed: boolean;
   /** Fleet check-ins tied to the order. */
   vehicleIds: string[];
+  /** The same check-ins, labelled for the bar's "In shop" chip. */
+  vehicles: JobVehicle[];
   /** Every part on the order and where it stands (the bar's parts list). */
   parts: JobPart[];
   /** NetSuite id of the sales order, for its Parts card link. */
@@ -100,8 +129,8 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
     inChunks(ids, part => service.from('drop_ship_orders').select('estimate_id, lines, created_at, purchase_order_number, vendor_name').in('estimate_id', part)),
     inChunks(ids, part => service.from('shop_appointments').select('estimate_id, slot_date, slot_time, status')
       .in('estimate_id', part).eq('kind', 'dropoff').neq('status', 'cancelled')),
-    inChunks(soIds, part => service.from('netsuite_sales_orders').select('netsuite_id, tranid, status, status_label, estimate_id').in('netsuite_id', part)),
-    inChunks(ids, part => service.from('netsuite_sales_orders').select('netsuite_id, tranid, status, status_label, estimate_id').in('estimate_id', part)),
+    inChunks(soIds, part => service.from('netsuite_sales_orders').select('netsuite_id, tranid, status, status_label, estimate_id, vin').in('netsuite_id', part)),
+    inChunks(ids, part => service.from('netsuite_sales_orders').select('netsuite_id, tranid, status, status_label, estimate_id, vin').in('estimate_id', part)),
   ]);
 
   const projectToEst = new Map<string, string>();
@@ -200,13 +229,39 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
   for (const r of inbProj) { const e = projectToEst.get(r.source_id); if (e) push(inbByEst, e, r); }
 
   // ── Vehicles ──
-  const VEH = 'id, status, shop_stage, graphics_install_status, upfit_completed_at, created_at, updated_at, invoice_number, date_invoiced, source_estimate_id';
+  // A check-in counts as this order's vehicle when anything ties the two
+  // together (Craig 2026-11-06, "this probably needs to be more automatic"):
+  // the check-in was made from the estimate, the estimate or an Arriving row
+  // points at it, the check-in names the sales order, the graphics job
+  // matched that van, or its VIN is the order's VIN. Customer name alone
+  // never links: a dealer has many vans in at once (the "Link vehicle in
+  // shop" button covers that by hand).
+  const VEH = 'id, vin, vehicle_year, vehicle_make, vehicle_model, status, shop_stage, graphics_install_status, upfit_completed_at, created_at, updated_at, invoice_number, date_invoiced, source_estimate_id, netsuite_sales_order_id, matched_graphics_job_id';
   const linkedCheckins = new Map<string, string>(); // checkin → estimate
   for (const e of ests) if (e.fleet_checkin_id) linkedCheckins.set(e.fleet_checkin_id, e.id);
   for (const [estId, rows] of inbByEst) for (const r of rows) if (r.fleet_checkin_id) linkedCheckins.set(r.fleet_checkin_id, estId);
-  const [vehBySource, vehById] = await Promise.all([
+  const estBySoId = new Map<string, string>();
+  for (const [estId, sos] of soByEst) for (const so of sos) if (so.netsuite_id) estBySoId.set(String(so.netsuite_id), estId);
+  const estByVin = new Map<string, string>();
+  for (const e of ests) {
+    const vins = [e.vin, ...(soByEst.get(e.id) || []).map(so => so.vin)];
+    for (const raw of vins) {
+      const vin = normVin(raw);
+      if (vin && !estByVin.has(vin)) estByVin.set(vin, e.id);
+    }
+  }
+  const soLinks = await inChunks([...estBySoId.keys()], part => service.from('fleet_checkin_sales_orders')
+    .select('checkin_id, netsuite_sales_order_id').in('netsuite_sales_order_id', part));
+  for (const r of soLinks) {
+    const estId = estBySoId.get(String(r.netsuite_sales_order_id));
+    if (estId && r.checkin_id && !linkedCheckins.has(r.checkin_id)) linkedCheckins.set(r.checkin_id, estId);
+  }
+  const [vehBySource, vehById, vehBySo, vehByJob, vehByVin] = await Promise.all([
     inChunks(ids, part => service.from('fleet_checkins').select(VEH).in('source_estimate_id', part)),
     inChunks([...linkedCheckins.keys()], part => service.from('fleet_checkins').select(VEH).in('id', part)),
+    inChunks([...estBySoId.keys()], part => service.from('fleet_checkins').select(VEH).in('netsuite_sales_order_id', part)),
+    inChunks([...jobToEst.keys()], part => service.from('fleet_checkins').select(VEH).in('matched_graphics_job_id', part)),
+    inChunks([...estByVin.keys()], part => service.from('fleet_checkins').select(VEH).in('vin', part)),
   ]);
   const vehByEst = new Map<string, Map<string, any>>();
   const addVeh = (estId: string | undefined, v: any) => {
@@ -217,6 +272,19 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
   };
   for (const v of vehBySource) addVeh(v.source_estimate_id, v);
   for (const v of vehById) addVeh(linkedCheckins.get(v.id), v);
+  for (const v of vehBySo) addVeh(estBySoId.get(String(v.netsuite_sales_order_id)), v);
+  for (const v of vehByJob) addVeh(jobToEst.get(v.matched_graphics_job_id), v);
+  const estById = new Map(ests.map(e => [e.id as string, e]));
+  for (const v of vehByVin) {
+    const estId = estByVin.get(normVin(v.vin) || '');
+    const est = estId ? estById.get(estId) : null;
+    if (!estId || !est) continue;
+    if (vehicleBelongsElsewhere(v, estId, soByEst.get(estId) || [])) continue;
+    // The same van comes back for later jobs: only a visit from around the
+    // time of this order counts, never one from a job long before it.
+    if (!checkinNearOrder(v.created_at, est.created_at)) continue;
+    addVeh(estId, v);
+  }
   const vehicleIds = [...vehByEst.values()].flatMap(m => [...m.keys()]);
   const history = await inChunks(vehicleIds, part => service.from('vehicle_status_history')
     .select('vehicle_id, to_status, created_at').in('vehicle_id', part).in('to_status', ['in_progress', 'complete', 'shipped']));
@@ -422,6 +490,7 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
       soNumber: sos.map(s => s.tranid).filter(Boolean)[0] || null,
       soClosed: sos.length > 0 && sos.every(s => !isOpenSalesOrderStatus(s.status, s.status_label)),
       vehicleIds: vehicles.map(v => v.id),
+      vehicles: vehicles.map(v => ({ id: v.id as string, label: vehicleLabel(v), vin: v.vin || null })),
       parts: describeJobParts([...traces.values()], est.parts_all_in_at || null),
       soNetsuiteId: sos.map(so => String(so.netsuite_id)).filter(Boolean)[0] || null,
     });

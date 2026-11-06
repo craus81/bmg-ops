@@ -242,6 +242,8 @@ When the order has graphics lines (3M Vinyl, Graphics Install Labor, decals, a w
 
 To see which parts are in and which aren't, tap **Parts ordered** or **Parts in** on the bar, the **Parts & materials** tile (**See parts ›**), or the **Parts:** line in the customer card under it. A full-screen list opens with every part grouped as **Not ordered**, **Ordered, not in yet** and **In**, each with its PO number, vendor and ETA or how it came in. Filter with **All**, **Not in yet** or **In**. **Open the sales order's Parts card →** at the bottom jumps to the Parts card on the sales order page. Tap **Close** to go back.
 
+**Vehicle arrived** and **Install** follow the vehicle on the In-Shop board. A checked-in vehicle ties to the order on its own when its VIN matches the order's VIN, the check-in names the sales order, or the graphics job already matched that van. Once tied, the bar shows **In shop:** with the vehicle; tap it to open the vehicle on the In-Shop board. If nothing tied it (for example a dealer van checked in without the SO), tap **🚗 Link vehicle in shop** under the bar, pick the van from the customer's vehicles in the shop (search or **Show the other vehicles in the shop** for the rest), and the bar moves. It's the same link as **Link Checked-In Vehicle** on the estimate.
+
 ---
 
 ## Create a graphics job from a sales order
