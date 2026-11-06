@@ -306,6 +306,19 @@ Each invoice row on the page has **Print** and **Email**, and shows when, by who
 
 ---
 
+## Invoice a vehicle when you finish it, with changes
+
+When a vehicle on **In-Shop** is marked complete, the completion window has a **NetSuite Invoice · admin** box with one row per sales order on the vehicle.
+
+- **Invoice SO …** bills the order exactly as it is.
+- **✎ Adjust & invoice** opens the order's lines first. Change a quantity or price (a removal that took longer, more vinyl), or tap **+ Add line** to add a part or labor item. Then tap **Save N changes & invoice**. FleetSuite saves the changes to the sales order in NetSuite, then fulfills and invoices it.
+
+Billed lines are locked, and a quantity can't go below what already shipped. To remove or close a line, use the sales order page. If the save fails, nothing is invoiced and the reason shows in red.
+
+After it's billed, the row has **Print / PDF** and **✉ Email**. Nothing is emailed to the customer until you press Send.
+
+---
+
 ## Make an invoice from nothing
 
 1. Go to **Invoicing → + New invoice**.
