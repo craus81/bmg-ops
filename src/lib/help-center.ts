@@ -70,6 +70,7 @@ export const PAGE_GUIDES: { prefix: string; slug: string }[] = [
   { prefix: '/customer', slug: 'customer' },
   { prefix: '/admin/prospects', slug: 'sales' },
   { prefix: '/admin/wrap-quote', slug: 'sales' },
+  { prefix: '/admin/purchasing', slug: 'workflows/edit-vendor-po' },
   { prefix: '/admin', slug: 'admin' },
   { prefix: '/home', slug: 'getting-started' },
 ];

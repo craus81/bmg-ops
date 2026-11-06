@@ -36,6 +36,8 @@ to ship. Read this first if you're new to the app.
 - `workflows/magic-link-approvals.md`
 - `workflows/estimate-to-invoice.md`
 - `workflows/install-completion.md`
+- `workflows/edit-vendor-po.md` — change a vendor PO's parts, prices,
+  dates or ship-to, or move parts to another vendor.
 - `workflows/import-rfid-installs.md` — bulk-import a spreadsheet of
   CNI RFID installs (VIN, SN, IMEI, CCID).
 

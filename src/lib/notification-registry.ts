@@ -173,6 +173,13 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
   { type: 'po_received', label: 'PO received', description: 'Parts arrived against a purchase order.', area: 'purchasing', defaultChannels: ['in_app'], audience: 'Users who opted in with "New Purchase Orders".' },
   { type: 'po_eta_changed', label: 'PO delivery date moved', description: 'A vendor changed the promised arrival on an open PO.', area: 'purchasing', defaultChannels: ['in_app'] },
   { type: 'auto_reorder', label: 'Stock hit its reorder point', description: 'An item dropped to the level where it needs reordering.', area: 'purchasing', defaultChannels: ['in_app', 'push'], audience: 'Whoever has Purchasing in their Dashboard focus (Admin → Users), else the super admins.' },
+  // Edit PO on Vendor POs (Craig, 2026-11-06): only Craig hears, through
+  // "Copy me on new alerts"; the person who made the edit doesn't.
+  { type: 'vendor_po_edited', label: 'Vendor PO edited', description: 'Someone changed a vendor PO with Edit PO: quantities, prices, parts, memo, expected date, ship-to, or parts moved to another vendor. Lists what changed and opens the PO on Purchasing → Vendor POs.', area: 'purchasing', defaultChannels: ['in_app', 'push'], emailNow: true,
+    fixedChannels: {
+      email: { reason: 'Emailed only to anyone with "Copy me on new alerts" ticked (Admin → Users → Settings).', on: p => p?.copy_new_alerts === true },
+    },
+    audience: 'Only anyone with "Copy me on new alerts" (Admin → Users → Settings), never the person who made the edit.' },
   { type: 'price_drift', label: 'Part cost moved', description: 'A part is being bought at a materially different price than before.', area: 'purchasing', defaultChannels: ['in_app'], audience: 'Whoever has Purchasing in their Dashboard focus (Admin → Users), else the super admins.' },
 
   // ── Invoicing & money ─────────────────────────────────────────────────
