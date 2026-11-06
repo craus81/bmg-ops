@@ -26,6 +26,7 @@ import FulfillInvoiceModal from '@/components/FulfillInvoiceModal';
 import EmailInvoicesModal from '@/components/EmailInvoicesModal';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import SentBox from '@/components/SentBox';
+import JobProgressBar from '@/components/JobProgressBar';
 import { docRef } from '@/lib/document-sends';
 import { isBadDelivery } from '@/lib/invoice-emails';
 import { lineAllows, isFullyBilled, type SoLine, type SoHeader, type SoLineEdit, type SoNewLine } from '@/lib/sales-order-edit';
@@ -453,6 +454,9 @@ export default function SalesOrderPage() {
           Saved to NetSuite: {saved.join('; ')}.
         </div>
       )}
+
+      {/* ── Job progress (Valarie's bar, 2026-11-06): only once the order has an approved estimate ── */}
+      {data.estimate && <JobProgressBar refTo={{ estimate: data.estimate.id }} />}
 
       {/* ── Lines ── */}
       <div style={card}>

@@ -22,6 +22,7 @@ import { deepLinks } from '@/lib/deep-links';
 import { storage, storageDownloadUrl } from '@/lib/storage';
 import { isNativeApp, isViewableInApp, fetchStoredFile, canShareFiles } from '@/lib/native-files';
 import ProofViewer from '@/components/ProofViewer';
+import JobProgressBar from '@/components/JobProgressBar';
 import TopSaveBar from '@/components/TopSaveBar';
 import { apiFetch } from '@/lib/api-client';
 import { useAuth } from '@/components/AuthProvider';
@@ -1277,6 +1278,9 @@ export default function GraphicsJobRecordPage() {
           </button>
         ))}
       </div>
+
+      {/* ── Job progress (Valarie's bar, 2026-11-06): the whole order this job belongs to ── */}
+      {job.estimate_id && <JobProgressBar key={`jp-${job.estimate_id}-${job.status}`} refTo={{ estimate: job.estimate_id }} />}
 
       {/* ── Status controls + actions ── */}
       <div style={card}>
