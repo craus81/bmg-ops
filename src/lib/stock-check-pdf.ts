@@ -167,7 +167,7 @@ export function buildStockCheckPdf(data: StockCheckData, opts?: { logo?: string 
     head: [['Part', 'Needed', 'On hand', 'Available', 'On order', 'Requesting', 'Counted', 'OK']],
     body: data.lines.length > 0 ? stockCheckRows(data.lines) : [['No parts on this estimate', '', '', '', '', '', '', '']],
     styles: { fontSize: 10, cellPadding: 6, valign: 'middle' },
-    headStyles: { fillColor: [37, 99, 235], textColor: 255, fontSize: 9 },
+    headStyles: { fillColor: [238, 64, 35], textColor: 255, fontSize: 9 },
     margin: { left: margin, right: margin, bottom: 50 },
     columnStyles: {
       0: { cellWidth: 'auto' },

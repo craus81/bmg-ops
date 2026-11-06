@@ -158,7 +158,7 @@ export function buildCountSheetPdf(data: CountSheetData, opts?: { logo?: string 
     head: [['#', 'Item', 'Counted']],
     body: data.lines.length > 0 ? countSheetRows(data.lines) : [['', 'Nothing left to count on this sheet', '']],
     styles: { fontSize: 10, cellPadding: 6, valign: 'middle' },
-    headStyles: { fillColor: [37, 99, 235], textColor: 255, fontSize: 9 },
+    headStyles: { fillColor: [238, 64, 35], textColor: 255, fontSize: 9 },
     margin: { left: margin, right: margin, bottom: 50 },
     columnStyles: {
       0: { cellWidth: 34, halign: 'right', textColor: 110 },

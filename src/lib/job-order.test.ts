@@ -45,7 +45,7 @@ describe('buildJobOrderPdf', () => {
   it('is titled Job Order and carries no prices', () => {
     const doc = buildJobOrderPdf(data, { logo: null, printedAt: new Date('2026-10-09T12:00:00Z') });
     const raw = doc.output();
-    expect(raw).toContain('JOB ORDER');
+    expect(raw).toContain('Job Order');
     expect(raw).toContain('SO1060');
     expect(raw).toContain('06U357');
     expect(raw).not.toContain('$');

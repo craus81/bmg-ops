@@ -181,7 +181,7 @@ export function buildQuoteDocPdf(model: QuoteDocModel, opts: QuoteDocPdfOptions 
       head: [['Item', model.columns.qty, model.columns.rate, 'Total']],
       body: model.rows.map(r => [cell(r, 'itemHtml'), cell(r, 'qtyHtml'), cell(r, 'rateHtml'), cell(r, 'totalHtml')]),
       styles: { fontSize: 9, cellPadding: 5, valign: 'top' },
-      headStyles: { fillColor: [37, 99, 235], fontSize: 8.5 },
+      headStyles: { fillColor: [238, 64, 35], fontSize: 8.5 },
       columnStyles: {
         1: { halign: 'right', cellWidth: 40 },
         2: { halign: 'right', cellWidth: 64 },

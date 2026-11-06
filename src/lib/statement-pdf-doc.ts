@@ -150,7 +150,7 @@ export function buildStatementPdf(data: StatementPdfData): jsPDF {
     body: rows,
     foot: [['', '', '', '', 'Total balance due', '', usd(total)]],
     styles: { fontSize: 9, cellPadding: 5 },
-    headStyles: { fillColor: [37, 99, 235], fontSize: 8.5 },
+    headStyles: { fillColor: [238, 64, 35], fontSize: 8.5 },
     footStyles: { fillColor: [244, 244, 244], textColor: 20, fontStyle: 'bold' },
     columnStyles: { 5: { halign: 'right' }, 6: { halign: 'right' } },
     didParseCell: (hook) => {

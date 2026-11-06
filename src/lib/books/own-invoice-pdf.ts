@@ -261,7 +261,7 @@ export function buildOwnInvoicePdf(data: InvoicePdfData): jsPDF {
     ],
     showFoot: 'lastPage',
     styles: { fontSize: 9, cellPadding: 5 },
-    headStyles: { fillColor: [37, 99, 235], fontSize: 8.5 },
+    headStyles: { fillColor: [238, 64, 35], fontSize: 8.5 },
     footStyles: { fillColor: [255, 255, 255], textColor: 20 },
     columnStyles: { 0: { cellWidth: 90 }, 2: { halign: 'right', cellWidth: 48 }, 3: { halign: 'right', cellWidth: 70 }, 4: { halign: 'right', cellWidth: 80 } },
   });
