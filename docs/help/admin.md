@@ -170,6 +170,15 @@ right context.
 
 ---
 
+## Email a purchase order to the vendor
+
+1. Go to **Purchasing → Vendor POs** and tap **✉ Email vendor** on the PO (or use the button on a drop ship order).
+2. Check the vendor's email address, add a note if you like, and send.
+
+The email carries FleetSuite's own PO PDF: BMG logo, the vendor and its address, ship to, PO date, terms, expected date, who ordered it, the sales order it's for, each line with cost, the total and the memo. It's drawn from the PO as NetSuite has it at that moment, so a change you just saved shows up. If FleetSuite can't read the PO from NetSuite, nothing is sent and a red message says why; try again in a minute.
+
+NetSuite's own print form is still there on the **📄 PDF** links if you need it.
+
 ## Run a NetSuite report
 
 1. Go to **Admin → Reports**.

@@ -449,7 +449,7 @@ export default function VendorPosTab({ isAdmin, onChanged, startNew = false, ini
         <EmailComposeModal
           title={`Email ${emailingPo.vendor_name || 'vendor'} · PO ${emailingPo.tranid || ''}`}
           stateKey={`vendor-po-email:${emailingPo.id}${emailMessage ? ':edit' : ''}`}
-          intro={<div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>The PO PDF from NetSuite is attached.</div>}
+          intro={<div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>FleetSuite's PO PDF is attached.</div>}
           messagePlaceholder="Optional note to the vendor"
           initialMessage={emailMessage}
           sendLabel="Send to vendor"

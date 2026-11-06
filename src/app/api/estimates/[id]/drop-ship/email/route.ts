@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { makePurchaseOrderPdf } from '@/lib/po-pdf-server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireAdmin } from '@/lib/api-auth';
 import { validateBody, z } from '@/lib/validate';
 import { repFromName, sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { getEmailSignature, renderSignatureHtml } from '@/lib/email-signature';
-import { getNetSuitePdf, getVendorContact } from '@/lib/netsuite';
+import { getVendorContact } from '@/lib/netsuite';
 import { buildDropShipVendorEmail, EMPTY_SHIP_TO, type ShipTo } from '@/lib/drop-ship';
 import { logAudit } from '@/lib/audit';
 
@@ -27,7 +28,7 @@ const Schema = z.object({
  * POST /api/estimates/[id]/drop-ship/email — "Email vendor…" after a drop
  * ship PO is made. The standard compose contract (docs/customer-email-
  * standard.md): preview renders with no side effects and prefills To with
- * the vendor's NetSuite email; a real send attaches the PO PDF from NetSuite
+ * the vendor's NetSuite email; a real send attaches FleetSuite's own PO PDF
  * and fails before sending when the PDF can't be made. Never automatic.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -70,16 +71,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!p.emails.length) return NextResponse.json({ error: 'Enter at least one recipient email address.' }, { status: 400 });
 
   // The PO PDF goes first; no PDF, no send.
-  const pdf = await getNetSuitePdf('purchaseOrder', String(ds.purchase_order_id), { timeoutMs: 45_000 });
-  if (!pdf.success || !pdf.pdfBase64) {
-    return NextResponse.json({ error: `Could not get the PO PDF from NetSuite, so nothing was sent: ${pdf.error || 'no PDF came back'}` }, { status: 502 });
+  // FleetSuite's own PO PDF, drawn from the live NetSuite record (Craig, 2026-11-06).
+  const pdf = await makePurchaseOrderPdf(supabase, String(ds.purchase_order_id));
+  if (!pdf.ok) {
+    return NextResponse.json({ error: `Could not make the PO PDF, so nothing was sent: ${pdf.error}` }, { status: 502 });
   }
 
   const { data: me } = await supabase.from('profiles').select('full_name').eq('id', auth.user.id).maybeSingle();
   const bcc = p.bccSelf && auth.user.email ? [auth.user.email] : undefined;
   const { ok } = await sendEmailDetailed(
     p.emails, subject, html, undefined,
-    [{ filename: pdfName, content: Buffer.from(pdf.pdfBase64, 'base64'), contentType: 'application/pdf' }],
+    [{ filename: pdfName, content: pdf.buffer, contentType: 'application/pdf' }],
     auth.user.email || undefined, bcc,
     {
       kind: 'drop_ship_po',

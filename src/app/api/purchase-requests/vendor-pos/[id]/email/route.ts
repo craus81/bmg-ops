@@ -5,7 +5,8 @@ import { validateBody, z } from '@/lib/validate';
 import { buildNotificationEmail, repFromName, sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { getEmailSignature } from '@/lib/email-signature';
-import { getNetSuitePdf, getVendorContact } from '@/lib/netsuite';
+import { getVendorContact } from '@/lib/netsuite';
+import { makePurchaseOrderPdf } from '@/lib/po-pdf-server';
 import { docRef } from '@/lib/document-sends';
 import { logAudit } from '@/lib/audit';
 
@@ -27,7 +28,7 @@ const Schema = z.object({
  * Purchasing → Vendor POs (Craig, 2026-10-31). [id] is the netsuite_vendor_pos
  * row. The standard compose contract: preview suggests the vendor's email
  * (the vendor mirror, else NetSuite's vendor record) with no side effects; a
- * real send attaches NetSuite's PO PDF and fails before sending when the PDF
+ * real send attaches FleetSuite's own PO PDF (src/lib/po-pdf.ts) and fails before sending when the PDF
  * can't be made. Never automatic. Logged as vendor_po:<PO number>.
  */
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -74,16 +75,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!p.emails.length) return NextResponse.json({ error: 'Enter at least one recipient email address.' }, { status: 400 });
 
   // The PO PDF goes first; no PDF, no send.
-  const pdf = await getNetSuitePdf('purchaseOrder', String(po.netsuite_id), { timeoutMs: 45_000 });
-  if (!pdf.success || !pdf.pdfBase64) {
-    return NextResponse.json({ error: `Could not get the PO PDF from NetSuite, so nothing was sent: ${pdf.error || 'no PDF came back'}` }, { status: 502 });
+  // FleetSuite's own PO PDF, drawn from the live NetSuite record (Craig, 2026-11-06).
+  const pdf = await makePurchaseOrderPdf(supabase, String(po.netsuite_id));
+  if (!pdf.ok) {
+    return NextResponse.json({ error: `Could not make the PO PDF, so nothing was sent: ${pdf.error}` }, { status: 502 });
   }
 
   const { data: me } = await supabase.from('profiles').select('full_name').eq('id', auth.user.id).maybeSingle();
   const bcc = p.bccSelf && auth.user.email ? [auth.user.email] : undefined;
   const { ok } = await sendEmailDetailed(
     p.emails, subject, html, undefined,
-    [{ filename: pdfName, content: Buffer.from(pdf.pdfBase64, 'base64'), contentType: 'application/pdf' }],
+    [{ filename: pdfName, content: pdf.buffer, contentType: 'application/pdf' }],
     auth.user.email || undefined, bcc,
     {
       kind: 'vendor_po',
