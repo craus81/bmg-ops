@@ -129,9 +129,13 @@ export interface FormPdfData {
     widths?: Record<number, number>;
     /** A column drawn as an empty tick box. */
     tickColumn?: number;
+    /** Which rows get the tick box; all when left out. */
+    tickRows?: boolean[];
     foot?: { label: string; value: string; bold?: boolean }[];
   };
   memo?: string | null;
+  /** Short labelled notes after the memo (a packing slip's delivery details). */
+  notes?: { label: string; value: string }[];
   footer?: string | null;
   signoffs?: string[];
   letterhead: { company: CompanyProfile | null; logoDataUrl: string | null } | null;
@@ -231,6 +235,7 @@ export function buildFormPdf(data: FormPdfData, into?: jsPDF): jsPDF {
     columnStyles: colStyles,
     didDrawCell: (hook) => {
       if (hook.section !== 'body' || hook.column.index !== t.tickColumn) return;
+      if (t.tickRows && !t.tickRows[hook.row.index]) return;
       const s = 9;
       doc.setDrawColor(90).setLineWidth(0.8).rect(hook.cell.x + (hook.cell.width - s) / 2, hook.cell.y + (hook.cell.height - s) / 2, s, s);
     },
@@ -243,11 +248,22 @@ export function buildFormPdf(data: FormPdfData, into?: jsPDF): jsPDF {
     doc.text(memo, MARGIN, noteY);
     noteY += memo.length * 11 + 8;
   }
+  for (const n of data.notes ?? []) {
+    if (blank(n.value)) continue;
+    doc.setFontSize(9).setFont('helvetica', 'bold').setTextColor(55, 65, 81).text(`${pageText(n.label)}:`, MARGIN, noteY);
+    const wrapped = doc.splitTextToSize(pageText(n.value), pageW - MARGIN * 2 - 100) as string[];
+    doc.setFont('helvetica', 'normal').text(wrapped, MARGIN + 100, noteY);
+    noteY += wrapped.length * 11 + 4;
+  }
+  if (data.notes?.length) noteY += 6;
   if (!blank(data.footer)) {
     doc.setFontSize(8.5).setTextColor(100).text(pageText(data.footer!), MARGIN, noteY, { maxWidth: pageW - MARGIN * 2 });
+    noteY += 24;
   }
 
   if (data.signoffs?.length) {
+    // Room for the lines under what's drawn, or they go on a page of their own.
+    if (noteY > pageH - 100) doc.addPage();
     const lineY = pageH - 70;
     const w = (pageW - MARGIN * 2 - 30 * (data.signoffs.length - 1)) / data.signoffs.length;
     data.signoffs.forEach((label, i) => {

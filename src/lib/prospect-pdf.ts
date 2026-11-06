@@ -130,7 +130,7 @@ export function exportProspectPDF(data: ProspectPDFData) {
         ['Last Order', fmtDate(m.last_order_date)],
       ],
       styles: { fontSize: 9 },
-      headStyles: { fillColor: [37, 99, 235], textColor: 255 },
+      headStyles: { fillColor: [238, 64, 35], textColor: 255 },
       margin: { left: margin, right: margin },
       tableWidth: (pageW - margin * 2) / 2 - 6,
     });
@@ -149,7 +149,7 @@ export function exportProspectPDF(data: ProspectPDFData) {
         c.phone || '',
       ]),
       styles: { fontSize: 9, cellPadding: 4 },
-      headStyles: { fillColor: [37, 99, 235], textColor: 255 },
+      headStyles: { fillColor: [238, 64, 35], textColor: 255 },
       margin: { left: margin, right: margin },
     });
     y = (doc as any).lastAutoTable.finalY + 16;
@@ -168,7 +168,7 @@ export function exportProspectPDF(data: ProspectPDFData) {
         fmtDate(o.expected_close_date),
       ]),
       styles: { fontSize: 9, cellPadding: 4 },
-      headStyles: { fillColor: [37, 99, 235], textColor: 255 },
+      headStyles: { fillColor: [238, 64, 35], textColor: 255 },
       margin: { left: margin, right: margin },
     });
     y = (doc as any).lastAutoTable.finalY + 16;
@@ -186,7 +186,7 @@ export function exportProspectPDF(data: ProspectPDFData) {
         a.creator_name || '',
       ]),
       styles: { fontSize: 9, cellPadding: 4 },
-      headStyles: { fillColor: [37, 99, 235], textColor: 255 },
+      headStyles: { fillColor: [238, 64, 35], textColor: 255 },
       margin: { left: margin, right: margin },
       columnStyles: { 2: { cellWidth: 'auto' } },
     });
@@ -205,7 +205,7 @@ export function exportProspectPDF(data: ProspectPDFData) {
         d.status,
       ]),
       styles: { fontSize: 9, cellPadding: 4 },
-      headStyles: { fillColor: [37, 99, 235], textColor: 255 },
+      headStyles: { fillColor: [238, 64, 35], textColor: 255 },
       margin: { left: margin, right: margin },
     });
     y = (doc as any).lastAutoTable.finalY + 16;

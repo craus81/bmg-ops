@@ -181,6 +181,8 @@ NetSuite's own print form is still there on the **📄 PDF** links if you need i
 
 Sales orders and invoices work the same way: **Email** on a sales order, every invoice email (one or several, statements) and the customer portal all attach FleetSuite's own PDF, drawn from what NetSuite holds at that moment, so older invoices get it too. An invoice paid in full says **Paid** under its number.
 
+Every FleetSuite form now shares one look with red BMG headings: estimates, POs, sales orders, invoices, statements, job orders (the board copy, End user in a red box), packing lists, stock check and count sheets.
+
 ## Run a NetSuite report
 
 1. Go to **Admin → Reports**.
