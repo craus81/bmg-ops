@@ -16,6 +16,8 @@ import { deriveJobProgress, chicagoToday, type JobProgressInput, type JobProgres
 import { normalizeItemNumber } from './incoming-parts';
 import { isOpenSalesOrderStatus } from './parts-demand';
 import { VEHICLE_ROW_LABELS, vehicleRowKey } from './types';
+import { loadSoPartsCover } from './so-parts-cover-server';
+import type { SoPartsCover } from './so-parts-cover';
 
 type Db = SupabaseClient;
 
@@ -194,6 +196,19 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
   const invByEst = new Map<string, any[]>();
   for (const r of invRows) push(invByEst, r.estimate_id, r);
 
+  // ── Parts ordered on the sales order: on a PO or in stock (2026-11-06,
+  //    src/lib/so-parts-cover.ts). A failure just leaves the request count. ──
+  let covers = new Map<string, SoPartsCover>();
+  const openSoIds = [...soByEst.values()].flat()
+    .filter(so => isOpenSalesOrderStatus(so.status, so.status_label)).map(so => String(so.netsuite_id));
+  if (openSoIds.length > 0) {
+    try {
+      covers = await loadSoPartsCover(service, openSoIds);
+    } catch (e) {
+      console.error('job progress: parts check failed', e);
+    }
+  }
+
   for (const est of ests) {
     const estId: string = est.id;
     const liveJobs = jobsByEst.get(estId) || [];
@@ -228,6 +243,23 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
         if (k) parts.set(k, { ordered: true, received: true });
       }
       orderedAt = latest(orderedAt, d.created_at || null);
+    }
+    // The sales order's own check counts stock and every part line, not just
+    // what was requested: a part filled from the shelf is ordered and in.
+    for (const so of sos) {
+      const cover = covers.get(String(so.netsuite_id));
+      if (!cover) continue;
+      for (const p of cover.parts) {
+        const cur = parts.get(p.item_number);
+        if (cover.marked || p.state === 'po' || p.state === 'mixed') {
+          parts.set(p.item_number, { ordered: true, received: cur?.received ?? false });
+        } else if (p.state === 'stock') {
+          parts.set(p.item_number, { ordered: true, received: true });
+        } else if (!cur) {
+          parts.set(p.item_number, { ordered: false, received: false });
+        }
+      }
+      if (cover.marked) orderedAt = latest(orderedAt, cover.marked.at);
     }
     const partList = [...parts.values()];
 

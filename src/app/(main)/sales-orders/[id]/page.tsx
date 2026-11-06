@@ -27,6 +27,7 @@ import EmailInvoicesModal from '@/components/EmailInvoicesModal';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import SentBox from '@/components/SentBox';
 import JobProgressBar from '@/components/JobProgressBar';
+import { SoPartsCard } from '@/components/SoPartsCover';
 import { docRef } from '@/lib/document-sends';
 import { isBadDelivery } from '@/lib/invoice-emails';
 import { lineAllows, isFullyBilled, type SoLine, type SoHeader, type SoLineEdit, type SoNewLine } from '@/lib/sales-order-edit';
@@ -457,6 +458,9 @@ export default function SalesOrderPage() {
 
       {/* ── Job progress (Valarie's bar, 2026-11-06): only once the order has an approved estimate ── */}
       {data.estimate && <JobProgressBar refTo={{ estimate: data.estimate.id }} />}
+
+      {/* ── Parts ordered: every part on a PO or in stock (2026-11-06) ── */}
+      {!editing && <SoPartsCard netsuiteId={id} />}
 
       {/* ── Lines ── */}
       <div style={card}>

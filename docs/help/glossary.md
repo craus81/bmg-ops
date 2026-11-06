@@ -40,6 +40,10 @@ the customer's defaults.
 **Magic link** — A single-use link sent by email or SMS. Lets a
 customer approve work without logging in.
 
+**Parts ordered** — A sales order where every part is on a vendor PO
+or in stock that no other order is holding. Shows green on **Sales
+orders**. See `workflows/estimate-to-invoice.md`.
+
 **Pick-list** — The mobile installer page for one vehicle. Shows
 proofs, install context, the QC checklist, photo timeline, and the
 **Mark Complete** button.

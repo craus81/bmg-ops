@@ -28,6 +28,34 @@ see `full-job-walkthrough.md`.
 
 ---
 
+## Green "Parts ordered" sales orders
+
+On **Sales → Sales orders**, an open order turns **green** with a
+**✓ Parts ordered** badge once every part on it is covered:
+
+- **On a PO**: the part was ordered for this job (Request parts → PO,
+  or a drop ship).
+- **In stock**: it's on the shelf and not held for another order.
+  Reserved parts go to their job first, then older orders get the shelf
+  before newer ones, so two orders never count the same part.
+
+Labor, freight and other 06 service lines don't count. Until every
+part is covered the row shows a gray **5 of 7 ready**; tap it to see
+which parts are still missing.
+
+The sales order page has a **Parts** card with the same list. If you
+know the parts are covered but FleetSuite's stock is off, an admin can
+tap **✓ Mark parts ordered**. The card says who marked it and when.
+**Undo mark** takes it off, and the mark goes away by itself if a new
+part is added to the order. The **Parts ordered** step on the job
+progress bar uses the same check.
+
+The list works from FleetSuite's copy of NetSuite (refreshed every 2
+hours), so a brand-new order or a PO made straight in NetSuite can take
+a while to show, or may need the hand mark.
+
+---
+
 ## Every line needs a NetSuite item
 
 NetSuite estimate/SO lines require a real item — there's no free-text
