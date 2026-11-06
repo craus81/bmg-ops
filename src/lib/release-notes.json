@@ -2,6 +2,16 @@
   {
     "date": "2026-11-06",
     "kind": "new",
+    "text": "Create a graphics job right from a sales order, filled in from the order's lines. The progress bar shows an orange Needs graphics job step until someone does.",
+    "where": "Sales order → Graphics card → + Create graphics job",
+    "areas": [
+      "sales",
+      "graphics"
+    ]
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
     "text": "Tap the parts steps on the job progress bar to see which parts are in and which are still coming.",
     "where": "Job progress bar → Parts ordered / Parts in",
     "areas": [

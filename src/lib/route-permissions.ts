@@ -561,6 +561,9 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/sales-orders/items/route.ts': admin(),
   'src/app/api/sales-orders/[id]/fulfill-invoice/route.ts': admin(),
   'src/app/api/sales-orders/[id]/email/route.ts': admin(),
+  // Graphics card on the sales order page (Craig 2026-11-06): prefill the New
+  // Job form from the order, search and link jobs. Staff, like the form.
+  'src/app/api/sales-orders/[id]/graphics/route.ts': staff(),
   'src/app/api/sales-orders/[id]/parts/route.ts': { kind: 'staff', contains: ['requireStaff(', 'requireAdmin('] },
   'src/app/api/netsuite/sales-orders/route.ts': staff(),
   'src/app/api/netsuite/so-invoices/route.ts': staff(),

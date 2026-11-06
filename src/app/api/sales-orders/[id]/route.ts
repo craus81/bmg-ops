@@ -10,6 +10,8 @@ import { parseSalesOrderRecord, planSalesOrderEdit, type SalesOrderView } from '
 import { refreshSalesOrderMirror } from '@/lib/sales-order-mirror-refresh';
 import { findSoInvoices } from '@/lib/so-invoices';
 import { fetchEmailedByNumber, type EmailedInfo } from '@/lib/invoice-emails';
+import { soGraphicsLines } from '@/lib/so-graphics';
+import { loadSoGraphicsCatalog, loadSoGraphicsJobs } from '@/lib/so-graphics-server';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -21,7 +23,8 @@ export const maxDuration = 60;
  * a note (audit history, the mirror row, the estimate's "changed" stamp).
  *
  *   GET   (staff)  order + lines + invoices (with when/who/to whom each was
- *                  emailed) + linked estimate/job + history.
+ *                  emailed) + linked estimate/job + history + the
+ *                  Graphics card (graphics lines, linked graphics jobs).
  *                  Prices and totals are left out for anyone without
  *                  See prices.
  *   PATCH (admin)  { lastModified, header?, lines?, add? } — planned by
@@ -70,6 +73,14 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     findSoInvoices([params.id]).then(r => r.invoices.get(params.id) || []).catch(() => null),
   ]);
 
+  // The Graphics card (Craig 2026-11-06): which lines are graphics, and the
+  // order's graphics jobs. A failed read shows the card without them.
+  const [gfxCatalog, gfxJobs] = await Promise.all([
+    loadSoGraphicsCatalog(supabase, parsed.lines.map(l => l.itemNumber)).catch(() => undefined),
+    loadSoGraphicsJobs(supabase, params.id, estimateRes.data?.id || null).catch(() => null),
+  ]);
+  const gfxLines = soGraphicsLines(parsed.lines, gfxCatalog);
+
   // Has each invoice been emailed to the customer, when, by whom, to whom.
   const invoiceNumbers = (invoicesRes || []).map(inv => inv.tranid).filter(Boolean);
   const [emailed, sentByRes] = invoiceNumbers.length === 0
@@ -101,6 +112,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     seeMoney,
     estimate: estimateRes.data ? { id: estimateRes.data.id, number: estimateRes.data.estimate_number } : null,
     job: jobRes.data ? { id: jobRes.data.id, title: jobRes.data.title } : null,
+    graphics: {
+      lines: gfxLines.map(l => l.line),
+      // null = the lookup failed; the card says so instead of "no job".
+      jobs: gfxJobs,
+    },
     // null = the lookup failed (shown as "couldn't check"), never "none".
     invoices: invoicesRes === null ? null : invoicesRes.map(inv => ({
       id: inv.id, tranid: inv.tranid, trandate: inv.trandate, total: seeMoney ? inv.total : null,
