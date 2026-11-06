@@ -15,7 +15,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { useDialog } from '@/components/DialogProvider';
 import CustomerPicker from '@/components/CustomerPicker';
@@ -31,6 +31,10 @@ import {
 import { EMPTY_NEW_SO_SHIP_TO, NEW_SALES_ORDER_FEATURES, shipToBlank, shipToProblem, type NewSoShipTo } from '@/lib/new-sales-order';
 
 type Line = NewInvoiceLineDraft & { key: number; quantityText: string; priceText: string };
+
+/** An old document Copy from… can bring in (/api/sales-orders/new/copy). */
+interface CopySource { type: 'salesOrder' | 'invoice' | 'estimate'; netsuiteId: string; number: string; customer: string | null; date: string | null; memo: string | null }
+const COPY_LABEL: Record<CopySource['type'], string> = { salesOrder: 'Sales order', invoice: 'Invoice', estimate: 'Estimate' };
 
 const newRequestId = () =>
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -58,6 +62,9 @@ export default function NewSalesOrderPage() {
   const router = useRouter();
   const dialog = useDialog();
   const { hasFeature, canSeeMoney, loading: authLoading } = useAuth();
+  // Opened from a vehicle's In-Shop card: fill in its customer and VIN, and link the order to it.
+  const checkinId = useSearchParams()?.get('checkin') || null;
+  const backTo = checkinId ? deepLinks.vehicle(checkinId) : '/sales-orders';
 
   const [requestId] = useState(newRequestId);
   const [customer, setCustomer] = useState('');
@@ -76,6 +83,69 @@ export default function NewSalesOrderPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [made, setMade] = useState<string | null>(null);
+  const [vehicleLabel, setVehicleLabel] = useState<string | null>(null);
+  const [copyOpen, setCopyOpen] = useState(false);
+  const [copyQuery, setCopyQuery] = useState('');
+  const [copySources, setCopySources] = useState<CopySource[]>([]);
+  const [copying, setCopying] = useState(false);
+  const [copyNote, setCopyNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!checkinId) return;
+    (async () => {
+      const res = await apiFetch(`/api/sales-orders/new?checkin=${encodeURIComponent(checkinId)}`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(body.error || "Couldn't read the vehicle."); return; }
+      if (body.customerName) setCustomer(body.customerName);
+      if (body.customerNetsuiteId) setCustomerId(String(body.customerNetsuiteId));
+      if (body.vin) setVin(String(body.vin).toUpperCase().slice(0, 17));
+      if (body.vehicle) { setVehicleLabel(body.vehicle); setMemo(m => m || body.vehicle); }
+    })();
+  }, [checkinId]);
+
+  // Copy from…: the customer's own documents until something is typed.
+  useEffect(() => {
+    if (!copyOpen) return;
+    const q = copyQuery.trim();
+    if (q.length < 2 && !customerId) { setCopySources([]); return; }
+    const t = setTimeout(async () => {
+      const params = q.length >= 2 ? `q=${encodeURIComponent(q)}` : `customer=${encodeURIComponent(customerId!)}`;
+      const res = await apiFetch(`/api/sales-orders/new/copy?${params}`);
+      const body = await res.json().catch(() => ({}));
+      setCopySources(res.ok ? body.sources || [] : []);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [copyOpen, copyQuery, customerId]);
+
+  const copyFrom = async (src: CopySource) => {
+    setCopying(true);
+    setCopyNote(null);
+    try {
+      const res = await apiFetch(`/api/sales-orders/new/copy?type=${src.type}&id=${encodeURIComponent(src.netsuiteId)}`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || "Couldn't copy that document.");
+      const copied = (body.lines || []) as (NewInvoiceItem & { quantity: number })[];
+      let key = nextKey;
+      setLines(prev => [...prev, ...copied.map(c => ({
+        key: key++, itemId: c.itemId, itemNumber: c.itemNumber, itemType: c.itemType, taxableOverride: c.taxableOverride,
+        description: c.description, quantity: c.quantity, price: c.price ?? 0,
+        quantityText: String(c.quantity), priceText: isDiscountType(c.itemType) ? '' : c.price != null ? String(c.price) : '',
+      }))]);
+      setNextKey(key);
+      const missed = (body.missed || []) as string[];
+      setCopyNote([
+        `Copied ${copied.length} line${copied.length !== 1 ? 's' : ''} from ${COPY_LABEL[src.type].toLowerCase()} ${src.number} at today's prices.`,
+        missed.length ? `Not in the catalog any more, so left off: ${missed.join('; ')}.` : '',
+        body.discountLines ? `${body.discountLines} discount line${body.discountLines !== 1 ? 's' : ''} left off.` : '',
+      ].filter(Boolean).join(' '));
+      setCopyOpen(false);
+      setCopyQuery('');
+    } catch (e: any) {
+      setCopyNote(e?.message || "Couldn't copy that document.");
+    } finally {
+      setCopying(false);
+    }
+  };
 
   // The customer's tax-exempt flag and Settings → Sales Tax, for the total shown.
   useEffect(() => {
@@ -144,6 +214,7 @@ export default function NewSalesOrderPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           requestId,
+          ...(checkinId ? { checkinId } : {}),
           customerNetsuiteId: customerId,
           customerName: customer,
           poNumber: poNumber.trim() || null,
@@ -157,7 +228,7 @@ export default function NewSalesOrderPage() {
       const body = await res.json().catch(() => ({}));
       if (!res.ok || !body.success) throw new Error(body.error || `NetSuite didn't make the sales order (${res.status}).`);
       setMade(body.salesOrderNumber || body.salesOrderId);
-      router.replace(deepLinks.salesOrder(body.salesOrderId));
+      router.replace(checkinId && body.linkedVehicle ? backTo : deepLinks.salesOrder(body.salesOrderId));
     } catch (e: any) {
       setError(e?.message || "NetSuite didn't make the sales order.");
     } finally {
@@ -183,18 +254,21 @@ export default function NewSalesOrderPage() {
           disabled={problems.length > 0}
           saveLabel="Create sales order"
           savingLabel="Making sales order…"
-          onCancel={() => router.push('/sales-orders')}
+          onCancel={() => router.push(backTo)}
         />
       )}
       <div>
-        <button onClick={() => router.push('/sales-orders')} style={{ ...btn, padding: '4px 0', border: 'none', background: 'none', color: theme.textMuted, fontSize: '13px' }}>← Sales orders</button>
+        <button onClick={() => router.push(backTo)} style={{ ...btn, padding: '4px 0', border: 'none', background: 'none', color: theme.textMuted, fontSize: '13px' }}>{checkinId ? '← Back to the vehicle' : '← Sales orders'}</button>
         <h1 style={{ margin: '4px 0 0', fontSize: '22px', fontWeight: 800, color: theme.textPrimary }}>New sales order</h1>
-        <div style={{ fontSize: '13px', color: theme.textMuted }}>Made in NetSuite from O&apos;Fallon, dated today. Nothing is billed until you invoice it.</div>
+        <div style={{ fontSize: '13px', color: theme.textMuted }}>
+          Made in NetSuite from O&apos;Fallon, dated today. Nothing is billed until you invoice it.
+          {checkinId && ` It's linked to ${vehicleLabel || 'the vehicle'} on In-Shop.`}
+        </div>
       </div>
 
       {made ? (
         <div style={{ ...card, borderColor: theme.successBorder, background: theme.successBg, fontSize: '16px', fontWeight: 800, color: theme.success }}>
-          Sales order {made} made in NetSuite. Opening it…
+          Sales order {made} made in NetSuite. {checkinId ? 'Back to the vehicle…' : 'Opening it…'}
         </div>
       ) : (
         <>
@@ -267,7 +341,36 @@ export default function NewSalesOrderPage() {
           </div>
 
           <div style={{ ...card, display: 'grid', gap: '10px' }}>
-            <div style={{ fontSize: '15px', fontWeight: 800, color: theme.textPrimary }}>Lines</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: '15px', fontWeight: 800, color: theme.textPrimary }}>Lines</div>
+              <button onClick={() => setCopyOpen(o => !o)} style={{ ...btn, padding: '6px 12px', fontSize: '13px' }}>⧉ Copy from…</button>
+            </div>
+            {copyOpen && (
+              <div style={{ display: 'grid', gap: '6px' }}>
+                <input id="nso-copy" style={input} value={copyQuery} autoFocus
+                  placeholder="Customer, sales order, invoice or estimate number"
+                  onChange={e => setCopyQuery(e.target.value)} />
+                <div style={{ border: `1px solid ${theme.border}`, borderRadius: '8px', overflow: 'hidden' }}>
+                  {copySources.length === 0 && (
+                    <div style={{ padding: '10px', fontSize: '13px', color: theme.textMuted }}>
+                      {copyQuery.trim().length >= 2 || customerId ? 'Nothing found.' : 'Type a customer or a document number.'}
+                    </div>
+                  )}
+                  {copySources.map(src => (
+                    <button key={`${src.type}-${src.netsuiteId}`} disabled={copying} onClick={() => copyFrom(src)}
+                      style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', width: '100%', textAlign: 'left', padding: '9px 10px', background: theme.card, border: 'none', borderBottom: `1px solid ${theme.border}`, color: theme.textPrimary, cursor: copying ? 'wait' : 'pointer', fontSize: '13px' }}>
+                      <span style={{ minWidth: 0 }}>
+                        <strong>{COPY_LABEL[src.type]} {src.number}</strong>
+                        <span style={{ color: theme.textMuted }}>{[src.customer, src.memo].filter(Boolean).map(t => ` · ${t}`).join('')}</span>
+                      </span>
+                      <span style={{ color: theme.textMuted, whiteSpace: 'nowrap' }}>{src.date || ''}</span>
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: '12px', color: theme.textMuted }}>Copies the items, quantities and labor hours at today&apos;s prices. Change anything before you create the order.</div>
+              </div>
+            )}
+            {copyNote && <div style={{ fontSize: '12px', color: theme.textSecondary }}>{copyNote}</div>}
             {lines.length === 0 && (
               <div style={{ fontSize: '13px', color: theme.textMuted }}>Find a part, labor, freight or discount item below to add the first line.</div>
             )}

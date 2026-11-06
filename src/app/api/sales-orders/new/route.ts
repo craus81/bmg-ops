@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { queueNewSalesOrder } from '@/lib/so-print-queue';
 import { createServiceClient } from '@/lib/supabase-service';
-import { profileHasFeature, requireAuth } from '@/lib/api-auth';
+import { requireAuth } from '@/lib/api-auth';
+import { salesOrderMakerError } from '@/lib/new-sales-order-auth';
 import { validateBody, z } from '@/lib/validate';
 import { createSalesOrder } from '@/lib/netsuite';
 import { KNOWN_LOCATION_IDS } from '@/lib/invoice-location';
@@ -14,7 +15,7 @@ import {
   MAX_LINES, formatCents, netsuiteLines, workOutNewInvoice, type NewInvoiceLineDraft,
 } from '@/lib/new-invoice';
 import {
-  NEW_SALES_ORDER_FEATURES, centralToday, mirrorRow, shipToForNetSuite, shipToProblem,
+  centralToday, mirrorRow, shipToForNetSuite, shipToProblem,
 } from '@/lib/new-sales-order';
 
 export const dynamic = 'force-dynamic';
@@ -22,23 +23,42 @@ export const maxDuration = 60;
 
 const service = createServiceClient();
 
-/** Anyone with the Estimates or the Invoicing permission (Craig 2026-10-31, 1A). */
-async function requireSalesOrderMaker(req: NextRequest) {
-  const auth = await requireAuth(req);
-  if (auth.error) return auth;
-  for (const key of NEW_SALES_ORDER_FEATURES) {
-    if (await profileHasFeature(auth.user.id, auth.profile, key)) return auth;
-  }
-  return { ...auth, error: NextResponse.json({ error: 'You need the Estimates or Invoicing permission to make sales orders.' }, { status: 403 }) };
-}
-
 /**
  * GET /api/sales-orders/new?q=… — items for a line (any active NetSuite item in the catalog, not layout lines).
  * GET /api/sales-orders/new?customer=<NetSuite id> — whether that customer is tax exempt, and the tax rate.
+ * GET /api/sales-orders/new?checkin=<id> — the checked-in vehicle the order is for: its customer, VIN and van,
+ *   so Create sales order on the In-Shop card opens filled in (Craig 2026-11-05).
  */
 export async function GET(req: NextRequest) {
-  const auth = await requireSalesOrderMaker(req);
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
+  const notMaker = await salesOrderMakerError(auth);
+  if (notMaker) return notMaker;
+
+  const checkin = (req.nextUrl.searchParams.get('checkin') || '').trim();
+  if (checkin) {
+    if (!/^[0-9a-f-]{36}$/i.test(checkin)) return NextResponse.json({ error: 'Bad vehicle id' }, { status: 400 });
+    const { data: v } = await service.from('fleet_checkins')
+      .select('id, vin, vehicle_year, vehicle_make, vehicle_model, customer_id, customer_name')
+      .eq('id', checkin).maybeSingle();
+    if (!v) return NextResponse.json({ error: 'That vehicle is not checked in.' }, { status: 404 });
+    let cust: { netsuite_id: string | null; company_name: string | null } | null = null;
+    if (v.customer_id) {
+      ({ data: cust } = await service.from('customers').select('netsuite_id, company_name').eq('id', v.customer_id).maybeSingle());
+    }
+    if (!cust?.netsuite_id && v.customer_name) {
+      const { data } = await service.from('customers').select('netsuite_id, company_name')
+        .ilike('company_name', v.customer_name).not('netsuite_id', 'is', null).limit(2);
+      if (data && data.length === 1) cust = data[0];
+    }
+    return NextResponse.json({
+      checkinId: v.id,
+      vin: v.vin || null,
+      vehicle: [v.vehicle_year, v.vehicle_make, v.vehicle_model].filter(Boolean).join(' ') || null,
+      customerName: cust?.company_name || v.customer_name || null,
+      customerNetsuiteId: cust?.netsuite_id || null,
+    });
+  }
 
   const customer = (req.nextUrl.searchParams.get('customer') || '').trim();
   if (customer) {
@@ -55,6 +75,8 @@ export async function GET(req: NextRequest) {
 const Schema = z.object({
   // Made by the page when the form opens: the same form pressed twice is one order.
   requestId: z.string().uuid(),
+  // The checked-in vehicle to link the new order to (In-Shop card's Create sales order).
+  checkinId: z.string().uuid().optional().nullable(),
   customerNetsuiteId: z.string().regex(/^\d+$/),
   customerName: z.string().max(200).optional().nullable(),
   poNumber: z.string().max(45).optional().nullable(),
@@ -81,8 +103,10 @@ const Schema = z.object({
  * job is made; the order goes on the Sales orders list straight away.
  */
 export async function POST(req: NextRequest) {
-  const auth = await requireSalesOrderMaker(req);
+  const auth = await requireAuth(req);
   if (auth.error) return auth.error;
+  const notMaker = await salesOrderMakerError(auth);
+  if (notMaker) return notMaker;
 
   const parsed = await validateBody(req, Schema);
   if (parsed.error) return parsed.error;
@@ -208,6 +232,32 @@ export async function POST(req: NextRequest) {
     totalCents: worked.totalCents,
   }), { onConflict: 'netsuite_id', ignoreDuplicates: true });
 
+  // Made from a vehicle's card: link it there the way Link SO does (fleet_checkin_sales_orders, and the
+  // vehicle's own single-SO columns when it had none).
+  let linkedVehicle = false;
+  if (body.checkinId) {
+    const { data: existing } = await service.from('fleet_checkin_sales_orders').select('id').eq('checkin_id', body.checkinId).limit(1);
+    const { error: linkError } = await service.from('fleet_checkin_sales_orders').insert({
+      checkin_id: body.checkinId,
+      netsuite_sales_order_id: result.salesOrderId,
+      sales_order_number: result.salesOrderNumber || null,
+      customer_name: customerName,
+      sales_order_memo: memo,
+      sales_order_total: worked.totalCents / 100,
+      added_by: auth.user.id,
+    });
+    linkedVehicle = !linkError;
+    if (!linkError && (!existing || existing.length === 0)) {
+      await service.from('fleet_checkins').update({
+        netsuite_sales_order_id: result.salesOrderId,
+        sales_order_number: result.salesOrderNumber || null,
+        customer_name: customerName,
+        sales_order_memo: memo,
+        sales_order_total: worked.totalCents / 100,
+      }).eq('id', body.checkinId);
+    }
+  }
+
   await logAudit(service, {
     actorId: auth.user.id,
     table: 'typed_sales_orders',
@@ -220,6 +270,7 @@ export async function POST(req: NextRequest) {
       total: formatCents(worked.totalCents),
       lines: worked.lines.length,
       ship_to: shipTo ? 'typed' : 'customer default',
+      ...(body.checkinId ? { checkin_id: body.checkinId, linked_vehicle: linkedVehicle } : {}),
     },
   });
 
@@ -229,5 +280,6 @@ export async function POST(req: NextRequest) {
     salesOrderNumber: result.salesOrderNumber || null,
     customerName,
     totalCents: worked.totalCents,
+    ...(body.checkinId ? { linkedVehicle } : {}),
   });
 }

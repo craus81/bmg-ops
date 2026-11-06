@@ -2932,6 +2932,18 @@ export default function TrackingPage() {
                               }}
                             >+ {linkedSos.length > 0 ? 'Add Another Sales Order' : 'Link Sales Order'}</button>
                           )}
+                          {/* No order in NetSuite yet: make one here, filled in from this
+                              vehicle and linked back to it (Craig 2026-11-05). */}
+                          {soSearchOpen !== vehicle.id && (hasFeature('estimates') || hasFeature('invoicing')) && (
+                            <button
+                              onClick={() => router.push(`/sales-orders/new?checkin=${encodeURIComponent(vehicle.id)}`)}
+                              style={{
+                                width: '100%', marginTop: '6px', padding: '10px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                                background: 'rgba(34,197,94,0.08)', border: '1px dashed rgba(34,197,94,0.4)',
+                                color: 'var(--success)', cursor: 'pointer',
+                              }}
+                            >+ Create Sales Order</button>
+                          )}
                         </div>
                       );
                     })()}
