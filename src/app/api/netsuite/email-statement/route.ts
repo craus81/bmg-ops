@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getFleetSuiteInvoicePdf } from '@/lib/sales-pdf-server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { requireRole } from '@/lib/api-auth';
 import { safeIntId, SqlSafeError } from '@/lib/sql-safe';
 import { fetchStatementInvoices, type StatementInvoice, type StatementScope } from '@/lib/financials-data';
-import { getNetSuitePdf } from '@/lib/netsuite';
 import { sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { r2PublicUrl } from '@/lib/r2';
@@ -213,7 +213,7 @@ export async function POST(req: NextRequest) {
       // all at once trips NetSuite's concurrency limit.
       type FetchedPdf = { inv: StatementInvoice; filename: string; content: Buffer | null };
       const fetched = await mapWithConcurrency(toAttach, 5, async (inv): Promise<FetchedPdf> => {
-        const pdf = await getNetSuitePdf('invoice', inv.id);
+        const pdf = await getFleetSuiteInvoicePdf(supabase, inv.id);
         return {
           inv,
           filename: pdf.filename || `Invoice_${inv.tranid}.pdf`,

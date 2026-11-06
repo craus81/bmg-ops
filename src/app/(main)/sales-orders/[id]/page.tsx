@@ -678,7 +678,7 @@ export default function SalesOrderPage() {
         <EmailComposeModal
           title={`Email sales order ${h.tranId}`}
           stateKey={`sales-order-email:${id}`}
-          intro={<div style={{ fontSize: 12, color: theme.textSecondary, marginBottom: 8 }}>The sales order PDF from NetSuite is attached.</div>}
+          intro={<div style={{ fontSize: 12, color: theme.textSecondary, marginBottom: 8 }}>FleetSuite's sales order PDF is attached.</div>}
           messagePlaceholder="Optional note to the customer"
           fetchPreview={async fields => {
             const res = await apiFetch(`/api/sales-orders/${encodeURIComponent(id)}/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: soEmailBody(fields, true) });

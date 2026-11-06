@@ -5,8 +5,9 @@ import { validateBody, z } from '@/lib/validate';
 import { buildNotificationEmail, repFromName, sendEmailDetailed } from '@/lib/resend';
 import { deepLinks } from '@/lib/deep-links';
 import { getEmailSignature } from '@/lib/email-signature';
-import { getNetSuitePdf, getSalesOrderRecord } from '@/lib/netsuite';
+import { getSalesOrderRecord } from '@/lib/netsuite';
 import { parseSalesOrderRecord } from '@/lib/sales-order-edit';
+import { makeSalesPdf } from '@/lib/sales-pdf-server';
 import { docRef } from '@/lib/document-sends';
 import { logAudit } from '@/lib/audit';
 
@@ -28,7 +29,7 @@ const Schema = z.object({
  * (Craig, 2026-10-31). The standard compose contract (docs/customer-email-
  * standard.md): preview renders with no side effects and suggests To (whoever
  * approved the estimate, else the customer's billing email); a real send
- * attaches NetSuite's sales order PDF and fails before sending when the PDF
+ * attaches FleetSuite's own sales order PDF (src/lib/sales-pdf.ts) and fails before sending when the PDF
  * can't be made. Never automatic. The send is logged against
  * sales_order:<SO number> so the page's Sent box shows it.
  */
@@ -76,16 +77,17 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!p.emails.length) return NextResponse.json({ error: 'Enter at least one recipient email address.' }, { status: 400 });
 
   // The sales order PDF goes first; no PDF, no send.
-  const pdf = await getNetSuitePdf('salesOrder', params.id, { timeoutMs: 45_000 });
-  if (!pdf.success || !pdf.pdfBase64) {
-    return NextResponse.json({ error: `Could not get the sales order PDF from NetSuite, so nothing was sent: ${pdf.error || 'no PDF came back'}` }, { status: 502 });
+  // FleetSuite's own sales order PDF, drawn from the live record (Craig, 2026-11-06).
+  const pdf = await makeSalesPdf(supabase, 'sales_order', params.id);
+  if (!pdf.ok) {
+    return NextResponse.json({ error: `Could not make the sales order PDF, so nothing was sent: ${pdf.error}` }, { status: 502 });
   }
 
   const { data: me } = await supabase.from('profiles').select('full_name').eq('id', auth.user.id).maybeSingle();
   const bcc = p.bccSelf && auth.user.email ? [auth.user.email] : undefined;
   const { ok } = await sendEmailDetailed(
     p.emails, subject, html, undefined,
-    [{ filename: pdfName, content: Buffer.from(pdf.pdfBase64, 'base64'), contentType: 'application/pdf' }],
+    [{ filename: pdfName, content: pdf.buffer, contentType: 'application/pdf' }],
     auth.user.email || undefined, bcc,
     {
       kind: 'sales_order',

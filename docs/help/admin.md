@@ -179,6 +179,8 @@ The email carries FleetSuite's own PO PDF: BMG logo, the vendor and its address,
 
 NetSuite's own print form is still there on the **📄 PDF** links if you need it.
 
+Sales orders and invoices work the same way: **Email** on a sales order, every invoice email (one or several, statements) and the customer portal all attach FleetSuite's own PDF, drawn from what NetSuite holds at that moment, so older invoices get it too. An invoice paid in full says **Paid** under its number.
+
 ## Run a NetSuite report
 
 1. Go to **Admin → Reports**.

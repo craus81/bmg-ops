@@ -26,9 +26,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { getFleetSuiteInvoicePdf } from '@/lib/sales-pdf-server';
 import { notifyMany } from '@/lib/notify';
 import { deepLinks } from '@/lib/deep-links';
-import { getNetSuitePdf, suiteqlQuery } from '@/lib/netsuite';
+import { suiteqlQuery } from '@/lib/netsuite';
 
 export interface PortalCustomer {
   id: string;
@@ -207,7 +208,7 @@ export async function notifyPortalInvoice(supabase: SupabaseClient, ev: PortalIn
     const attachments: { filename: string; content: Buffer; contentType: string }[] = [];
     if (ev.invoiceId != null) {
       try {
-        const pdf = await getNetSuitePdf('invoice', String(ev.invoiceId), { timeoutMs: 20000 });
+        const pdf = await getFleetSuiteInvoicePdf(supabase, String(ev.invoiceId));
         if (pdf.success && pdf.pdfBase64) {
           attachments.push({
             filename: pdf.filename || `Invoice_${invoiceNumber}.pdf`,

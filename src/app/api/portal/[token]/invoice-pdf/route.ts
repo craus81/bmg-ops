@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getFleetSuiteInvoicePdf } from '@/lib/sales-pdf-server';
 import { createServiceClient } from '@/lib/supabase-service';
 import { checkRateLimit, getRequestIp } from '@/lib/magic-link-approval';
 import { resolvePortalCustomer } from '@/lib/portal-token';
 import { invoiceBelongsToCustomer } from '@/lib/portal-billing';
-import { getNetSuitePdf } from '@/lib/netsuite';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -37,7 +37,7 @@ export async function GET(req: NextRequest, { params }: { params: { token: strin
     if (!await invoiceBelongsToCustomer(service, customer.netsuite_id, id)) {
       return NextResponse.json({ status: 'invalid' }, { status: 404 });
     }
-    const pdf = await getNetSuitePdf('invoice', id);
+    const pdf = await getFleetSuiteInvoicePdf(service, id);
     if (!pdf.success || !pdf.pdfBase64) {
       return NextResponse.json({ error: 'The invoice PDF is temporarily unavailable — try again shortly.' }, { status: 502 });
     }
