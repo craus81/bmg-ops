@@ -53,6 +53,34 @@ Tap **Enter Manually** if decoding fails.
 
 ---
 
+## Scan several parts on each vehicle (kit + unit-number decal)
+
+When every truck in a run gets the same kit, but some trucks also get a
+part of their own (like a unit-number decal whose part number changes
+truck to truck):
+
+1. On **Scan**, pick the customer, then search and tap the kit. You can
+   tap more than one part here. Every part you tick is saved on every
+   vehicle. Tap **Continue with N parts →**, then pick the location.
+2. Scan or type the VIN and the **Unit #**.
+3. Under **Extra parts for this vehicle**, type or search the extra part
+   number (for example `06S646`) and press Enter or tap **Add**. Add more
+   if that truck needs them. Typing `06S646/06S647` adds both. A number
+   that isn't in the parts list can still be added as typed.
+4. Tap **Log & Scan Next** (or **Log**). FleetSuite saves one line for each
+   shift part and one line for each extra part. All of them have the same
+   VIN, unit #, stock #, location and crew.
+5. The extra parts **stay** for the next truck. Tap **×** on a part to
+   remove it, or **Clear** to remove them all, before logging the next
+   vehicle.
+
+Each extra line pays the crew that part's own rate from Install Pay Rates.
+A part with no rate yet goes to the admin needs-pricing list. Each line
+also matches its own PO line. The Verizon RFID part can't be an extra
+part. It has to be scanned on its own.
+
+---
+
 ## Pull a vehicle into a bay (job timer)
 
 1. On **Home**, tap **Pull In**.
