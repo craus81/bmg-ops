@@ -2335,28 +2335,41 @@ async function purchaseOrderRecordCall(
 
 const poNum = (v: unknown) => Math.abs(parseFloat(String(v ?? '0'))) || 0;
 
+/** A PO record's item lines (GET …?expandSubResources=true). */
+export function poItemLinesFromRecord(rec: any): PoItemLine[] {
+  const items: any[] = rec?.item?.items || [];
+  return items
+    .filter(it => it?.item?.id != null && it?.line != null)
+    .map(it => ({
+      line: Number(it.line),
+      itemId: String(it.item.id),
+      quantity: poNum(it.quantity),
+      quantityReceived: poNum(it.quantityReceived ?? it.quantityreceived),
+      quantityBilled: poNum(it.quantityBilled ?? it.quantitybilled),
+      isClosed: it.isClosed === true || it.isclosed === true,
+      rate: it.rate != null ? poNum(it.rate) : null,
+      description: it.description || null,
+    }));
+}
+
 /** A PO's item lines, read live (the mirror can be two hours old). */
 export async function getPurchaseOrderItemLines(
   purchaseOrderId: string | number,
 ): Promise<{ success: true; lines: PoItemLine[] } | { success: false; error: string }> {
   const res = await purchaseOrderRecordCall(`${purchaseOrderId}?expandSubResources=true`, 'GET');
   if (!res.ok) return { success: false, error: res.error };
-  const items: any[] = res.data?.item?.items || [];
-  return {
-    success: true,
-    lines: items
-      .filter(it => it?.item?.id != null && it?.line != null)
-      .map(it => ({
-        line: Number(it.line),
-        itemId: String(it.item.id),
-        quantity: poNum(it.quantity),
-        quantityReceived: poNum(it.quantityReceived ?? it.quantityreceived),
-        quantityBilled: poNum(it.quantityBilled ?? it.quantitybilled),
-        isClosed: it.isClosed === true || it.isclosed === true,
-        rate: it.rate != null ? poNum(it.rate) : null,
-        description: it.description || null,
-      })),
-  };
+  return { success: true, lines: poItemLinesFromRecord(res.data) };
+}
+
+/**
+ * A whole PO record read live, item sublist and ship-to included — the Edit
+ * PO window (src/lib/po-edit.ts) plans against what NetSuite has now.
+ */
+export async function getPurchaseOrderRecord(
+  purchaseOrderId: string | number,
+): Promise<{ success: true; record: any } | { success: false; error: string }> {
+  const res = await purchaseOrderRecordCall(`${purchaseOrderId}?expandSubResources=true`, 'GET');
+  return res.ok ? { success: true, record: res.data } : { success: false, error: res.error };
 }
 
 /**
@@ -2474,14 +2487,19 @@ export async function patchSalesOrder(
 }
 
 /**
- * Change a PO's header — the drop ship PO's ship-to address and memo
- * (src/lib/drop-ship.ts). NetSuite's refusal comes back as is.
+ * Change a PO — the drop ship PO's ship-to address and memo
+ * (src/lib/drop-ship.ts), and the Edit PO window (po-edit.ts), whose body
+ * can carry the item sublist too. `replace` (only when a line comes off)
+ * makes the item sublist exactly the lines sent, each kept line by its
+ * `line` key, the way the purchasing Undo removes a line. NetSuite's
+ * refusal comes back as is.
  */
 export async function patchPurchaseOrder(
   purchaseOrderId: string | number,
   body: Record<string, unknown>,
+  opts: { replace?: boolean } = {},
 ): Promise<{ success: boolean; error?: string }> {
-  const res = await purchaseOrderRecordCall(String(purchaseOrderId), 'PATCH', body);
+  const res = await purchaseOrderRecordCall(`${purchaseOrderId}${opts.replace ? '?replace=item' : ''}`, 'PATCH', body);
   return res.ok ? { success: true } : { success: false, error: res.error };
 }
 

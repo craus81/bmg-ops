@@ -319,6 +319,12 @@ On **Purchasing**, a vendor group shows a yellow line when that vendor already h
 
 ---
 
+## Edit a vendor PO
+
+On **Purchasing → Vendor POs**, tap **✎ Edit PO** on any open PO. Change quantities, prices, the memo, the expected date or the ship-to; **Remove** a part; add a part; or tick **Move** and pick a vendor to put parts on a new PO with them. Tap **Save to NetSuite**. Received parts can't go below what came in, and billed lines are locked. Parts a job still needs go back to the parts queue. After saving, **✉ Email the vendor the change** sends them the updated PO. Full steps: `workflows/edit-vendor-po.md`.
+
+---
+
 ## Adjust inventory
 
 1. On **Inventory**, tap **Adjust** on the part's row (or **Adjust inventory** in the part's details on the Parts list).

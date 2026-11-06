@@ -5,7 +5,10 @@
  * first, so the POs made from the queue have a home besides the job pages
  * (Craig, 2026-10-20). Lines show what each one holds; a line ordered with
  * Create PO gets Undo, which takes the part off the PO in NetSuite and puts
- * its requests back in the queue (/api/purchase-requests/undo-po).
+ * its requests back in the queue (/api/purchase-requests/undo-po). ✎ Edit PO
+ * (Craig, 2026-11-06) changes any open PO in NetSuite: quantities, prices,
+ * parts, memo, expected date, ship-to, or moves parts to another vendor
+ * (EditVendorPoModal).
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -16,6 +19,8 @@ import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import { trackingUrl } from '@/lib/tracking-url';
 import NewVendorPoModal from '@/components/NewVendorPoModal';
+import EditVendorPoModal, { type PoEditSaved } from '@/components/EditVendorPoModal';
+import { canEditPo } from '@/lib/po-edit';
 import EmailComposeModal, { type EmailComposeFields } from '@/components/EmailComposeModal';
 import { useDocumentSends, MarkSentModal } from '@/components/SentBox';
 import { docRef, sendLine, sendTone } from '@/lib/document-sends';
@@ -150,6 +155,11 @@ export default function VendorPosTab({ isAdmin, onChanged, startNew = false, ini
   const [creating, setCreating] = useState(false);
   // ✉ Email vendor and Mark as sent (Craig, 2026-10-31).
   const [emailingPo, setEmailingPo] = useState<VendorPo | null>(null);
+  // The note the email window starts with (the changes, after an edit).
+  const [emailMessage, setEmailMessage] = useState('');
+  // ✎ Edit PO (Craig, 2026-11-06), and what the last save did.
+  const [editingPo, setEditingPo] = useState<VendorPo | null>(null);
+  const [saved, setSaved] = useState<{ po: VendorPo; result: PoEditSaved } | null>(null);
   const [markingPo, setMarkingPo] = useState<VendorPo | null>(null);
   const { sends, refresh: refreshSends } = useDocumentSends(pos.filter(p => p.tranid).map(p => docRef('vendor_po', p.tranid!)));
   const poEmailBody = (fields: EmailComposeFields, preview: boolean) => JSON.stringify({
@@ -213,6 +223,7 @@ export default function VendorPosTab({ isAdmin, onChanged, startNew = false, ini
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap', marginBottom: '12px' }}>
         <div style={{ flex: '1 1 260px', fontSize: '12px', color: theme.textSecondary }}>
           Every vendor PO, newest first: the ones made here and the ones keyed straight into NetSuite.
+          {' ✎ Edit PO changes an open PO in NetSuite.'}
           {isAdmin && ' A part put on the wrong PO with Create PO has an Undo on its line.'}
         </div>
         {isAdmin && (
@@ -244,6 +255,57 @@ export default function VendorPosTab({ isAdmin, onChanged, startNew = false, ini
           <button onClick={() => setNotice(null)} title="Dismiss"
             style={{ background: 'none', border: 'none', color: theme.textMuted, cursor: 'pointer', fontSize: '13px', padding: 0 }}>✕</button>
         </div>
+      )}
+      {saved && (() => {
+        const r = saved.result;
+        const moved = r.movedTo?.id ? pos.find(p => p.id === r.movedTo!.id) || null : null;
+        const label = r.poNumber ? `PO ${r.poNumber}` : 'The PO';
+        return (
+          <div style={{ padding: '10px 14px', marginBottom: '14px', background: r.warning ? 'rgba(248,113,113,0.08)' : 'rgba(74,222,128,0.08)', border: `1px solid ${r.warning ? 'rgba(248,113,113,0.4)' : 'rgba(74,222,128,0.3)'}`, borderRadius: '12px', display: 'flex', gap: '10px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 240px', minWidth: 0, fontSize: '12px', color: 'var(--text-body)', lineHeight: 1.5 }}>
+              {r.warning
+                ? <span style={{ color: '#f87171', fontWeight: 700 }}>{r.warning}</span>
+                : <>{label} is updated in NetSuite.</>}
+              {r.movedTo?.number && !r.warning && <> New PO {r.movedTo.number}{r.movedTo.vendorName ? ` with ${r.movedTo.vendorName}` : ''} has the moved parts.</>}
+              {r.requeued.length > 0 && <> Parts for {r.requeued.join(', ')} are back in the parts queue.</>}
+            </div>
+            {isAdmin && !r.warning && (
+              <button onClick={() => {
+                setEmailMessage(`We've changed ${label}:\n${r.changes.map(c => `• ${c}`).join('\n')}\n\nThe updated PO is attached.`);
+                setEmailingPo(saved.po);
+              }}
+                style={{ padding: '4px 10px', borderRadius: '6px', background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-primary)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                ✉ Email {r.vendorName || 'vendor'} the change
+              </button>
+            )}
+            {isAdmin && moved && (
+              <button onClick={() => { setEmailMessage(''); setEmailingPo(moved); }}
+                style={{ padding: '4px 10px', borderRadius: '6px', background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-primary)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                ✉ Email {moved.vendor_name || 'the new vendor'} PO {moved.tranid || ''}
+              </button>
+            )}
+            <button onClick={() => setSaved(null)} title="Dismiss"
+              style={{ background: 'none', border: 'none', color: theme.textMuted, cursor: 'pointer', fontSize: '13px', padding: 0 }}>✕</button>
+          </div>
+        );
+      })()}
+      {editingPo && (
+        <EditVendorPoModal
+          poId={editingPo.id}
+          emailedLine={(() => {
+            const latest = editingPo.tranid ? sends[docRef('vendor_po', editingPo.tranid)]?.latest || null : null;
+            const tone = sendTone(latest);
+            return latest && (tone === 'ok' || tone === 'wait') ? sendLine(latest) : null;
+          })()}
+          onClose={() => setEditingPo(null)}
+          onSaved={result => {
+            setSaved({ po: editingPo, result });
+            setEditingPo(null);
+            setNotice(null);
+            onChanged();
+            load();
+          }}
+        />
       )}
       {error && <div style={{ fontSize: '12px', color: '#f87171', marginBottom: '12px' }}>{error}</div>}
       {loading && pos.length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>}
@@ -303,8 +365,14 @@ export default function VendorPosTab({ isAdmin, onChanged, startNew = false, ini
                       <div style={{ flex: '1 1 220px', minWidth: 0, fontSize: '11px', color, fontWeight: tone === 'bad' ? 700 : 400, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                         {latest ? sendLine(latest) : 'Not emailed yet'}
                       </div>
+                      {po.netsuite_id && canEditPo(po.status) && (
+                        <button onClick={() => setEditingPo(po)}
+                          style={{ padding: '4px 10px', borderRadius: '6px', background: 'transparent', border: '1px solid rgba(96,165,250,0.5)', color: '#60a5fa', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
+                          ✎ Edit PO
+                        </button>
+                      )}
                       {isAdmin && po.netsuite_id && (
-                        <button onClick={() => setEmailingPo(po)}
+                        <button onClick={() => { setEmailMessage(''); setEmailingPo(po); }}
                           style={{ padding: '4px 10px', borderRadius: '6px', background: 'transparent', border: `1px solid ${theme.border}`, color: 'var(--text-primary)', fontSize: '11px', fontWeight: 700, cursor: 'pointer' }}>
                           ✉ Email vendor
                         </button>
@@ -380,9 +448,10 @@ export default function VendorPosTab({ isAdmin, onChanged, startNew = false, ini
       {emailingPo && (
         <EmailComposeModal
           title={`Email ${emailingPo.vendor_name || 'vendor'} · PO ${emailingPo.tranid || ''}`}
-          stateKey={`vendor-po-email:${emailingPo.id}`}
+          stateKey={`vendor-po-email:${emailingPo.id}${emailMessage ? ':edit' : ''}`}
           intro={<div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>The PO PDF from NetSuite is attached.</div>}
           messagePlaceholder="Optional note to the vendor"
+          initialMessage={emailMessage}
           sendLabel="Send to vendor"
           fetchPreview={async fields => {
             const res = await fetch(`/api/purchase-requests/vendor-pos/${emailingPo.id}/email`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: poEmailBody(fields, true) });
