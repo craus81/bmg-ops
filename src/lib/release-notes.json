@@ -2,6 +2,15 @@
   {
     "date": "2026-11-06",
     "kind": "new",
+    "text": "The job progress bar finds the vehicle in the shop on its own when the VIN, sales order or graphics job matches, and Link vehicle in shop picks it by hand when nothing does.",
+    "where": "Job progress bar → Link vehicle in shop",
+    "areas": [
+      "everyone"
+    ]
+  },
+  {
+    "date": "2026-11-06",
+    "kind": "new",
     "text": "Create a graphics job right from a sales order, filled in from the order's lines. The progress bar shows an orange Needs graphics job step until someone does.",
     "where": "Sales order → Graphics card → + Create graphics job",
     "areas": [

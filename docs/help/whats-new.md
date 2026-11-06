@@ -7,6 +7,7 @@ New features and fixes, newest first. Everything that went live on the same day 
 
 ## Release 2026.11.06 (Friday, Nov 6, 2026)
 
+- New: The job progress bar finds the vehicle in the shop on its own when the VIN, sales order or graphics job matches, and Link vehicle in shop picks it by hand when nothing does. Where: Job progress bar → Link vehicle in shop. [Everyone]
 - New: Create a graphics job right from a sales order, filled in from the order's lines. The progress bar shows an orange Needs graphics job step until someone does. Where: Sales order → Graphics card → + Create graphics job. [Sales, Graphics]
 - New: Tap the parts steps on the job progress bar to see which parts are in and which are still coming. Where: Job progress bar → Parts ordered / Parts in. [Everyone]
 - New: Scan extra parts for each vehicle, like its kit and unit-number decal. Where: Scan. [Shop]
