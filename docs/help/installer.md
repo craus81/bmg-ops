@@ -138,3 +138,9 @@ billed at the end.
 1. Tap **Installer → Profile**.
 2. Edit name, phone, certifications, equipment.
 3. Tap **Save**.
+
+---
+
+## Start graphics or upfit on a job
+
+On the In-Shop card, the slim progress bar shows where the job is. Tap it to get the status buttons, then tap the graphics or **Upfit In Progress** button when you start. The job's bar moves to **Install** for everyone.

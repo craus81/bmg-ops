@@ -128,3 +128,39 @@ The icon appears on your home screen and runs full-screen.
 - Tap **Admin → Knowledge** if you're an admin to browse the full
   library.
 - Or ping your shop's admin.
+
+---
+
+## Report a problem or ask for a feature
+
+1. Tap **More → Requests** (it's at the top) and tap **+ New request**, or use the Requests card at the bottom of Home.
+2. Pick **Problem**, **Idea** or **Question** and say what happened in plain words.
+3. Add a screenshot if it helps: drag it in, paste it, or tap upload. FleetSuite notes which screen you came from.
+4. Tap **Send request**.
+
+Craig hears about it right away. FleetSuite AI reads new requests on a schedule and writes the answer under the request, and you get a bell when it does. The status shows where it stands: **New**, **Looking into it**, **Waiting on Craig**, **Done**.
+
+Someone already asked for the same thing? Tap **Me too** on their request instead of sending a new one.
+
+---
+
+## Ask FleetSuite AI
+
+Tap the round mascot button in the corner of any page. Ask in plain words, for example "What vehicles are in the shop right now?" or "How do I send an estimate for approval?". It reads FleetSuite's own data and these help guides.
+
+It can also do things when you ask: make a draft estimate, start a graphics job, move a graphics job to a new status, or send someone a message.
+
+If you tell it about a bug or an idea, or ask something it can't answer, it files a Request for you and tells you the request number. Craig hears about it right away.
+
+---
+
+## Find a page in More
+
+Type in the search box at the top of **More** to jump to any page. Groups fold and unfold when you tap their names, and a folded group shows how many things are waiting in it. Tap **(i)** next to a page to read what it's for.
+
+---
+
+## Leave a page without saving
+
+Long forms and transactions have one Save bar pinned at the top. **Save** keeps your changes. **Leave without saving** throws away what you changed and takes you back.
+

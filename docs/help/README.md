@@ -54,8 +54,12 @@ to ship. Read this first if you're new to the app.
 ## How to update
 
 1. Edit the markdown file in the repo.
-2. Push to main. Vercel auto-deploys.
-3. Go to **Admin → Knowledge**.
-4. Tap **Sync Help Library from Repo (docs/help)**.
+2. Push to main. Vercel auto-deploys, and the deploy loads every guide
+   into FleetSuite on its own (FleetSuite AI and Admin → Knowledge).
+3. Need it sooner? **Admin → Knowledge → Sync Help Library from Repo
+   (docs/help)** does the same thing by hand.
+
+Every feature change updates the guide it affects in the same change
+(Craig, 2026-11-06), so FleetSuite AI can explain it to staff.
 
 The AI and the in-app search pick up your changes within seconds.

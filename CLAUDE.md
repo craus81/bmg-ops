@@ -41,6 +41,16 @@ Don't try to apply or verify one from a session container either:
 `go.bmgfleet.com` is rejected too. To confirm a migration landed, check
 the latest production build log on Vercel for `applied <file>.sql`.
 
+## Help guides ship with every feature
+
+FleetSuite AI answers staff "how do I…" questions from `docs/help/*.md`
+(knowledge_docs, category `help`). Every PR that adds or changes something
+staff see updates the guide it affects in the same PR: the role guide
+(`sales.md`, `admin.md`, `installer.md`, …) or `getting-started.md` for
+everyone. Write steps with the exact button and menu names. The build
+loads the guides on every production deploy (`scripts/sync-help-docs.mjs
+--deploy`), so nothing else is needed. (Craig, 2026-11-06.)
+
 ## Git workflow
 
 Pushes to `main` are currently broken (the local git proxy returns

@@ -25,6 +25,11 @@
  *
  * Options:
  *   --dry-run     Print what would change without touching the database.
+ *   --deploy      Run from the Vercel build (package.json "build"), after
+ *                 next build: only on production builds, and a failure only
+ *                 warns, so a help sync can never stop a deploy. Craig
+ *                 (2026-11-06): the guides reach FleetSuite AI on every
+ *                 deploy instead of waiting for someone to tap Sync.
  *
  * Required env (loaded from .env.local if present):
  *   NEXT_PUBLIC_SUPABASE_URL
@@ -118,7 +123,23 @@ function parseDoc(filePath, repoRoot) {
   };
 }
 
+const deploy = process.argv.includes('--deploy');
+
+/** In --deploy mode a problem warns and lets the deploy go on. */
+function fail(message) {
+  if (deploy) {
+    console.warn(`WARNING: help guides not synced: ${message}`);
+    process.exit(0);
+  }
+  console.error(message);
+  process.exit(1);
+}
+
 async function main() {
+  if (deploy && process.env.VERCEL_ENV !== 'production') {
+    console.log(`Help sync skipped (VERCEL_ENV=${process.env.VERCEL_ENV || 'unset'}; deploy mode only runs on production builds).`);
+    return;
+  }
   loadEnv();
 
   const dryRun = process.argv.includes('--dry-run');
@@ -129,13 +150,11 @@ async function main() {
   try {
     files = walkMarkdown(helpDir);
   } catch (err) {
-    console.error(`Couldn't read ${helpDir}: ${err.message}`);
-    process.exit(1);
+    fail(`Couldn't read ${helpDir}: ${err.message}`);
   }
 
   if (files.length === 0) {
-    console.error(`No markdown files found in ${helpDir}`);
-    process.exit(1);
+    fail(`No markdown files found in ${helpDir}`);
   }
 
   const docs = files.map((f) => parseDoc(f, repoRoot));
@@ -153,8 +172,7 @@ async function main() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !serviceKey) {
-    console.error('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in env.');
-    process.exit(1);
+    fail('Missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in env.');
   }
   const { createClient } = await import('@supabase/supabase-js');
   const supabase = createClient(url, serviceKey, { auth: { persistSession: false } });
@@ -162,8 +180,7 @@ async function main() {
   console.log(`\nDeleting existing category='help' rows...`);
   const del = await supabase.from('knowledge_docs').delete().eq('category', 'help');
   if (del.error) {
-    console.error(`Delete failed: ${del.error.message}`);
-    process.exit(1);
+    fail(`Delete failed: ${del.error.message}`);
   }
 
   console.log(`Inserting ${docs.length} fresh rows...`);
@@ -172,18 +189,16 @@ async function main() {
     category: d.category,
     content: d.content,
     tags: d.tags,
+    // The guide's stable identity (migration 312), as the admin Sync button stores it.
+    source_path: d.source_path,
   }));
   const ins = await supabase.from('knowledge_docs').insert(rows).select('id, title');
   if (ins.error) {
-    console.error(`Insert failed: ${ins.error.message}`);
-    process.exit(1);
+    fail(`Insert failed: ${ins.error.message}`);
   }
 
   console.log(`Inserted ${ins.data.length} rows.`);
   console.log('Done. The FleetSuite AI and Admin → Knowledge search will pick up the new content immediately.');
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main().catch((err) => fail(err?.message || String(err)));

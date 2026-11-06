@@ -280,3 +280,60 @@ says so rather than silently storing nothing.
 4. Tap **Save**.
 
 These pre-fill on every new estimate and check-in for this customer.
+
+---
+
+## Fulfill and invoice from the sales order page
+
+1. Open the sales order.
+2. Tap the orange **Fulfill & Invoice** button.
+3. Check the lines and confirm. FleetSuite fulfills the order and makes the invoice in NetSuite.
+
+Each invoice row on the page has **Print** and **Email**, and shows when, by whom and to whom it was emailed.
+
+---
+
+## Make an invoice from nothing
+
+1. Go to **Invoicing → + New invoice**.
+2. Pick the customer, add PO #, VIN and memo if you have them, and type the lines (parts, labor, freight, discounts).
+3. Check the tax and total, then save. FleetSuite makes the invoice in NetSuite and offers the PDF and the email screen.
+
+---
+
+## Print new sales orders for the board
+
+Every new sales order lands on **More → Sales → To Print** by itself.
+
+1. Tick the orders you want (or **Select all**).
+2. Tap **Print N selected**. They open as one PDF, one Job Order per page, with the End user and vendor POs and no prices.
+3. When it's done, answer **Did all N print?** with **Mark N printed**, or **Not yet** if the printer jammed.
+
+An order you already printed comes back marked **Changed** when someone edits it, or **New PO** when a vendor PO is added to its job.
+
+---
+
+## Add parts to a vendor PO that's already open
+
+On **Purchasing**, a vendor group shows a yellow line when that vendor already has an open PO from today or yesterday. Tap it to add the waiting parts to that PO instead of starting a new one. A part already on the PO just gets a bigger quantity.
+
+---
+
+## Adjust inventory
+
+1. On **Inventory**, tap **Adjust** on the part's row (or **Adjust inventory** in the part's details on the Parts list).
+2. Enter a change (+ or -) or the count on the shelf.
+3. Pick a reason, add a note, and save.
+
+FleetSuite posts the adjustment to NetSuite at O'Fallon and the numbers update right away. Stock comes from NetSuite every 15 minutes; tap **Refresh** on the Inventory page to get it now.
+
+---
+
+## Update prices from a file
+
+1. Go to **More → Part setup → Update Prices**.
+2. Upload an Excel or CSV file (or paste rows) with part numbers and a price, a cost, or both.
+3. Check the preview, then tap **Save**. FleetSuite updates its prices and sends each part to NetSuite.
+
+**Prices that don't match** lists parts where FleetSuite and NetSuite disagree. It's checked every night, or tap **Check now**. For each one, send FleetSuite's price to NetSuite or use NetSuite's.
+

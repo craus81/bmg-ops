@@ -132,3 +132,9 @@ admin / sales).
 3. Type and send.
 
 Replies go to whoever's assigned (usually admin / sales).
+
+---
+
+## Start graphics or upfit on a job
+
+On the In-Shop card, the slim progress bar shows where the job is. Tap it to get the status buttons, then tap the graphics or **Upfit In Progress** button when you start. The job's bar moves to **Install** for everyone.
