@@ -202,3 +202,79 @@ Customer**.
 
 Reply notifications go to whoever's assigned to the thread (usually
 you or an admin).
+
+---
+
+## Send several estimates at once
+
+1. On **Estimates**, tap **Select**.
+2. Tick the estimates you want.
+3. Tap **Send for approval** (each customer gets one email listing their estimates, with one page to approve them all) or **Email PDFs** (each customer gets one email with every PDF attached).
+4. Each customer's email opens on the normal compose screen so you can read it before it goes.
+
+To pull another open estimate for the same customer into a fleet order, use **Join an existing estimate** in the estimate's fleet order box.
+
+---
+
+## What the Approved and Parts ordered banners mean
+
+Once a customer approves, the estimate shows a big green **Approved** banner, and the estimate gets a tag on the Estimates list and the customer's page.
+
+- **Approved**: still waiting on some parts to be ordered.
+- **Parts ordered**: every part requested for the job is on a PO.
+- **Parts in stock**: nothing needed ordering because every part was on the shelf.
+
+The tag goes away once the sales order is billed or closed.
+
+---
+
+## Follow a job's progress
+
+Every approved order has an eight-step bar on the estimate, the sales order page and the graphics job page:
+
+**Submitted → Parts ordered → Graphics → Parts in → Scheduled → Vehicle arrived → Install → Complete**
+
+Each step moves by itself from what happens in FleetSuite (POs, receipts, proof approval, the install date, check-in, the crew's buttons, completion and billing). An earlier step that's still holding things up shows amber. On-site jobs say **Tech on site** instead of Vehicle arrived.
+
+To see every open order by step, go to **More → Job Stages**.
+
+---
+
+## Send the customer an order status link
+
+After a customer approves, open the estimate and send the **"We got your approval"** email. It has a **Track your order** link to a page that shows where the job is. Nothing sends by itself; you see the email on the compose screen first.
+
+---
+
+## Enter an End user
+
+When one company pays and the work is for another (a lender or leasing company, for example), type the company the work is for in **End user** on the estimate. It carries to the sales order, prints on the Job Order, and goes to NetSuite. You can change it on the sales order page too.
+
+---
+
+## See if, when and to whom something was sent
+
+Estimates, sales orders, customer POs, proofs and statements have a **Sent** box. It shows the latest send in color (green delivered, red bounced), and earlier sends open below it. If you sent something outside FleetSuite, tap **Mark as sent**.
+
+On **Estimates**, use the **Not sent** or **Bounced** filter. On **Invoices**, unsent ones show an orange **NOT SENT** chip.
+
+---
+
+## Make a sales order from nothing
+
+1. Go to **More → Sales → Sales orders → + New**.
+2. Pick the customer, type the lines (any item), and add a ship-to if needed.
+3. Save. FleetSuite makes the sales order in NetSuite and opens its page.
+
+---
+
+## Use Outreach
+
+Every Monday each sales rep gets 25 new companies near O'Fallon on **Outreach** (linked from Prospects). For each one, FleetSuite AI drafts a short first email in your name.
+
+1. Read the draft and tap **Review & send**. It opens the normal compose screen. Nothing sends until you press Send.
+2. The email carries **Pick a time** and **Have me call** buttons. When a company books or asks for a call, you get an alert and it lands on your schedule.
+3. A week with no answer, a follow-up draft appears under **Follow-up ready**.
+
+Tap **Save for later** or **Not a fit** to clear a company off your list.
+
