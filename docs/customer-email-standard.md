@@ -92,7 +92,7 @@ out). A staff member who has a reason can still send.
   bytes the record's view/print endpoint hands out (`generateEstimatePdf`
   in `src/lib/estimate-pdf-server.ts`, `generateWrapQuotePdf` in
   `src/lib/wrap-quote-pdf-server.ts`, `generateStatementPdf` in
-  `src/lib/statement-pdf-server.ts`, NetSuite's PDF for invoices) — so
+  `src/lib/statement-pdf-server.ts`, NetSuite's PDF for invoices, and FleetSuite's own PO PDF — `makePurchaseOrderPdf` in `src/lib/po-pdf-server.ts` — for vendor and drop ship PO emails) — so
   the customer can save or forward the document without the original
   email. It rides first, is named in the body's attachment list, the
   preview returns its filename in `attachments` so the compose screen can

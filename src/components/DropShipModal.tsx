@@ -369,7 +369,7 @@ export default function DropShipModal({ estimateId, soLabel, onClose }: Props) {
           title={`Email vendor · drop ship PO ${emailing.poLabel}`}
           stateKey={`drop-ship-email:${emailing.id}`}
           initialTo={emailing.to}
-          intro={<div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>The PO PDF from NetSuite is attached, and the email shows the customer&apos;s ship-to address.</div>}
+          intro={<div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>FleetSuite's PO PDF is attached, and the email shows the customer&apos;s ship-to address.</div>}
           messagePlaceholder="Optional note to the vendor"
           sendLabel="Send to vendor"
           fetchPreview={async fields => {
