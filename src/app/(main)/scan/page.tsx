@@ -23,6 +23,8 @@ import { useAddToCatalog, AddToCatalogRow, offerAddToCatalog } from '@/component
 import { closeOnEscape } from '@/lib/modal-escape';
 import { partNumberKey } from '@/lib/loose-search';
 import { partsToSplit } from '@/lib/scan-part-split';
+import { withExtraParts } from '@/lib/scan-extra-parts';
+import ScanExtraParts from '@/components/ScanExtraParts';
 
 interface Part {
   id: string;
@@ -90,6 +92,9 @@ export default function ScanPage() {
   const [partSearch, setPartSearch] = useState('');
   const [selectedParts, setSelectedParts] = useState<Part[]>([]);
   const [customJob, setCustomJob] = useState('');
+  // Extra parts saved with each vehicle on top of the shift's parts (a
+  // unit-number decal next to the kit). Stays until the installer clears it.
+  const [extraParts, setExtraParts] = useState<string[]>([]);
   const [customCustomer, setCustomCustomer] = useState('');
   const [showCustom, setShowCustom] = useState(false);
 
@@ -232,6 +237,7 @@ export default function ScanPage() {
         if (s.billableCustomer?.name) { setSelectedCustomer(s.billableCustomer); }
         if (s.customJob) { setCustomJob(s.customJob); setShowCustom(true); }
         if (s.customCustomer) { setCustomCustomer(s.customCustomer); }
+        if (Array.isArray(s.extraParts)) { setExtraParts(s.extraParts.filter((x: unknown) => typeof x === 'string')); }
         if (s.selectedLocation) { setSelectedLocation(s.selectedLocation); }
         if (s.shiftId) { shiftIdRef.current = s.shiftId; setShiftId(s.shiftId); }
         if (s.selectedParts?.length || s.selectedPart || s.customJob) { setStep(s.selectedLocation ? 'scan' : 'location'); restoredJob = true; }
@@ -252,10 +258,10 @@ export default function ScanPage() {
   useEffect(() => {
     if (selectedParts.length > 0 || customJob || selectedCustomer) {
       try {
-        localStorage.setItem('scan_session', JSON.stringify({ selectedParts, customJob, customCustomer, selectedLocation, shiftId, billableCustomer: selectedCustomer }));
+        localStorage.setItem('scan_session', JSON.stringify({ selectedParts, customJob, customCustomer, selectedLocation, shiftId, billableCustomer: selectedCustomer, extraParts }));
       } catch {}
     }
-  }, [selectedParts, customJob, customCustomer, selectedLocation, shiftId, selectedCustomer]);
+  }, [selectedParts, customJob, customCustomer, selectedLocation, shiftId, selectedCustomer, extraParts]);
 
   // Stopgap while the CNI custom-job process is in flux: remember the last
   // custom job/customer beyond End Shift / Switch Part (scan_session only
@@ -418,6 +424,7 @@ export default function ScanPage() {
     setOtherCustomer('');
     setSelectedParts([]);
     setCustomJob('');
+    setExtraParts([]);
     setCustomCustomer('');
     setSelectedLocation(null);
     setScans([]);
@@ -650,13 +657,18 @@ export default function ScanPage() {
     const unitClean = unit?.trim() || null;
     const stockClean = stock?.trim() || null;
 
-    const partsToScan = selectedParts.length > 0
+    const shiftParts = selectedParts.length > 0
       ? selectedParts.map(p => ({ partNumber: p.item_number, partDesc: p.display_name || p.description || p.item_number, billable: p.billable_customer || customCustomer || null }))
       : customJobParts().map(cp => ({
           partNumber: cp.partNumber,
           partDesc: cp.catalog ? cp.catalog.display_name || cp.catalog.description || cp.partNumber : cp.partNumber,
           billable: cp.catalog?.billable_customer || customCustomer || null,
         }));
+    // Extra parts for this vehicle: one more line each. Not on a Verizon RFID
+    // scan, which has to be the only part on its line.
+    const partsToScan = deviceFields
+      ? shiftParts
+      : withExtraParts(shiftParts, extraParts, parts, customCustomer || null);
 
     // Crew shift for pay credits — implicit solo shift if none was tagged.
     const sid = await ensureShift();
@@ -1309,7 +1321,7 @@ export default function ScanPage() {
               </div>
             )}
             <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
-              <button onClick={() => { closeServerShift(); setStep('part'); setSelectedParts([]); setCustomJob(''); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); setStockNumber(''); try { localStorage.removeItem('scan_session'); } catch {} prefillCustomJobDefaults(); }} style={{
+              <button onClick={() => { closeServerShift(); setStep('part'); setSelectedParts([]); setCustomJob(''); setExtraParts([]); setCustomCustomer(''); setSelectedLocation(null); setScans([]); setShowCustom(false); setPendingScan(null); setUnitNumber(''); setStockNumber(''); try { localStorage.removeItem('scan_session'); } catch {} prefillCustomJobDefaults(); }} style={{
                 padding: '4px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
                 background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)',
                 color: '#6b7280', cursor: 'pointer',
@@ -1413,6 +1425,14 @@ export default function ScanPage() {
                       color: theme.textPrimary, marginBottom: '10px',
                     }}
                   />
+                  {!isVerizonRfid && (
+                    <ScanExtraParts
+                      parts={extraParts}
+                      onChange={setExtraParts}
+                      catalog={customerParts}
+                      baseParts={selectedParts.length > 0 ? selectedParts.map(p => p.item_number) : customJobPartNumbers()}
+                    />
+                  )}
                   <div style={{ display: 'flex', gap: '8px' }}>
                     <button onClick={confirmPendingScan} disabled={vinLoading} style={{
                       flex: 1, padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: 800,
@@ -1476,6 +1496,14 @@ export default function ScanPage() {
                 }}
               />
             </div>
+            {!isVerizonRfid && (
+              <ScanExtraParts
+                parts={extraParts}
+                onChange={setExtraParts}
+                catalog={customerParts}
+                baseParts={selectedParts.length > 0 ? selectedParts.map(p => p.item_number) : customJobPartNumbers()}
+              />
+            )}
           </div>
           )}
 
