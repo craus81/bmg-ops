@@ -41,6 +41,7 @@ export async function GET(req: NextRequest) {
       progress: result.view,
       soNetsuiteId: result.soNetsuiteId,
       parts: result.parts,
+      vehicles: result.vehicles,
     });
   } catch (e: any) {
     return NextResponse.json({ error: `Couldn't load the job progress: ${e?.message || e}` }, { status: 500 });

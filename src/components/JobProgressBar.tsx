@@ -20,6 +20,7 @@ import { useAuth } from '@/components/AuthProvider';
 import { theme } from '@/lib/theme';
 import { deepLinks } from '@/lib/deep-links';
 import type { JobPart, JobProgressView, JobStageView } from '@/lib/job-progress';
+import { fmtDay } from '@/lib/job-progress';
 
 export type JobProgressRef = { estimate: string } | { so: string } | { graphicsJob: string } | { checkin: string };
 
@@ -30,6 +31,7 @@ interface Loaded {
   soNetsuiteId?: string | null;
   progress: JobProgressView;
   parts?: JobPart[];
+  vehicles?: { id: string; label: string; vin: string | null }[];
 }
 
 type PartsFilter = 'all' | 'notin' | 'in';
@@ -189,6 +191,7 @@ export default function JobProgressBar({ refTo, createGraphicsHref }: {
   const [partsSheet, setPartsSheet] = useState<PartsFilter | null>(null);
   const [busy, setBusy] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [vehiclePicker, setVehiclePicker] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Open on the blue step when the bar scrolls (phones).
@@ -204,6 +207,8 @@ export default function JobProgressBar({ refTo, createGraphicsHref }: {
   const cur = p.stages.find(s => s.key === p.current)!;
   const partsOpen = p.stages.some(s => s.key === 'parts_in' && (s.state === 'now' || s.state === 'held'));
   const canMark = partsOpen && hasFeature('estimates');
+  const vehicles = data.vehicles || [];
+  const onsite = p.stages.some(s => s.key === 'arrived' && s.label === 'Tech on site');
 
   const markPartsIn = async () => {
     setBusy(true);
@@ -274,7 +279,24 @@ export default function JobProgressBar({ refTo, createGraphicsHref }: {
           }}>{busy ? 'Saving…' : 'Mark all parts in'}</button>
         </div>
       )}
+      {!onsite && (vehicles.length > 0 ? (
+        <div style={{ display: 'flex', gap: '6px 10px', alignItems: 'center', flexWrap: 'wrap', fontSize: '13px' }}>
+          <span style={{ color: theme.textMuted }}>In shop:</span>
+          {vehicles.map(v => (
+            <Link key={v.id} href={deepLinks.vehicle(v.id)} style={{ color: BLUE, fontWeight: 700, textDecoration: 'none' }}>🚗 {v.label} ›</Link>
+          ))}
+        </div>
+      ) : !p.done && (
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <span style={{ fontSize: '12px', color: theme.textMuted, flex: '1 1 220px' }}>No vehicle in the shop is tied to this order yet. Vehicle arrived and Install move on their own once one is.</span>
+          <button type="button" onClick={() => setVehiclePicker(true)} style={{
+            padding: '9px 14px', borderRadius: '10px', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+            background: theme.card, color: BLUE, border: `1px solid ${BLUE}`,
+          }}>🚗 Link vehicle in shop</button>
+        </div>
+      ))}
       {saveError && <div style={{ color: theme.error, fontSize: '13px', fontWeight: 600 }}>{saveError}</div>}
+      {vehiclePicker && <JobVehicleSheet estimateId={data.estimateId} onClose={() => setVehiclePicker(false)} onLinked={() => { setVehiclePicker(false); reload(); }} />}
       {partsSheet && <JobPartsSheet data={data} start={partsSheet} onClose={() => setPartsSheet(null)} />}
     </div>
   );
@@ -365,6 +387,127 @@ export function JobPartsSheet({ data, start, onClose }: { data: Loaded; start: P
           </a>
         )}
         <div style={{ fontSize: '12px', color: theme.textMuted }}>Same counts as the bar. &quot;In&quot; means the PO line was received, someone tapped Got it, it came off the shelf, or all parts were marked in.</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+interface InShopVehicle { id: string; label: string; customer: string | null; status: string; checkedInAt: string; sameCustomer: boolean; vinMatch: boolean }
+
+/** Pick the vehicle in the shop that this order is for. The order's own
+ *  customer comes first; everything else in the shop shows on a search. */
+export function JobVehicleSheet({ estimateId, onClose, onLinked }: { estimateId: string; onClose: () => void; onLinked: () => void }) {
+  const [list, setList] = useState<InShopVehicle[] | null>(null);
+  const [customer, setCustomer] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [showAll, setShowAll] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const before = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('keydown', onKey); before?.focus?.(); };
+  }, [onClose]);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const res = await apiFetch(`/api/job-progress/link-vehicle?estimate=${encodeURIComponent(estimateId)}`);
+        const body = await res.json().catch(() => ({}));
+        if (!live) return;
+        if (!res.ok) { setError(body.error || "Couldn't load the vehicles in the shop."); return; }
+        setCustomer(body.customer || null);
+        setList(body.vehicles || []);
+      } catch {
+        if (live) setError("Couldn't load the vehicles in the shop. Check your connection.");
+      }
+    })();
+    return () => { live = false; };
+  }, [estimateId]);
+
+  const link = async (v: InShopVehicle) => {
+    setSaving(v.id);
+    setError(null);
+    try {
+      const res = await apiFetch('/api/job-progress/link-vehicle', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ estimateId, checkinId: v.id }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { setError(body.error || "Couldn't link the vehicle."); return; }
+      onLinked();
+    } catch {
+      setError("Couldn't link the vehicle. Check your connection.");
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const q = search.trim().toLowerCase();
+  const all = list || [];
+  const matches = (v: InShopVehicle) => !q || `${v.label} ${v.customer || ''}`.toLowerCase().includes(q);
+  const mine = all.filter(v => (v.sameCustomer || v.vinMatch) && matches(v));
+  const others = (q || showAll || mine.length === 0) ? all.filter(v => !v.sameCustomer && !v.vinMatch && matches(v)) : [];
+  const hiddenOthers = all.filter(v => !v.sameCustomer && !v.vinMatch).length;
+
+  const row = (v: InShopVehicle, i: number) => (
+    <button key={v.id} type="button" disabled={!!saving} onClick={() => link(v)} style={{
+      display: 'grid', gridTemplateColumns: '1fr auto', gap: '2px 10px', width: '100%', padding: '10px 14px', textAlign: 'left',
+      background: 'transparent', color: theme.textPrimary, border: 'none', borderTop: i === 0 ? 'none' : `1px solid ${theme.border}`,
+      font: 'inherit', cursor: saving ? 'default' : 'pointer',
+    }}>
+      <span style={{ fontWeight: 700, minWidth: 0, overflowWrap: 'anywhere' }}>{v.label}</span>
+      <span style={{ fontSize: '12.5px', fontWeight: 700, color: BLUE, whiteSpace: 'nowrap' }}>{saving === v.id ? 'Linking…' : 'Link ›'}</span>
+      <span style={{ gridColumn: '1 / -1', fontSize: '12.5px', color: theme.textSecondary }}>
+        {v.customer || 'No customer'} · checked in {fmtDay(v.checkedInAt)} · {v.status.replace(/_/g, ' ')}
+        {v.vinMatch && <span style={{ marginLeft: '6px', fontWeight: 800, color: GREEN }}>VIN matches the order</span>}
+      </span>
+    </button>
+  );
+  const group = (title: string, rows: InShopVehicle[]) => rows.length > 0 && (
+    <div>
+      <div style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '.08em', textTransform: 'uppercase', color: theme.textMuted, padding: '10px 14px 4px' }}>{title} · {rows.length}</div>
+      {rows.map(row)}
+    </div>
+  );
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div className="jp-sheet-wrap" onClick={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) onClose(); }}>
+      <style>{CSS}</style>
+      <div className="jp-sheet" role="dialog" aria-modal="true" aria-label="Link vehicle in shop">
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'flex-start' }}>
+          <div style={{ fontSize: '19px', fontWeight: 800, minWidth: 0 }}>Which van is this order for?</div>
+          <button ref={closeRef} type="button" onClick={onClose} style={{
+            padding: '8px 14px', borderRadius: '10px', fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+            background: theme.card, color: theme.textPrimary, border: `1px solid ${theme.border}`,
+          }}>Close</button>
+        </div>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search customer, make, model or last 6 of VIN…" style={{
+          padding: '10px 12px', borderRadius: '10px', border: `1px solid ${theme.border}`, background: theme.card, color: theme.textPrimary, fontSize: '16px',
+        }} />
+        {error && <div style={{ color: theme.error, fontSize: '13px', fontWeight: 600 }}>{error}</div>}
+        {!list && !error && <div style={{ fontSize: '14px', color: theme.textMuted }}>Loading the vehicles in the shop…</div>}
+        {list && (
+          <div style={{ border: `1px solid ${theme.border}`, borderRadius: '12px', background: theme.card, overflow: 'hidden' }}>
+            {group(customer ? `${customer} · in the shop` : 'This customer · in the shop', mine)}
+            {group('Other vehicles in the shop', others)}
+            {mine.length === 0 && others.length === 0 && (
+              <div style={{ padding: '12px 14px', fontSize: '14px', color: theme.textMuted }}>{all.length === 0 ? 'No vehicles are checked in right now.' : 'No vehicle in the shop matches that search.'}</div>
+            )}
+          </div>
+        )}
+        {list && !q && !showAll && mine.length > 0 && hiddenOthers > 0 && (
+          <button type="button" onClick={() => setShowAll(true)} style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, color: BLUE, fontWeight: 700, fontSize: '13px', cursor: 'pointer' }}>
+            Show the other {hiddenOthers} vehicles in the shop
+          </button>
+        )}
+        <div style={{ fontSize: '12px', color: theme.textMuted }}>Vehicles link on their own when the VIN matches, the check-in names the sales order, or the graphics job matched the van. Use this when none of those happened.</div>
       </div>
     </div>,
     document.body,
