@@ -283,3 +283,67 @@ export function deriveJobProgress(input: JobProgressInput): JobProgressView {
     done,
   };
 }
+
+// ── The parts list behind the bar (Craig 2026-11-06, picked C): tap Parts
+//    ordered, Parts in, the Parts & materials tile or the customer card's
+//    Parts line to see which parts are in and which aren't. ──
+
+export type JobPartStatus = 'not_ordered' | 'ordered' | 'in';
+
+/** Everything the loader found about one part number on the order. */
+export interface JobPartTrace {
+  itemNumber: string;
+  description: string | null;
+  quantity: number | null;
+  /** A purchase request exists (any status but cancelled). */
+  requested: boolean;
+  ordered: boolean;
+  received: boolean;
+  poNumbers: string[];
+  vendors: string[];
+  /** Earliest ETA among its open POs (YYYY-MM-DD). */
+  eta: string | null;
+  /** "Got it" on the job, when that's how it came in. */
+  gotItAt: string | null;
+  fromStock: boolean;
+  /** Drop ship PO number ('' when it has none yet); null = not a drop ship. */
+  dropShip: string | null;
+  /** Covered by the sales order's hand "Mark parts ordered". */
+  markedOrdered: boolean;
+}
+
+export interface JobPart {
+  itemNumber: string;
+  description: string | null;
+  quantity: number | null;
+  status: JobPartStatus;
+  /** "PO2311 · Masterack · ETA Nov 10", "Received · PO2301", "From stock"… */
+  where: string;
+}
+
+const STATUS_ORDER: Record<JobPartStatus, number> = { not_ordered: 0, ordered: 1, in: 2 };
+
+export function describeJobParts(traces: JobPartTrace[], partsAllInAt: string | null): JobPart[] {
+  const parts = traces.map((t): JobPart => {
+    const po = t.poNumbers.join(', ');
+    const vendor = t.vendors.join(', ');
+    let status: JobPartStatus = t.received ? 'in' : t.ordered ? 'ordered' : 'not_ordered';
+    let where: string;
+    if (status === 'in') {
+      if (t.fromStock) where = 'From stock';
+      else if (t.dropShip != null) where = ['Drop ship', t.dropShip || null, vendor || null].filter(Boolean).join(' · ');
+      else if (t.gotItAt) where = ['Got it', fmtDay(t.gotItAt)].filter(Boolean).join(' · ');
+      else where = ['Received', po || null, vendor || null].filter(Boolean).join(' · ');
+    } else if (partsAllInAt) {
+      status = 'in';
+      where = ['Marked all parts in', fmtDay(partsAllInAt)].filter(Boolean).join(' · ');
+    } else if (status === 'ordered') {
+      where = [po || null, vendor || null, t.eta ? `ETA ${fmtDay(t.eta)}` : null].filter(Boolean).join(' · ')
+        || (t.markedOrdered ? 'Marked ordered on the sales order' : 'Ordered');
+    } else {
+      where = t.requested ? 'Requested, not on a PO yet' : 'Not on a PO yet';
+    }
+    return { itemNumber: t.itemNumber, description: t.description, quantity: t.quantity, status, where };
+  });
+  return parts.sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.itemNumber.localeCompare(b.itemNumber));
+}

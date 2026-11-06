@@ -39,6 +39,8 @@ export async function GET(req: NextRequest) {
       estimateNumber: (est as any).estimate_number || null,
       soNumber: result.soNumber,
       progress: result.view,
+      soNetsuiteId: result.soNetsuiteId,
+      parts: result.parts,
     });
   } catch (e: any) {
     return NextResponse.json({ error: `Couldn't load the job progress: ${e?.message || e}` }, { status: 500 });

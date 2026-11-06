@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveJobProgress, chicagoToday, type JobProgressInput } from './job-progress';
+import { deriveJobProgress, chicagoToday, describeJobParts, type JobProgressInput } from './job-progress';
 
 const base = (over: Partial<JobProgressInput> = {}): JobProgressInput => ({
   approved: true,
@@ -132,5 +132,40 @@ describe('deriveJobProgress', () => {
 describe('chicagoToday', () => {
   it('uses the Chicago date, not UTC', () => {
     expect(chicagoToday(new Date('2026-11-06T03:00:00Z'))).toBe('2026-11-05');
+  });
+});
+
+describe('describeJobParts', () => {
+  const t = (over: Partial<import('./job-progress').JobPartTrace>): import('./job-progress').JobPartTrace => ({
+    itemNumber: 'X', description: null, quantity: 1, requested: true, ordered: false, received: false,
+    poNumbers: [], vendors: [], eta: null, gotItAt: null, fromStock: false, dropShip: null, markedOrdered: false, ...over,
+  });
+
+  it('groups not ordered, then ordered, then in, and says where each one is', () => {
+    const parts = describeJobParts([
+      t({ itemNumber: 'IN-1', ordered: true, received: true, poNumbers: ['PO2301'], vendors: ['Masterack'] }),
+      t({ itemNumber: 'ORD-1', ordered: true, poNumbers: ['PO2311'], vendors: ['Masterack'], eta: '2026-11-10' }),
+      t({ itemNumber: 'NO-1' }),
+      t({ itemNumber: 'STK-1', requested: false, ordered: true, received: true, fromStock: true }),
+    ], null);
+    expect(parts.map(p => [p.itemNumber, p.status, p.where])).toEqual([
+      ['NO-1', 'not_ordered', 'Requested, not on a PO yet'],
+      ['ORD-1', 'ordered', 'PO2311 · Masterack · ETA Nov 10'],
+      ['IN-1', 'in', 'Received · PO2301 · Masterack'],
+      ['STK-1', 'in', 'From stock'],
+    ]);
+  });
+
+  it('Mark all parts in counts the rest as in', () => {
+    const [p] = describeJobParts([t({ itemNumber: 'ORD-1', ordered: true, poNumbers: ['PO1'] })], '2026-11-04T15:00:00Z');
+    expect(p).toMatchObject({ status: 'in', where: 'Marked all parts in · Nov 4' });
+  });
+
+  it('a drop ship and a Got it read plainly', () => {
+    const parts = describeJobParts([
+      t({ itemNumber: 'A', ordered: true, received: true, dropShip: 'PO77', vendors: ['CURT'] }),
+      t({ itemNumber: 'B', ordered: true, received: true, gotItAt: '2026-11-04T15:00:00Z' }),
+    ], null);
+    expect(parts.map(p => p.where)).toEqual(['Drop ship · PO77 · CURT', 'Got it · Nov 4']);
   });
 });

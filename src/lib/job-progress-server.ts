@@ -12,7 +12,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { deriveJobProgress, chicagoToday, type JobProgressInput, type JobProgressView } from './job-progress';
+import { deriveJobProgress, chicagoToday, describeJobParts, type JobProgressInput, type JobProgressView, type JobPart, type JobPartTrace } from './job-progress';
 import { normalizeItemNumber } from './incoming-parts';
 import { isOpenSalesOrderStatus } from './parts-demand';
 import { VEHICLE_ROW_LABELS, vehicleRowKey } from './types';
@@ -65,6 +65,10 @@ export interface JobProgressResult {
   soClosed: boolean;
   /** Fleet check-ins tied to the order. */
   vehicleIds: string[];
+  /** Every part on the order and where it stands (the bar's parts list). */
+  parts: JobPart[];
+  /** NetSuite id of the sales order, for its Parts card link. */
+  soNetsuiteId: string | null;
 }
 
 /** `estimates` must carry JOB_PROGRESS_ESTIMATE_COLUMNS and be approved. */
@@ -82,7 +86,7 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
     inChunks(ids, part => service.from('graphics_jobs')
       .select('id, estimate_id, status, customer_approved, customer_approved_at, delivery_method, scheduled_install_date, install_arrival_time, updated_at')
       .in('estimate_id', part)),
-    inChunks(ids, part => service.from('drop_ship_orders').select('estimate_id, lines, created_at').in('estimate_id', part)),
+    inChunks(ids, part => service.from('drop_ship_orders').select('estimate_id, lines, created_at, purchase_order_number, vendor_name').in('estimate_id', part)),
     inChunks(ids, part => service.from('shop_appointments').select('estimate_id, slot_date, slot_time, status')
       .in('estimate_id', part).eq('kind', 'dropoff').neq('status', 'cancelled')),
     inChunks(soIds, part => service.from('netsuite_sales_orders').select('netsuite_id, tranid, status, status_label, estimate_id').in('netsuite_id', part)),
@@ -115,7 +119,7 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
   }
 
   // ── Purchase requests: from the estimate or its upfit project ──
-  const REQ = 'id, item_number, quantity, status, ordered_at, ordered_po_id, ordered_po_number, received_at, source_estimate_id, source_project_id';
+  const REQ = 'id, item_number, description, vendor_name, quantity, status, ordered_at, ordered_po_id, ordered_po_number, received_at, source_estimate_id, source_project_id';
   const [reqByEstRows, reqByProjRows] = await Promise.all([
     inChunks(ids, part => service.from('purchase_requests').select(REQ).in('source_estimate_id', part)),
     inChunks([...projectToEst.keys()], part => service.from('purchase_requests').select(REQ).in('source_project_id', part)),
@@ -138,6 +142,9 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
   for (const po of posByNumber) if (po.tranid) poIdByNumber.set(String(po.tranid), po.id);
   const poIdOf = (r: any): string | null => r.ordered_po_id || (r.ordered_po_number ? poIdByNumber.get(String(r.ordered_po_number)) || null : null);
   const poIds = allReqs.map(poIdOf).filter(Boolean) as string[];
+  const poHeads = await inChunks(poIds, part => service.from('netsuite_vendor_pos').select('id, tranid, vendor_name, eta_date').in('id', part));
+  const poHead = new Map<string, any>();
+  for (const po of poHeads) poHead.set(po.id, po);
   const poLines = await inChunks(poIds, part => service.from('netsuite_vendor_po_lines')
     .select('po_id, item_number, quantity, quantity_received').in('po_id', part));
   // po_id:item → [ordered, received]
@@ -220,6 +227,17 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
     // it is ordered; received when every ordered one is (PO line received,
     // or "Got it"). Drop ships ship straight out, so they count as both.
     const parts = new Map<string, { ordered: boolean; received: boolean }>();
+    const traces = new Map<string, JobPartTrace>();
+    const trace = (k: string, item: string): JobPartTrace => {
+      let t = traces.get(k);
+      if (!t) {
+        t = { itemNumber: item || k, description: null, quantity: null, requested: false, ordered: false, received: false,
+          poNumbers: [], vendors: [], eta: null, gotItAt: null, fromStock: false, dropShip: null, markedOrdered: false };
+        traces.set(k, t);
+      }
+      return t;
+    };
+    const addTo = (list: string[], v: string | null | undefined) => { if (v && !list.includes(v)) list.push(v); };
     let orderedAt: string | null = null;
     let receivedAt: string | null = null;
     for (const r of reqsByEst.get(estId)?.values() || []) {
@@ -234,13 +252,30 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
       }
       const cur = parts.get(k) || { ordered: true, received: true };
       parts.set(k, { ordered: cur.ordered && ordered, received: cur.received && ordered && received });
+      const tr = trace(k, String(r.item_number || '').trim());
+      tr.requested = true;
+      tr.description = tr.description || r.description || null;
+      tr.quantity = (tr.quantity || 0) + (Number(r.quantity) || 0);
+      if (ordered) {
+        const head = poIdOf(r) ? poHead.get(poIdOf(r)!) : null;
+        addTo(tr.poNumbers, head?.tranid || r.ordered_po_number || null);
+        addTo(tr.vendors, head?.vendor_name || r.vendor_name || null);
+        if (head?.eta_date && !received && (!tr.eta || head.eta_date < tr.eta)) tr.eta = String(head.eta_date).slice(0, 10);
+      }
+      if (r.received_at && !poIdOf(r)) tr.gotItAt = latest(tr.gotItAt, r.received_at);
       if (ordered) orderedAt = latest(orderedAt, r.ordered_at || null);
       if (r.received_at) receivedAt = latest(receivedAt, r.received_at);
     }
     for (const d of dropByEst.get(estId) || []) {
       for (const l of Array.isArray(d.lines) ? d.lines : []) {
         const k = normalizeItemNumber(String(l?.itemNumber || ''));
-        if (k) parts.set(k, { ordered: true, received: true });
+        if (!k) continue;
+        parts.set(k, { ordered: true, received: true });
+        const tr = trace(k, String(l.itemNumber).trim());
+        tr.description = tr.description || l?.description || null;
+        tr.quantity = tr.quantity ?? (Number(l?.quantity) || null);
+        tr.dropShip = d.purchase_order_number || '';
+        addTo(tr.vendors, d.vendor_name || null);
       }
       orderedAt = latest(orderedAt, d.created_at || null);
     }
@@ -251,6 +286,11 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
       if (!cover) continue;
       for (const p of cover.parts) {
         const cur = parts.get(p.item_number);
+        const tr = trace(p.item_number, p.item_number);
+        tr.description = tr.description || p.description || null;
+        tr.quantity = Math.max(tr.quantity || 0, p.needed || 0) || null;
+        if (cover.marked && p.state === 'missing') tr.markedOrdered = true;
+        if (p.state === 'stock') tr.fromStock = true;
         if (cover.marked || p.state === 'po' || p.state === 'mixed') {
           parts.set(p.item_number, { ordered: true, received: cur?.received ?? false });
         } else if (p.state === 'stock') {
@@ -262,6 +302,7 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
       if (cover.marked) orderedAt = latest(orderedAt, cover.marked.at);
     }
     const partList = [...parts.values()];
+    for (const [k, v] of parts) { const tr = trace(k, k); tr.ordered = v.ordered; tr.received = v.received; }
 
     // Scheduled: the earliest live date anywhere.
     let schedule: JobProgressInput['schedule'] = null;
@@ -352,6 +393,8 @@ export async function loadJobProgress(service: Db, estimates: any[], now: Date =
       soNumber: sos.map(s => s.tranid).filter(Boolean)[0] || null,
       soClosed: sos.length > 0 && sos.every(s => !isOpenSalesOrderStatus(s.status, s.status_label)),
       vehicleIds: vehicles.map(v => v.id),
+      parts: describeJobParts([...traces.values()], est.parts_all_in_at || null),
+      soNetsuiteId: sos.map(so => String(so.netsuite_id)).filter(Boolean)[0] || null,
     });
   }
   return out;

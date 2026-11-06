@@ -136,6 +136,13 @@ export default function SalesOrderPage() {
     }
   }, [id]);
   useEffect(() => { load(); }, [load]);
+  // "Open the sales order's Parts card" on the job progress parts list
+  // links here with #so-parts; the card renders after the order loads.
+  useEffect(() => {
+    if (!data || typeof window === 'undefined' || window.location.hash !== '#so-parts') return;
+    const t = setTimeout(() => document.getElementById('so-parts')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+    return () => clearTimeout(t);
+  }, [data]);
 
   // Deposit on the order: once taking deposits is switched on, anyone with
   // Invoicing who can see prices; until then super admins only.
@@ -460,7 +467,7 @@ export default function SalesOrderPage() {
       {data.estimate && <JobProgressBar refTo={{ estimate: data.estimate.id }} />}
 
       {/* ── Parts ordered: every part on a PO or in stock (2026-11-06) ── */}
-      {!editing && <SoPartsCard netsuiteId={id} />}
+      {!editing && <div id="so-parts" style={{ scrollMarginTop: '72px' }}><SoPartsCard netsuiteId={id} /></div>}
 
       {/* ── Lines ── */}
       <div style={card}>
