@@ -24,6 +24,7 @@ import {
   KIND_LABEL, MAX_REQUEST_FILES, REQUEST_KINDS, STATUS_LABEL, excerpt, isClosed, pageName,
   type AppRequestKind, type AppRequestStatus,
 } from '@/lib/app-requests';
+import { ASSISTANT_NAME } from '@/lib/assistant-name';
 
 interface ListItem {
   id: string;
@@ -173,7 +174,7 @@ export default function RequestsPage() {
         </button>
       </div>
       <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px', lineHeight: 1.4 }}>
-        Report a problem, ask for a feature or ask a question. Claude answers here.
+        Report a problem, ask for a feature or ask a question. {ASSISTANT_NAME} answers here.
       </div>
 
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '14px 0 12px' }}>
@@ -488,7 +489,7 @@ function RequestSheet({ id, onClose, onChanged }: { id: string; onClose: () => v
           )}
 
           {d.messages.map(m => (
-            <Message key={m.id} name={m.author_kind === 'claude' ? 'Claude' : m.author_name} at={m.created_at} body={m.body} claude={m.author_kind === 'claude'} />
+            <Message key={m.id} name={m.author_kind === 'claude' ? ASSISTANT_NAME : m.author_name} at={m.created_at} body={m.body} claude={m.author_kind === 'claude'} />
           ))}
 
           <div>

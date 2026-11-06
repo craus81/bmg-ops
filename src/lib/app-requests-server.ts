@@ -13,6 +13,7 @@ import {
   REQUESTS_OWNER_EMAIL, KIND_LABEL, STATUS_LABEL, excerpt, pageName, updateRecipients,
   type AppRequestKind, type AppRequestStatus,
 } from './app-requests';
+import { ASSISTANT_NAME } from '@/lib/assistant-name';
 
 export const REQUEST_SELECT = 'id, number, kind, body, status, from_page, device, created_by, needs_claude, submitter_unread, created_at, updated_at';
 
@@ -135,7 +136,7 @@ export async function loadRequestDetail(
     },
     messages: ((msgs || []) as any[]).map(m => ({
       id: m.id, author_kind: m.author_kind, author_id: m.author_id, body: m.body, created_at: m.created_at,
-      author_name: m.author_kind === 'claude' ? 'Claude' : (m.author_id ? people.get(m.author_id)?.full_name : null) || 'Someone',
+      author_name: m.author_kind === 'claude' ? ASSISTANT_NAME : (m.author_id ? people.get(m.author_id)?.full_name : null) || 'Someone',
     })),
     files: ((files || []) as any[]).map(f => ({ id: f.id, file_name: f.file_name, content_type: f.content_type, created_at: f.created_at, url: opts.fileUrl(f.id) })),
     me_too: ((mt || []) as any[]).map(m => ({ user_id: m.user_id, name: people.get(m.user_id)?.full_name || null })),
@@ -159,7 +160,7 @@ export async function alertNewRequest(service: SupabaseClient, r: RequestRow, su
       userId,
       type: 'app_request_new',
       title: `New ${kind} from ${who}: ${excerpt(r.body, 60)}`,
-      body: `${who} sent request #${r.number}${where ? ` from ${where}` : ''}: "${excerpt(r.body, 400)}". Claude picks it up on the next check.`,
+      body: `${who} sent request #${r.number}${where ? ` from ${where}` : ''}: "${excerpt(r.body, 400)}". ${ASSISTANT_NAME} picks it up on the next check.`,
       url: deepLinks.appRequest(r.id),
     })));
   } catch (err) {

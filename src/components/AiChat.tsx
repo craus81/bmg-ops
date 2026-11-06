@@ -7,6 +7,9 @@ import { createClient } from '@/lib/supabase-browser';
 import { getTextZoom } from '@/lib/text-size';
 import { AI_CHAT_STATE_EVENT, AI_CHAT_TOGGLE_EVENT } from '@/lib/ai-chat-events';
 import { useNavTabs } from '@/components/useNavTabs';
+import Link from 'next/link';
+import { deepLinks } from '@/lib/deep-links';
+import { ASSISTANT_NAME } from '@/lib/assistant-name';
 
 // Keep the prompt + history under a sane token budget by only sending
 // the most recent N exchanges to the model. The full transcript still
@@ -21,6 +24,8 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   loading?: boolean;
+  /** A Request this answer filed or added to (src/lib/ai-agent-requests.ts). */
+  request?: { id: string; number: number };
 }
 
 // Parse an assistant message into alternating text and markdown-table
@@ -443,6 +448,7 @@ export default function AiChat() {
     setTimeout(scrollToBottom, 50);
 
     let assistantReply = '';
+    let filedRequest: ChatMessage['request'];
     try {
       const history = [...messages, userMsg]
         .filter(m => !m.loading)
@@ -465,6 +471,7 @@ export default function AiChat() {
         assistantReply = data.error || 'Something went wrong. Try again.';
       } else {
         assistantReply = data.reply || '';
+        if (data.filedRequest?.id) filedRequest = { id: data.filedRequest.id, number: data.filedRequest.number };
       }
     } catch {
       assistantReply = 'Network error. Check your connection and try again.';
@@ -472,7 +479,7 @@ export default function AiChat() {
 
     setMessages(prev => [
       ...prev.filter(m => !m.loading),
-      { role: 'assistant', content: assistantReply },
+      { role: 'assistant', content: assistantReply, ...(filedRequest ? { request: filedRequest } : {}) },
     ]);
     setSending(false);
     setTimeout(scrollToBottom, 50);
@@ -602,7 +609,7 @@ export default function AiChat() {
               </div>
               <div>
                 <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-body)' }}>
-                  FleetSuite AI
+                  {ASSISTANT_NAME}
                 </div>
                 <div style={{ fontSize: '10px', color: sending ? '#60a5fa' : 'var(--text-label)' }}>
                   {sending ? 'Thinking...' : 'Ask anything or tell me to do something'}
@@ -749,7 +756,20 @@ export default function AiChat() {
                       <style>{`@keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }`}</style>
                     </div>
                   ) : msg.role === 'assistant' ? (
-                    <MessageBody text={msg.content} />
+                    <>
+                      <MessageBody text={msg.content} />
+                      {msg.request && (
+                        <div style={{
+                          marginTop: '8px', padding: '7px 9px', borderRadius: '8px',
+                          border: '1px solid #16a34a', background: 'rgba(22, 163, 74, 0.10)',
+                        }}>
+                          <div style={{ fontWeight: 700, color: '#16a34a' }}>✓ Sent to Craig as request #{msg.request.number}</div>
+                          <Link href={deepLinks.appRequest(msg.request.id)} style={{ color: '#3b82f6', fontWeight: 600, textDecoration: 'none' }}>
+                            Open request #{msg.request.number} →
+                          </Link>
+                        </div>
+                      )}
+                    </>
                   ) : (
                     <div style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</div>
                   )}

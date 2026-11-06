@@ -13,6 +13,7 @@ import { resolveDashboardFocus } from '@/lib/dashboard-focus';
 import { MORE_GROUPS, orderMoreGroups, searchMorePages, type MoreGroupId } from '@/lib/more-menu';
 import { deepLinks } from '@/lib/deep-links';
 import { booksAccess } from '@/lib/books/access';
+import { ASSISTANT_NAME } from '@/lib/assistant-name';
 
 export default function MorePage() {
   const router = useRouter();
@@ -243,7 +244,7 @@ export default function MorePage() {
   const visible = items.filter(i => i.show);
   // Requests (Craig, 2026-10-30): top of More, for everyone, outside the
   // folding groups so it's never hidden. Search finds it too.
-  const requestsItem: Item = { title: 'Requests', sub: 'Report a problem, ask for a feature or ask a question · Claude answers there', path: '/requests', show: true };
+  const requestsItem: Item = { title: 'Requests', sub: `Report a problem, ask for a feature or ask a question · ${ASSISTANT_NAME} answers there`, path: '/requests', show: true };
 
   // The person's own area first: the same focus that shapes their Dashboard.
   const focus = resolveDashboardFocus(profile?.dashboard_focus, {
