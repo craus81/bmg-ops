@@ -10,6 +10,7 @@ import { booksOnly } from '@/lib/books/access';
 import NeedsInstallDate from '@/components/NeedsInstallDate';
 import ReadyToSchedule from '@/components/ReadyToSchedule';
 import RequestsHomeCard from '@/components/RequestsHomeCard';
+import { WhatsNewBanner } from '@/components/WhatsNew';
 
 const OpsDashboard = lazy(() => import('@/components/OpsDashboard'));
 const FinancialsDashboard = lazy(() => import('@/components/FinancialsDashboard'));
@@ -117,8 +118,10 @@ export default function HomePage() {
   if (booksHome) return null;
 
   // Every Home ends with the small Requests card (2026-10-30).
+  // What's new banner on top of every Home (Craig, 2026-11-06).
   return (
     <>
+      <WhatsNewBanner />
       {isOnlyRole('graphics_production') ? <MyHome role="graphics" />
         // Shop first: its view is the superset (check-ins and completions plus installs).
         : isOnlyRole('shop_tech') ? <MyHome role="shop_tech" />

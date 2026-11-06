@@ -7,6 +7,7 @@ import { AI_TAB_ID, type Tab } from '@/lib/nav-tabs';
 import { AI_CHAT_STATE_EVENT, AI_CHAT_TOGGLE_EVENT } from '@/lib/ai-chat-events';
 import { useNavTabs } from '@/components/useNavTabs';
 import { useSplitScreen } from '@/components/SplitScreen';
+import { WhatsNewDot } from '@/components/WhatsNew';
 import {
   Home, Palette, ClipboardCheck, Warehouse, Users,
   CalendarDays, ScanLine, Clock, FileText, Briefcase,
@@ -117,9 +118,11 @@ export default function BottomNav() {
               whiteSpace: 'nowrap',
               minWidth: 0,
               transition: 'all 0.15s',
+              position: 'relative',
             }}
           >
             {Icon && <Icon size={22} strokeWidth={active ? 2.5 : 2} />}
+            {tab.id === 'more' && <WhatsNewDot />}
             {/* Ellipsis guard: with 8 tabs on a narrow phone the longest
                 labels (Customers, Estimates) can exceed their slot at 10px —
                 clip visually, screen readers still get the full text. */}

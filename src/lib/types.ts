@@ -1,3 +1,4 @@
+import type { WhatsNewSeen } from '@/lib/release-notes';
 export type AppRole = 'admin' | 'super_admin' | 'executive' | 'installer' | 'field_tech' | 'shop_tech' | 'sales' | 'graphics_production' | 'customer' | 'finance' | 'bookkeeper' | 'cpa';
 
 // Human-readable labels for roles
@@ -47,6 +48,9 @@ export interface Profile {
   /** What this person's Dashboard is about (migration 432). NULL = from
    *  the role. See src/lib/dashboard-focus.ts. */
   dashboard_focus?: string[] | null;
+  /** The newest release this person has seen on What's new, its popup and
+   *  its dashboard banner (migration 522). See src/lib/release-notes.ts. */
+  whats_new_seen?: WhatsNewSeen | null;
 }
 
 export interface CatalogItem {
