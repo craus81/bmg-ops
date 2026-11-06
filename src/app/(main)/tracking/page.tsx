@@ -23,6 +23,7 @@ import VehicleJobPanel from '@/components/VehicleJobPanel';
 import type { FleetCheckin, VehicleTrackingStatus, VehicleStatusHistory, VehiclePhoto, GraphicsJob, GraphicsInstallStatus, CheckinSalesOrder } from '@/lib/types';
 import { VEHICLE_STATUS_LABELS, GRAPHICS_STATUS_LABELS, GRAPHICS_INSTALL_LABELS, IN_SHOP_STATUSES, VEHICLE_ROW, VEHICLE_ROW_LABELS, VEHICLE_ROW_COLORS, vehicleRowKey, type VehicleRowKey } from '@/lib/types';
 import VehicleStatusRow from '@/components/VehicleStatusRow';
+import { JobProgressMini } from '@/components/JobProgressBar';
 import NetSuitePdf from '@/components/NetSuitePdf';
 import EmailInvoicesModal, { type EmailableInvoice } from '@/components/EmailInvoicesModal';
 import { openNetSuiteInvoicePdfByNumber } from '@/lib/netsuite-pdf-client';
@@ -2124,6 +2125,9 @@ export default function TrackingPage() {
                             </div>
                           )}
                         </div>
+                        {/* The job's progress bar stands in for the buttons
+                            (Craig 2026-11-06); tap it to open them. */}
+                        <JobProgressMini key={`${vehicle.id}:${vehicle.status}:${(vehicle as any).shop_stage || ''}`} checkinId={vehicle.id}>
                         <VehicleStatusRow
                           vehicle={vehicle as any}
                           disabled={updatingId === vehicle.id}
@@ -2137,6 +2141,7 @@ export default function TrackingPage() {
                             }
                           }}
                         />
+                        </JobProgressMini>
 
                         {/* Note input */}
                         <div onClick={(e) => e.stopPropagation()}>

@@ -20,6 +20,7 @@ import type { AddonLine } from '@/lib/rack-picker';
 import { gatherKitGroups } from '@/lib/estimate-kits';
 import MentionTextArea, { reportMentions } from '@/components/MentionTextArea';
 import EstimateOrderStatusCard from '@/components/EstimateOrderStatusCard';
+import JobProgressBar from '@/components/JobProgressBar';
 import EstimateBatchSend from '@/components/EstimateBatchSend';
 import { canSendForApproval, groupByCustomer, MAX_BATCH_ESTIMATES } from '@/lib/estimate-batch';
 import { useSendCheck } from '@/components/SendCheckModal';
@@ -7767,7 +7768,12 @@ export default function EstimatesPage() {
         {editingId && (() => {
           const est = estimates.find(e => e.id === editingId) as any;
           if (!est || !(est.customer_approved || est.status === 'accepted')) return null;
-          return <EstimateOrderStatusCard key={editingId} estimateId={editingId} customerId={customerId} prospectId={prospectId} />;
+          return (
+            <>
+              <JobProgressBar key={`jp-${editingId}`} refTo={{ estimate: editingId }} />
+              <EstimateOrderStatusCard key={editingId} estimateId={editingId} customerId={customerId} prospectId={prospectId} />
+            </>
+          );
         })()}
 
         {/* Signed E-SIGN snapshot — the frozen document the customer accepted,

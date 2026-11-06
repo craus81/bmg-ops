@@ -509,6 +509,8 @@ export const ROUTE_GUARDS: Record<string, RouteGuard> = {
   'src/app/api/sales-orders/new/route.ts': authScoped('Estimates OR Invoicing permission (Craig 2026-10-31, New sales order 1A): requireSalesOrderMaker checks each feature', 'profileHasFeature('),
   'src/app/api/customer-contacts/route.ts': staff(),
   'src/app/api/customer-holds/route.ts': staff(),
+  'src/app/api/job-progress/route.ts': staff(),
+  'src/app/api/job-progress/board/route.ts': staff(),
   'src/app/api/jobs/assign/route.ts': staff(),
   'src/app/api/work-lists/route.ts': authScoped('"My List" read for the caller\'s own assigned jobs (external installers hold vehicle assignments too, so not a staff wall); another person\'s list, the people roster and every save require admin', 'isAdminRole('),
   'src/app/api/knowledge/reprocess/route.ts': admin(),
